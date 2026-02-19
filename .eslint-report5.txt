@@ -1,0 +1,140 @@
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkMemoryExtractor.ts
+  72:47  warning  Unnecessary escape character: \-  no-useless-escape
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkOpenAICompatProxy.ts
+  269:37   warning  Unnecessary escape character: \[          no-useless-escape
+  785:94   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  793:78   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  797:14   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  801:70   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  807:86   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  811:88   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  815:95   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  819:108  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  823:97   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  827:93   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  835:120  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  844:97   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  876:52   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  877:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  879:67   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkRunner.ts
+    54:57  warning  Unnecessary escape character: \[          no-useless-escape
+   522:35  warning  Unnecessary escape character: \-          no-useless-escape
+  2405:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2429:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2450:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2487:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2501:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2515:57  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  3537:31  warning  Unnecessary escape character: \/          no-useless-escape
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkSandboxRuntime.ts
+  269:56  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkUtil.ts
+  537:24  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/main.ts
+   146:47  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   146:53  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   159:51  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   159:57  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   361:24  warning  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   362:20  warning  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   369:21  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   386:24  warning  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   387:20  warning  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   418:24  warning  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   419:20  warning  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   540:61  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   568:71  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   633:43  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   638:92  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+  1458:64  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+  1475:76  warning  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/preload.ts
+    8:31  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   55:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   69:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   82:38  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   85:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   86:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   86:46  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   98:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  137:65  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  183:50  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  184:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  184:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  189:70  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  190:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  190:73  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  195:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  199:73  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  200:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  200:73  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  205:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  210:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  242:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  249:24  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  256:41  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  257:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  257:45  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  261:45  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  262:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  262:46  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  271:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  272:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  288:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  289:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  289:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  293:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  294:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  294:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/App.tsx
+  119:6  warning  React Hook useEffect has a missing dependency: 'dispatch'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/MarkdownContent.tsx
+  3:1  warning  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+  5:1  warning  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+  7:1  warning  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/Settings.tsx
+  1415:6  warning  React Hook useMemo has an unnecessary dependency: 'language'. Either exclude it or remove the dependency array  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkPermissionModal.tsx
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useMemo Hook (at line 67) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook    react-hooks/exhaustive-deps
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useEffect Hook (at line 91) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkQuestionWizard.tsx
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useMemo Hook (at line 67) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook    react-hooks/exhaustive-deps
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useEffect Hook (at line 86) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkSessionDetail.tsx
+  1160:6  warning  React Hook useEffect has a missing dependency: 'currentSession'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkSessionItem.tsx
+  138:9  warning  The 'handleTogglePin' function makes the dependencies of useMemo Hook (at line 251) change on every render. Move it inside the useMemo callback. Alternatively, wrap the definition of 'handleTogglePin' in its own useCallback() Hook      react-hooks/exhaustive-deps
+  144:9  warning  The 'handleRenameClick' function makes the dependencies of useMemo Hook (at line 251) change on every render. Move it inside the useMemo callback. Alternatively, wrap the definition of 'handleRenameClick' in its own useCallback() Hook  react-hooks/exhaustive-deps
+  178:9  warning  The 'handleDeleteClick' function makes the dependencies of useMemo Hook (at line 251) change on every render. Move it inside the useMemo callback. Alternatively, wrap the definition of 'handleDeleteClick' in its own useCallback() Hook  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkView.tsx
+  107:6  warning  React Hook useEffect has a missing dependency: 'onRequestAppSettings'. Either include it or remove the dependency array. If 'onRequestAppSettings' changes too often, find the parent component that defines it and wrap that definition in useCallback  react-hooks/exhaustive-deps
+  286:6  warning  React Hook useEffect has missing dependencies: 'dispatch', 'quickActions', and 'selectedActionId'. Either include them or remove the dependency array                                                                                                    react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/services/api.ts
+   16:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  295:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/services/config.ts
+  85:67  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/services/i18n.ts
+  994:39  warning  Unnecessary escape character: \"  no-useless-escape
+  994:47  warning  Unnecessary escape character: \"  no-useless-escape
+
+✖ 102 problems (0 errors, 102 warnings)

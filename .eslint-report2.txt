@@ -1,0 +1,308 @@
+
+/Users/xueyuheng/powerful-app/LobsterAI/SKILLs/web-search/server/playwright/operations.ts
+  21:10  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  79:79  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  82:45  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/SKILLs/web-search/server/search/bing.ts
+  5:10  error  'Page' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/dingtalkGateway.ts
+   37:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   43:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  153:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  198:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  268:69  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  287:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  310:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  365:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  448:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  510:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  627:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  730:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/dingtalkMedia.ts
+  133:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/discordGateway.ts
+   32:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  169:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  219:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  395:30  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  407:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  412:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  464:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/feishuGateway.ts
+   58:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   59:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   65:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  168:47  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  180:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  187:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  190:55  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  209:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  255:47  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  255:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  271:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  285:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  709:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  778:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/feishuMedia.ts
+   35:11  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   64:31  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   68:37  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   83:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   97:11  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  129:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  134:37  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  148:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/imChatHandler.ts
+  129:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  151:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  152:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/imCoworkHandler.ts
+  622:17  error  '_sessionId' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/imGatewayManager.ts
+   45:40  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  171:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  210:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  343:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  535:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  543:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  551:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  559:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  622:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  678:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  712:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  712:59  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/lark-sdk.d.ts
+  59:54  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  69:46  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/telegramGateway.ts
+  207:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  274:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  353:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  645:34  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  750:28  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  762:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/im/telegramMedia.ts
+  122:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  290:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  298:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkMemoryExtractor.ts
+  72:47  warning  Unnecessary escape character: \-  no-useless-escape
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkOpenAICompatProxy.ts
+  269:37   warning  Unnecessary escape character: \[          no-useless-escape
+  785:94   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  793:78   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  797:14   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  801:70   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  807:86   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  811:88   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  815:95   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  819:108  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  823:97   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  827:93   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  835:120  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  844:97   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  876:52   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  877:17   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  879:67   error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkRunner.ts
+    54:57  warning  Unnecessary escape character: \[          no-useless-escape
+   522:35  warning  Unnecessary escape character: \-          no-useless-escape
+  2405:26  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2429:18  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2450:18  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2487:22  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2501:22  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2515:57  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  3537:31  warning  Unnecessary escape character: \/          no-useless-escape
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkSandboxRuntime.ts
+  269:56  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/coworkUtil.ts
+  148:40  error  'electronPath' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  537:24  error  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/libs/scheduler.ts
+  2:63  error  'Schedule' is defined but never used        @typescript-eslint/no-unused-vars
+  2:73  error  'NotifyPlatform' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/logger.ts
+  37:27  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  41:29  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  45:28  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  49:28  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  53:29  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/main.ts
+     1:89  error  'systemPreferences' is defined but never used   @typescript-eslint/no-unused-vars
+   146:47  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   146:53  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   159:51  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   159:57  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   361:24  error  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   362:20  error  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   369:21  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   386:24  error  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   387:20  error  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   418:24  error  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   419:20  error  Require statement not part of import statement  @typescript-eslint/no-var-requires
+   540:61  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   568:71  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   633:43  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+   638:92  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+  1458:64  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+  1475:76  error  Unexpected any. Specify a different type        @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/main/preload.ts
+    8:31  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   55:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   69:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   82:38  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   85:43  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   86:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   86:46  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   98:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  137:65  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  183:50  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  184:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  184:43  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  189:70  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  190:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  190:73  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  195:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  199:73  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  200:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  200:73  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  205:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  210:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  242:25  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  249:24  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  256:41  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  257:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  257:45  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  261:45  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  262:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  262:46  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  271:21  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  272:33  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  288:39  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  289:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  289:43  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  293:36  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  294:32  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  294:43  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/App.tsx
+  119:6  warning  React Hook useEffect has a missing dependency: 'dispatch'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/MarkdownContent.tsx
+    3:1   error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+    5:1   error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+    7:1   error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+  131:35  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  156:27  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  380:9   error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  380:15  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  380:48  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  385:14  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  385:20  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  385:53  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  390:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  390:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  390:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  395:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  395:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  395:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  400:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  400:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  400:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  405:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  405:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  405:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  410:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  410:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  410:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  415:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  415:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  415:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  420:18  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  420:24  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  420:57  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  426:13  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  426:19  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  426:52  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  433:13  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  433:19  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  433:52  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  438:13  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  438:19  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  438:52  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  443:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  443:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  443:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  448:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  448:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  448:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  453:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  453:16  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  453:49  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  458:11  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  458:17  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  458:40  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  461:10  error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  461:28  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  464:9   error  'node' is defined but never used. Allowed unused args must match /^_/u                                               @typescript-eslint/no-unused-vars
+  464:21  error  'className' is defined but never used. Allowed unused args must match /^_/u                                          @typescript-eslint/no-unused-vars
+  464:54  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+  530:41  error  Unexpected any. Specify a different type                                                                             @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/Settings.tsx
+  1415:6  warning  React Hook useMemo has an unnecessary dependency: 'language'. Either exclude it or remove the dependency array  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkPermissionModal.tsx
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useMemo Hook (at line 67) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook    react-hooks/exhaustive-deps
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useEffect Hook (at line 91) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkQuestionWizard.tsx
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useMemo Hook (at line 67) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook    react-hooks/exhaustive-deps
+  27:9  warning  The 'toolInput' logical expression could make the dependencies of useEffect Hook (at line 86) change on every render. To fix this, wrap the initialization of 'toolInput' in its own useMemo() Hook  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkSessionDetail.tsx
+  1160:6  warning  React Hook useEffect has a missing dependency: 'currentSession'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkSessionItem.tsx
+  138:9  warning  The 'handleTogglePin' function makes the dependencies of useMemo Hook (at line 251) change on every render. Move it inside the useMemo callback. Alternatively, wrap the definition of 'handleTogglePin' in its own useCallback() Hook      react-hooks/exhaustive-deps
+  144:9  warning  The 'handleRenameClick' function makes the dependencies of useMemo Hook (at line 251) change on every render. Move it inside the useMemo callback. Alternatively, wrap the definition of 'handleRenameClick' in its own useCallback() Hook  react-hooks/exhaustive-deps
+  178:9  warning  The 'handleDeleteClick' function makes the dependencies of useMemo Hook (at line 251) change on every render. Move it inside the useMemo callback. Alternatively, wrap the definition of 'handleDeleteClick' in its own useCallback() Hook  react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/components/cowork/CoworkView.tsx
+  107:6  warning  React Hook useEffect has a missing dependency: 'onRequestAppSettings'. Either include it or remove the dependency array. If 'onRequestAppSettings' changes too often, find the parent component that defines it and wrap that definition in useCallback  react-hooks/exhaustive-deps
+  286:6  warning  React Hook useEffect has missing dependencies: 'dispatch', 'quickActions', and 'selectedActionId'. Either include them or remove the dependency array                                                                                                    react-hooks/exhaustive-deps
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/services/api.ts
+   16:23  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  295:26  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/services/config.ts
+  85:67  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/Users/xueyuheng/powerful-app/LobsterAI/src/renderer/services/i18n.ts
+  994:39  warning  Unnecessary escape character: \"  no-useless-escape
+  994:47  warning  Unnecessary escape character: \"  no-useless-escape
+
+✖ 240 problems (153 errors, 87 warnings)
