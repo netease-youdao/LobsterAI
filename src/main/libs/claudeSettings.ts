@@ -4,6 +4,7 @@ import type { SqliteStore } from '../sqliteStore';
 import type { CoworkApiConfig } from './coworkConfigStore';
 import {
   configureCoworkOpenAICompatProxy,
+  type OpenAICompatProxyTarget,
   getCoworkOpenAICompatProxyBaseURL,
   getCoworkOpenAICompatProxyStatus,
 } from './coworkOpenAICompatProxy';
@@ -84,6 +85,10 @@ function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown)
   return normalizeProviderApiFormat(apiFormat);
 }
 
+function providerRequiresApiKey(providerName: string): boolean {
+  return providerName !== 'ollama';
+}
+
 function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvider | null; error?: string } {
   const providers = appConfig.providers ?? {};
 
@@ -121,7 +126,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
   }
 
-  if (apiFormat === 'anthropic' && !providerConfig.apiKey?.trim()) {
+  if (apiFormat === 'anthropic' && providerRequiresApiKey(providerName) && !providerConfig.apiKey?.trim()) {
     return { matched: null, error: `Provider ${providerName} requires API key for Anthropic-compatible mode.` };
   }
 
@@ -135,7 +140,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   };
 }
 
-export function resolveCurrentApiConfig(): ApiConfigResolution {
+export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): ApiConfigResolution {
   const sqliteStore = getStore();
   if (!sqliteStore) {
     return {
@@ -162,11 +167,16 @@ export function resolveCurrentApiConfig(): ApiConfigResolution {
 
   const resolvedBaseURL = matched.providerConfig.baseUrl.trim();
   const resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
+  const effectiveApiKey = matched.providerName === 'ollama'
+    && matched.apiFormat === 'anthropic'
+    && !resolvedApiKey
+    ? 'sk-ollama-local'
+    : resolvedApiKey;
 
   if (matched.apiFormat === 'anthropic') {
     return {
       config: {
-        apiKey: resolvedApiKey,
+        apiKey: effectiveApiKey,
         baseURL: resolvedBaseURL,
         model: matched.modelId,
         apiType: 'anthropic',
@@ -189,7 +199,7 @@ export function resolveCurrentApiConfig(): ApiConfigResolution {
     provider: matched.providerName,
   });
 
-  const proxyBaseURL = getCoworkOpenAICompatProxyBaseURL();
+  const proxyBaseURL = getCoworkOpenAICompatProxyBaseURL(target);
   if (!proxyBaseURL) {
     return {
       config: null,
@@ -207,14 +217,15 @@ export function resolveCurrentApiConfig(): ApiConfigResolution {
   };
 }
 
-export function getCurrentApiConfig(): CoworkApiConfig | null {
-  return resolveCurrentApiConfig().config;
+export function getCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): CoworkApiConfig | null {
+  return resolveCurrentApiConfig(target).config;
 }
 
 export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {
   const baseEnv = { ...process.env } as Record<string, string>;
 
   baseEnv.ANTHROPIC_AUTH_TOKEN = config.apiKey;
+  baseEnv.ANTHROPIC_API_KEY = config.apiKey;
   baseEnv.ANTHROPIC_BASE_URL = config.baseURL;
   baseEnv.ANTHROPIC_MODEL = config.model;
 

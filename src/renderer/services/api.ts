@@ -82,6 +82,24 @@ class ApiService {
     return `${normalized}/v1/chat/completions`;
   }
 
+  private buildOpenAIResponsesUrl(baseUrl: string): string {
+    const normalized = baseUrl.trim().replace(/\/+$/, '');
+    if (!normalized) {
+      return '/v1/responses';
+    }
+    if (normalized.endsWith('/responses')) {
+      return normalized;
+    }
+    if (normalized.endsWith('/v1')) {
+      return `${normalized}/responses`;
+    }
+    return `${normalized}/v1/responses`;
+  }
+
+  private shouldUseOpenAIResponsesApi(provider: string): boolean {
+    return provider === 'openai';
+  }
+
   private buildImageHint(images?: ImageAttachment[]): string {
     if (!images?.length) return '';
     return `[images: ${images.length}]`;
@@ -129,6 +147,72 @@ class ApiService {
       : this.mergeContentWithImageHint(message.content, message.images);
     if (!content?.trim()) return null;
     return { role: message.role, content };
+  }
+
+  private formatOpenAIResponsesInputMessage(message: ChatMessagePayload, supportsImages: boolean) {
+    const role = message.role === 'assistant' ? 'assistant' : 'user';
+
+    if (role === 'user' && supportsImages && message.images?.length) {
+      const parts: Array<
+        | { type: 'input_text'; text: string }
+        | { type: 'input_image'; image_url: string }
+      > = [];
+      if (message.content?.trim()) {
+        parts.push({ type: 'input_text', text: message.content });
+      }
+      message.images.forEach(image => {
+        if (image.dataUrl) {
+          parts.push({ type: 'input_image', image_url: image.dataUrl });
+        }
+      });
+      if (!parts.length) return null;
+      return { role, content: parts };
+    }
+
+    const content = supportsImages
+      ? message.content
+      : this.mergeContentWithImageHint(message.content, message.images);
+    if (!content?.trim()) return null;
+    if (role === 'assistant') {
+      return { role, content: [{ type: 'output_text', text: content }] };
+    }
+    return { role, content: [{ type: 'input_text', text: content }] };
+  }
+
+  private extractResponsesOutputText(payload: any): string {
+    const directOutputText = typeof payload?.output_text === 'string' ? payload.output_text : '';
+    if (directOutputText) {
+      return directOutputText;
+    }
+
+    const nestedOutputText = typeof payload?.response?.output_text === 'string'
+      ? payload.response.output_text
+      : '';
+    if (nestedOutputText) {
+      return nestedOutputText;
+    }
+
+    const output = Array.isArray(payload?.response?.output)
+      ? payload.response.output
+      : Array.isArray(payload?.output)
+        ? payload.output
+        : [];
+    if (!Array.isArray(output)) {
+      return '';
+    }
+
+    const chunks: string[] = [];
+    output.forEach((item: any) => {
+      if (!Array.isArray(item?.content)) {
+        return;
+      }
+      item.content.forEach((contentItem: any) => {
+        if (typeof contentItem?.text === 'string' && contentItem.text) {
+          chunks.push(contentItem.text);
+        }
+      });
+    });
+    return chunks.join('');
   }
 
   private formatAnthropicMessage(message: ChatMessagePayload, supportsImages: boolean) {
@@ -247,7 +331,7 @@ class ApiService {
 
     // 根据 API 协议格式决定调用方式：
     // - anthropic: Anthropic 兼容协议 (/v1/messages)
-    // - openai: OpenAI 兼容协议 (/v1/chat/completions)
+    // - openai: OpenAI 兼容协议 (OpenAI provider uses /v1/responses)
     const normalizedApiFormat = this.normalizeApiFormat(effectiveConfig.apiFormat);
     const useOpenAIFormat = normalizedApiFormat === 'openai';
 
@@ -439,6 +523,7 @@ class ApiService {
       this.cancelOngoingRequest();
       const requestId = generateRequestId();
       this.currentRequestId = requestId;
+      const useResponsesApi = this.shouldUseOpenAIResponsesApi(provider);
 
       const userMessage: ChatMessagePayload = {
         role: 'user',
@@ -451,31 +536,69 @@ class ApiService {
       ]
         .map(item => this.formatOpenAIMessage(item, supportsImages))
         .filter(Boolean);
+      const systemInstructions = history
+        .filter(item => item.role === 'system')
+        .map(item => this.mergeContentWithImageHint(item.content, supportsImages ? undefined : item.images))
+        .filter(Boolean)
+        .join('\n');
+      const responseInputMessages = [
+        ...history.filter(item => item.role !== 'system'),
+        userMessage,
+      ]
+        .map(item => this.formatOpenAIResponsesInputMessage(item, supportsImages))
+        .filter(Boolean);
 
       return new Promise((resolve, reject) => {
         let aborted = false;
+        let sseBuffer = '';
+        let currentEvent = '';
 
         // 设置流式监听器
         const removeDataListener = window.electron.api.onStreamData(requestId, (chunk) => {
-          const lines = chunk.split('\n');
+          sseBuffer += chunk;
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? '';
 
-          for (const line of lines) {
-            console.log('>>>>>', line);
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') continue;
+          for (const rawLine of lines) {
+            const line = rawLine.replace(/\r$/, '');
+            if (!line) {
+              currentEvent = '';
+              continue;
+            }
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim();
+              continue;
+            }
+            if (!line.startsWith('data: ')) {
+              continue;
+            }
 
-              try {
-                const parsed = JSON.parse(data);
-                const delta = parsed.choices?.[0]?.delta || {};
-                const content = typeof delta.content === 'string' ? delta.content : '';
-                const reasoning = typeof delta.reasoning_content === 'string'
-                  ? delta.reasoning_content
-                  : typeof delta.reasoning === 'string'
-                    ? delta.reasoning
-                    : typeof delta.thoughts === 'string'
-                      ? delta.thoughts
-                      : '';
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(data);
+
+              if (useResponsesApi) {
+                const eventType = currentEvent || String(parsed.type || '');
+                const content = (
+                  (eventType === 'response.output_text.delta' || eventType === 'response.output.delta')
+                  && typeof parsed.delta === 'string'
+                )
+                  ? parsed.delta
+                  : '';
+                const reasoning = (
+                  eventType === 'response.reasoning_summary_text.delta'
+                  && typeof parsed.delta === 'string'
+                )
+                  ? parsed.delta
+                  : '';
+                const completedText = (
+                  eventType === 'response.completed'
+                  || eventType === 'response.output_item.done'
+                )
+                  ? this.extractResponsesOutputText(parsed)
+                  : '';
 
                 if (content) {
                   fullContent += content;
@@ -483,12 +606,36 @@ class ApiService {
                 if (reasoning) {
                   fullReasoning += reasoning;
                 }
-                if (content || reasoning) {
+                if (!fullContent && completedText) {
+                  fullContent = completedText;
+                }
+                if (content || reasoning || completedText) {
                   onProgress?.(fullContent, fullReasoning || undefined);
                 }
-              } catch (e) {
-                console.warn('Failed to parse SSE message:', e);
+                continue;
               }
+
+              const delta = parsed.choices?.[0]?.delta || {};
+              const content = typeof delta.content === 'string' ? delta.content : '';
+              const reasoning = typeof delta.reasoning_content === 'string'
+                ? delta.reasoning_content
+                : typeof delta.reasoning === 'string'
+                  ? delta.reasoning
+                  : typeof delta.thoughts === 'string'
+                    ? delta.thoughts
+                    : '';
+
+              if (content) {
+                fullContent += content;
+              }
+              if (reasoning) {
+                fullReasoning += reasoning;
+              }
+              if (content || reasoning) {
+                onProgress?.(fullContent, fullReasoning || undefined);
+              }
+            } catch (e) {
+              console.warn('Failed to parse SSE message:', e);
             }
           }
         });
@@ -522,18 +669,29 @@ class ApiService {
           headers.Authorization = `Bearer ${config.apiKey}`;
         }
 
-        // 发起流式请求
-        const chatCompletionsUrl = this.buildOpenAICompatibleChatCompletionsUrl(config.baseUrl, provider);
+        const requestUrl = useResponsesApi
+          ? this.buildOpenAIResponsesUrl(config.baseUrl)
+          : this.buildOpenAICompatibleChatCompletionsUrl(config.baseUrl, provider);
+        const requestBody: Record<string, unknown> = useResponsesApi
+          ? {
+              model: modelId,
+              input: responseInputMessages,
+              stream: true,
+            }
+          : {
+              model: modelId,
+              messages: messages,
+              stream: true,
+            };
+        if (useResponsesApi && systemInstructions) {
+          requestBody.instructions = systemInstructions;
+        }
 
         window.electron.api.stream({
-          url: chatCompletionsUrl,
+          url: requestUrl,
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            model: modelId,
-            messages: messages,
-            stream: true,
-          }),
+          body: JSON.stringify(requestBody),
           requestId,
         }).then((response) => {
           if (!response.ok && !aborted) {
@@ -568,4 +726,4 @@ class ApiService {
   }
 }
 
-export const apiService = new ApiService(); 
+export const apiService = new ApiService();

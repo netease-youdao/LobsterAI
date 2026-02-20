@@ -5,6 +5,7 @@ import { delimiter, dirname, join } from 'path';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { loadClaudeSdk } from './claudeSdk';
 import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
+import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
 
@@ -435,8 +436,8 @@ export function getSkillsRoot(): string {
  * Get enhanced environment variables (including proxy configuration)
  * Async function to fetch system proxy and inject into environment variables
  */
-export async function getEnhancedEnv(): Promise<Record<string, string | undefined>> {
-  const config = getCurrentApiConfig();
+export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'): Promise<Record<string, string | undefined>> {
+  const config = getCurrentApiConfig(target);
   const env = config
     ? buildEnvForConfig(config)
     : { ...process.env };
@@ -498,8 +499,11 @@ export function ensureCoworkTempDir(cwd: string): string {
  * This ensures Claude Agent SDK creates temporary files in the user's working directory
  * @param cwd Working directory path
  */
-export async function getEnhancedEnvWithTmpdir(cwd: string): Promise<Record<string, string | undefined>> {
-  const env = await getEnhancedEnv();
+export async function getEnhancedEnvWithTmpdir(
+  cwd: string,
+  target: OpenAICompatProxyTarget = 'local'
+): Promise<Record<string, string | undefined>> {
+  const env = await getEnhancedEnv(target);
   const tempDir = ensureCoworkTempDir(cwd);
 
   // Set temp directory environment variables for all platforms

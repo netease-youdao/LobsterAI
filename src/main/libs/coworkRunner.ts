@@ -29,6 +29,7 @@ import {
 
 const SANDBOX_ALLOWED_ENV_KEYS = [
   'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
   'ANTHROPIC_BASE_URL',
   'LOBSTERAI_API_BASE_URL',
   'ANTHROPIC_MODEL',
@@ -227,6 +228,57 @@ function formatSandboxSpawnError(
   const diagnostics = `${baseMessage}${detailString}.${hint} ${runtimeSummary}`;
   const logPath = persistSandboxSpawnDiagnostics(runtimeInfo, diagnostics);
   return logPath ? `${diagnostics} Diagnostics saved to: ${logPath}` : diagnostics;
+}
+
+function summarizeEndpointForLog(rawValue: string | undefined): string | null {
+  if (!rawValue) return null;
+  const trimmed = rawValue.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    const defaultPort = parsed.protocol === 'https:' ? '443' : parsed.protocol === 'http:' ? '80' : '';
+    const resolvedPort = parsed.port || defaultPort;
+    const port = resolvedPort ? `:${resolvedPort}` : '';
+    return `${parsed.protocol}//${parsed.hostname}${port}`;
+  } catch {
+    return trimmed.length > 160 ? `${trimmed.slice(0, 157)}...` : trimmed;
+  }
+}
+
+function extractHostFromUrl(rawValue: string | undefined): string | null {
+  if (!rawValue) return null;
+  const trimmed = rawValue.trim();
+  if (!trimmed) return null;
+  try {
+    return new URL(trimmed).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function mergeNoProxyList(currentValue: string | undefined, requiredHosts: string[]): string {
+  const seen = new Set<string>();
+  const items: string[] = [];
+
+  const addEntry = (entry: string) => {
+    const normalized = entry.trim();
+    if (!normalized) return;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    items.push(normalized);
+  };
+
+  if (currentValue) {
+    for (const part of currentValue.split(',')) {
+      addEntry(part);
+    }
+  }
+  for (const host of requiredHosts) {
+    addEntry(host);
+  }
+
+  return items.join(',');
 }
 
 // Event types emitted by the runner
@@ -966,6 +1018,36 @@ export class CoworkRunner extends EventEmitter {
       sandboxEnv.LOBSTERAI_SKILLS_ROOT = guestSkillsRoot;
     }
     sandboxEnv.WEB_SEARCH_SERVER = 'http://10.0.2.2:8923';
+
+    // Ensure requests to host-side services bypass system HTTP proxies.
+    const noProxyHosts = [
+      'localhost',
+      '127.0.0.1',
+      '10.0.2.2',
+    ];
+    const anthropicHost = extractHostFromUrl(sandboxEnv.ANTHROPIC_BASE_URL);
+    const internalApiHost = extractHostFromUrl(sandboxEnv.LOBSTERAI_API_BASE_URL);
+    const webSearchHost = extractHostFromUrl(sandboxEnv.WEB_SEARCH_SERVER);
+    if (anthropicHost) noProxyHosts.push(anthropicHost);
+    if (internalApiHost) noProxyHosts.push(internalApiHost);
+    if (webSearchHost) noProxyHosts.push(webSearchHost);
+
+    const mergedNoProxy = mergeNoProxyList(sandboxEnv.NO_PROXY ?? sandboxEnv.no_proxy, noProxyHosts);
+    sandboxEnv.NO_PROXY = mergedNoProxy;
+    sandboxEnv.no_proxy = mergedNoProxy;
+
+    // Some SDK/network stacks may ignore NO_PROXY for local gateway addresses.
+    // When model traffic is explicitly routed to host gateway, force direct mode.
+    const anthropicBaseHost = extractHostFromUrl(sandboxEnv.ANTHROPIC_BASE_URL)?.toLowerCase();
+    const shouldForceDirectHostRouting = anthropicBaseHost === '10.0.2.2'
+      || anthropicBaseHost === '127.0.0.1'
+      || anthropicBaseHost === 'localhost';
+    if (shouldForceDirectHostRouting) {
+      delete sandboxEnv.HTTP_PROXY;
+      delete sandboxEnv.HTTPS_PROXY;
+      delete sandboxEnv.http_proxy;
+      delete sandboxEnv.https_proxy;
+    }
 
     return sandboxEnv;
   }
@@ -2251,7 +2333,7 @@ export class CoworkRunner extends EventEmitter {
     activeSession.lastStreamingTextUpdateAt = 0;
     activeSession.lastStreamingThinkingUpdateAt = 0;
 
-    const apiConfig = getCurrentApiConfig();
+    const apiConfig = getCurrentApiConfig('local');
     if (!apiConfig) {
       this.handleError(sessionId, 'API configuration not found. Please configure model settings.');
       this.clearPendingPermissions(sessionId);
@@ -2260,7 +2342,7 @@ export class CoworkRunner extends EventEmitter {
     }
 
     const claudeCodePath = getClaudeCodePath();
-    const envVars = await getEnhancedEnvWithTmpdir(cwd);
+    const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
     let stderrTail = '';
 
     // When packaged, process.execPath is the Electron binary.
@@ -2718,7 +2800,7 @@ export class CoworkRunner extends EventEmitter {
       return;
     }
 
-    const apiConfig = getCurrentApiConfig();
+    const apiConfig = getCurrentApiConfig('sandbox');
     if (!apiConfig) {
       this.handleError(sessionId, 'API configuration not found. Please configure model settings.');
       this.clearPendingPermissions(sessionId);
@@ -2728,10 +2810,18 @@ export class CoworkRunner extends EventEmitter {
 
     const paths = ensureCoworkSandboxDirs(sessionId);
     const cwdMapping = resolveSandboxCwd(cwd);
-    const env = await getEnhancedEnv();
+    const env = await getEnhancedEnv('sandbox');
     const hostSkillsRoots = this.collectHostSkillsRoots(env, cwdMapping, systemPrompt);
     const sandboxSkills = this.resolveSandboxSkillsConfig(hostSkillsRoots, runtimeInfo.platform);
     const sandboxEnv = this.buildSandboxEnv(env, sandboxSkills.guestSkillsRoot);
+    coworkLog('INFO', 'runSandbox', 'Resolved sandbox API endpoint', {
+      sessionId,
+      anthropicBaseUrl: summarizeEndpointForLog(sandboxEnv.ANTHROPIC_BASE_URL),
+      anthropicModel: sandboxEnv.ANTHROPIC_MODEL ?? null,
+      httpProxy: summarizeEndpointForLog(sandboxEnv.HTTP_PROXY ?? sandboxEnv.http_proxy),
+      noProxy: sandboxEnv.NO_PROXY ?? sandboxEnv.no_proxy ?? null,
+      directHostRouting: !(sandboxEnv.HTTP_PROXY || sandboxEnv.http_proxy),
+    });
     const sandboxSystemPrompt = this.enforceSandboxWorkspacePrompt(systemPrompt, cwdMapping.guestPath);
     const resolvedSystemPrompt = this.resolveAutoRoutingForSandbox(sandboxSystemPrompt, {
       guestSkillsRoot: sandboxSkills.guestSkillsRoot,
@@ -3232,7 +3322,7 @@ export class CoworkRunner extends EventEmitter {
     activeSession.lastStreamingTextUpdateAt = 0;
     activeSession.lastStreamingThinkingUpdateAt = 0;
 
-    const apiConfig = getCurrentApiConfig();
+    const apiConfig = getCurrentApiConfig('sandbox');
     if (!apiConfig) {
       this.handleError(sessionId, 'API configuration not found. Please configure model settings.');
       return;
@@ -3240,7 +3330,7 @@ export class CoworkRunner extends EventEmitter {
 
     const paths = ensureCoworkSandboxDirs(sessionId);
     const cwdMapping = resolveSandboxCwd(cwd);
-    const env = await getEnhancedEnv();
+    const env = await getEnhancedEnv('sandbox');
     const hostSkillsRoots = this.collectHostSkillsRoots(env, cwdMapping, systemPrompt);
     const sandboxSystemPrompt = this.enforceSandboxWorkspacePrompt(systemPrompt, cwdMapping.guestPath);
     const resolvedSystemPrompt = this.resolveAutoRoutingForSandbox(sandboxSystemPrompt, {
@@ -3248,6 +3338,14 @@ export class CoworkRunner extends EventEmitter {
       hostSkillsRoots: hostSkillsRoots,
     });
     const sandboxEnv = this.buildSandboxEnv(env, activeSession.sandboxSkillsGuestPath ?? null);
+    coworkLog('INFO', 'runSandbox', 'Resolved sandbox API endpoint (continue)', {
+      sessionId,
+      anthropicBaseUrl: summarizeEndpointForLog(sandboxEnv.ANTHROPIC_BASE_URL),
+      anthropicModel: sandboxEnv.ANTHROPIC_MODEL ?? null,
+      httpProxy: summarizeEndpointForLog(sandboxEnv.HTTP_PROXY ?? sandboxEnv.http_proxy),
+      noProxy: sandboxEnv.NO_PROXY ?? sandboxEnv.no_proxy ?? null,
+      directHostRouting: !(sandboxEnv.HTTP_PROXY || sandboxEnv.http_proxy),
+    });
 
     // Ensure the bridge has the latest host CWD for file sync
     if (activeSession.ipcBridge) {
@@ -3566,6 +3664,41 @@ export class CoworkRunner extends EventEmitter {
     return rewritten;
   }
 
+  private resolveAssistantEventError(payload: Record<string, unknown>): string | null {
+    const directError = this.normalizeSdkError(payload.error);
+    if (directError) {
+      return directError;
+    }
+    if (typeof payload.error !== 'string' || payload.error.trim().toLowerCase() !== 'unknown') {
+      return null;
+    }
+
+    const messagePayload = payload.message;
+    if (!messagePayload || typeof messagePayload !== 'object') {
+      return null;
+    }
+    const content = (messagePayload as Record<string, unknown>).content;
+    const inferredError = this.extractText(content)?.trim();
+    if (!inferredError) {
+      return null;
+    }
+    return inferredError;
+  }
+
+  private normalizeSdkError(value: unknown): string | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.toLowerCase() === 'unknown') {
+      return null;
+    }
+    return trimmed;
+  }
+
   private handleClaudeEvent(sessionId: string, event: unknown): void {
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) return;
@@ -3612,8 +3745,9 @@ export class CoworkRunner extends EventEmitter {
     }
 
     if (eventType === 'auth_status') {
-      if (typeof payload.error === 'string' && payload.error.trim()) {
-        this.handleError(sessionId, payload.error);
+      const authError = this.normalizeSdkError(payload.error);
+      if (authError) {
+        this.handleError(sessionId, authError);
       }
       return;
     }
@@ -3622,13 +3756,17 @@ export class CoworkRunner extends EventEmitter {
       const subtype = String(payload.subtype ?? 'success');
       if (subtype !== 'success') {
         const errors = Array.isArray(payload.errors)
-          ? payload.errors.filter((error) => typeof error === 'string')
+          ? payload.errors
+            .filter((error) => typeof error === 'string')
+            .map((error) => (error as string).trim())
+            .filter((error) => error && error.toLowerCase() !== 'unknown')
           : [];
+        const payloadError = this.normalizeSdkError(payload.error);
         const errorMessage =
           errors.length > 0
             ? errors.join('\n')
-            : typeof payload.error === 'string'
-              ? payload.error
+            : payloadError
+              ? payloadError
               : 'Claude run failed';
         this.handleError(sessionId, errorMessage);
         return;
@@ -3699,8 +3837,9 @@ export class CoworkRunner extends EventEmitter {
       return;
     }
 
-    if (typeof payload.error === 'string' && payload.error.trim()) {
-      this.handleError(sessionId, payload.error);
+    const assistantEventError = this.resolveAssistantEventError(payload);
+    if (assistantEventError) {
+      this.handleError(sessionId, assistantEventError);
     }
 
     // Check if we already have assistant text output from streaming

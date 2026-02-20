@@ -47,8 +47,8 @@ function buildContextMenu(getWindow: () => BrowserWindow | null, store: SqliteSt
       click: () => {
         const win = getWindow();
         if (win && !win.isDestroyed()) {
-          win.show();
-          win.focus();
+          if (!win.isVisible()) win.show();
+          if (!win.isFocused()) win.focus();
         }
       },
     },
@@ -57,8 +57,8 @@ function buildContextMenu(getWindow: () => BrowserWindow | null, store: SqliteSt
       click: () => {
         const win = getWindow();
         if (win && !win.isDestroyed()) {
-          win.show();
-          win.focus();
+          if (!win.isVisible()) win.show();
+          if (!win.isFocused()) win.focus();
           win.webContents.send('app:newTask');
         }
       },
@@ -69,8 +69,8 @@ function buildContextMenu(getWindow: () => BrowserWindow | null, store: SqliteSt
       click: () => {
         const win = getWindow();
         if (win && !win.isDestroyed()) {
-          win.show();
-          win.focus();
+          if (!win.isVisible()) win.show();
+          if (!win.isFocused()) win.focus();
           win.webContents.send('app:openSettings');
         }
       },
@@ -110,8 +110,8 @@ export function createTray(getWindow: () => BrowserWindow | null, store: SqliteS
   clickHandler = () => {
     const win = getWindow();
     if (!win || win.isDestroyed()) return;
-    win.show();
-    win.focus();
+    if (!win.isVisible()) win.show();
+    if (!win.isFocused()) win.focus();
   };
 
   rightClickHandler = () => {

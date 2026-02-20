@@ -116,6 +116,39 @@ export class IMChatHandler {
     return `${normalized}/v1/chat/completions`;
   }
 
+  private buildOpenAIResponsesUrl(config: LLMConfig): string {
+    const normalized = config.baseUrl.replace(/\/+$/, '');
+    if (!normalized) {
+      return '/v1/responses';
+    }
+    if (normalized.endsWith('/responses')) {
+      return normalized;
+    }
+    if (normalized.endsWith('/v1')) {
+      return `${normalized}/responses`;
+    }
+    return `${normalized}/v1/responses`;
+  }
+
+  private shouldUseOpenAIResponsesApi(config: LLMConfig): boolean {
+    return config.provider?.toLowerCase() === 'openai';
+  }
+
+  private shouldUseMaxCompletionTokens(config: LLMConfig): boolean {
+    const provider = config.provider?.toLowerCase();
+    if (provider !== 'openai') {
+      return false;
+    }
+    const normalizedModel = config.model?.toLowerCase() || '';
+    const resolvedModel = normalizedModel.includes('/')
+      ? normalizedModel.slice(normalizedModel.lastIndexOf('/') + 1)
+      : normalizedModel;
+    return resolvedModel.startsWith('gpt-5')
+      || resolvedModel.startsWith('o1')
+      || resolvedModel.startsWith('o3')
+      || resolvedModel.startsWith('o4');
+  }
+
   /**
    * Call Anthropic API
    */
@@ -164,7 +197,10 @@ export class IMChatHandler {
     userMessage: string,
     systemPrompt?: string
   ): Promise<string> {
-    const url = this.buildOpenAICompatibleChatCompletionsUrl(config);
+    const useResponsesApi = this.shouldUseOpenAIResponsesApi(config);
+    const url = useResponsesApi
+      ? this.buildOpenAIResponsesUrl(config)
+      : this.buildOpenAICompatibleChatCompletionsUrl(config);
 
     const messages: Array<{ role: string; content: string }> = [];
 
@@ -173,11 +209,26 @@ export class IMChatHandler {
     }
     messages.push({ role: 'user', content: userMessage });
 
-    const body = {
-      model: config.model || 'gpt-4o',
-      messages,
-      max_tokens: 4096,
-    };
+    const body: Record<string, unknown> = useResponsesApi
+      ? {
+          model: config.model || 'gpt-4o',
+          input: [{ role: 'user', content: [{ type: 'input_text', text: userMessage }] }],
+          max_output_tokens: 4096,
+        }
+      : {
+          model: config.model || 'gpt-4o',
+          messages,
+        };
+    if (useResponsesApi && systemPrompt) {
+      body.instructions = systemPrompt;
+    }
+    if (!useResponsesApi) {
+      if (this.shouldUseMaxCompletionTokens(config)) {
+        body.max_completion_tokens = 4096;
+      } else {
+        body.max_tokens = 4096;
+      }
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -189,7 +240,30 @@ export class IMChatHandler {
 
     const response = await axios.post(url, body, { headers });
 
+    if (useResponsesApi) {
+      return this.extractResponsesText(response.data);
+    }
     return response.data.choices?.[0]?.message?.content || '';
+  }
+
+  private extractResponsesText(payload: any): string {
+    if (typeof payload?.output_text === 'string' && payload.output_text) {
+      return payload.output_text;
+    }
+
+    const output = Array.isArray(payload?.output) ? payload.output : [];
+    const chunks: string[] = [];
+    output.forEach((item: any) => {
+      if (!Array.isArray(item?.content)) {
+        return;
+      }
+      item.content.forEach((contentItem: any) => {
+        if (typeof contentItem?.text === 'string' && contentItem.text) {
+          chunks.push(contentItem.text);
+        }
+      });
+    });
+    return chunks.join('');
   }
 
   /**

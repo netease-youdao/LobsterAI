@@ -190,6 +190,7 @@ export const defaultConfig: AppConfig = {
       apiFormat: 'openai',
       models: [
         { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true },
+        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true },
         { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', supportsImage: true }
       ]
     },
@@ -322,5 +323,13 @@ export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] =>
     ...CHINA_PROVIDERS,
     ...GLOBAL_PROVIDERS,
   ];
-  return [...new Set(orderedProviders)];
+  const uniqueProviders = [...new Set(orderedProviders)];
+  const ollamaIndex = uniqueProviders.indexOf('ollama');
+  if (ollamaIndex === -1) {
+    return uniqueProviders;
+  }
+
+  uniqueProviders.splice(ollamaIndex, 1);
+  uniqueProviders.push('ollama');
+  return uniqueProviders;
 };

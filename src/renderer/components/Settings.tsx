@@ -256,6 +256,36 @@ const buildOpenAICompatibleChatCompletionsUrl = (baseUrl: string, provider: stri
   }
   return `${normalized}/v1/chat/completions`;
 };
+const buildOpenAIResponsesUrl = (baseUrl: string): string => {
+  const normalized = baseUrl.trim().replace(/\/+$/, '');
+  if (!normalized) {
+    return '/v1/responses';
+  }
+  if (normalized.endsWith('/responses')) {
+    return normalized;
+  }
+  if (normalized.endsWith('/v1')) {
+    return `${normalized}/responses`;
+  }
+  return `${normalized}/v1/responses`;
+};
+const shouldUseOpenAIResponsesForProvider = (provider: string): boolean => (
+  provider === 'openai'
+);
+const shouldUseMaxCompletionTokensForOpenAI = (provider: string, modelId?: string): boolean => {
+  if (provider !== 'openai') {
+    return false;
+  }
+  const normalizedModel = (modelId ?? '').toLowerCase();
+  const resolvedModel = normalizedModel.includes('/')
+    ? normalizedModel.slice(normalizedModel.lastIndexOf('/') + 1)
+    : normalizedModel;
+  return resolvedModel.startsWith('gpt-5')
+    || resolvedModel.startsWith('o1')
+    || resolvedModel.startsWith('o3')
+    || resolvedModel.startsWith('o4');
+};
+const CONNECTIVITY_TEST_TOKEN_BUDGET = 64;
 
 const getDefaultProviders = (): ProvidersConfig => {
   const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
@@ -1071,7 +1101,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
       // 统一为两种协议格式：
       // - anthropic: /v1/messages
-      // - openai: /v1/chat/completions
+      // - openai provider: /v1/responses
+      // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = getEffectiveApiFormat(activeProvider, providerConfig.apiFormat) === 'anthropic';
 
       if (useAnthropicFormat) {
@@ -1088,27 +1119,43 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           },
           body: JSON.stringify({
             model: firstModel.id,
-            max_tokens: 1,
+            max_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
             messages: [{ role: 'user', content: 'Hi' }],
           }),
         });
       } else {
-        const openaiUrl = buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, activeProvider);
+        const useResponsesApi = shouldUseOpenAIResponsesForProvider(activeProvider);
+        const openaiUrl = useResponsesApi
+          ? buildOpenAIResponsesUrl(normalizedBaseUrl)
+          : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, activeProvider);
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
         if (providerConfig.apiKey) {
           headers.Authorization = `Bearer ${providerConfig.apiKey}`;
         }
+        const openAIRequestBody: Record<string, unknown> = useResponsesApi
+          ? {
+              model: firstModel.id,
+              input: [{ role: 'user', content: [{ type: 'input_text', text: 'Hi' }] }],
+              max_output_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
+            }
+          : {
+              model: firstModel.id,
+              messages: [{ role: 'user', content: 'Hi' }],
+            };
+        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(activeProvider, firstModel.id)) {
+          openAIRequestBody.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
+        } else {
+          if (!useResponsesApi) {
+            openAIRequestBody.max_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
+          }
+        }
         response = await window.electron.api.fetch({
           url: openaiUrl,
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            model: firstModel.id,
-            max_tokens: 1,
-            messages: [{ role: 'user', content: 'Hi' }],
-          }),
+          body: JSON.stringify(openAIRequestBody),
         });
       }
 
@@ -1118,6 +1165,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         const data = response.data || {};
         // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
+        if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
+          setTestResult({ success: true, message: i18nService.t('connectionSuccess') });
+          return;
+        }
         setTestResult({
           success: false,
           message: errorMessage,
@@ -1963,7 +2014,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                       : 'bg-red-500/20 text-red-600 dark:text-red-400'
                   }`}
                 >
-                  {providers[activeProvider].enabled ? i18nService.t('enabled') : i18nService.t('disabled')}
+                  {providers[activeProvider].enabled ? i18nService.t('providerStatusOn') : i18nService.t('providerStatusOff')}
                 </div>
               </div>
 
