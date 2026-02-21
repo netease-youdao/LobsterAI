@@ -146,7 +146,7 @@ function getWindowsGitToolDirs(bashPath: string): string[] {
   return candidates.filter((dir) => existsSync(dir));
 }
 
-function ensureWindowsElectronNodeShim(electronPath: string): string | null {
+function ensureWindowsElectronNodeShim(_electronPath: string): string | null {
   if (process.platform !== 'win32') {
     return null;
   }

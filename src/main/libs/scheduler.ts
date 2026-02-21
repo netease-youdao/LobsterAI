@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { ScheduledTaskStore, ScheduledTask, ScheduledTaskRun, Schedule, NotifyPlatform } from '../scheduledTaskStore';
+import { ScheduledTaskStore, ScheduledTask, ScheduledTaskRun } from '../scheduledTaskStore';
 import type { CoworkStore } from '../coworkStore';
 import type { CoworkRunner } from './coworkRunner';
 import type { IMGatewayManager } from '../im/imGatewayManager';
