@@ -32,7 +32,7 @@ export interface TaskState {
 }
 
 // IM 通知平台类型
-export type NotifyPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord';
+export type NotifyPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim';
 
 // 定时任务
 export interface ScheduledTask {

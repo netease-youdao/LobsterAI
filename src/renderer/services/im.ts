@@ -212,7 +212,7 @@ class IMService {
    */
   isAnyConnected(): boolean {
     const status = this.getStatus();
-    return status.dingtalk.connected || status.feishu.connected || status.telegram.connected || status.discord.connected;
+    return status.dingtalk.connected || status.feishu.connected || status.telegram.connected || status.discord.connected || status.nim.connected;
   }
 }
 

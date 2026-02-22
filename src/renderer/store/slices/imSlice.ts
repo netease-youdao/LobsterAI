@@ -11,6 +11,7 @@ import type {
   FeishuConfig,
   TelegramConfig,
   DiscordConfig,
+  NimConfig,
   IMSettings,
 } from '../../types/im';
 import {
@@ -51,6 +52,9 @@ const imSlice = createSlice({
     setDiscordConfig: (state, action: PayloadAction<Partial<DiscordConfig>>) => {
       state.config.discord = { ...state.config.discord, ...action.payload };
     },
+    setNimConfig: (state, action: PayloadAction<Partial<NimConfig>>) => {
+      state.config.nim = { ...state.config.nim, ...action.payload };
+    },
     setIMSettings: (state, action: PayloadAction<Partial<IMSettings>>) => {
       state.config.settings = { ...state.config.settings, ...action.payload };
     },
@@ -75,6 +79,7 @@ export const {
   setFeishuConfig,
   setTelegramConfig,
   setDiscordConfig,
+  setNimConfig,
   setIMSettings,
   setStatus,
   setLoading,
