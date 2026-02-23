@@ -996,7 +996,7 @@ function printUsage() {
 
 示例:
   film-search.js search "流浪地球2"
-  film-search.js search "怪奇物语" --pan quark --quality 4k
+  film-search.js search "流浪地球2" --pan quark --quality 4k
   film-search.js search "流浪地球2" --engine deep
   film-search.js hot "2025年热门电影"
   film-search.js resolve "https://example.com/redirect/xxx"

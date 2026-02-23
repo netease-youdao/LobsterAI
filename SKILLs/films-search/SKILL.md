@@ -45,7 +45,7 @@ bash "$SKILLS_ROOT/films-search/scripts/film-search.sh" search "流浪地球2"
 bash "$SKILLS_ROOT/films-search/scripts/film-search.sh" search "流浪地球2" --pan quark --quality 4k
 
 # 限制结果数量
-bash "$SKILLS_ROOT/films-search/scripts/film-search.sh" search "怪奇物语" --limit 10
+bash "$SKILLS_ROOT/films-search/scripts/film-search.sh" search "流浪地球2" --limit 10
 
 # 使用浅层搜索（不深度抓取页面）
 bash "$SKILLS_ROOT/films-search/scripts/film-search.sh" search "流浪地球2" --engine web
