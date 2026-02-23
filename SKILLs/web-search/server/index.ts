@@ -62,6 +62,7 @@ function decodeJsonRequestBody(raw: Buffer): string {
     return '';
   }
 
+  // BOM detection
   if (raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) {
     return new TextDecoder('utf-8', { fatal: false }).decode(raw.subarray(3));
   }
@@ -72,39 +73,31 @@ function decodeJsonRequestBody(raw: Buffer): string {
     return new TextDecoder('utf-16be', { fatal: false }).decode(raw.subarray(2));
   }
 
-  let utf8Decoded: string | null = null;
+  // Per RFC 8259, JSON text must be encoded in UTF-8.
+  // Prefer UTF-8: if it decodes cleanly AND parses as valid JSON, use it directly.
+  // Only fall back to gb18030 when UTF-8 decoding fails (e.g. raw bytes are
+  // genuinely gb18030-encoded). The previous heuristic scoring could mis-classify
+  // valid UTF-8 CJK text as gb18030 because gb18030's 2-byte-per-CJK encoding
+  // produces more CJK characters from the same bytes, inflating its score.
   try {
-    utf8Decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    const utf8Decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    // Validate it's parseable JSON before committing
+    JSON.parse(utf8Decoded);
+    return utf8Decoded;
   } catch {
-    utf8Decoded = null;
+    // UTF-8 decoding or JSON parsing failed
   }
 
-  let gbDecoded: string | null = null;
+  // Fallback: try gb18030 for clients that send non-UTF-8 bodies
   try {
-    gbDecoded = new TextDecoder('gb18030', { fatal: true }).decode(raw);
-  } catch {
-    gbDecoded = null;
-  }
-
-  if (utf8Decoded && gbDecoded) {
-    const utf8Score = scoreDecodedJsonText(utf8Decoded);
-    const gbScore = scoreDecodedJsonText(gbDecoded);
-    if (gbScore > utf8Score) {
-      console.warn(`[Bridge Server] Request body decoded using gb18030 (score ${gbScore} > utf8 ${utf8Score})`);
-      return gbDecoded;
-    }
-    return utf8Decoded;
-  }
-
-  if (utf8Decoded) {
-    return utf8Decoded;
-  }
-
-  if (gbDecoded) {
+    const gbDecoded = new TextDecoder('gb18030', { fatal: true }).decode(raw);
     console.warn('[Bridge Server] Request body decoded using gb18030 fallback');
     return gbDecoded;
+  } catch {
+    // gb18030 also failed
   }
 
+  // Last resort: lenient UTF-8
   return new TextDecoder('utf-8', { fatal: false }).decode(raw);
 }
 
