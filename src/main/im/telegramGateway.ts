@@ -20,7 +20,6 @@ import { extractMediaFromMessage, cleanupOldMediaFiles } from './telegramMedia';
 import { parseMediaMarkers } from './dingtalkMediaParser';
 
 // Import node-fetch for HTTP requests (grammy's default)
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const nodeFetch = require('node-fetch');
 
 /**
@@ -150,7 +149,6 @@ export class TelegramGateway extends EventEmitter {
       this.bot = new Bot(config.botToken, {
         client: {
           // Use our custom fetch wrapper
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           fetch: grammyFetch as any,
           // Increase API timeout to 60 seconds for file uploads (default is 500s which is too long)
           timeoutSeconds: 60,
