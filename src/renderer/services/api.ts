@@ -258,7 +258,7 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'ollama'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'ollama'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -279,6 +279,8 @@ class ApiService {
       return 'minimax';
     } else if (normalizedModelId.startsWith('qwen') || normalizedModelId.startsWith('qvq')) {
       return 'qwen';
+    } else if (normalizedModelId.startsWith('mimo') || normalizedModelId.includes('xiaomi')) {
+      return 'xiaomi';
     }
     return 'openai'; // 默认使用 OpenAI 兼容格式
   }
