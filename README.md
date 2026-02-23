@@ -64,9 +64,27 @@ npm install
 
 # Start development (Vite dev server + Electron with hot reload)
 npm run electron:dev
+
+# Start web mode (Vite UI + Electron RPC backend)
+npm run web:dev
 ```
 
 The dev server runs at `http://localhost:5175` by default.
+In web mode, open that URL in your browser. The Electron process runs as backend RPC service on `http://127.0.0.1:5680`.
+
+## Runtime Modes
+
+LobsterAI now supports two UI startup modes:
+
+- **Desktop UI** (default): `npm run electron:dev`
+- **Browser Web UI**: `npm run web:dev`
+
+Web mode is controlled by environment variables:
+
+- `LOBSTERAI_UI_MODE=web` - run without opening Electron desktop window
+- `LOBSTERAI_WEB_PORT` - RPC server port (default `5680`)
+- `LOBSTERAI_WEB_ORIGIN` - CORS origin allowlist (default `*`)
+- `VITE_LOBSTER_WEB_API_BASE` - optional browser-side API base URL override
 
 ### Production Build
 

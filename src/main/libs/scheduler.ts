@@ -3,6 +3,7 @@ import { ScheduledTaskStore, ScheduledTask, ScheduledTaskRun, Schedule, NotifyPl
 import type { CoworkStore } from '../coworkStore';
 import type { CoworkRunner } from './coworkRunner';
 import type { IMGatewayManager } from '../im/imGatewayManager';
+import { broadcastWebEvent } from '../webEventBus';
 
 interface SchedulerDeps {
   scheduledTaskStore: ScheduledTaskStore;
@@ -314,22 +315,26 @@ export class Scheduler {
   private emitTaskStatusUpdate(taskId: string): void {
     const task = this.store.getTask(taskId);
     if (!task) return;
+    const payload = {
+      taskId: task.id,
+      state: task.state,
+    };
 
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
-        win.webContents.send('scheduledTask:statusUpdate', {
-          taskId: task.id,
-          state: task.state,
-        });
+        win.webContents.send('scheduledTask:statusUpdate', payload);
       }
     });
+    broadcastWebEvent('scheduledTask:statusUpdate', payload);
   }
 
   private emitRunUpdate(run: ScheduledTaskRun): void {
+    const payload = { run };
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
-        win.webContents.send('scheduledTask:runUpdate', { run });
+        win.webContents.send('scheduledTask:runUpdate', payload);
       }
     });
+    broadcastWebEvent('scheduledTask:runUpdate', payload);
   }
 }

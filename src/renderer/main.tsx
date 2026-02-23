@@ -3,7 +3,10 @@ import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
 import { store } from './store';
 import App from './App';
+import { ensureElectronBridge } from './bridge/webElectron';
 import './index.css';
+
+ensureElectronBridge();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

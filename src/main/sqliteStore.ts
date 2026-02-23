@@ -16,15 +16,19 @@ const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 
 // Get the path to sql.js WASM file
 function getWasmPath(): string {
-  if (app.isPackaged) {
-    // In production, the wasm file is in the unpacked resources
-    return path.join(
-      process.resourcesPath,
-      'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
-    );
-  }
-  // In development, use node_modules directly
-  return path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm');
+  const candidates = [
+    // Packaged app path
+    path.join(process.resourcesPath, 'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'),
+    // Dev path when app root resolves correctly
+    path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm'),
+    // Dev path fallback when app root points to Electron default app
+    path.join(process.cwd(), 'node_modules/sql.js/dist/sql-wasm.wasm'),
+    // Dist-electron execution fallback
+    path.resolve(__dirname, '../../node_modules/sql.js/dist/sql-wasm.wasm'),
+  ];
+
+  const resolved = candidates.find((candidate) => fs.existsSync(candidate));
+  return resolved ?? candidates[0];
 }
 
 export class SqliteStore {
