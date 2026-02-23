@@ -69,10 +69,15 @@ const App: React.FC = () => {
         await i18nService.initialize();
         
         const config = await configService.getConfig();
+        const enabledProviders = Object.entries(config.providers ?? {}).filter(([, providerConfig]) => providerConfig.enabled);
+        const primaryProviderEntry = enabledProviders[0];
         
         const apiConfig: ApiConfig = {
           apiKey: config.api.key,
           baseUrl: config.api.baseUrl,
+          openaiApiType: primaryProviderEntry?.[0] === 'openai'
+            ? primaryProviderEntry[1].openaiApiType
+            : undefined,
         };
         apiService.setConfig(apiConfig);
 
@@ -253,9 +258,14 @@ const App: React.FC = () => {
   const handleCloseSettings = () => {
     setShowSettings(false);
     const config = configService.getConfig();
+    const enabledProviders = Object.entries(config.providers ?? {}).filter(([, providerConfig]) => providerConfig.enabled);
+    const primaryProviderEntry = enabledProviders[0];
     apiService.setConfig({
       apiKey: config.api.key,
       baseUrl: config.api.baseUrl,
+      openaiApiType: primaryProviderEntry?.[0] === 'openai'
+        ? primaryProviderEntry[1].openaiApiType
+        : undefined,
     });
 
     if (config.providers) {

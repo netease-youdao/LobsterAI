@@ -643,6 +643,7 @@ const getIMGatewayManager = () => {
               baseUrl: providerConfig.baseUrl,
               model: model,
               provider: providerName,
+              openaiApiType: providerConfig.openaiApiType,
             };
           }
         }
