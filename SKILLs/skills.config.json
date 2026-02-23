@@ -17,6 +17,7 @@
     "local-tools": { "order": 200, "enabled": true },
     "weather": { "order": 210, "enabled": true },
     "skill-creator": { "order": 300, "enabled": true },
-    "films-search": { "order": 16, "enabled": true }
+    "films-search": { "order": 16, "enabled": true },
+    "music-search": { "order": 17, "enabled": true }
   }
 }
