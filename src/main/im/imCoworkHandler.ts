@@ -92,6 +92,12 @@ export class IMCoworkHandler extends EventEmitter {
       return await this.processMessageInternal(message, false);
     } catch (error) {
       if (!this.isSessionNotFoundError(error)) {
+        if (this.shouldRetryWithFreshSession(error, message)) {
+          console.warn(
+            `[IMCoworkHandler] Detected recoverable API 400 for ${message.platform}:${message.conversationId}, recreating session and retrying once`
+          );
+          return this.processMessageInternal(message, true);
+        }
         throw error;
       }
 
@@ -275,6 +281,34 @@ export class IMCoworkHandler extends EventEmitter {
   private isSessionNotFoundError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return /^Session\s.+\snot found$/i.test(message.trim());
+  }
+
+  private isRecoverableApi400Error(error: unknown): boolean {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    if (!message.includes('400')) {
+      return false;
+    }
+
+    return (
+      message.includes('api error')
+      || message.includes('bad_response_status_code')
+      || message.includes('invalid chat setting')
+      || message.includes('signature: field required')
+    );
+  }
+
+  private shouldRetryWithFreshSession(error: unknown, message: IMMessage): boolean {
+    if (!this.isRecoverableApi400Error(error)) {
+      return false;
+    }
+
+    const mapping = this.imStore.getSessionMapping(message.conversationId, message.platform);
+    if (!mapping) {
+      return false;
+    }
+
+    const session = this.coworkStore.getSession(mapping.coworkSessionId);
+    return Boolean(session?.claudeSessionId);
   }
 
   /**

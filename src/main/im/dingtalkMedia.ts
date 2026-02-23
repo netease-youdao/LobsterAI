@@ -6,6 +6,7 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import FormData from 'form-data';
+import { sanitizeLogArgs, sanitizeSensitiveString } from './logSanitizer';
 
 const DINGTALK_OAPI = 'https://oapi.dingtalk.com';
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
@@ -108,7 +109,7 @@ export async function uploadMediaToDingTalk(
 
     // 上传到钉钉
     const uploadUrl = `${DINGTALK_OAPI}/media/upload?access_token=${accessToken}&type=${mediaType}`;
-    console.log(`[DingTalk Media] 上传 URL: ${uploadUrl}`);
+    console.log(sanitizeSensitiveString(`[DingTalk Media] 上传 URL: ${uploadUrl}`));
 
     const response = await axios.post(
       uploadUrl,
@@ -131,7 +132,7 @@ export async function uploadMediaToDingTalk(
     console.log(`[DingTalk Media] 上传成功, media_id: ${response.data.media_id}`);
     return { success: true, mediaId: response.data.media_id };
   } catch (error: any) {
-    console.error(`[DingTalk Media] 上传失败:`, error.message, error.response?.data);
+    console.error(...sanitizeLogArgs(['[DingTalk Media] 上传失败:', error.message, error.response?.data]));
     return { success: false, error: `上传失败: ${error.message}` };
   }
 }
