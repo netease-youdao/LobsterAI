@@ -52,6 +52,8 @@ const SKILL_FILE_NAME = 'SKILL.md';
 const SKILLS_CONFIG_FILE = 'skills.config.json';
 const SKILL_STATE_KEY = 'skills_state';
 const WATCH_DEBOUNCE_MS = 250;
+const CLAUDE_SKILLS_DIR_NAME = '.claude';
+const CLAUDE_SKILLS_SUBDIR = 'skills';
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -1089,12 +1091,23 @@ export class SkillManager {
 
   private getSkillRoots(primaryRoot?: string): string[] {
     const resolvedPrimary = primaryRoot ?? this.getSkillsRoot();
-    const roots = [resolvedPrimary];
+    const roots: string[] = [resolvedPrimary];
+
+    const claudeSkillsRoot = this.getClaudeSkillsRoot();
+    if (claudeSkillsRoot && fs.existsSync(claudeSkillsRoot)) {
+      roots.push(claudeSkillsRoot);
+    }
+
     const appRoot = this.getBundledSkillsRoot();
     if (appRoot !== resolvedPrimary && fs.existsSync(appRoot)) {
       roots.push(appRoot);
     }
     return roots;
+  }
+
+  private getClaudeSkillsRoot(): string | null {
+    const homeDir = app.getPath('home');
+    return path.join(homeDir, CLAUDE_SKILLS_DIR_NAME, CLAUDE_SKILLS_SUBDIR);
   }
 
   private getBundledSkillsRoot(): string {
