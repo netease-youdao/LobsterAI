@@ -155,6 +155,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;

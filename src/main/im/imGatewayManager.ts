@@ -9,7 +9,6 @@ import { DingTalkGateway } from './dingtalkGateway';
 import { FeishuGateway } from './feishuGateway';
 import { TelegramGateway } from './telegramGateway';
 import { DiscordGateway } from './discordGateway';
-import { IMChatHandler } from './imChatHandler';
 import { IMCoworkHandler } from './imCoworkHandler';
 import { IMStore } from './imStore';
 import { getOapiAccessToken } from './dingtalkMedia';
@@ -40,9 +39,7 @@ export class IMGatewayManager extends EventEmitter {
   private telegramGateway: TelegramGateway;
   private discordGateway: DiscordGateway;
   private imStore: IMStore;
-  private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
-  private getLLMConfig: (() => Promise<any>) | null = null;
   private getSkillsPrompt: (() => Promise<string | null>) | null = null;
 
   // Cowork dependencies
@@ -165,14 +162,13 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   /**
-   * Initialize the manager with LLM and skills providers
+   * Initialize the manager with skills provider
    */
   initialize(options: {
-    getLLMConfig: () => Promise<any>;
     getSkillsPrompt?: () => Promise<string | null>;
   }): void {
-    this.getLLMConfig = options.getLLMConfig;
     this.getSkillsPrompt = options.getSkillsPrompt ?? null;
+    this.updateCoworkHandler();
 
     // Set up message handlers for gateways
     this.setupMessageHandlers();
@@ -187,24 +183,15 @@ export class IMGatewayManager extends EventEmitter {
       replyFn: (text: string) => Promise<void>
     ): Promise<void> => {
       try {
-        let response: string;
-
-        // Always use Cowork mode if handler is available
-        if (this.coworkHandler) {
-          console.log('[IMGatewayManager] Using Cowork mode for message processing');
-          response = await this.coworkHandler.processMessage(message);
-        } else {
-          // Fallback to regular chat handler
-          if (!this.chatHandler) {
-            this.updateChatHandler();
-          }
-
-          if (!this.chatHandler) {
-            throw new Error('Chat handler not available');
-          }
-
-          response = await this.chatHandler.processMessage(message);
+        if (!this.coworkHandler) {
+          this.updateCoworkHandler();
         }
+        if (!this.coworkHandler) {
+          throw new Error('Cowork handler not available');
+        }
+
+        console.log('[IMGatewayManager] Using Cowork mode for message processing');
+        const response = await this.coworkHandler.processMessage(message);
 
         await replyFn(response);
       } catch (error: any) {
@@ -222,27 +209,6 @@ export class IMGatewayManager extends EventEmitter {
     this.feishuGateway.setMessageCallback(messageHandler);
     this.telegramGateway.setMessageCallback(messageHandler);
     this.discordGateway.setMessageCallback(messageHandler);
-  }
-
-  /**
-   * Update chat handler with current settings
-   */
-  private updateChatHandler(): void {
-    if (!this.getLLMConfig) {
-      console.warn('[IMGatewayManager] LLM config provider not set');
-      return;
-    }
-
-    const imSettings = this.imStore.getIMSettings();
-
-    this.chatHandler = new IMChatHandler({
-      getLLMConfig: this.getLLMConfig,
-      getSkillsPrompt: this.getSkillsPrompt || undefined,
-      imSettings,
-    });
-
-    // Update or create Cowork handler if dependencies are available
-    this.updateCoworkHandler();
   }
 
   /**
@@ -277,10 +243,8 @@ export class IMGatewayManager extends EventEmitter {
   setConfig(config: Partial<IMGatewayConfig>): void {
     this.imStore.setConfig(config);
 
-    // Update chat handler if settings changed
-    if (config.settings) {
-      this.updateChatHandler();
-    }
+    // Keep trying to recover Cowork handler in case dependencies were late-initialized.
+    this.updateCoworkHandler();
   }
 
   // ==================== Status ====================
@@ -494,8 +458,8 @@ export class IMGatewayManager extends EventEmitter {
   async startGateway(platform: IMPlatform): Promise<void> {
     const config = this.getConfig();
 
-    // Ensure chat handler is ready
-    this.updateChatHandler();
+    // Ensure Cowork handler is ready before accepting messages.
+    this.updateCoworkHandler();
 
     if (platform === 'dingtalk') {
       await this.dingtalkGateway.start(config.dingtalk);

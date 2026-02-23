@@ -5,7 +5,7 @@
   "version": "0.1.17",
   "main": "dist-electron/main.js",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=18"
   },
   "scripts": {
     "dev": "vite",
