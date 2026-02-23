@@ -31,3 +31,8 @@ nul
 
 .playwright-mcp/
 .cowork-temp/
+
+# Local runtime/debug artifacts
+vite.log
+webdev.log
+logs/security/.security-key
