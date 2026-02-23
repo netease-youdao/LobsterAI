@@ -22,6 +22,8 @@ export interface AppConfig {
       baseUrl: string;
       // API 协议格式：anthropic 为 Anthropic 兼容，openai 为 OpenAI 兼容
       apiFormat?: 'anthropic' | 'openai';
+      // OpenAI 兼容协议下优先使用的上游接口
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -33,6 +35,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -44,6 +47,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -55,6 +59,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -66,6 +71,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -77,6 +83,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -88,6 +95,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -99,6 +107,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -110,6 +119,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -121,6 +131,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -132,6 +143,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -143,6 +155,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
