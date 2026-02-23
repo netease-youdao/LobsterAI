@@ -18,6 +18,7 @@ import {
 import { uploadMediaToDingTalk, detectMediaType, getOapiAccessToken } from './dingtalkMedia';
 import { parseMediaMarkers } from './dingtalkMediaParser';
 import { createUtf8JsonBody, JSON_UTF8_CONTENT_TYPE, stringifyAsciiJson } from './jsonEncoding';
+import { sanitizeLogArg, sanitizeLogArgs } from './logSanitizer';
 
 const DINGTALK_API = 'https://api.dingtalk.com';
 
@@ -58,6 +59,16 @@ export class DingTalkGateway extends EventEmitter {
 
   constructor() {
     super();
+  }
+
+  private patchSdkDebugLogger(client: any): void {
+    if (!client || typeof client.printDebug !== 'function') {
+      return;
+    }
+    const rawPrintDebug = client.printDebug.bind(client);
+    client.printDebug = (message: unknown) => {
+      rawPrintDebug(sanitizeLogArg(message));
+    };
   }
 
   /**
@@ -250,7 +261,9 @@ export class DingTalkGateway extends EventEmitter {
     this.config = config;
     this.savedConfig = { ...config }; // Save config for reconnection
     this.isStopping = false;
-    this.log = config.debug ? console.log.bind(console) : () => {};
+    this.log = config.debug ? (...args: unknown[]) => {
+      console.log(...sanitizeLogArgs(args));
+    } : () => {};
     this.log('[DingTalk Gateway] Starting...');
 
     try {
@@ -263,6 +276,9 @@ export class DingTalkGateway extends EventEmitter {
         debug: config.debug || false,
         keepAlive: true,
       });
+      if (config.debug) {
+        this.patchSdkDebugLogger(this.client);
+      }
 
       // Register message callback
       this.client.registerCallbackListener(TOPIC_ROBOT, async (res: any) => {

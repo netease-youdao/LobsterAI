@@ -18,9 +18,7 @@ import {
 } from './types';
 import { extractMediaFromMessage, cleanupOldMediaFiles } from './telegramMedia';
 import { parseMediaMarkers } from './dingtalkMediaParser';
-
-// Import node-fetch for HTTP requests (grammy's default)
-const nodeFetch = require('node-fetch');
+import { fetchWithSystemProxy } from './http';
 
 /**
  * Custom fetch wrapper that uses Node.js native AbortController
@@ -55,7 +53,7 @@ async function grammyFetch(url: string, options: RequestInit = {}): Promise<Resp
     options = { ...options, signal: nativeController.signal };
   }
 
-  return nodeFetch(url, options);
+  return fetchWithSystemProxy(url, options);
 }
 
 // 媒体组缓冲接口
