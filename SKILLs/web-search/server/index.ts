@@ -72,37 +72,25 @@ function decodeJsonRequestBody(raw: Buffer): string {
     return new TextDecoder('utf-16be', { fatal: false }).decode(raw.subarray(2));
   }
 
-  let utf8Decoded: string | null = null;
+  // Per RFC 8259, JSON must be UTF-8. Prefer UTF-8 when it decodes cleanly.
+  // The scoring heuristic (scoreDecodedJsonText) is unreliable for CJK text:
+  // gb18030 uses 2 bytes per CJK char vs UTF-8's 3 bytes, so the same bytes
+  // decoded as gb18030 produce more CJK chars → higher score → wrong choice.
   try {
-    utf8Decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    const utf8Decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    JSON.parse(utf8Decoded);
+    return utf8Decoded;
   } catch {
-    utf8Decoded = null;
+    // UTF-8 decoding or JSON parsing failed
   }
 
-  let gbDecoded: string | null = null;
+  // Fallback: try gb18030 for clients that send non-UTF-8 bodies (e.g. Windows GBK)
   try {
-    gbDecoded = new TextDecoder('gb18030', { fatal: true }).decode(raw);
-  } catch {
-    gbDecoded = null;
-  }
-
-  if (utf8Decoded && gbDecoded) {
-    const utf8Score = scoreDecodedJsonText(utf8Decoded);
-    const gbScore = scoreDecodedJsonText(gbDecoded);
-    if (gbScore > utf8Score) {
-      console.warn(`[Bridge Server] Request body decoded using gb18030 (score ${gbScore} > utf8 ${utf8Score})`);
-      return gbDecoded;
-    }
-    return utf8Decoded;
-  }
-
-  if (utf8Decoded) {
-    return utf8Decoded;
-  }
-
-  if (gbDecoded) {
+    const gbDecoded = new TextDecoder('gb18030', { fatal: true }).decode(raw);
     console.warn('[Bridge Server] Request body decoded using gb18030 fallback');
     return gbDecoded;
+  } catch {
+    // gb18030 also failed
   }
 
   return new TextDecoder('utf-8', { fatal: false }).decode(raw);
