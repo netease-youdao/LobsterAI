@@ -5,7 +5,7 @@ import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
 import CoworkSessionList from './cowork/CoworkSessionList';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
-import { MagnifyingGlassIcon, PuzzlePieceIcon, ClockIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, PuzzlePieceIcon, ClockIcon, GlobeAltIcon } from '@heroicons/react/24/outline';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 
@@ -69,6 +69,19 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const handleRenameSession = async (sessionId: string, title: string) => {
     await coworkService.renameSession(sessionId, title);
+  };
+
+  const handleOpenWebUi = async () => {
+    try {
+      const result = await window.electron.webUi.open();
+      if (!result?.success) {
+        const msg = result?.error || i18nService.t('openWebUiFailed');
+        window.dispatchEvent(new CustomEvent('app:showToast', { detail: msg }));
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : i18nService.t('openWebUiFailed');
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: msg }));
+    }
   };
 
   return (
@@ -167,6 +180,15 @@ const Sidebar: React.FC<SidebarProps> = ({
         onRenameSession={handleRenameSession}
       />
       <div className="px-3 pb-3 pt-1">
+        <button
+          type="button"
+          onClick={handleOpenWebUi}
+          className="w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+          aria-label={i18nService.t('openWebUi')}
+        >
+          <GlobeAltIcon className="h-4 w-4" />
+          {i18nService.t('openWebUi')}
+        </button>
         <button
           type="button"
           onClick={() => onShowSettings()}

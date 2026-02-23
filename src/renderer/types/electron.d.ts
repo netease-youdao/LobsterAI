@@ -300,6 +300,9 @@ interface IElectronAPI {
     getVersion: () => Promise<string>;
     getSystemLocale: () => Promise<string>;
   };
+  webUi: {
+    open: () => Promise<{ success: boolean; url?: string; error?: string }>;
+  };
   im: {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
     setConfig: (config: Partial<IMGatewayConfig>) => Promise<{ success: boolean; error?: string }>;

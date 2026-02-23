@@ -183,6 +183,9 @@ const createWebElectronApi = (): ElectronApi => ({
     getVersion: () => invoke('app:getVersion'),
     getSystemLocale: () => invoke('app:getSystemLocale'),
   },
+  webUi: {
+    open: () => invoke('webui:open'),
+  },
   im: {
     getConfig: () => invoke('im:config:get'),
     setConfig: (config: any) => invoke('im:config:set', config),

@@ -6,15 +6,15 @@
 > lobsterai@0.1.16 compile:electron
 > tsc --project electron-tsconfig.json
 
-(node:50300) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+(node:32728) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
 (Use `node --trace-deprecation ...` to show where the warning was created)
 [0] [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
-[1] waiting for 1 resources: http://localhost:5175
 [0] 
-[0]   [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m272[22m[2m[0m ms[22m
+[0]   [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m248[22m[2m[0m ms[22m
 [0] 
 [0]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5175[22m/[39m
 [0]   [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.1.11:[1m5175[22m/[39m
+[1] waiting for 1 resources: http://localhost:5175
 [0] [36mvite v5.4.21 [32mbuilding for development...[36m[39m
 [0] [36m
 [0] watching for file changes...[39m
@@ -30,17 +30,17 @@
 [0] transforming...
 [0] rendering chunks...
 [0] computing gzip size...
-[0] [2mdist-electron/[22m[36mpreload.js  [39m[1m[2m11.96 kB[22m[1m[22m[2m │ gzip: 2.16 kB[22m[2m │ map: 23.04 kB[22m
-[0] [36mbuilt in 423ms.[39m
+[0] [2mdist-electron/[22m[36mpreload.js  [39m[1m[2m12.04 kB[22m[1m[22m[2m │ gzip: 2.18 kB[22m[2m │ map: 23.16 kB[22m
+[0] [36mbuilt in 133ms.[39m
 [0] [32m✓[39m 631 modules transformed.
 [0] rendering chunks...
 [0] computing gzip size...
 [0] [2mdist-electron/[22m[36mmain.js                       [39m[1m[2m    0.18 kB[22m[1m[22m[2m │ gzip:   0.13 kB[22m[2m │ map:     0.10 kB[22m
-[0] [2mdist-electron/[22m[36mindex-Cg3clmGV.js             [39m[1m[2m   10.06 kB[22m[1m[22m[2m │ gzip:   3.11 kB[22m[2m │ map:    15.69 kB[22m
-[0] [2mdist-electron/[22m[36mwebsocket-server-Chsyxvxl.js  [39m[1m[2m   90.96 kB[22m[1m[22m[2m │ gzip:  18.07 kB[22m[2m │ map:   189.84 kB[22m
-[0] [2mdist-electron/[22m[36mmain-CWLUGr6T.js              [39m[1m[33m2,798.66 kB[39m[22m[2m │ gzip: 502.15 kB[22m[2m │ map: 3,710.53 kB[22m
-[0] [2mdist-electron/[22m[36mindex--vVSgdn2.js             [39m[1m[33m3,626.85 kB[39m[22m[2m │ gzip: 232.28 kB[22m[2m │ map: 6,640.92 kB[22m
-[0] [36mbuilt in 9168ms.[39m
+[0] [2mdist-electron/[22m[36mindex-CvkSR-jh.js             [39m[1m[2m   10.06 kB[22m[1m[22m[2m │ gzip:   3.11 kB[22m[2m │ map:    15.69 kB[22m
+[0] [2mdist-electron/[22m[36mwebsocket-server-DnCiSGsh.js  [39m[1m[2m   90.96 kB[22m[1m[22m[2m │ gzip:  18.07 kB[22m[2m │ map:   189.84 kB[22m
+[0] [2mdist-electron/[22m[36mmain-8u7TiTIS.js              [39m[1m[33m2,799.24 kB[39m[22m[2m │ gzip: 502.23 kB[22m[2m │ map: 3,711.50 kB[22m
+[0] [2mdist-electron/[22m[36mindex-Wt195GJG.js             [39m[1m[33m3,626.85 kB[39m[22m[2m │ gzip: 232.29 kB[22m[2m │ map: 6,640.92 kB[22m
+[0] [36mbuilt in 4102ms.[39m
 [1] making HTTP(S) head request to  url:http://localhost:5175 ...
 [1]   HTTP(S) result for http://localhost:5175: {
 [1]   status: 200,
@@ -49,22 +49,22 @@
 [1]     connection: 'close',
 [1]     'cache-control': 'no-cache',
 [1]     'content-type': 'text/html',
-[1]     date: 'Mon, 23 Feb 2026 07:43:37 GMT',
+[1]     date: 'Mon, 23 Feb 2026 09:16:08 GMT',
 [1]     etag: 'W/"778-FYjZsSoFEPQpHbjWAD3oQt3csoM"',
 [1]     vary: 'Origin'
 [1]   },
 [1]   data: ''
 [1] }
-[1] wait-on(32348) complete
+[1] wait-on(50216) complete
 [1] 
-[1] (node:37652) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+[1] (node:21696) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
 [1] (Use `electron --trace-deprecation ...` to show where the warning was created)
 [1] [SkillServices] Starting skill services...
 [1] [SkillServices] Using fallback PATH for skill services
 [1] [SkillServices] Starting Web Search Bridge Server...
-[1] [SkillServices] Web Search Bridge Server starting (PID: 44540, runtime: electron-node)
+[1] [SkillServices] Web Search Bridge Server starting (PID: 43792, runtime: electron-node)
 [1] [SkillServices] Logs: C:\Users\youdo\AppData\Roaming\LobsterAI\SKILLs\web-search\.server.log
-[1] [SkillServices] Web Search Bridge Server started (PID: 44540)
+[1] [SkillServices] Web Search Bridge Server started (PID: 43792)
 [1] 已设置为跟随系统代理
 [1] [Web] UI mode enabled. Open http://localhost:5175 in your browser.
 [1] [Scheduler] Started

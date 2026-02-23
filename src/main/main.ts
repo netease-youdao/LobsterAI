@@ -893,6 +893,14 @@ const startWebRpcServer = (): void => {
   });
 };
 
+const getWebUiUrl = (): string => {
+  if (isDev) {
+    return DEV_SERVER_URL;
+  }
+  const port = Number.isFinite(webPort) && webPort > 0 ? webPort : 5680;
+  return `http://127.0.0.1:${port}`;
+};
+
 
 // Ensure desktop mode is single-instance. Web mode may run alongside desktop mode.
 const gotTheLock = webOnlyMode ? true : app.requestSingleInstanceLock();
@@ -994,6 +1002,19 @@ if (!gotTheLock) {
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getSystemLocale', () => app.getLocale());
+  ipcMain.handle('webui:open', async () => {
+    try {
+      startWebRpcServer();
+      const url = getWebUiUrl();
+      await shell.openExternal(url);
+      return { success: true, url };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to open web UI',
+      };
+    }
+  });
 
   // Skills IPC handlers
   ipcMain.handle('skills:list', () => {
