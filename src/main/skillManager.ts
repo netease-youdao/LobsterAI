@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import extractZip from 'extract-zip';
 import { SqliteStore } from './sqliteStore';
+import { broadcastWebEvent } from './webEventBus';
 
 export type SkillRecord = {
   id: string;
@@ -1004,6 +1005,7 @@ export class SkillManager {
         win.webContents.send('skills:changed');
       }
     });
+    broadcastWebEvent('skills:changed');
   }
 
   private parseSkillDir(

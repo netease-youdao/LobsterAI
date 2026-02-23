@@ -67,7 +67,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   useEffect(() => {
     const init = async () => {
-      await coworkService.init();
+      try {
+        await coworkService.init();
+      } catch (error) {
+        console.error('Failed to initialize cowork service:', error);
+      }
       // Load quick actions with localization
       try {
         quickActionService.initialize();

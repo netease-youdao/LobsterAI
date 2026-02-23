@@ -21,6 +21,8 @@ import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './au
 import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { initLogger, getLogFilePath } from './logger';
+import { startWebServer } from './webServer';
+import { broadcastWebEvent, setWebEventBroadcaster } from './webEventBus';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -288,6 +290,11 @@ const isDev = process.env.NODE_ENV === 'development';
 const isLinux = process.platform === 'linux';
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
+const uiMode = process.env.LOBSTERAI_UI_MODE === 'web' ? 'web' : 'desktop';
+const webOnlyMode = uiMode === 'web';
+const webPort = Number.parseInt(process.env.LOBSTERAI_WEB_PORT || '5680', 10);
+const webAllowedOrigin = process.env.LOBSTERAI_WEB_ORIGIN || '*';
+const webStaticDir = process.env.LOBSTERAI_WEB_STATIC_DIR || (isDev ? '' : path.join(__dirname, '../dist'));
 const DEV_SERVER_URL = process.env.ELECTRON_START_URL || 'http://localhost:5175';
 const enableVerboseLogging =
   process.env.ELECTRON_ENABLE_LOGGING === '1' ||
@@ -502,6 +509,34 @@ let imGatewayManager: IMGatewayManager | null = null;
 let scheduledTaskStore: ScheduledTaskStore | null = null;
 let scheduler: Scheduler | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
+let webServerController: ReturnType<typeof startWebServer> | null = null;
+
+const invokeHandlers = new Map<string, (event: any, ...args: any[]) => any>();
+const onHandlers = new Map<string, Array<(event: any, ...args: any[]) => void>>();
+const ipcHandleOriginal = ipcMain.handle.bind(ipcMain);
+const ipcOnOriginal = ipcMain.on.bind(ipcMain);
+const ipcRemoveAllListenersOriginal = ipcMain.removeAllListeners.bind(ipcMain);
+
+(ipcMain as any).handle = (channel: string, listener: (event: any, ...args: any[]) => any) => {
+  invokeHandlers.set(channel, listener);
+  return ipcHandleOriginal(channel, listener as any);
+};
+
+(ipcMain as any).on = (channel: string, listener: (event: any, ...args: any[]) => void) => {
+  const listeners = onHandlers.get(channel) ?? [];
+  listeners.push(listener);
+  onHandlers.set(channel, listeners);
+  return ipcOnOriginal(channel, listener as any);
+};
+
+(ipcMain as any).removeAllListeners = (channel?: string) => {
+  if (typeof channel === 'string') {
+    onHandlers.delete(channel);
+  } else {
+    onHandlers.clear();
+  }
+  return ipcRemoveAllListenersOriginal(channel as any);
+};
 
 const initStore = async (): Promise<SqliteStore> => {
   if (!storeInitPromise) {
@@ -549,6 +584,7 @@ const getCoworkRunner = () => {
           }
         }
       });
+      broadcastWebEvent('cowork:stream:message', { sessionId, message: safeMessage });
     });
 
     coworkRunner.on('messageUpdate', (sessionId: string, messageId: string, content: string) => {
@@ -563,6 +599,7 @@ const getCoworkRunner = () => {
           }
         }
       });
+      broadcastWebEvent('cowork:stream:messageUpdate', { sessionId, messageId, content: safeContent });
     });
 
     coworkRunner.on('permissionRequest', (sessionId: string, request: any) => {
@@ -580,6 +617,7 @@ const getCoworkRunner = () => {
           }
         }
       });
+      broadcastWebEvent('cowork:stream:permission', { sessionId, request: safeRequest });
     });
 
     coworkRunner.on('complete', (sessionId: string, claudeSessionId: string | null) => {
@@ -589,6 +627,7 @@ const getCoworkRunner = () => {
           win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId });
         }
       });
+      broadcastWebEvent('cowork:stream:complete', { sessionId, claudeSessionId });
     });
 
     coworkRunner.on('error', (sessionId: string, error: string) => {
@@ -598,6 +637,7 @@ const getCoworkRunner = () => {
           win.webContents.send('cowork:stream:error', { sessionId, error });
         }
       });
+      broadcastWebEvent('cowork:stream:error', { sessionId, error });
     });
   }
   return coworkRunner;
@@ -643,6 +683,7 @@ const getIMGatewayManager = () => {
               baseUrl: providerConfig.baseUrl,
               model: model,
               provider: providerName,
+              openaiApiType: providerConfig.openaiApiType,
             };
           }
         }
@@ -671,6 +712,7 @@ const getIMGatewayManager = () => {
           win.webContents.send('im:status:change', status);
         }
       });
+      broadcastWebEvent('im:status:change', status);
     });
 
     imGatewayManager.on('message', (message) => {
@@ -680,6 +722,7 @@ const getIMGatewayManager = () => {
           win.webContents.send('im:message:received', message);
         }
       });
+      broadcastWebEvent('im:message:received', message);
     });
 
     imGatewayManager.on('error', ({ platform, error }) => {
@@ -738,6 +781,7 @@ onSandboxProgress((progress) => {
   windows.forEach((win) => {
     win.webContents.send('cowork:sandbox:downloadProgress', progress);
   });
+  broadcastWebEvent('cowork:sandbox:downloadProgress', progress);
 });
 let isQuitting = false;
 
@@ -827,9 +871,40 @@ const scheduleReload = (reason: string, webContents?: WebContents) => {
   target.reloadIgnoringCache();
 };
 
+const startWebRpcServer = (): void => {
+  if (webServerController) return;
 
-// 确保应用程序只有一个实例
-const gotTheLock = app.requestSingleInstanceLock();
+  const resolvedStaticDir = webStaticDir && fs.existsSync(webStaticDir)
+    ? webStaticDir
+    : null;
+
+  webServerController = startWebServer({
+    port: Number.isFinite(webPort) && webPort > 0 ? webPort : 5680,
+    platform: process.platform,
+    allowedOrigin: webAllowedOrigin,
+    rpcRegistry: {
+      invokeHandlers,
+      onHandlers,
+    },
+    staticDir: resolvedStaticDir,
+  });
+
+  setWebEventBroadcaster((channel, ...args) => {
+    webServerController?.broadcastEvent(channel, ...args);
+  });
+};
+
+const getWebUiUrl = (): string => {
+  if (isDev) {
+    return DEV_SERVER_URL;
+  }
+  const port = Number.isFinite(webPort) && webPort > 0 ? webPort : 5680;
+  return `http://127.0.0.1:${port}`;
+};
+
+
+// Ensure desktop mode is single-instance. Web mode may run alongside desktop mode.
+const gotTheLock = webOnlyMode ? true : app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
   app.quit();
@@ -928,6 +1003,19 @@ if (!gotTheLock) {
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getSystemLocale', () => app.getLocale());
+  ipcMain.handle('webui:open', async () => {
+    try {
+      startWebRpcServer();
+      const url = getWebUiUrl();
+      await shell.openExternal(url);
+      return { success: true, url };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to open web UI',
+      };
+    }
+  });
 
   // Skills IPC handlers
   ipcMain.handle('skills:list', () => {
@@ -2170,6 +2258,13 @@ if (!gotTheLock) {
 
   const runAppCleanup = async (): Promise<void> => {
     console.log('[Main] App is quitting, starting cleanup...');
+    setWebEventBroadcaster(null);
+    if (webServerController) {
+      await webServerController.stop().catch((error) => {
+        console.error('[Web] Failed to stop web server:', error);
+      });
+      webServerController = null;
+    }
     destroyTray();
     skillManager?.stopWatching();
 
@@ -2291,8 +2386,14 @@ if (!gotTheLock) {
     // 设置安全策略
     setContentSecurityPolicy();
 
-    // 创建窗口
-    createWindow();
+    if (webOnlyMode) {
+      startWebRpcServer();
+      console.log(`[Web] UI mode enabled. Open ${DEV_SERVER_URL} in your browser.`);
+      getScheduler().start();
+    } else {
+      // 创建窗口
+      createWindow();
+    }
 
     // Auto-reconnect IM bots that were enabled before restart
     getIMGatewayManager().startAllEnabled().catch((error) => {
@@ -2318,6 +2419,9 @@ if (!gotTheLock) {
 
     // 在 macOS 上，当点击 dock 图标时显示已有窗口或重新创建
     app.on('activate', () => {
+      if (webOnlyMode) {
+        return;
+      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         if (!mainWindow.isVisible()) mainWindow.show();
         if (!mainWindow.isFocused()) mainWindow.focus();
@@ -2334,7 +2438,7 @@ if (!gotTheLock) {
 
   // 当所有窗口关闭时退出应用
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    if (!webOnlyMode && process.platform !== 'darwin') {
       app.quit();
     }
   });

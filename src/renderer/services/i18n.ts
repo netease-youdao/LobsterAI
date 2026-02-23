@@ -17,6 +17,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     
     // 设置
     settings: '设置',
+    openWebUi: '打开网页版',
+    openWebUiFailed: '打开网页版失败',
     general: '通用',
     model: '模型',
     shortcuts: '快捷键',
@@ -65,6 +67,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     apiFormatNative: 'Anthropic 兼容',
     apiFormatOpenAI: 'OpenAI 兼容',
     apiFormatHint: '请选择 API 协议兼容格式：Anthropic 兼容或 OpenAI 兼容',
+    openaiApiType: 'OpenAI 接口类型',
+    openaiApiTypeAuto: '自动',
+    openaiApiTypeResponses: 'Responses',
+    openaiApiTypeChatCompletions: 'Chat Completions',
+    openaiApiTypeHint: '自动模式优先使用 Responses；如需兼容旧接口，请切换到 Chat Completions。',
     import: '导入',
     export: '导出',
     importProvidersFailed: '导入失败',
@@ -623,6 +630,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     
     // Settings
     settings: 'Settings',
+    openWebUi: 'Open Web UI',
+    openWebUiFailed: 'Failed to open Web UI',
     general: 'General',
     model: 'Model',
     shortcuts: 'Shortcuts',
@@ -671,6 +680,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     apiFormatNative: 'Anthropic Compatible',
     apiFormatOpenAI: 'OpenAI Compatible',
     apiFormatHint: 'Select protocol compatibility: Anthropic Compatible or OpenAI Compatible',
+    openaiApiType: 'OpenAI API Type',
+    openaiApiTypeAuto: 'Auto',
+    openaiApiTypeResponses: 'Responses',
+    openaiApiTypeChatCompletions: 'Chat Completions',
+    openaiApiTypeHint: 'Auto prefers Responses. Switch to Chat Completions for legacy compatibility.',
     import: 'Import',
     export: 'Export',
     importProvidersFailed: 'Failed to import providers',

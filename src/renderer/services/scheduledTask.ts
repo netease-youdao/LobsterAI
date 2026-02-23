@@ -62,7 +62,10 @@ class ScheduledTaskService {
 
   async loadTasks(): Promise<void> {
     const api = window.electron?.scheduledTasks;
-    if (!api) return;
+    if (!api) {
+      store.dispatch(setLoading(false));
+      return;
+    }
 
     store.dispatch(setLoading(true));
     try {
@@ -72,6 +75,8 @@ class ScheduledTaskService {
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+    } finally {
+      store.dispatch(setLoading(false));
     }
   }
 

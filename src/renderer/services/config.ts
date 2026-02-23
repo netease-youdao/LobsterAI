@@ -49,6 +49,19 @@ const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'a
   return 'anthropic';
 };
 
+const normalizeProviderOpenAIApiType = (
+  providerKey: string,
+  openaiApiType: unknown
+): 'auto' | 'chat_completions' | 'responses' | undefined => {
+  if (providerKey !== 'openai') {
+    return undefined;
+  }
+  if (openaiApiType === 'chat_completions' || openaiApiType === 'responses' || openaiApiType === 'auto') {
+    return openaiApiType;
+  }
+  return 'auto';
+};
+
 const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig['providers'] => {
   if (!providers) {
     return providers;
@@ -61,6 +74,7 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
         ...providerConfig,
         baseUrl: normalizeProviderBaseUrl(providerKey, providerConfig.baseUrl),
         apiFormat: normalizeProviderApiFormat(providerKey, providerConfig.apiFormat),
+        openaiApiType: normalizeProviderOpenAIApiType(providerKey, providerConfig.openaiApiType),
       },
     ])
   ) as AppConfig['providers'];
@@ -85,14 +99,15 @@ class ConfigService {
                     ...(defaultConfig.providers as Record<string, any>)?.[providerKey],
                     ...providerConfig,
                   };
-                  return {
-                    ...mergedProvider,
-                    baseUrl: normalizeProviderBaseUrl(providerKey, mergedProvider.baseUrl),
-                    apiFormat: normalizeProviderApiFormat(providerKey, mergedProvider.apiFormat),
-                  };
-                })(),
-              ])
-            )
+                    return {
+                      ...mergedProvider,
+                      baseUrl: normalizeProviderBaseUrl(providerKey, mergedProvider.baseUrl),
+                      apiFormat: normalizeProviderApiFormat(providerKey, mergedProvider.apiFormat),
+                      openaiApiType: normalizeProviderOpenAIApiType(providerKey, mergedProvider.openaiApiType),
+                    };
+                  })(),
+                ])
+              )
           : defaultConfig.providers;
 
         this.config = {
