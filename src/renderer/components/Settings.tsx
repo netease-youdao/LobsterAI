@@ -672,6 +672,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         };
       }
 
+      // Handle codingPlanEnabled toggle for qwen
+      if (field === 'codingPlanEnabled' && provider === 'qwen') {
+        const codingPlanEnabled = value === 'true';
+        return {
+          ...prev,
+          qwen: {
+            ...prev.qwen,
+            codingPlanEnabled,
+          },
+        };
+      }
+
       return {
         ...prev,
         [provider]: {
@@ -1087,13 +1099,31 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
     try {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
-      const normalizedBaseUrl = providerConfig.baseUrl.replace(/\/+$/, '');
-
+      // Apply Coding Plan endpoint switch
+      let effectiveBaseUrl = providerConfig.baseUrl;
+      let effectiveApiFormat = getEffectiveApiFormat(activeProvider, providerConfig.apiFormat);
+      
+      // Handle Zhipu GLM Coding Plan endpoint switch
+      if (activeProvider === 'zhipu' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+        effectiveBaseUrl = 'https://open.bigmodel.cn/api/coding/paas/v4';
+        effectiveApiFormat = 'openai';
+      }
+      // Handle Qwen Coding Plan endpoint switch
+      if (activeProvider === 'qwen' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+        if (effectiveApiFormat === 'anthropic') {
+          effectiveBaseUrl = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
+        } else {
+          effectiveBaseUrl = 'https://coding.dashscope.aliyuncs.com/v1';
+          effectiveApiFormat = 'openai';
+        }
+      }
+      
+      const normalizedBaseUrl = effectiveBaseUrl.replace(/\/+$/, '');
       // 统一为两种协议格式：
       // - anthropic: /v1/messages
       // - openai provider: /v1/responses
       // - other openai-compatible providers: /v1/chat/completions
-      const useAnthropicFormat = getEffectiveApiFormat(activeProvider, providerConfig.apiFormat) === 'anthropic';
+      const useAnthropicFormat = effectiveApiFormat === 'anthropic';
 
       if (useAnthropicFormat) {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
@@ -2034,10 +2064,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 <input
                   type="text"
                   id={`${activeProvider}-baseUrl`}
-                  value={providers[activeProvider].baseUrl}
+                  value={
+                    activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled
+                      ? 'https://open.bigmodel.cn/api/coding/paas/v4'
+                      : activeProvider === 'qwen' && providers.qwen.codingPlanEnabled
+                        ? (getEffectiveApiFormat('qwen', providers.qwen.apiFormat) === 'anthropic'
+                            ? 'https://coding.dashscope.aliyuncs.com/apps/anthropic'
+                            : 'https://coding.dashscope.aliyuncs.com/v1')
+                        : providers[activeProvider].baseUrl
+                  }
                   onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
-                  disabled={activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled}
-                  className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs ${activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled)}
+                  className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs ${(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   placeholder={i18nService.t('baseUrlPlaceholder')}
                 />
                 {activeProvider === 'custom' && (
@@ -2054,12 +2092,19 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   </p>
                 </div>
                 )}
-                {/* GLM Coding Plan 端点提示 */}
+                {/* GLM Coding Plan 提示 */}
                 {activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled && (
                   <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
                     <p className="text-[11px] text-claude-accent dark:text-claude-accent">
                       <span className="font-medium">GLM Coding Plan:</span> {i18nService.t('zhipuCodingPlanEndpointHint')}
-                      <code className="ml-1 block mt-1 break-all">https://open.bigmodel.cn/api/coding/paas/v4</code>
+                    </p>
+                  </div>
+                )}
+                {/* Qwen Coding Plan 提示 */}
+                {activeProvider === 'qwen' && providers.qwen.codingPlanEnabled && (
+                  <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                    <p className="text-[11px] text-claude-accent dark:text-claude-accent">
+                      <span className="font-medium">Coding Plan:</span> {i18nService.t('qwenCodingPlanEndpointHint')}
                     </p>
                   </div>
                 )}
@@ -2126,6 +2171,34 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                       type="checkbox"
                       checked={providers.zhipu.codingPlanEnabled ?? false}
                       onChange={(e) => handleProviderConfigChange('zhipu', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
+                  </label>
+                </div>
+              )}
+
+              {/* Qwen Coding Plan 开关 (仅 Qwen) */}
+              {activeProvider === 'qwen' && (
+                <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                        Coding Plan
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                        订阅套餐
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('qwenCodingPlanHint')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-3">
+                    <input
+                      type="checkbox"
+                      checked={providers.qwen.codingPlanEnabled ?? false}
+                      onChange={(e) => handleProviderConfigChange('qwen', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
                       className="sr-only peer"
                     />
                     <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>

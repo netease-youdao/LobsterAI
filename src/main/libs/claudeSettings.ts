@@ -11,6 +11,9 @@ import {
 import { normalizeProviderApiFormat, type AnthropicApiFormat } from './coworkFormatTransform';
 
 const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
+// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
+const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
 
 type ProviderModel = {
   id: string;
@@ -130,6 +133,17 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   if (providerName === 'zhipu' && providerConfig.codingPlanEnabled) {
     baseURL = ZHIPU_CODING_PLAN_BASE_URL;
     apiFormat = 'openai';
+  }
+
+  // Handle Qwen Coding Plan endpoint switch
+  // Coding Plan supports both OpenAI and Anthropic compatible formats
+  if (providerName === 'qwen' && providerConfig.codingPlanEnabled) {
+    if (apiFormat === 'anthropic') {
+      baseURL = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
+    } else {
+      baseURL = QWEN_CODING_PLAN_OPENAI_BASE_URL;
+      apiFormat = 'openai';
+    }
   }
 
   if (!baseURL) {

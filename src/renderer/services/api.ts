@@ -3,6 +3,9 @@ import { configService } from './config';
 import { ChatMessagePayload, ChatUserMessageInput, ImageAttachment } from '../types/chat';
 
 const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
+// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
+const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
 
 export interface ApiConfig {
   apiKey: string;
@@ -303,6 +306,17 @@ class ApiService {
         if (provider === 'zhipu' && providerConfig.codingPlanEnabled) {
           baseUrl = ZHIPU_CODING_PLAN_BASE_URL;
           apiFormat = 'openai'; // Coding Plan uses OpenAI format
+        }
+
+        // Handle Qwen Coding Plan endpoint switch
+        // Coding Plan supports both OpenAI and Anthropic compatible formats
+        if (provider === 'qwen' && providerConfig.codingPlanEnabled) {
+          if (apiFormat === 'anthropic') {
+            baseUrl = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
+          } else {
+            baseUrl = QWEN_CODING_PLAN_OPENAI_BASE_URL;
+            apiFormat = 'openai';
+          }
         }
         
         return {
