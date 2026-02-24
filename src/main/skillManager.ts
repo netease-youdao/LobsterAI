@@ -1166,12 +1166,58 @@ export class SkillManager {
     }
   }
 
+  private ensureSkillDependencies(skillDir: string): { success: boolean; error?: string } {
+    const nodeModulesPath = path.join(skillDir, 'node_modules');
+    const packageJsonPath = path.join(skillDir, 'package.json');
+
+    // If node_modules exists, assume dependencies are installed
+    if (fs.existsSync(nodeModulesPath)) {
+      return { success: true };
+    }
+
+    // If no package.json, nothing to install
+    if (!fs.existsSync(packageJsonPath)) {
+      return { success: true };
+    }
+
+    // Try to install dependencies
+    console.log(`[skills] Installing dependencies for ${path.basename(skillDir)}...`);
+    try {
+      const result = spawnSync('npm', ['install'], {
+        cwd: skillDir,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+        timeout: 120000, // 2 minute timeout
+      });
+
+      if (result.status !== 0) {
+        const errorMsg = result.stderr || 'npm install failed';
+        console.warn(`[skills] Failed to install dependencies for ${path.basename(skillDir)}:`, errorMsg);
+        return { success: false, error: `Failed to install dependencies: ${errorMsg}` };
+      }
+
+      console.log(`[skills] Dependencies installed for ${path.basename(skillDir)}`);
+      return { success: true };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn(`[skills] Error installing dependencies for ${path.basename(skillDir)}:`, errorMsg);
+      return { success: false, error: `Failed to install dependencies: ${errorMsg}` };
+    }
+  }
+
   async testEmailConnectivity(
     skillId: string,
     config: Record<string, string>
   ): Promise<{ success: boolean; result?: EmailConnectivityTestResult; error?: string }> {
     try {
       const skillDir = this.resolveSkillDir(skillId);
+
+      // Ensure dependencies are installed before running scripts
+      const depsResult = this.ensureSkillDependencies(skillDir);
+      if (!depsResult.success) {
+        return { success: false, error: depsResult.error };
+      }
+
       const imapScript = path.join(skillDir, 'scripts', 'imap.js');
       const smtpScript = path.join(skillDir, 'scripts', 'smtp.js');
       if (!fs.existsSync(imapScript) || !fs.existsSync(smtpScript)) {
