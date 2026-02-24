@@ -320,6 +320,11 @@ export class IMGatewayManager extends EventEmitter {
     if (config.settings) {
       this.updateChatHandler();
     }
+
+    // Hot-update Telegram config on running gateway
+    if (config.telegram && this.telegramGateway) {
+      this.telegramGateway.updateConfig(config.telegram);
+    }
   }
 
   // ==================== Status ====================

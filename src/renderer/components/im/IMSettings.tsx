@@ -43,6 +43,7 @@ const IMSettings: React.FC = () => {
   const [connectivityResults, setConnectivityResults] = useState<Partial<Record<IMPlatform, IMConnectivityTestResult>>>({});
   const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<IMPlatform | null>(null);
   const [language, setLanguage] = useState<'zh' | 'en'>(i18nService.getLanguage());
+  const [allowedUserIdInput, setAllowedUserIdInput] = useState('');
 
   // Subscribe to language changes
   useEffect(() => {
@@ -71,7 +72,7 @@ const IMSettings: React.FC = () => {
   };
 
   // Handle Telegram config change
-  const handleTelegramChange = (field: 'botToken', value: string) => {
+  const handleTelegramChange = (field: 'botToken' | 'allowedUserIds', value: string | string[]) => {
     dispatch(setTelegramConfig({ [field]: value }));
   };
 
@@ -472,6 +473,75 @@ const IMSettings: React.FC = () => {
               />
               <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
                 {i18nService.t('telegramTokenHint') || '从 @BotFather 获取 Bot Token'}
+              </p>
+            </div>
+
+            {/* Allowed User IDs */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Allowed User IDs
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={allowedUserIdInput}
+                  onChange={(e) => setAllowedUserIdInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const id = allowedUserIdInput.trim();
+                      if (id && !(config.telegram.allowedUserIds || []).includes(id)) {
+                        const newIds = [...(config.telegram.allowedUserIds || []), id];
+                        handleTelegramChange('allowedUserIds', newIds);
+                        setAllowedUserIdInput('');
+                        void imService.updateConfig({ ...config, telegram: { ...config.telegram, allowedUserIds: newIds } });
+                      }
+                    }
+                  }}
+                  className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  placeholder={i18nService.t('telegramAllowedUserIdsPlaceholder') || '输入 Telegram User ID'}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = allowedUserIdInput.trim();
+                    if (id && !(config.telegram.allowedUserIds || []).includes(id)) {
+                      const newIds = [...(config.telegram.allowedUserIds || []), id];
+                      handleTelegramChange('allowedUserIds', newIds);
+                      setAllowedUserIdInput('');
+                      void imService.updateConfig({ ...config, telegram: { ...config.telegram, allowedUserIds: newIds } });
+                    }
+                  }}
+                  className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                >
+                  {i18nService.t('add') || '添加'}
+                </button>
+              </div>
+              {(config.telegram.allowedUserIds || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {(config.telegram.allowedUserIds || []).map((id) => (
+                    <span
+                      key={id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                    >
+                      {id}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newIds = (config.telegram.allowedUserIds || []).filter((uid) => uid !== id);
+                          handleTelegramChange('allowedUserIds', newIds);
+                          void imService.updateConfig({ ...config, telegram: { ...config.telegram, allowedUserIds: newIds } });
+                        }}
+                        className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                      >
+                        <XMarkIcon className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('telegramAllowedUserIdsHint') || '限制只有白名单中的用户可以与 Bot 交互。留空则允许所有用户。'}
               </p>
             </div>
 

@@ -85,6 +85,7 @@ export interface FeishuMessageContext {
 export interface TelegramConfig {
   enabled: boolean;
   botToken: string;
+  allowedUserIds?: string[];
   debug?: boolean;
 }
 
@@ -290,6 +291,7 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
 export const DEFAULT_TELEGRAM_CONFIG: TelegramConfig = {
   enabled: false,
   botToken: '',
+  allowedUserIds: [],
   debug: true,
 };
 
