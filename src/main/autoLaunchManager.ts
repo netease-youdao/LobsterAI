@@ -2,7 +2,12 @@ import { app } from 'electron';
 
 export function getAutoLaunchEnabled(): boolean {
   try {
-    const settings = app.getLoginItemSettings();
+    // Windows: must pass the same args used in setLoginItemSettings,
+    // otherwise openAtLogin defaults to comparing against [] which
+    // won't match the registered ['--auto-launched'] and returns false.
+    const settings = app.getLoginItemSettings({
+      args: ['--auto-launched'],
+    });
     return settings.openAtLogin;
   } catch (error) {
     console.error('Failed to get auto-launch settings:', error);

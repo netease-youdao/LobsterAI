@@ -882,8 +882,14 @@ if (!gotTheLock) {
   });
 
   // Auto-launch IPC handlers
+  // Use SQLite store as the source of truth for UI state, because
+  // app.getLoginItemSettings() returns unreliable values on macOS and
+  // requires matching args on Windows.
   ipcMain.handle('app:getAutoLaunch', () => {
-    return { enabled: getAutoLaunchEnabled() };
+    const stored = getStore().get<boolean>('auto_launch_enabled');
+    // Fall back to OS API if SQLite has no record yet (e.g. upgraded from older version)
+    const enabled = stored ?? getAutoLaunchEnabled();
+    return { enabled };
   });
 
   ipcMain.handle('app:setAutoLaunch', (_event, enabled: unknown) => {
@@ -892,6 +898,7 @@ if (!gotTheLock) {
     }
     try {
       setAutoLaunchEnabled(enabled);
+      getStore().set('auto_launch_enabled', enabled);
       return { success: true };
     } catch (error) {
       return {
@@ -2302,6 +2309,7 @@ if (!gotTheLock) {
     // 首次启动时默认开启开机自启动（先写标记再设置，避免崩溃后重复设置）
     if (!getStore().get('auto_launch_initialized')) {
       getStore().set('auto_launch_initialized', true);
+      getStore().set('auto_launch_enabled', true);
       setAutoLaunchEnabled(true);
     }
 
