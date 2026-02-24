@@ -1,6 +1,7 @@
 ---
 name: web-search
 description: Real-time web search using Playwright-controlled browser. Use this skill when you need current information, latest documentation, recent news, or any data beyond your knowledge cutoff (January 2025).
+official: true
 ---
 
 # Web Search Skill
