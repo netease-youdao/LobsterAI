@@ -1,6 +1,7 @@
 ---
 name: scheduled-task
 description: 创建定时任务，支持一次性、每日、每周、每月、Cron 等调度方式。当用户想设置定期自动执行的任务时使用。Create scheduled tasks for recurring or one-time automated execution.
+official: true
 ---
 
 # 定时任务 Skill

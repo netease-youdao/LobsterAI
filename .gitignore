@@ -23,6 +23,7 @@ resources/PortableGit-*.7z.exe
 SKILLs/**/.connection
 SKILLs/**/.server.log
 SKILLs/**/.server.pid
+SKILLs/**/.venv/
 
 package-lock.json
 
