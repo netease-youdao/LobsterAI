@@ -75,6 +75,7 @@ interface ProviderExportEntry {
   apiKey: PasswordEncryptedPayload;
   baseUrl: string;
   apiFormat?: 'anthropic' | 'openai';
+  codingPlanEnabled?: boolean;
   models?: Model[];
 }
 
@@ -97,6 +98,7 @@ interface ProvidersImportEntry {
   apiKeyIv?: string;
   baseUrl?: string;
   apiFormat?: 'anthropic' | 'openai' | 'native';
+  codingPlanEnabled?: boolean;
   models?: Model[];
 }
 
@@ -658,6 +660,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         };
       }
 
+      // Handle codingPlanEnabled toggle for zhipu
+      if (field === 'codingPlanEnabled' && provider === 'zhipu') {
+        const codingPlanEnabled = value === 'true';
+        return {
+          ...prev,
+          zhipu: {
+            ...prev.zhipu,
+            codingPlanEnabled,
+          },
+        };
+      }
+
       return {
         ...prev,
         [provider]: {
@@ -1171,6 +1185,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             apiKey,
             baseUrl: providerConfig.baseUrl,
             apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
+            codingPlanEnabled: (providerConfig as ProviderConfig).codingPlanEnabled,
             models: providerConfig.models,
           },
         ] as const;
@@ -1307,6 +1322,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           apiKey: apiKey ?? providers[providerKey].apiKey,
           baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
           apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
           models: models ?? providers[providerKey].models,
         };
       }
@@ -1383,6 +1399,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           apiKey: apiKey ?? providers[providerKey].apiKey,
           baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
           apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
           models: models ?? providers[providerKey].models,
         };
       }
@@ -2019,7 +2036,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   id={`${activeProvider}-baseUrl`}
                   value={providers[activeProvider].baseUrl}
                   onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
-                  className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                  disabled={activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled}
+                  className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs ${activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                   placeholder={i18nService.t('baseUrlPlaceholder')}
                 />
                 {activeProvider === 'custom' && (
@@ -2035,6 +2053,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                     <code className="ml-1 text-claude-accent/80 dark:text-claude-accent/70 break-all">{i18nService.t('baseUrlHintExample2')}</code>
                   </p>
                 </div>
+                )}
+                {/* GLM Coding Plan 端点提示 */}
+                {activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled && (
+                  <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                    <p className="text-[11px] text-claude-accent dark:text-claude-accent">
+                      <span className="font-medium">GLM Coding Plan:</span> {i18nService.t('zhipuCodingPlanEndpointHint')}
+                      <code className="ml-1 block mt-1 break-all">https://open.bigmodel.cn/api/coding/paas/v4</code>
+                    </p>
+                  </div>
                 )}
               </div>
 
@@ -2075,6 +2102,34 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <p className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
                     {i18nService.t('apiFormatHint')}
                   </p>
+                </div>
+              )}
+
+              {/* GLM Coding Plan 开关 (仅 Zhipu) */}
+              {activeProvider === 'zhipu' && (
+                <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                        GLM Coding Plan
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                        Beta
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('zhipuCodingPlanHint')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-3">
+                    <input
+                      type="checkbox"
+                      checked={providers.zhipu.codingPlanEnabled ?? false}
+                      onChange={(e) => handleProviderConfigChange('zhipu', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
+                  </label>
                 </div>
               )}
 

@@ -660,6 +660,37 @@ function filterOpenAIToolsForProvider(
   }
 }
 
+/**
+ * MiniMax API only accepts 'system', 'user', and 'assistant' roles.
+ * OpenAI's newer API uses 'developer' role which MiniMax doesn't recognize.
+ * This function remaps 'developer' to 'system' for MiniMax compatibility.
+ */
+function remapMessageRolesForMiniMax(
+  openAIRequest: Record<string, unknown>,
+  provider?: string
+): void {
+  if (provider !== 'minimax') {
+    return;
+  }
+
+  const messages = toArray(openAIRequest.messages);
+  if (messages.length === 0) {
+    return;
+  }
+
+  for (const message of messages) {
+    const messageObj = toOptionalObject(message);
+    if (!messageObj) {
+      continue;
+    }
+
+    const role = toString(messageObj.role);
+    if (role === 'developer') {
+      messageObj.role = 'system';
+    }
+  }
+}
+
 function extractMaxTokensRange(errorMessage: string): { min: number; max: number } | null {
   if (!errorMessage) {
     return null;
@@ -2188,6 +2219,7 @@ async function handleRequest(
     openAIRequest.model = upstreamConfig.model;
   }
   filterOpenAIToolsForProvider(openAIRequest, upstreamConfig.provider);
+  remapMessageRolesForMiniMax(openAIRequest, upstreamConfig.provider);
   hydrateOpenAIRequestToolCalls(openAIRequest, upstreamConfig.provider, upstreamConfig.baseURL);
 
   if (upstreamAPIType === 'chat_completions') {

@@ -10,6 +10,8 @@ import {
 } from './coworkOpenAICompatProxy';
 import { normalizeProviderApiFormat, type AnthropicApiFormat } from './coworkFormatTransform';
 
+const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
+
 type ProviderModel = {
   id: string;
 };
@@ -19,6 +21,7 @@ type ProviderConfig = {
   apiKey: string;
   baseUrl: string;
   apiFormat?: 'anthropic' | 'openai' | 'native';
+  codingPlanEnabled?: boolean;
   models?: ProviderModel[];
 };
 
@@ -73,6 +76,7 @@ type MatchedProvider = {
   providerConfig: ProviderConfig;
   modelId: string;
   apiFormat: AnthropicApiFormat;
+  baseURL: string;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
@@ -119,8 +123,14 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   }
 
   const [providerName, providerConfig] = providerEntry;
-  const apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
-  const baseURL = providerConfig.baseUrl?.trim();
+  let apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
+  let baseURL = providerConfig.baseUrl?.trim();
+
+  // Handle Zhipu GLM Coding Plan endpoint switch
+  if (providerName === 'zhipu' && providerConfig.codingPlanEnabled) {
+    baseURL = ZHIPU_CODING_PLAN_BASE_URL;
+    apiFormat = 'openai';
+  }
 
   if (!baseURL) {
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
@@ -136,6 +146,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       providerConfig,
       modelId,
       apiFormat,
+      baseURL,
     },
   };
 }
@@ -165,7 +176,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
     };
   }
 
-  const resolvedBaseURL = matched.providerConfig.baseUrl.trim();
+  const resolvedBaseURL = matched.baseURL;
   const resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
   const effectiveApiKey = matched.providerName === 'ollama'
     && matched.apiFormat === 'anthropic'
