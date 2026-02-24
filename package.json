@@ -2,7 +2,7 @@
   "name": "lobsterai",
   "private": true,
   "license": "MIT",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "main": "dist-electron/main.js",
   "engines": {
     "node": ">=24 <25"
