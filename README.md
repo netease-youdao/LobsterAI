@@ -244,10 +244,11 @@ LobsterAI can bridge the Agent to multiple IM platforms. Send a message from you
 
 | Platform | Protocol | Description |
 |----------|----------|-------------|
-| DingTalk | DingTalk Stream | Enterprise bot with bidirectional communication |
-| Feishu (Lark) | Lark SDK | Feishu app bot |
+| DingTalk | DingTalk Stream | Enterprise robot bidirectional communication |
+| Feishu | Lark SDK | Feishu app robot |
 | Telegram | grammY | Bot API integration |
 | Discord | discord.js | Discord bot integration |
+| NetEase IM | node-nim V2 SDK | NetEase IM P2P messaging |
 
 Configure the corresponding platform Token/Secret in the Settings panel to enable. Once set up, you can send instructions directly to the Agent from your phone IM (e.g., "analyze this dataset", "make a weekly summary PPT"), and the Agent will execute on the desktop and return results.
 

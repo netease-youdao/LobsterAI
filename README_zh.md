@@ -249,6 +249,7 @@ LobsterAI 支持将 Agent 桥接到多种 IM 平台。在手机上通过 IM 发�
 | 飞书 | Lark SDK | 飞书应用机器人 |
 | Telegram | grammY | Bot API 接入 |
 | Discord | discord.js | Discord Bot 接入 |
+| 云信 IM | node-nim V2 SDK | 网易云信 IM P2P 私聊 |
 
 在设置面板中配置对应平台的 Token/密钥即可启用。配置完成后，你可以在手机 IM 中直接对 Agent 下达指令（如「帮我分析这份数据」「做一份本周工作汇报 PPT」），Agent 会在桌面端自动执行并返回结果。
 

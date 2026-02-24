@@ -8,7 +8,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
 import { imService } from '../../services/im';
-import { setDingTalkConfig, setFeishuConfig, setTelegramConfig, setDiscordConfig, clearError } from '../../store/slices/imSlice';
+import { setDingTalkConfig, setFeishuConfig, setTelegramConfig, setDiscordConfig, setNimConfig, clearError } from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
 import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
@@ -19,6 +19,7 @@ const platformMeta: Record<IMPlatform, { label: string; logo: string }> = {
   feishu: { label: '飞书', logo: 'feishu.png' },
   telegram: { label: 'Telegram', logo: 'telegram.svg' },
   discord: { label: 'Discord', logo: 'discord.svg' },
+  nim: { label: '云信', logo: 'nim.png' },
 };
 
 const verdictColorClass: Record<IMConnectivityTestResult['verdict'], string> = {
@@ -79,6 +80,11 @@ const IMSettings: React.FC = () => {
     dispatch(setDiscordConfig({ [field]: value }));
   };
 
+  // Handle NIM config change
+  const handleNimChange = (field: 'appKey' | 'account' | 'token', value: string) => {
+    dispatch(setNimConfig({ [field]: value }));
+  };
+
   // Save config on blur
   const handleSaveConfig = async () => {
     await imService.updateConfig(config);
@@ -128,12 +134,7 @@ const IMSettings: React.FC = () => {
     const newEnabled = !isEnabled;
 
     // Map platform to its Redux action
-    const setConfigAction = {
-      dingtalk: setDingTalkConfig,
-      feishu: setFeishuConfig,
-      telegram: setTelegramConfig,
-      discord: setDiscordConfig,
-    }[platform];
+    const setConfigAction = getSetConfigAction(platform);
 
     // Update Redux state
     dispatch(setConfigAction({ enabled: newEnabled }));
@@ -162,6 +163,7 @@ const IMSettings: React.FC = () => {
   const feishuConnected = status.feishu.connected;
   const telegramConnected = status.telegram.connected;
   const discordConnected = status.discord.connected;
+  const nimConnected = status.nim.connected;
 
   // Compute visible platforms based on language
   const platforms = useMemo<IMPlatform[]>(() => {
@@ -187,6 +189,9 @@ const IMSettings: React.FC = () => {
     if (platform === 'discord') {
       return !!config.discord.botToken;
     }
+    if (platform === 'nim') {
+      return !!(config.nim.appKey && config.nim.account && config.nim.token);
+    }
     return !!(config.feishu.appId && config.feishu.appSecret);
   };
 
@@ -200,6 +205,7 @@ const IMSettings: React.FC = () => {
     if (platform === 'dingtalk') return dingtalkConnected;
     if (platform === 'telegram') return telegramConnected;
     if (platform === 'discord') return discordConnected;
+    if (platform === 'nim') return nimConnected;
     return feishuConnected;
   };
 
@@ -225,6 +231,18 @@ const IMSettings: React.FC = () => {
       setActivePlatform(platform);
       toggleGateway(platform);
     }
+  };
+
+  // Toggle gateway on/off - map platform to Redux action
+  const getSetConfigAction = (platform: IMPlatform) => {
+    const actionMap: Record<IMPlatform, any> = {
+      dingtalk: setDingTalkConfig,
+      feishu: setFeishuConfig,
+      telegram: setTelegramConfig,
+      discord: setDiscordConfig,
+      nim: setNimConfig,
+    };
+    return actionMap[platform];
   };
 
   const renderConnectivityTestButton = (platform: IMPlatform) => (
@@ -513,6 +531,96 @@ const IMSettings: React.FC = () => {
             {status.discord.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
                 {status.discord.lastError}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* NIM (NetEase IM) Settings */}
+        {activePlatform === 'nim' && (
+          <div className="space-y-3">
+            {/* How to get NIM credentials */}
+            <div className="mb-3 p-3 rounded-lg bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/30">
+              <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+                {i18nService.t('nimCredentialsGuide') || '如何获取云信凭证：'}
+              </p>
+              <ol className="mt-2 ml-3 text-xs text-blue-600 dark:text-blue-400 space-y-1 list-decimal list-inside">
+                <li>{i18nService.t('nimGuideStep1') || '登录网易云信控制台（yunxin.163.com）'}</li>
+                <li>{i18nService.t('nimGuideStep2') || '创建或选择应用，获取 App Key'}</li>
+                <li>{i18nService.t('nimGuideStep3') || '在"账号管理"中创建 IM 账号（accid）'}</li>
+                <li>{i18nService.t('nimGuideStep4') || '为该账号生成 Token（建议长期有效）'}</li>
+              </ol>
+            </div>
+
+            {/* App Key */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                App Key
+              </label>
+              <input
+                type="text"
+                value={config.nim.appKey}
+                onChange={(e) => handleNimChange('appKey', e.target.value)}
+                onBlur={handleSaveConfig}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                placeholder="your_app_key"
+              />
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('nimAppKeyHint') || '从云信控制台应用信息中获取'}
+              </p>
+            </div>
+
+            {/* Account */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Account (accid)
+              </label>
+              <input
+                type="text"
+                value={config.nim.account}
+                onChange={(e) => handleNimChange('account', e.target.value)}
+                onBlur={handleSaveConfig}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                placeholder={i18nService.t('nimAccountPlaceholder') || 'bot_account_id'}
+              />
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('nimAccountHint') || '在云信控制台"账号管理"中创建的 IM 账号 ID'}
+              </p>
+            </div>
+
+            {/* Token */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Token
+              </label>
+              <input
+                type="password"
+                value={config.nim.token}
+                onChange={(e) => handleNimChange('token', e.target.value)}
+                onBlur={handleSaveConfig}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                placeholder="••••••••••••"
+              />
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('nimTokenHint') || '为该账号生成的访问凭证（建议设置为长期有效）'}
+              </p>
+            </div>
+
+            <div className="pt-1">
+              {renderConnectivityTestButton('nim')}
+            </div>
+
+            {/* Bot account display */}
+            {status.nim.botAccount && (
+              <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                Account: {status.nim.botAccount}
+              </div>
+            )}
+
+            {/* Error display */}
+            {status.nim.lastError && (
+              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                {status.nim.lastError}
               </div>
             )}
           </div>

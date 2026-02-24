@@ -56,6 +56,7 @@
     "grammy": "^1.21.0",
     "katex": "^0.16.21",
     "mermaid": "^10.9.5",
+    "node-nim": "^10.9.76",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.0.0",

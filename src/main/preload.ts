@@ -242,10 +242,10 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (config: any) => ipcRenderer.invoke('im:config:set', config),
 
     // Gateway control
-    startGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord') => ipcRenderer.invoke('im:gateway:start', platform),
-    stopGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord') => ipcRenderer.invoke('im:gateway:stop', platform),
+    startGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim') => ipcRenderer.invoke('im:gateway:start', platform),
+    stopGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim') => ipcRenderer.invoke('im:gateway:stop', platform),
     testGateway: (
-      platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord',
+      platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim',
       configOverride?: any
     ) => ipcRenderer.invoke('im:gateway:test', platform, configOverride),
 

@@ -14,7 +14,7 @@ interface TaskFormProps {
 
 type ScheduleMode = 'once' | 'daily' | 'weekly' | 'monthly';
 
-const NOTIFY_PLATFORMS: NotifyPlatform[] = ['dingtalk', 'feishu', 'telegram', 'discord'];
+const NOTIFY_PLATFORMS: NotifyPlatform[] = ['dingtalk', 'feishu', 'telegram', 'discord', 'nim'];
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6] as const; // 0=Sunday
 
 // Parse existing schedule into UI state

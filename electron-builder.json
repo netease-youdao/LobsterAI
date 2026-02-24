@@ -82,7 +82,8 @@
   "asarUnpack": [
     "node_modules/@anthropic-ai/claude-agent-sdk/**",
     "node_modules/@img/**",
-    "node_modules/sql.js/dist/**"
+    "node_modules/sql.js/dist/**",
+    "node_modules/node-nim/**"
   ],
   "asar": true
 }

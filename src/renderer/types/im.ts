@@ -82,15 +82,35 @@ export interface DiscordGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+// ==================== NIM (NetEase IM) Types ====================
+
+export interface NimConfig {
+  enabled: boolean;
+  appKey: string;
+  account: string;
+  token: string;
+  debug?: boolean;
+}
+
+export interface NimGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  botAccount: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord';
+export type IMPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim';
 
 export interface IMGatewayConfig {
   dingtalk: DingTalkConfig;
   feishu: FeishuConfig;
   telegram: TelegramConfig;
   discord: DiscordConfig;
+  nim: NimConfig;
   settings: IMSettings;
 }
 
@@ -104,6 +124,7 @@ export interface IMGatewayStatus {
   feishu: FeishuGatewayStatus;
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
+  nim: NimGatewayStatus;
 }
 
 // ==================== Media Attachment Types ====================
@@ -171,7 +192,8 @@ export type IMConnectivityCheckCode =
   | 'feishu_event_subscription_required'
   | 'discord_group_requires_mention'
   | 'telegram_privacy_mode_hint'
-  | 'dingtalk_bot_membership_hint';
+  | 'dingtalk_bot_membership_hint'
+  | 'nim_p2p_only_hint';
 
 export interface IMConnectivityCheck {
   code: IMConnectivityCheckCode;
@@ -224,6 +246,14 @@ export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
   debug: true,
 };
 
+export const DEFAULT_NIM_CONFIG: NimConfig = {
+  enabled: false,
+  appKey: '',
+  account: '',
+  token: '',
+  debug: true,
+};
+
 export const DEFAULT_IM_SETTINGS: IMSettings = {
   systemPrompt: '',
   skillsEnabled: true,
@@ -234,6 +264,7 @@ export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   feishu: DEFAULT_FEISHU_CONFIG,
   telegram: DEFAULT_TELEGRAM_CONFIG,
   discord: DEFAULT_DISCORD_CONFIG,
+  nim: DEFAULT_NIM_CONFIG,
   settings: DEFAULT_IM_SETTINGS,
 };
 
@@ -267,6 +298,14 @@ export const DEFAULT_IM_STATUS: IMGatewayStatus = {
     startedAt: null,
     lastError: null,
     botUsername: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
+  },
+  nim: {
+    connected: false,
+    startedAt: null,
+    lastError: null,
+    botAccount: null,
     lastInboundAt: null,
     lastOutboundAt: null,
   },
