@@ -21,6 +21,7 @@ import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './au
 import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { initLogger, getLogFilePath } from './logger';
+import { cpRecursiveSync } from './fsCompat';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -267,11 +268,8 @@ const migrateLegacyUserData = (): void => {
         if (fs.existsSync(targetPath)) {
           continue;
         }
-        fs.cpSync(sourcePath, targetPath, {
-          recursive: true,
+        cpRecursiveSync(sourcePath, targetPath, {
           dereference: true,
-          force: false,
-          errorOnExist: false,
         });
       }
       console.log(`[Main] Migrated missing user data from legacy directory: ${legacyRoot}`);
@@ -494,6 +492,10 @@ process.on('unhandledRejection', (error) => {
   console.error('Unhandled Rejection:', error);
 });
 
+process.on('exit', (code) => {
+  console.log(`[Main] Process exiting with code: ${code}`);
+});
+
 let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let coworkRunner: CoworkRunner | null = null;
@@ -508,7 +510,12 @@ const initStore = async (): Promise<SqliteStore> => {
     if (!app.isReady()) {
       throw new Error('Store accessed before app is ready.');
     }
-    storeInitPromise = SqliteStore.create(app.getPath('userData'));
+    storeInitPromise = Promise.race([
+      SqliteStore.create(app.getPath('userData')),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Store initialization timed out after 15s')), 15_000)
+      ),
+    ]);
   }
   return storeInitPromise;
 };
@@ -2252,9 +2259,12 @@ if (!gotTheLock) {
 
   // 初始化应用
   const initApp = async () => {
+    console.log('[Main] initApp: waiting for app.whenReady()');
     await app.whenReady();
+    console.log('[Main] initApp: app is ready');
 
     migrateLegacyUserData();
+    console.log('[Main] initApp: legacy data migration done');
 
     // Note: Calendar permission is checked on-demand when calendar operations are requested
     // We don't trigger permission dialogs at startup to avoid annoying users
@@ -2265,23 +2275,50 @@ if (!gotTheLock) {
       fs.mkdirSync(defaultProjectDir, { recursive: true });
       console.log('Created default project directory:', defaultProjectDir);
     }
+    console.log('[Main] initApp: default project dir ensured');
 
+    console.log('[Main] initApp: starting initStore()');
     store = await initStore();
+    console.log('[Main] initApp: store initialized');
+
     // Defensive recovery: app may be force-closed during execution and leave
     // stale running flags in DB. Normalize them on startup.
     const resetCount = getCoworkStore().resetRunningSessions();
+    console.log('[Main] initApp: resetRunningSessions done, count:', resetCount);
     if (resetCount > 0) {
       console.log(`[Main] Reset ${resetCount} stuck cowork session(s) from running -> idle`);
     }
     // Inject store getter into claudeSettings
     setStoreGetter(() => store);
+    console.log('[Main] initApp: setStoreGetter done');
     const manager = getSkillManager();
-    manager.syncBundledSkillsToUserData();
-    manager.startWatching();
+    console.log('[Main] initApp: getSkillManager done');
 
-    // Start skill services
-    const skillServices = getSkillServiceManager();
-    await skillServices.startAll();
+    // Non-critical: sync bundled skills to user data.
+    // Wrapped in try-catch so a failure here does not block window creation.
+    try {
+      manager.syncBundledSkillsToUserData();
+      console.log('[Main] initApp: syncBundledSkillsToUserData done');
+    } catch (error) {
+      console.error('[Main] initApp: syncBundledSkillsToUserData failed:', error);
+    }
+
+    try {
+      manager.startWatching();
+      console.log('[Main] initApp: startWatching done');
+    } catch (error) {
+      console.error('[Main] initApp: startWatching failed:', error);
+    }
+
+    // Start skill services (non-critical)
+    try {
+      const skillServices = getSkillServiceManager();
+      console.log('[Main] initApp: getSkillServiceManager done');
+      await skillServices.startAll();
+      console.log('[Main] initApp: skill services started');
+    } catch (error) {
+      console.error('[Main] initApp: skill services failed:', error);
+    }
 
     // [关键代码] 显式告诉 Electron 使用系统的代理配置
     // 这会涵盖绝大多数 VPN（如 Clash, V2Ray 等开启了"系统代理"模式的情况）
@@ -2299,7 +2336,9 @@ if (!gotTheLock) {
     setContentSecurityPolicy();
 
     // 创建窗口
+    console.log('[Main] initApp: creating window');
     createWindow();
+    console.log('[Main] initApp: window created');
 
     // Auto-reconnect IM bots that were enabled before restart
     getIMGatewayManager().startAllEnabled().catch((error) => {
