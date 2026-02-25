@@ -2,6 +2,11 @@ import { store } from '../store';
 import { configService } from './config';
 import { ChatMessagePayload, ChatUserMessageInput, ImageAttachment } from '../types/chat';
 
+const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
+// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
+const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
+
 export interface ApiConfig {
   apiKey: string;
   baseUrl: string;
@@ -76,7 +81,8 @@ class ApiService {
       return `${normalized}/v1beta/openai/chat/completions`;
     }
 
-    if (normalized.endsWith('/v1')) {
+    // Handle /v1, /v4 etc. versioned paths
+    if (/\/v\d+$/.test(normalized)) {
       return `${normalized}/chat/completions`;
     }
     return `${normalized}/v1/chat/completions`;
@@ -292,11 +298,32 @@ class ApiService {
     if (appConfig?.providers?.[provider]) {
       const providerConfig = appConfig.providers[provider];
       if (providerConfig.enabled && (providerConfig.apiKey || !this.providerRequiresApiKey(provider))) {
+        let baseUrl = providerConfig.baseUrl;
+        let apiFormat = this.normalizeApiFormat(providerConfig.apiFormat);
+        
+        // Handle Zhipu GLM Coding Plan endpoint switch
+        // Coding Plan uses OpenAI-compatible format: /v4/chat/completions
+        if (provider === 'zhipu' && providerConfig.codingPlanEnabled) {
+          baseUrl = ZHIPU_CODING_PLAN_BASE_URL;
+          apiFormat = 'openai'; // Coding Plan uses OpenAI format
+        }
+
+        // Handle Qwen Coding Plan endpoint switch
+        // Coding Plan supports both OpenAI and Anthropic compatible formats
+        if (provider === 'qwen' && providerConfig.codingPlanEnabled) {
+          if (apiFormat === 'anthropic') {
+            baseUrl = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
+          } else {
+            baseUrl = QWEN_CODING_PLAN_OPENAI_BASE_URL;
+            apiFormat = 'openai';
+          }
+        }
+        
         return {
           apiKey: providerConfig.apiKey,
-          baseUrl: providerConfig.baseUrl,
+          baseUrl,
           provider: provider,
-          apiFormat: this.normalizeApiFormat(providerConfig.apiFormat),
+          apiFormat,
         };
       }
     }
