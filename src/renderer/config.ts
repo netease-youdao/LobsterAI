@@ -120,6 +120,19 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    volcengine: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      /** 是否启用 Volcengine Coding Plan 模式（使用专属 Coding API 端点） */
+      codingPlanEnabled?: boolean;
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     xiaomi: {
       enabled: boolean;
       apiKey: string;
@@ -292,6 +305,19 @@ export const defaultConfig: AppConfig = {
         { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false }
       ]
     },
+    volcengine: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/compatible',
+      apiFormat: 'anthropic',
+      codingPlanEnabled: false,
+      models: [
+        { id: 'ark-code-latest', name: 'Auto', supportsImage: false },
+        { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao-Seed-2.0-pro', supportsImage: false },
+        { id: 'doubao-seed-2-0-lite-260215', name: 'Doubao-Seed-2.0-lite', supportsImage: false },
+        { id: 'doubao-seed-2-0-mini-260215', name: 'Doubao-Seed-2.0-mini', supportsImage: false }
+      ]
+    },
     openrouter: {
       enabled: false,
       apiKey: '',
@@ -345,7 +371,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'xiaomi', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'xiaomi', 'volcengine', 'ollama', 'custom'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 
