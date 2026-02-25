@@ -6,6 +6,9 @@ const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4'
 // Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
 const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
 const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
+// Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
+const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
 
 export interface ApiConfig {
   apiKey: string;
@@ -264,7 +267,7 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'ollama'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -287,6 +290,8 @@ class ApiService {
       return 'qwen';
     } else if (normalizedModelId.startsWith('mimo') || normalizedModelId.includes('xiaomi')) {
       return 'xiaomi';
+    } else if (normalizedModelId.startsWith('doubao') || normalizedModelId.includes('volcengine') || normalizedModelId.includes('ep-') || normalizedModelId.startsWith('ark-')) {
+      return 'volcengine';
     }
     return 'openai'; // 默认使用 OpenAI 兼容格式
   }
@@ -315,6 +320,17 @@ class ApiService {
             baseUrl = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
           } else {
             baseUrl = QWEN_CODING_PLAN_OPENAI_BASE_URL;
+            apiFormat = 'openai';
+          }
+        }
+
+        // Handle Volcengine Coding Plan endpoint switch
+        // Coding Plan supports both OpenAI and Anthropic compatible formats
+        if (provider === 'volcengine' && providerConfig.codingPlanEnabled) {
+          if (apiFormat === 'anthropic') {
+            baseUrl = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
+          } else {
+            baseUrl = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
             apiFormat = 'openai';
           }
         }
