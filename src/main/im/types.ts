@@ -35,6 +35,8 @@ export interface DingTalkInboundMessage {
     fileName?: string;
     recognition?: string;
     richText?: Array<{ text?: string }>;
+    duration?: string;
+    videoType?: string;
   };
   conversationType: '1' | '2'; // 1: DM, 2: Group
   conversationId: string;
@@ -78,6 +80,10 @@ export interface FeishuMessageContext {
   parentId?: string;
   content: string;
   contentType: string;
+  mediaKey?: string;
+  mediaType?: string;
+  mediaFileName?: string;
+  mediaDuration?: number;
 }
 
 // ==================== Telegram Types ====================
@@ -163,10 +169,10 @@ export interface IMGatewayStatus {
 
 // ==================== Media Attachment Types ====================
 
-export type TelegramMediaType = 'image' | 'video' | 'audio' | 'voice' | 'document' | 'sticker';
+export type IMMediaType = 'image' | 'video' | 'audio' | 'voice' | 'document' | 'sticker';
 
 export interface IMMediaAttachment {
-  type: TelegramMediaType;
+  type: IMMediaType;
   localPath: string;          // 下载后的本地路径
   mimeType: string;           // MIME 类型
   fileName?: string;          // 原始文件名
@@ -185,7 +191,6 @@ export interface IMMessage {
   content: string;
   chatType: 'direct' | 'group';
   timestamp: number;
-  // 媒体附件（Telegram 支持）
   attachments?: IMMediaAttachment[];
   mediaGroupId?: string;      // 媒体组 ID（用于合并多张图片）
 }

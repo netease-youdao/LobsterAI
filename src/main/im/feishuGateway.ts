@@ -12,6 +12,7 @@ import {
   FeishuGatewayStatus,
   FeishuMessageContext,
   IMMessage,
+  IMMediaAttachment,
   DEFAULT_FEISHU_STATUS,
 } from './types';
 import {
@@ -21,6 +22,9 @@ import {
   isFeishuImagePath,
   isFeishuAudioPath,
   resolveFeishuMediaPath,
+  downloadFeishuMedia,
+  getFeishuDefaultMimeType,
+  mapFeishuMediaType,
 } from './feishuMedia';
 import { parseMediaMarkers } from './dingtalkMediaParser';
 import { stringifyAsciiJson } from './jsonEncoding';
@@ -323,6 +327,11 @@ export class FeishuGateway extends EventEmitter {
       if (messageType === 'post') {
         return this.parsePostContent(content);
       }
+      // For media types, return descriptive text (media keys extracted in parseMessageEvent)
+      if (messageType === 'image') return '[图片]';
+      if (messageType === 'audio') return '[语音]';
+      if (messageType === 'video' || messageType === 'media') return '[视频]';
+      if (messageType === 'file') return parsed.file_name ? `[文件: ${parsed.file_name}]` : '[文件]';
       return content;
     } catch {
       return content;
@@ -387,9 +396,38 @@ export class FeishuGateway extends EventEmitter {
    * Parse Feishu message event
    */
   private parseMessageEvent(event: FeishuMessageEvent): FeishuMessageContext {
-    const rawContent = this.parseMessageContent(event.message.content, event.message.message_type);
+    const messageType = event.message.message_type;
+    const rawContent = this.parseMessageContent(event.message.content, messageType);
     const mentionedBot = this.checkBotMentioned(event);
     const content = this.stripBotMention(rawContent, event.message.mentions);
+
+    // Extract media keys from content JSON for media message types
+    let mediaKey: string | undefined;
+    let mediaType: string | undefined;
+    let mediaFileName: string | undefined;
+    let mediaDuration: number | undefined;
+
+    if (['image', 'file', 'audio', 'video', 'media'].includes(messageType)) {
+      try {
+        const parsed = JSON.parse(event.message.content);
+        mediaType = messageType;
+
+        if (messageType === 'image') {
+          mediaKey = parsed.image_key;
+        } else {
+          // file, audio, video, media all use file_key
+          mediaKey = parsed.file_key;
+          mediaFileName = parsed.file_name;
+          if (parsed.duration !== undefined) {
+            mediaDuration = typeof parsed.duration === 'string'
+              ? parseInt(parsed.duration, 10)
+              : parsed.duration;
+          }
+        }
+      } catch {
+        // JSON parse failed, skip media extraction
+      }
+    }
 
     return {
       chatId: event.message.chat_id,
@@ -401,7 +439,11 @@ export class FeishuGateway extends EventEmitter {
       rootId: event.message.root_id,
       parentId: event.message.parent_id,
       content,
-      contentType: event.message.message_type,
+      contentType: messageType,
+      mediaKey,
+      mediaType,
+      mediaFileName,
+      mediaDuration,
     };
   }
 
@@ -725,6 +767,32 @@ export class FeishuGateway extends EventEmitter {
       return;
     }
 
+    // Download media attachments if present
+    let attachments: IMMediaAttachment[] | undefined;
+    if (ctx.mediaKey && ctx.mediaType && this.restClient) {
+      try {
+        const result = await downloadFeishuMedia(
+          this.restClient,
+          ctx.messageId,
+          ctx.mediaKey,
+          ctx.mediaType,
+          ctx.mediaFileName
+        );
+        if (result) {
+          attachments = [{
+            type: mapFeishuMediaType(ctx.mediaType),
+            localPath: result.localPath,
+            mimeType: getFeishuDefaultMimeType(ctx.mediaType, ctx.mediaFileName),
+            fileName: ctx.mediaFileName,
+            fileSize: result.fileSize,
+            duration: ctx.mediaDuration ? ctx.mediaDuration / 1000 : undefined,
+          }];
+        }
+      } catch (err: any) {
+        console.error(`[Feishu] 下载媒体失败: ${err.message}`);
+      }
+    }
+
     // Create IMMessage
     const message: IMMessage = {
       platform: 'feishu',
@@ -734,6 +802,7 @@ export class FeishuGateway extends EventEmitter {
       content: ctx.content,
       chatType: ctx.chatType === 'p2p' ? 'direct' : 'group',
       timestamp: Date.now(),
+      attachments,
     };
     this.status.lastInboundAt = Date.now();
 
@@ -749,6 +818,9 @@ export class FeishuGateway extends EventEmitter {
       mentionedBot: ctx.mentionedBot,
       rootId: ctx.rootId,
       parentId: ctx.parentId,
+      mediaKey: ctx.mediaKey,
+      mediaType: ctx.mediaType,
+      attachmentsCount: attachments?.length || 0,
     }, null, 2));
 
     // Create reply function with media support
