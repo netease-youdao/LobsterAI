@@ -118,6 +118,15 @@ export class TelegramGateway extends EventEmitter {
   }
 
   /**
+   * Update config on a running gateway without restart
+   */
+  updateConfig(config: TelegramConfig): void {
+    if (this.config) {
+      this.config = { ...this.config, ...config };
+    }
+  }
+
+  /**
    * Start Telegram gateway with polling mode
    */
   async start(config: TelegramConfig): Promise<void> {
@@ -293,6 +302,17 @@ export class TelegramGateway extends EventEmitter {
         ? [message.from.first_name, message.from.last_name].filter(Boolean).join(' ').trim() || message.from.username
         : 'Unknown';
       const senderId = message.from?.id?.toString() || 'unknown';
+
+      // Check allowed user IDs whitelist
+      if (this.config?.allowedUserIds && this.config.allowedUserIds.length > 0) {
+        const log = this.config?.debug ? console.log : () => {};
+        log(`[Telegram] 白名单校验: senderId=${senderId}, allowedUserIds=${JSON.stringify(this.config.allowedUserIds)}`);
+        if (!this.config.allowedUserIds.includes(senderId)) {
+          console.log(`[Telegram] 消息被拒绝 - 发送者 ${senderId} (${senderName}) 不在白名单中`);
+          return;
+        }
+        log(`[Telegram] 白名单校验通过: ${senderId} (${senderName})`);
+      }
 
       // Extract text content (could be text or caption)
       const textContent = message.text || message.caption || '';

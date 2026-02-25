@@ -247,6 +247,10 @@ export class IMGatewayManager extends EventEmitter {
         await replyFn(response);
       } catch (error: any) {
         console.error(`[IMGatewayManager] Error processing message: ${error.message}`);
+        // Don't send "Replaced by a newer IM request" error to user, just log it
+        if (error.message === 'Replaced by a newer IM request') {
+          return;
+        }
         // Send error message to user
         try {
           await replyFn(`处理消息时出错: ${error.message}`);
@@ -319,6 +323,11 @@ export class IMGatewayManager extends EventEmitter {
     // Update chat handler if settings changed
     if (config.settings) {
       this.updateChatHandler();
+    }
+
+    // Hot-update Telegram config on running gateway
+    if (config.telegram && this.telegramGateway) {
+      this.telegramGateway.updateConfig(config.telegram);
     }
   }
 

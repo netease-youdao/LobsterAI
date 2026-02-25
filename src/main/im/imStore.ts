@@ -104,6 +104,25 @@ export class IMStore {
       }
     }
 
+    // Migrate feishu renderMode from 'text' to 'card' (previous renderer default was incorrect)
+    const feishuResult = this.db.exec('SELECT value FROM im_config WHERE key = ?', ['feishu']);
+    if (feishuResult[0]?.values[0]) {
+      try {
+        const feishuConfig = JSON.parse(feishuResult[0].values[0][0] as string) as Partial<FeishuConfig>;
+        if (feishuConfig.renderMode === 'text') {
+          feishuConfig.renderMode = 'card';
+          const now = Date.now();
+          this.db.run(
+            'UPDATE im_config SET value = ?, updated_at = ? WHERE key = ?',
+            [JSON.stringify(feishuConfig), now, 'feishu']
+          );
+          changed = true;
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
     if (changed) {
       this.saveDb();
     }
