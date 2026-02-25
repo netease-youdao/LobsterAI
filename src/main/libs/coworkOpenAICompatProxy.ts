@@ -778,6 +778,49 @@ function normalizeMaxTokensFieldForOpenAIProvider(
   delete openAIRequest.max_tokens;
 }
 
+/**
+ * Merge multiple system messages into a single one at the beginning.
+ * Some OpenAI-compatible providers (e.g. MiniMax) reject requests containing
+ * more than one system message, returning error 2013 "invalid chat setting".
+ * This is safe for all providers since the semantic meaning is preserved.
+ */
+function mergeSystemMessagesForProvider(
+  openAIRequest: Record<string, unknown>
+): void {
+  const messages = toArray(openAIRequest.messages);
+  if (messages.length === 0) {
+    return;
+  }
+
+  const systemTexts: string[] = [];
+  const nonSystemMessages: unknown[] = [];
+  for (const msg of messages) {
+    const msgObj = toOptionalObject(msg);
+    if (!msgObj) {
+      nonSystemMessages.push(msg);
+      continue;
+    }
+    if (toString(msgObj.role) === 'system') {
+      const text = typeof msgObj.content === 'string' ? msgObj.content : '';
+      if (text) {
+        systemTexts.push(text);
+      }
+    } else {
+      nonSystemMessages.push(msg);
+    }
+  }
+
+  // Only rewrite if there are 2+ system messages; otherwise leave as-is
+  if (systemTexts.length <= 1) {
+    return;
+  }
+
+  const merged: unknown[] = [];
+  merged.push({ role: 'system', content: systemTexts.join('\n') });
+  merged.push(...nonSystemMessages);
+  openAIRequest.messages = merged;
+}
+
 function isMaxTokensUnsupportedError(errorMessage: string): boolean {
   const normalized = errorMessage.toLowerCase();
   return normalized.includes('max_tokens')
@@ -2218,12 +2261,31 @@ async function handleRequest(
   if (!openAIRequest.model) {
     openAIRequest.model = upstreamConfig.model;
   }
+
+  // Force-remap model name to the user-configured upstream model.
+  // The Claude Agent SDK may emit internal model names (e.g. claude-haiku-4-5-20251001)
+  // for probe/warmup requests, which non-Anthropic providers don't recognize.
+  if (upstreamConfig.provider && upstreamConfig.provider !== 'anthropic' && upstreamConfig.provider !== 'openai') {
+    const requestModel = typeof openAIRequest.model === 'string' ? openAIRequest.model : '';
+    if (requestModel !== upstreamConfig.model) {
+      console.info(
+        `[CoworkProxy] Remapping model: ${requestModel} -> ${upstreamConfig.model} (provider: ${upstreamConfig.provider})`
+      );
+      openAIRequest.model = upstreamConfig.model;
+    }
+  }
   filterOpenAIToolsForProvider(openAIRequest, upstreamConfig.provider);
   remapMessageRolesForMiniMax(openAIRequest, upstreamConfig.provider);
   hydrateOpenAIRequestToolCalls(openAIRequest, upstreamConfig.provider, upstreamConfig.baseURL);
 
   if (upstreamAPIType === 'chat_completions') {
     normalizeMaxTokensFieldForOpenAIProvider(openAIRequest, upstreamConfig.provider);
+  }
+
+  // Some providers (e.g. MiniMax) reject requests with multiple system messages.
+  // Merge all system messages into one before sending to these providers.
+  if (upstreamAPIType === 'chat_completions') {
+    mergeSystemMessagesForProvider(openAIRequest);
   }
 
   const upstreamRequest = upstreamAPIType === 'responses'
