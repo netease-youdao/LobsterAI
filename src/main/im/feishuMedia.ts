@@ -1,10 +1,12 @@
 /**
- * Feishu Media Upload Utilities
- * 飞书媒体上传工具函数
+ * Feishu Media Upload & Download Utilities
+ * 飞书媒体上传和下载工具函数
  */
 import { Readable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
+import { app } from 'electron';
+import type { IMMediaType } from './types';
 
 // Types
 export type FeishuFileType = 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream';
@@ -212,4 +214,183 @@ export function resolveFeishuMediaPath(rawPath: string): string {
   }
 
   return resolved;
+}
+
+// ==================== Download Utilities ====================
+
+const INBOUND_DIR = 'feishu-inbound';
+
+/**
+ * 获取飞书媒体存储目录
+ */
+export function getFeishuMediaDir(): string {
+  const userDataPath = app.getPath('userData');
+  const mediaDir = path.join(userDataPath, INBOUND_DIR);
+
+  if (!fs.existsSync(mediaDir)) {
+    fs.mkdirSync(mediaDir, { recursive: true });
+  }
+
+  return mediaDir;
+}
+
+/**
+ * 生成唯一文件名
+ */
+function generateFileName(prefix: string, extension: string): string {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).slice(2, 8);
+  return `${timestamp}_${random}${extension}`;
+}
+
+/**
+ * 根据飞书媒体类型获取默认扩展名
+ */
+function getDefaultExtension(mediaType: string): string {
+  switch (mediaType) {
+    case 'image': return '.jpg';
+    case 'audio': return '.opus';
+    case 'video': return '.mp4';
+    case 'file': return '.bin';
+    case 'media': return '.mp4';
+    default: return '.bin';
+  }
+}
+
+/**
+ * 根据飞书媒体类型获取默认 MIME 类型
+ */
+export function getFeishuDefaultMimeType(mediaType: string, fileName?: string): string {
+  if (fileName) {
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+      '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+      '.mp4': 'video/mp4', '.mov': 'video/quicktime',
+      '.opus': 'audio/ogg', '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav', '.m4a': 'audio/mp4',
+      '.pdf': 'application/pdf', '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    };
+    if (mimeMap[ext]) return mimeMap[ext];
+  }
+
+  switch (mediaType) {
+    case 'image': return 'image/jpeg';
+    case 'audio': return 'audio/ogg';
+    case 'video': return 'video/mp4';
+    default: return 'application/octet-stream';
+  }
+}
+
+/**
+ * 将飞书消息类型映射为 IMMediaType
+ */
+export function mapFeishuMediaType(mediaType: string): IMMediaType {
+  switch (mediaType) {
+    case 'image': return 'image';
+    case 'audio': return 'audio';
+    case 'video': return 'video';
+    case 'media': return 'video';
+    case 'file': return 'document';
+    default: return 'document';
+  }
+}
+
+/**
+ * 下载飞书消息中的媒体资源
+ *
+ * 使用飞书 SDK im.messageResource.get API 下载用户发送的媒体文件
+ *
+ * @param client 飞书 REST client
+ * @param messageId 消息 ID
+ * @param fileKey image_key 或 file_key
+ * @param type 资源类型 (image/file/audio/video)
+ * @param fileName 原始文件名（可选）
+ */
+export async function downloadFeishuMedia(
+  client: any,
+  messageId: string,
+  fileKey: string,
+  type: string,
+  fileName?: string
+): Promise<{ localPath: string; fileSize: number } | null> {
+  try {
+    console.log(`[Feishu Media] 下载媒体文件:`, JSON.stringify({
+      messageId,
+      fileKey,
+      type,
+      fileName,
+    }));
+
+    const resp = await client.im.messageResource.get({
+      params: { type },
+      path: { message_id: messageId, file_key: fileKey },
+    });
+
+    // 确定文件扩展名
+    let extension = getDefaultExtension(type);
+    if (fileName) {
+      const ext = path.extname(fileName);
+      if (ext) extension = ext;
+    }
+
+    const localFileName = generateFileName(type, extension);
+    const mediaDir = getFeishuMediaDir();
+    const localPath = path.join(mediaDir, localFileName);
+
+    // SDK response has writeFile method for saving to disk
+    await resp.writeFile(localPath);
+
+    const stats = fs.statSync(localPath);
+    console.log(`[Feishu Media] 下载成功: ${localFileName} (${(stats.size / 1024).toFixed(1)} KB)`);
+
+    return {
+      localPath,
+      fileSize: stats.size,
+    };
+  } catch (error: any) {
+    console.error(`[Feishu Media] 下载失败: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * 清理过期的飞书媒体文件
+ * @param maxAgeDays 最大保留天数，默认 7 天
+ */
+export function cleanupOldFeishuMediaFiles(maxAgeDays: number = 7): void {
+  const mediaDir = getFeishuMediaDir();
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  try {
+    if (!fs.existsSync(mediaDir)) {
+      return;
+    }
+
+    const files = fs.readdirSync(mediaDir);
+    let cleanedCount = 0;
+
+    for (const file of files) {
+      const filePath = path.join(mediaDir, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          fs.unlinkSync(filePath);
+          cleanedCount++;
+        }
+      } catch (err: any) {
+        console.warn(`[Feishu Media] 清理文件失败 ${file}: ${err.message}`);
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`[Feishu Media] 清理了 ${cleanedCount} 个过期文件`);
+    }
+  } catch (error: any) {
+    console.warn(`[Feishu Media] 清理错误: ${error.message}`);
+  }
 }

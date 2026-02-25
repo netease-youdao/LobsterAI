@@ -19,9 +19,11 @@ import {
   DiscordConfig,
   DiscordGatewayStatus,
   IMMessage,
+  IMMediaAttachment,
   DEFAULT_DISCORD_STATUS,
 } from './types';
 import { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
+import { downloadDiscordAttachment, mapDiscordContentType } from './discordMediaDownload';
 
 export class DiscordGateway extends EventEmitter {
   private client: Client | null = null;
@@ -232,8 +234,9 @@ export class DiscordGateway extends EventEmitter {
         return;
       }
 
-      // Ignore empty messages
-      if (!message.content || message.content.trim() === '') {
+      // Ignore empty messages (no text and no attachments)
+      const hasAttachments = message.attachments && message.attachments.size > 0;
+      if ((!message.content || message.content.trim() === '') && !hasAttachments) {
         return;
       }
 
@@ -258,15 +261,40 @@ export class DiscordGateway extends EventEmitter {
       const senderId = message.author.id;
 
       // Strip Discord mentions (<@123456789>, <@!123456789>, <#123456789>, <@&123456789>)
-      const cleanedContent = message.content
+      const cleanedContent = (message.content || '')
         .replace(/<@!?\d+>/g, '') // User mentions
         .replace(/<#\d+>/g, '')   // Channel mentions
         .replace(/<@&\d+>/g, '')  // Role mentions
         .trim();
 
-      // Ignore empty messages after stripping mentions
-      if (!cleanedContent) {
+      // Ignore empty messages after stripping mentions (unless has attachments)
+      if (!cleanedContent && !hasAttachments) {
         return;
+      }
+
+      // Download media attachments
+      let attachments: IMMediaAttachment[] | undefined;
+      if (hasAttachments) {
+        attachments = [];
+        for (const [, att] of message.attachments) {
+          const result = await downloadDiscordAttachment(
+            att.url,
+            att.contentType || 'application/octet-stream',
+            att.name || undefined
+          );
+          if (result) {
+            attachments.push({
+              type: mapDiscordContentType(att.contentType),
+              localPath: result.localPath,
+              mimeType: att.contentType || 'application/octet-stream',
+              fileName: att.name || undefined,
+              fileSize: result.fileSize,
+              width: att.width || undefined,
+              height: att.height || undefined,
+            });
+          }
+        }
+        if (attachments.length === 0) attachments = undefined;
       }
 
       // 打印完整的输入消息日志
@@ -279,6 +307,7 @@ export class DiscordGateway extends EventEmitter {
         content: cleanedContent,
         guildId: guildId || null,
         channelId,
+        attachmentsCount: attachments?.length || 0,
       }, null, 2));
 
       // Create IMMessage
@@ -291,6 +320,7 @@ export class DiscordGateway extends EventEmitter {
         content: cleanedContent,
         chatType: isDM ? 'direct' : 'group',
         timestamp: message.createdTimestamp,
+        attachments,
       };
       this.status.lastInboundAt = Date.now();
 

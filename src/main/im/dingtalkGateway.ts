@@ -13,9 +13,11 @@ import {
   DingTalkMediaMessage,
   MediaMarker,
   IMMessage,
+  IMMediaAttachment,
   DEFAULT_DINGTALK_STATUS,
 } from './types';
 import { uploadMediaToDingTalk, detectMediaType, getOapiAccessToken } from './dingtalkMedia';
+import { downloadDingtalkFile, getDefaultMimeType, mapDingtalkMediaType } from './dingtalkMediaDownload';
 import { parseMediaMarkers } from './dingtalkMediaParser';
 import { createUtf8JsonBody, JSON_UTF8_CONTENT_TYPE, stringifyAsciiJson } from './jsonEncoding';
 import { sanitizeLogArg, sanitizeLogArgs } from './logSanitizer';
@@ -32,6 +34,8 @@ interface MessageContent {
   messageType: string;
   mediaPath?: string;
   mediaType?: string;
+  fileName?: string;
+  duration?: string;
 }
 
 export class DingTalkGateway extends EventEmitter {
@@ -444,6 +448,35 @@ export class DingTalkGateway extends EventEmitter {
       };
     }
 
+    if (msgtype === 'picture') {
+      return {
+        text: '[图片]',
+        mediaPath: data.content?.downloadCode,
+        mediaType: 'image',
+        messageType: 'picture',
+      };
+    }
+
+    if (msgtype === 'video') {
+      return {
+        text: '[视频]',
+        mediaPath: data.content?.downloadCode,
+        mediaType: 'video',
+        messageType: 'video',
+        duration: data.content?.duration,
+      };
+    }
+
+    if (msgtype === 'file') {
+      return {
+        text: '[文件]',
+        mediaPath: data.content?.downloadCode,
+        mediaType: 'file',
+        fileName: data.content?.fileName,
+        messageType: 'file',
+      };
+    }
+
     return { text: data.text?.content?.trim() || `[${msgtype}消息]`, messageType: msgtype };
   }
 
@@ -677,7 +710,7 @@ export class DingTalkGateway extends EventEmitter {
     }
 
     const content = this.extractMessageContent(data);
-    if (!content.text) {
+    if (!content.text && !content.mediaPath) {
       return;
     }
 
@@ -697,6 +730,34 @@ export class DingTalkGateway extends EventEmitter {
       mediaType: content.mediaType,
     }, null, 2));
 
+    // Download media attachments if present
+    let attachments: IMMediaAttachment[] | undefined;
+    if (content.mediaPath && content.mediaType && this.config) {
+      try {
+        const token = await this.getAccessToken();
+        const robotCode = this.config.robotCode || this.config.clientId;
+        const result = await downloadDingtalkFile(
+          token,
+          content.mediaPath,
+          robotCode,
+          content.mediaType,
+          content.fileName
+        );
+        if (result) {
+          attachments = [{
+            type: mapDingtalkMediaType(content.mediaType),
+            localPath: result.localPath,
+            mimeType: getDefaultMimeType(content.mediaType),
+            fileName: content.fileName,
+            fileSize: result.fileSize,
+            duration: content.duration ? parseInt(content.duration, 10) / 1000 : undefined,
+          }];
+        }
+      } catch (err: any) {
+        console.error(`[DingTalk] 下载媒体失败: ${err.message}`);
+      }
+    }
+
     // Create IMMessage
     const message: IMMessage = {
       platform: 'dingtalk',
@@ -707,6 +768,7 @@ export class DingTalkGateway extends EventEmitter {
       content: content.text,
       chatType: isDirect ? 'direct' : 'group',
       timestamp: data.createAt || Date.now(),
+      attachments,
     };
     this.status.lastInboundAt = Date.now();
 
