@@ -210,6 +210,32 @@ export class SqliteStore {
         ON scheduled_task_runs(task_id, started_at DESC);
     `);
 
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS oauth_profiles (
+        profile_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL UNIQUE,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        expires_at_ms INTEGER NOT NULL,
+        project_id TEXT,
+        email TEXT,
+        scopes_json TEXT NOT NULL DEFAULT '[]',
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_oauth_profiles_provider_id
+      ON oauth_profiles(provider_id);
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_oauth_profiles_email
+      ON oauth_profiles(email);
+    `);
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists

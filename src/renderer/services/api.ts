@@ -6,7 +6,7 @@ export interface ApiConfig {
   apiKey: string;
   baseUrl: string;
   provider?: string;
-  apiFormat?: 'anthropic' | 'openai';
+  apiFormat?: 'anthropic' | 'openai' | 'antigravity';
 }
 
 export class ApiError extends Error {
@@ -46,7 +46,10 @@ class ApiService {
     this.currentRequestId = null;
   }
 
-  private normalizeApiFormat(apiFormat: unknown): 'anthropic' | 'openai' {
+  private normalizeApiFormat(apiFormat: unknown): 'anthropic' | 'openai' | 'antigravity' {
+    if (apiFormat === 'antigravity') {
+      return 'antigravity';
+    }
     if (apiFormat === 'openai') {
       return 'openai';
     }
@@ -166,7 +169,7 @@ class ApiService {
   }
 
   private providerRequiresApiKey(provider: string): boolean {
-    return provider !== 'ollama';
+    return provider !== 'ollama' && provider !== 'antigravity';
   }
 
   // 检测当前选择的模型属于哪个 provider
@@ -174,11 +177,14 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'ollama'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'antigravity', 'ollama'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
     const normalizedModelId = modelId.toLowerCase();
+    if (normalizedModelId.startsWith('google-antigravity/')) {
+      return 'antigravity';
+    }
     if (normalizedModelId.startsWith('claude')) {
       return 'anthropic';
     } else if (normalizedModelId.startsWith('gpt') || normalizedModelId.startsWith('o1') || normalizedModelId.startsWith('o3')) {
@@ -218,6 +224,38 @@ class ApiService {
     return null;
   }
 
+  private async resolveOAuthProviderConfig(
+    provider: string,
+    modelId: string
+  ): Promise<ApiConfig | null> {
+    const appConfig = configService.getConfig();
+    const providerConfig = appConfig.providers?.[provider];
+    if (!providerConfig || providerConfig.authMode !== 'oauth') {
+      return null;
+    }
+
+    if (provider !== 'antigravity' && provider !== 'openai') {
+      return null;
+    }
+
+    const resolver = window.electron.oauth?.resolveApiConfig;
+    if (!resolver) {
+      throw new ApiError('OAuth API is unavailable in preload.');
+    }
+
+    const result = await resolver(provider as 'antigravity' | 'openai', modelId);
+    if (!result.success || !result.config) {
+      throw new ApiError(result.error || `Failed to resolve ${provider} OAuth config.`);
+    }
+
+    return {
+      apiKey: result.config.apiKey,
+      baseUrl: result.config.baseURL,
+      provider,
+      apiFormat: result.config.apiType,
+    };
+  }
+
   async chat(
     message: string | ChatUserMessageInput,
     onProgress?: (content: string, reasoning?: string) => void,
@@ -239,6 +277,11 @@ class ApiService {
     const providerConfig = this.getProviderConfig(provider);
     if (providerConfig) {
       effectiveConfig = providerConfig;
+    }
+
+    const oauthConfig = await this.resolveOAuthProviderConfig(provider, selectedModel.id);
+    if (oauthConfig) {
+      effectiveConfig = oauthConfig;
     }
 
     if (this.providerRequiresApiKey(provider) && !effectiveConfig.apiKey) {

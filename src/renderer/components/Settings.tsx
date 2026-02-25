@@ -44,21 +44,60 @@ const providerKeys = [
   'moonshot',
   'zhipu',
   'minimax',
+  'antigravity',
   'qwen',
   'openrouter',
   'ollama',
 ] as const;
 
 type ProviderType = (typeof providerKeys)[number];
-type ProvidersConfig = NonNullable<AppConfig['providers']>;
-type ProviderConfig = ProvidersConfig[string];
-type Model = NonNullable<ProviderConfig['models']>[number];
+type Model = {
+  id: string;
+  name: string;
+  supportsImage?: boolean;
+};
+type ProviderOAuthMeta = {
+  providerId: string;
+  profileId?: string;
+  email?: string;
+  connectedAt?: number;
+  lastSyncAt?: number;
+};
+type ProviderConfig = {
+  enabled: boolean;
+  apiKey: string;
+  baseUrl: string;
+  authMode?: 'api-key' | 'oauth';
+  apiFormat?: 'anthropic' | 'openai' | 'antigravity' | 'native';
+  oauth?: ProviderOAuthMeta;
+  models?: Model[];
+};
+type ProvidersConfig = Record<string, ProviderConfig>;
+type ProviderOAuthStatus = {
+  providerKey: 'antigravity';
+  connected: boolean;
+  providerId: 'google-antigravity';
+  profileId?: string;
+  email?: string;
+  expiresAtMs?: number;
+  projectId?: string;
+  connectedAt?: number;
+  lastSyncAt?: number;
+};
 
 interface ProviderExportEntry {
   enabled: boolean;
   apiKey: PasswordEncryptedPayload;
   baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai';
+  authMode?: 'api-key' | 'oauth';
+  apiFormat?: 'anthropic' | 'openai' | 'antigravity';
+  oauth?: {
+    providerId: string;
+    profileId?: string;
+    email?: string;
+    connectedAt?: number;
+    lastSyncAt?: number;
+  };
   models?: Model[];
 }
 
@@ -80,7 +119,15 @@ interface ProvidersImportEntry {
   apiKeyEncrypted?: string;
   apiKeyIv?: string;
   baseUrl?: string;
-  apiFormat?: 'anthropic' | 'openai' | 'native';
+  authMode?: 'api-key' | 'oauth';
+  apiFormat?: 'anthropic' | 'openai' | 'antigravity' | 'native';
+  oauth?: {
+    providerId?: string;
+    profileId?: string;
+    email?: string;
+    connectedAt?: number;
+    lastSyncAt?: number;
+  };
   models?: Model[];
 }
 
@@ -138,6 +185,16 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
       <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}><title>Minimax</title><defs><linearGradient id="lobe-icons-minimax-fill" x1="0%" x2="100.182%" y1="50.057%" y2="50.057%"><stop offset="0%" stopColor="#E2167E"></stop><stop offset="100%" stopColor="#FE603C"></stop></linearGradient></defs><path d="M16.278 2c1.156 0 2.093.927 2.093 2.07v12.501a.74.74 0 00.744.709.74.74 0 00.743-.709V9.099a2.06 2.06 0 012.071-2.049A2.06 2.06 0 0124 9.1v6.561a.649.649 0 01-.652.645.649.649 0 01-.653-.645V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v7.472a2.037 2.037 0 01-2.048 2.026 2.037 2.037 0 01-2.048-2.026v-12.5a.785.785 0 00-.788-.753.785.785 0 00-.789.752l-.001 15.904A2.037 2.037 0 0113.441 22a2.037 2.037 0 01-2.048-2.026V18.04c0-.356.292-.645.652-.645.36 0 .652.289.652.645v1.934c0 .263.142.506.372.638.23.131.514.131.744 0a.734.734 0 00.372-.638V4.07c0-1.143.937-2.07 2.093-2.07zm-5.674 0c1.156 0 2.093.927 2.093 2.07v11.523a.648.648 0 01-.652.645.648.648 0 01-.652-.645V4.07a.785.785 0 00-.789-.78.785.785 0 00-.789.78v14.013a2.06 2.06 0 01-2.07 2.048 2.06 2.06 0 01-2.071-2.048V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v3.8a2.06 2.06 0 01-2.071 2.049A2.06 2.06 0 010 12.9v-1.378c0-.357.292-.646.652-.646.36 0 .653.29.653.646V12.9c0 .418.343.757.766.757s.766-.339.766-.757V9.099a2.06 2.06 0 012.07-2.048 2.06 2.06 0 012.071 2.048v8.984c0 .419.343.758.767.758.423 0 .766-.339.766-.758V4.07c0-1.143.937-2.07 2.093-2.07z" fill="url(#lobe-icons-minimax-fill)" fillRule="nonzero"></path></svg>
     ),
   },
+  antigravity: {
+    label: 'Antigravity',
+    icon: (
+      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}>
+        <title>Antigravity</title>
+        <path d="M12 2 20 7v10l-8 5-8-5V7z" fill="#4B9FEA" />
+        <path d="M12 6.2 16.2 8.7v6.6L12 17.8 7.8 15.3V8.7z" fill="#EAF4FF" />
+      </svg>
+    ),
+  },
   qwen: {
     label: 'Qwen',
     icon: (
@@ -189,21 +246,31 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   },
 };
 
-const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
+type OAuthProviderType = 'antigravity';
+type OAuthActionType = 'login' | 'disconnect' | 'sync';
+
+const isAntigravityOAuthStatus = (status: ProviderOAuthStatus | {
+  providerKey: 'antigravity' | 'openai';
+} | undefined): status is ProviderOAuthStatus => status?.providerKey === 'antigravity';
+
+const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'antigravity';
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
-const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
-  value === 'openai' ? 'openai' : 'anthropic'
+const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' | 'antigravity' => (
+  value === 'openai' ? 'openai' : value === 'antigravity' ? 'antigravity' : 'anthropic'
 );
-const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
+const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | 'antigravity' | null => {
   if (provider === 'openai' || provider === 'gemini') {
     return 'openai';
   }
   if (provider === 'anthropic') {
     return 'anthropic';
   }
+  if (provider === 'antigravity') {
+    return 'antigravity';
+  }
   return null;
 };
-const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' => (
+const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' | 'antigravity' => (
   getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value)
 );
 const shouldShowApiFormatSelector = (provider: string): boolean => (
@@ -211,10 +278,13 @@ const shouldShowApiFormatSelector = (provider: string): boolean => (
 );
 const getProviderDefaultBaseUrl = (
   provider: ProviderType,
-  apiFormat: 'anthropic' | 'openai'
+  apiFormat: 'anthropic' | 'openai' | 'antigravity'
 ): string | null => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
-  return defaults ? defaults[apiFormat] : null;
+  if (!defaults || apiFormat === 'antigravity') {
+    return null;
+  }
+  return defaults[apiFormat];
 };
 const shouldAutoSwitchProviderBaseUrl = (provider: ProviderType, currentBaseUrl: string): boolean => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
@@ -255,6 +325,56 @@ const buildOpenAICompatibleChatCompletionsUrl = (baseUrl: string, provider: stri
     return `${normalized}/chat/completions`;
   }
   return `${normalized}/v1/chat/completions`;
+};
+
+const extractConnectionErrorMessage = (
+  rawData: unknown,
+  status: number,
+  provider: ProviderType,
+  projectId?: string
+): string => {
+  const baseMessage = `${i18nService.t('connectionFailed')}: ${status}`;
+  const withContext = (message: string) => {
+    if (!message) return baseMessage;
+    return message.length > 360 ? `${message.slice(0, 360)}...` : message;
+  };
+
+  if (typeof rawData === 'string') {
+    const text = rawData.trim();
+    if (!text) return baseMessage;
+    if (text.includes('<!DOCTYPE html') || text.includes('<html')) {
+      if (provider === 'antigravity') {
+        return withContext(`${i18nService.t('antigravityApiDisabledHint')} (project: ${projectId || 'unknown'})`);
+      }
+      return baseMessage;
+    }
+    return withContext(text);
+  }
+
+  if (rawData && typeof rawData === 'object') {
+    const data = rawData as Record<string, any>;
+    const nestedErrorMessage = data?.error?.message;
+    const directMessage = data?.message;
+    const message = typeof nestedErrorMessage === 'string'
+      ? nestedErrorMessage
+      : typeof directMessage === 'string'
+        ? directMessage
+        : '';
+
+    if (message.includes('Cloud Code Private API has not been used')
+      || message.includes('SERVICE_DISABLED')
+      || message.includes('PERMISSION_DENIED')) {
+      if (provider === 'antigravity') {
+        return withContext(`${i18nService.t('antigravityApiDisabledHint')} (project: ${projectId || 'unknown'})`);
+      }
+    }
+
+    if (message) {
+      return withContext(message);
+    }
+  }
+
+  return baseMessage;
 };
 
 const getDefaultProviders = (): ProvidersConfig => {
@@ -304,6 +424,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const [oauthStatusByProvider, setOauthStatusByProvider] = useState<Partial<Record<OAuthProviderType, ProviderOAuthStatus>>>({});
+  const [oauthActionByProvider, setOauthActionByProvider] = useState<Partial<Record<OAuthProviderType, OAuthActionType>>>({});
   
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
@@ -479,6 +601,19 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               ...prev.openrouter,
               enabled: true,
               apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
+        } else if (normalizedApiBaseUrl.includes('cloudcode-pa')) {
+          setActiveProvider('antigravity');
+          setProviders(prev => ({
+            ...prev,
+            antigravity: {
+              ...prev.antigravity,
+              enabled: true,
+              apiKey: '',
+              authMode: 'oauth',
+              apiFormat: 'antigravity',
               baseUrl: config.api.baseUrl
             }
           }));
@@ -662,6 +797,153 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     });
   };
 
+  const updateOAuthProviderAction = useCallback((providerKey: OAuthProviderType, action?: OAuthActionType) => {
+    setOauthActionByProvider((prev) => {
+      const next = { ...prev };
+      if (action) {
+        next[providerKey] = action;
+      } else {
+        delete next[providerKey];
+      }
+      return next;
+    });
+  }, []);
+
+  const applyAntigravityOAuthState = useCallback((status: ProviderOAuthStatus, models?: Model[]) => {
+    setOauthStatusByProvider((prev) => ({
+      ...prev,
+      antigravity: status,
+    }));
+
+    setProviders((prev) => {
+      const current = prev.antigravity;
+      if (!current) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        antigravity: {
+          ...current,
+          apiKey: '',
+          authMode: 'oauth',
+          apiFormat: 'antigravity',
+          oauth: {
+            providerId: 'google-antigravity',
+            profileId: status.profileId,
+            email: status.email,
+            connectedAt: status.connectedAt ?? current.oauth?.connectedAt,
+            lastSyncAt: status.lastSyncAt ?? current.oauth?.lastSyncAt,
+          },
+          models: models ? models.map((model) => ({
+            ...model,
+            supportsImage: model.supportsImage ?? false,
+          })) : current.models,
+        },
+      };
+    });
+  }, []);
+
+  const refreshAntigravityOAuthStatus = useCallback(async (): Promise<ProviderOAuthStatus | null> => {
+    const response = await window.electron.oauth.getStatus('antigravity');
+    if (!response.success || !isAntigravityOAuthStatus(response.status)) {
+      return null;
+    }
+    applyAntigravityOAuthState(response.status);
+    return response.status;
+  }, [applyAntigravityOAuthState]);
+
+  const isAntigravityConnected = Boolean(oauthStatusByProvider.antigravity?.connected);
+
+  const handleAntigravityOAuthLogin = async () => {
+    setError(null);
+    updateOAuthProviderAction('antigravity', 'login');
+    try {
+      const response = await window.electron.oauth.login('antigravity');
+      if (!response.success || !isAntigravityOAuthStatus(response.status)) {
+        throw new Error(response.error || i18nService.t('oauthLoginFailed'));
+      }
+      applyAntigravityOAuthState(response.status);
+      setNoticeMessage(i18nService.t('oauthLoginSuccess'));
+    } catch (oauthError) {
+      setError(oauthError instanceof Error ? oauthError.message : i18nService.t('oauthLoginFailed'));
+    } finally {
+      updateOAuthProviderAction('antigravity');
+    }
+  };
+
+  const handleAntigravityOAuthDisconnect = async () => {
+    setError(null);
+    updateOAuthProviderAction('antigravity', 'disconnect');
+    try {
+      const response = await window.electron.oauth.disconnect('antigravity');
+      if (!response.success || !isAntigravityOAuthStatus(response.status)) {
+        throw new Error(response.error || i18nService.t('oauthDisconnectFailed'));
+      }
+      applyAntigravityOAuthState(response.status);
+      setNoticeMessage(i18nService.t('oauthDisconnectSuccess'));
+    } catch (oauthError) {
+      setError(oauthError instanceof Error ? oauthError.message : i18nService.t('oauthDisconnectFailed'));
+    } finally {
+      updateOAuthProviderAction('antigravity');
+    }
+  };
+
+  const handleAntigravitySyncModels = async () => {
+    setError(null);
+    updateOAuthProviderAction('antigravity', 'sync');
+    try {
+      const response = await window.electron.oauth.syncModels('antigravity', true);
+      if (!response.success || !response.result) {
+        throw new Error(response.error || i18nService.t('oauthSyncModelsFailed'));
+      }
+      const syncResult = response.result;
+
+      const latestStatus = await refreshAntigravityOAuthStatus();
+      if (latestStatus) {
+        applyAntigravityOAuthState(latestStatus, syncResult.models);
+      } else {
+        setProviders((prev) => ({
+          ...prev,
+          antigravity: {
+            ...prev.antigravity,
+            models: syncResult.models.map((model) => ({
+              ...model,
+              supportsImage: model.supportsImage ?? false,
+            })),
+            oauth: {
+              providerId: 'google-antigravity',
+              ...prev.antigravity.oauth,
+              lastSyncAt: syncResult.syncedAt,
+            },
+          },
+        }));
+      }
+
+      if (syncResult.source === 'remote') {
+        setNoticeMessage(i18nService.t('oauthSyncModelsSuccess'));
+      } else {
+        setNoticeMessage(i18nService.t('oauthSyncModelsFallback'));
+        if (syncResult.warning) {
+          setError(extractConnectionErrorMessage(
+            { error: { message: syncResult.warning } },
+            403,
+            'antigravity',
+            latestStatus?.projectId || oauthStatusByProvider.antigravity?.projectId
+          ));
+        }
+      }
+    } catch (oauthError) {
+      setError(oauthError instanceof Error ? oauthError.message : i18nService.t('oauthSyncModelsFailed'));
+    } finally {
+      updateOAuthProviderAction('antigravity');
+    }
+  };
+
+  useEffect(() => {
+    void refreshAntigravityOAuthStatus();
+  }, [refreshAntigravityOAuthStatus]);
+
   const hasCoworkConfigChanges = coworkExecutionMode !== coworkConfig.executionMode
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
@@ -816,9 +1098,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     const providerConfig = providers[provider];
     const isEnabling = !providerConfig.enabled;
     const missingApiKey = providerRequiresApiKey(provider) && !providerConfig.apiKey.trim();
+    const missingOAuth = provider === 'antigravity' && !isAntigravityConnected;
 
     if (isEnabling && missingApiKey) {
       setError(i18nService.t('apiKeyRequired'));
+      return;
+    }
+
+    if (isEnabling && missingOAuth) {
+      setError(i18nService.t('oauthConnectionRequired'));
       return;
     }
 
@@ -843,9 +1131,51 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           {
             ...providerConfig,
             apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
+            ...(providerKey === 'antigravity'
+              ? {
+                  apiKey: '',
+                  authMode: 'oauth' as const,
+                  apiFormat: 'antigravity' as const,
+                  oauth: {
+                    providerId: 'google-antigravity',
+                    ...(providerConfig as ProviderConfig).oauth,
+                  },
+                }
+              : {}),
           },
         ])
       ) as ProvidersConfig;
+
+      for (const [providerKey, providerConfig] of Object.entries(normalizedProviders) as Array<[ProviderType, ProviderConfig]>) {
+        if (!providerConfig.enabled) {
+          continue;
+        }
+
+        if (providerRequiresApiKey(providerKey) && !providerConfig.apiKey.trim()) {
+          throw new Error(i18nService.t('apiKeyRequired'));
+        }
+
+        if (providerKey === 'antigravity') {
+          const statusResponse = await window.electron.oauth.getStatus('antigravity');
+          if (!statusResponse.success || !isAntigravityOAuthStatus(statusResponse.status) || !statusResponse.status.connected) {
+            throw new Error(statusResponse.error || i18nService.t('oauthConnectionRequired'));
+          }
+          applyAntigravityOAuthState(statusResponse.status);
+          normalizedProviders.antigravity = {
+            ...normalizedProviders.antigravity,
+            apiKey: '',
+            authMode: 'oauth',
+            apiFormat: 'antigravity',
+            oauth: {
+              providerId: 'google-antigravity',
+              profileId: statusResponse.status.profileId,
+              email: statusResponse.status.email,
+              connectedAt: statusResponse.status.connectedAt,
+              lastSyncAt: statusResponse.status.lastSyncAt,
+            },
+          };
+        }
+      }
 
       // Find the first enabled provider to use as the primary API
       const firstEnabledProvider = Object.entries(normalizedProviders).find(
@@ -861,7 +1191,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           key: primaryProvider.apiKey,
           baseUrl: primaryProvider.baseUrl,
         },
-        providers: normalizedProviders, // Save all providers configuration
+        providers: normalizedProviders as AppConfig['providers'], // Save all providers configuration
         theme,
         language,
         shortcuts,
@@ -1067,12 +1397,29 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
     try {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
-      const normalizedBaseUrl = providerConfig.baseUrl.replace(/\/+$/, '');
+      let effectiveConfig: ProviderConfig = providerConfig;
+      let modelId = firstModel.id;
+
+      if (activeProvider === 'antigravity') {
+        const resolved = await window.electron.oauth.resolveApiConfig('antigravity', firstModel.id);
+        if (!resolved.success || !resolved.config) {
+          throw new Error(resolved.error || i18nService.t('oauthConnectionRequired'));
+        }
+        effectiveConfig = {
+          ...effectiveConfig,
+          apiKey: resolved.config.apiKey,
+          baseUrl: resolved.config.baseURL,
+          apiFormat: resolved.config.apiType,
+        };
+        modelId = resolved.config.model;
+      }
+
+      const normalizedBaseUrl = effectiveConfig.baseUrl.replace(/\/+$/, '');
 
       // 统一为两种协议格式：
       // - anthropic: /v1/messages
       // - openai: /v1/chat/completions
-      const useAnthropicFormat = getEffectiveApiFormat(activeProvider, providerConfig.apiFormat) === 'anthropic';
+      const useAnthropicFormat = getEffectiveApiFormat(activeProvider, effectiveConfig.apiFormat) !== 'openai';
 
       if (useAnthropicFormat) {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
@@ -1082,12 +1429,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           url: anthropicUrl,
           method: 'POST',
           headers: {
-            'x-api-key': providerConfig.apiKey,
+            'x-api-key': effectiveConfig.apiKey,
             'anthropic-version': '2023-06-01',
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: firstModel.id,
+            model: modelId,
             max_tokens: 1,
             messages: [{ role: 'user', content: 'Hi' }],
           }),
@@ -1097,15 +1444,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
-        if (providerConfig.apiKey) {
-          headers.Authorization = `Bearer ${providerConfig.apiKey}`;
+        if (effectiveConfig.apiKey) {
+          headers.Authorization = `Bearer ${effectiveConfig.apiKey}`;
         }
         response = await window.electron.api.fetch({
           url: openaiUrl,
           method: 'POST',
           headers,
           body: JSON.stringify({
-            model: firstModel.id,
+            model: modelId,
             max_tokens: 1,
             messages: [{ role: 'user', content: 'Hi' }],
           }),
@@ -1115,9 +1462,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       if (response.ok) {
         setTestResult({ success: true, message: i18nService.t('connectionSuccess') });
       } else {
-        const data = response.data || {};
-        // 提取错误信息
-        const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
+        const errorMessage = extractConnectionErrorMessage(
+          response.data,
+          response.status,
+          activeProvider,
+          activeProvider === 'antigravity' ? oauthStatusByProvider.antigravity?.projectId : undefined
+        );
         setTestResult({
           success: false,
           message: errorMessage,
@@ -1136,15 +1486,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const buildProvidersExport = async (password: string): Promise<ProvidersExportPayload> => {
     const entries = await Promise.all(
       Object.entries(providers).map(async ([providerKey, providerConfig]) => {
-        const apiKey = await encryptWithPassword(providerConfig.apiKey, password);
+        const typedProviderConfig = providerConfig as ProviderConfig;
+        const apiKey = await encryptWithPassword(typedProviderConfig.apiKey, password);
         return [
           providerKey,
           {
-            enabled: providerConfig.enabled,
+            enabled: typedProviderConfig.enabled,
             apiKey,
-            baseUrl: providerConfig.baseUrl,
-            apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
-            models: providerConfig.models,
+            baseUrl: typedProviderConfig.baseUrl,
+            authMode: typedProviderConfig.authMode,
+            apiFormat: getEffectiveApiFormat(providerKey, typedProviderConfig.apiFormat),
+            oauth: typedProviderConfig.oauth,
+            models: typedProviderConfig.models,
           },
         ] as const;
       })
@@ -1168,6 +1521,31 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       ...model,
       supportsImage: model.supportsImage ?? false,
     }));
+
+  const normalizeProviderOAuthMeta = (providerKey: string, oauth?: ProvidersImportEntry['oauth']): ProviderConfig['oauth'] | undefined => {
+    if (!oauth) {
+      return providerKey === 'antigravity'
+        ? { providerId: 'google-antigravity' }
+        : undefined;
+    }
+
+    const providerId = typeof oauth.providerId === 'string' && oauth.providerId.trim()
+      ? oauth.providerId.trim()
+      : providerKey === 'antigravity'
+        ? 'google-antigravity'
+        : '';
+    if (!providerId) {
+      return undefined;
+    }
+
+    return {
+      providerId,
+      profileId: typeof oauth.profileId === 'string' ? oauth.profileId : undefined,
+      email: typeof oauth.email === 'string' ? oauth.email : undefined,
+      connectedAt: Number.isFinite(oauth.connectedAt) ? oauth.connectedAt : undefined,
+      lastSyncAt: Number.isFinite(oauth.lastSyncAt) ? oauth.lastSyncAt : undefined,
+    };
+  };
 
   const DEFAULT_EXPORT_PASSWORD = EXPORT_PASSWORD;
 
@@ -1246,7 +1624,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const processImportPayloadWithLocalKey = async (payload: ProvidersImportPayload) => {
     setIsImportingProviders(true);
     try {
-      const providerUpdates: Partial<ProvidersConfig> = {};
+      const providerUpdates: Partial<Record<ProviderType, ProviderConfig>> = {};
       let hadDecryptFailure = false;
       for (const providerKey of providerKeys) {
         const providerData = payload.providers?.[providerKey];
@@ -1275,12 +1653,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
         const models = normalizeModels(providerData.models);
 
+        const currentProvider = providers[providerKey] as ProviderConfig;
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : currentProvider.enabled,
+          apiKey: providerKey === 'antigravity' ? '' : (apiKey ?? currentProvider.apiKey),
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : currentProvider.baseUrl,
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? currentProvider.apiFormat),
+          authMode: providerKey === 'antigravity'
+            ? 'oauth'
+            : (providerData.authMode ?? currentProvider.authMode),
+          oauth: normalizeProviderOAuthMeta(providerKey, providerData.oauth) ?? currentProvider.oauth,
+          models: models ?? currentProvider.models,
         };
       }
 
@@ -1324,7 +1707,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setIsImportingProviders(true);
 
     try {
-      const providerUpdates: Partial<ProvidersConfig> = {};
+      const providerUpdates: Partial<Record<ProviderType, ProviderConfig>> = {};
       let hadDecryptFailure = false;
 
       for (const providerKey of providerKeys) {
@@ -1351,12 +1734,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
         const models = normalizeModels(providerData.models);
 
+        const currentProvider = providers[providerKey] as ProviderConfig;
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : currentProvider.enabled,
+          apiKey: providerKey === 'antigravity' ? '' : (apiKey ?? currentProvider.apiKey),
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : currentProvider.baseUrl,
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? currentProvider.apiFormat),
+          authMode: providerKey === 'antigravity'
+            ? 'oauth'
+            : (providerData.authMode ?? currentProvider.authMode),
+          oauth: normalizeProviderOAuthMeta(providerKey, providerData.oauth) ?? currentProvider.oauth,
+          models: models ?? currentProvider.models,
         };
       }
 
@@ -1417,6 +1805,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const activeTabLabel = useMemo(() => {
     return sidebarTabs.find(t => t.key === activeTab)?.label ?? '';
   }, [activeTab, sidebarTabs]);
+  const antigravityStatus = oauthStatusByProvider.antigravity;
+  const antigravityBusyAction = oauthActionByProvider.antigravity;
+  const antigravityBusy = Boolean(antigravityBusyAction);
 
   const renderTabContent = () => {
     switch(activeTab) {
@@ -1897,7 +2288,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 const providerKey = provider as ProviderType;
                 const providerInfo = providerMeta[providerKey];
                 const missingApiKey = providerRequiresApiKey(providerKey) && !config.apiKey.trim();
-                const canToggleProvider = config.enabled || !missingApiKey;
+                const missingOAuth = providerKey === 'antigravity' && !isAntigravityConnected;
+                const canToggleProvider = config.enabled || (!missingApiKey && !missingOAuth);
                 return (
                   <div
                     key={provider}
@@ -1924,7 +2316,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                     </div>
                     <div className="flex items-center ml-2">
                       <div
-                        title={!canToggleProvider ? i18nService.t('configureApiKey') : undefined}
+                        title={!canToggleProvider
+                          ? (providerKey === 'antigravity'
+                            ? i18nService.t('oauthConnectionRequired')
+                            : i18nService.t('configureApiKey'))
+                          : undefined}
                         className={`w-7 h-4 rounded-full flex items-center transition-colors ${
                           config.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
                         } ${
@@ -1966,6 +2362,46 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   {providers[activeProvider].enabled ? i18nService.t('enabled') : i18nService.t('disabled')}
                 </div>
               </div>
+
+              {activeProvider === 'antigravity' && (
+                <div className="rounded-xl border dark:border-claude-darkBorder border-claude-border p-3 space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="dark:text-claude-darkText text-claude-text">{i18nService.t('oauthStatus')}</span>
+                    <span className={`font-medium ${isAntigravityConnected ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      {isAntigravityConnected ? i18nService.t('oauthConnected') : i18nService.t('oauthDisconnected')}
+                    </span>
+                  </div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary break-all">
+                    {antigravityStatus?.email || providers.antigravity?.oauth?.email || '-'}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { void handleAntigravityOAuthLogin(); }}
+                      disabled={antigravityBusy}
+                      className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    >
+                      {antigravityBusyAction === 'login' ? i18nService.t('loading') : i18nService.t('oauthLogin')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void handleAntigravityOAuthDisconnect(); }}
+                      disabled={antigravityBusy || !isAntigravityConnected}
+                      className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    >
+                      {antigravityBusyAction === 'disconnect' ? i18nService.t('loading') : i18nService.t('oauthDisconnect')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void handleAntigravitySyncModels(); }}
+                      disabled={antigravityBusy || !isAntigravityConnected}
+                      className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    >
+                      {antigravityBusyAction === 'sync' ? i18nService.t('loading') : i18nService.t('oauthSyncModels')}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {providerRequiresApiKey(activeProvider) && (
                 <div>
@@ -2042,7 +2478,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey)}
+                  disabled={
+                    isTesting
+                    || (activeProvider === 'antigravity' && !isAntigravityConnected)
+                    || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey)
+                  }
                   className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                 >
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />

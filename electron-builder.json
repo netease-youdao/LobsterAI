@@ -81,6 +81,7 @@
   "electronVersion": "40.2.1",
   "asarUnpack": [
     "node_modules/@anthropic-ai/claude-agent-sdk/**",
+    "node_modules/@mariozechner/pi-ai/**",
     "node_modules/@img/**",
     "node_modules/sql.js/dist/**"
   ],

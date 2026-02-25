@@ -8,14 +8,23 @@ import {
   openAIToAnthropic,
   type OpenAIStreamChunk,
 } from './coworkFormatTransform';
+import { loadPiAi } from './piAiLoader';
 import type { ScheduledTaskStore, ScheduledTaskInput } from '../scheduledTaskStore';
 import type { Scheduler } from './scheduler';
+import {
+  getAntigravityProjectId,
+  normalizeAntigravityModelId,
+  parseOAuthApiKeyPayload,
+} from '../oauth/providers/googleAntigravity';
 
 export type OpenAICompatUpstreamConfig = {
   baseURL: string;
   apiKey?: string;
   model: string;
   provider?: string;
+  upstreamKind?: 'openai' | 'antigravity';
+  providerModelId?: string;
+  resolveAuthApiKey?: (forceRefresh?: boolean) => Promise<string>;
 };
 
 export type OpenAICompatProxyStatus = {
@@ -24,6 +33,7 @@ export type OpenAICompatProxyStatus = {
   hasUpstream: boolean;
   upstreamBaseURL: string | null;
   upstreamModel: string | null;
+  upstreamKind: 'openai' | 'antigravity' | null;
   lastError: string | null;
 };
 
@@ -45,7 +55,10 @@ type StreamState = {
 };
 
 const LOCAL_HOST = '127.0.0.1';
-const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+const DEFAULT_PI_MODEL_MAX_TOKENS = 65536;
+const DEFAULT_PI_MODEL_CONTEXT_WINDOW = 1048576;
+const DEFAULT_ANTIGRAVITY_REQUEST_TIMEOUT_MS = 120000;
+const BASE64_THOUGHT_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
@@ -161,13 +174,7 @@ function cacheToolCallExtraContentFromOpenAIResponse(body: unknown): void {
   cacheToolCallExtraContentFromOpenAIToolCalls(message.tool_calls);
 }
 
-function hydrateOpenAIRequestToolCalls(
-  body: Record<string, unknown>,
-  provider?: string,
-  baseURL?: string
-): void {
-  const isGemini =
-    provider === 'gemini' || Boolean(baseURL?.includes('generativelanguage.googleapis.com'));
+function hydrateOpenAIRequestToolCalls(body: Record<string, unknown>): void {
   const messages = toArray(body.messages);
   for (const message of messages) {
     const messageObj = toOptionalObject(message);
@@ -191,17 +198,7 @@ function hydrateOpenAIRequestToolCalls(
         const cachedExtraContent = toolCallExtraContentById.get(toolCallId);
         if (cachedExtraContent !== undefined) {
           toolCallObj.extra_content = cachedExtraContent;
-          continue;
         }
-      }
-
-      if (isGemini) {
-        // Gemini requires thought signatures for tool calls; use a documented fallback when missing.
-        toolCallObj.extra_content = {
-          google: {
-            thought_signature: GEMINI_FALLBACK_THOUGHT_SIGNATURE,
-          },
-        };
       }
     }
   }
@@ -316,12 +313,1024 @@ function writeJSON(
   statusCode: number,
   body: Record<string, unknown>
 ): void {
+  if (res.headersSent) {
+    if (!res.writableEnded) {
+      res.end();
+    }
+    return;
+  }
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(payload),
   });
   res.end(payload);
+}
+
+function collectTextFragments(value: unknown, fragments: string[]): void {
+  if (typeof value === 'string') {
+    if (value) {
+      fragments.push(value);
+    }
+    return;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    fragments.push(String(value));
+    return;
+  }
+
+  if (!value) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectTextFragments(item, fragments);
+    }
+    return;
+  }
+
+  if (typeof value === 'object') {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      collectTextFragments(item, fragments);
+    }
+  }
+}
+
+function estimateAnthropicInputTokens(body: unknown): number {
+  const fragments: string[] = [];
+  collectTextFragments(body, fragments);
+  const text = fragments.join('\n');
+  if (!text) {
+    return 1;
+  }
+
+  // Use a conservative approximation so token budgeting errs on the safe side.
+  const estimated = Math.ceil(text.length / 3);
+  return Math.max(1, Math.min(estimated, 4_000_000));
+}
+
+function buildAnthropicModelObject(id: string): Record<string, unknown> {
+  return {
+    type: 'model',
+    id,
+    display_name: id,
+    created_at: '2026-01-01T00:00:00Z',
+  };
+}
+
+function listProxyModels(config: OpenAICompatUpstreamConfig): string[] {
+  const upstreamKind =
+    config.upstreamKind
+    || (config.provider === 'antigravity' ? 'antigravity' : 'openai');
+  const ids = new Set<string>();
+
+  if (upstreamKind === 'antigravity') {
+    const configuredModel = (config.providerModelId || config.model || '').trim();
+    if (configuredModel) {
+      ids.add(configuredModel);
+      const normalized = normalizeAntigravityModelId(configuredModel);
+      if (normalized) {
+        ids.add(normalized);
+        ids.add(`google-antigravity/${normalized}`);
+      }
+    }
+
+    // Claude SDK may probe with this fallback model during token estimation.
+    ids.add('claude-haiku-4-5-20251001');
+  } else if (config.model?.trim()) {
+    ids.add(config.model.trim());
+  }
+
+  return Array.from(ids);
+}
+
+function parseUpstreamApiKeyPayload(rawApiKey: string): { token: string; projectId: string } {
+  const parsed = parseOAuthApiKeyPayload(rawApiKey);
+  return {
+    token: parsed.token,
+    projectId: getAntigravityProjectId(parsed.projectId),
+  };
+}
+
+type PiAiRelayResult = {
+  started: boolean;
+  errorMessage?: string;
+  retryableAuthError?: boolean;
+};
+
+function parseDataUrl(rawUrl: string): { mimeType: string; data: string } | null {
+  const trimmed = rawUrl.trim();
+  const matched = /^data:([^;,]+)?;base64,(.+)$/i.exec(trimmed);
+  if (!matched) {
+    return null;
+  }
+
+  const mimeType = matched[1]?.trim() || 'image/png';
+  const data = matched[2]?.trim() || '';
+  if (!data) {
+    return null;
+  }
+
+  return { mimeType, data };
+}
+
+function normalizeOpenAIMessageText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        const partObj = toOptionalObject(part);
+        if (!partObj) {
+          return '';
+        }
+        if (partObj.type === 'text' && typeof partObj.text === 'string') {
+          return partObj.text;
+        }
+        if (partObj.type === 'input_text' && typeof partObj.text === 'string') {
+          return partObj.text;
+        }
+        return '';
+      })
+      .join('\n');
+  }
+
+  if (content === null || content === undefined) {
+    return '';
+  }
+
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function normalizeOpenAIUserContent(content: unknown): string | Array<Record<string, unknown>> {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return normalizeOpenAIMessageText(content);
+  }
+
+  const parts: Array<Record<string, unknown>> = [];
+  let hasImage = false;
+
+  for (const part of content) {
+    const partObj = toOptionalObject(part);
+    if (!partObj) {
+      continue;
+    }
+
+    const partType = toString(partObj.type);
+    if ((partType === 'text' || partType === 'input_text') && typeof partObj.text === 'string') {
+      parts.push({ type: 'text', text: partObj.text });
+      continue;
+    }
+
+    if (partType === 'image_url') {
+      const imageUrlObj = toOptionalObject(partObj.image_url);
+      const rawUrl = toString(imageUrlObj?.url);
+      if (!rawUrl) {
+        continue;
+      }
+
+      const parsedImage = parseDataUrl(rawUrl);
+      if (!parsedImage) {
+        continue;
+      }
+
+      parts.push({
+        type: 'image',
+        data: parsedImage.data,
+        mimeType: parsedImage.mimeType,
+      });
+      hasImage = true;
+    }
+  }
+
+  if (!hasImage) {
+    return parts
+      .filter((part) => part.type === 'text')
+      .map((part) => toString(part.text))
+      .join('\n');
+  }
+
+  if (parts.length === 0) {
+    return '';
+  }
+
+  return parts;
+}
+
+function extractToolCallThoughtSignature(toolCallObj: Record<string, unknown>): string | undefined {
+  const extraContent = normalizeToolCallExtraContent(toolCallObj);
+  const extraObj = toOptionalObject(extraContent);
+  const googleObj = toOptionalObject(extraObj?.google);
+  const nestedSignature = toString(googleObj?.thought_signature);
+  if (nestedSignature) {
+    return nestedSignature;
+  }
+
+  const functionObj = toOptionalObject(toolCallObj.function);
+  const functionSignature = toString(functionObj?.thought_signature);
+  if (functionSignature) {
+    return functionSignature;
+  }
+
+  return undefined;
+}
+
+function isValidThoughtSignature(signature: string | undefined): signature is string {
+  if (!signature) {
+    return false;
+  }
+  if (signature.length % 4 !== 0) {
+    return false;
+  }
+  return BASE64_THOUGHT_SIGNATURE_RE.test(signature);
+}
+
+function normalizeToolChoice(rawToolChoice: unknown): 'auto' | 'none' | 'any' | undefined {
+  if (rawToolChoice === 'auto' || rawToolChoice === 'none' || rawToolChoice === 'any') {
+    return rawToolChoice;
+  }
+
+  if (rawToolChoice === 'required') {
+    return 'any';
+  }
+
+  const toolChoiceObj = toOptionalObject(rawToolChoice);
+  if (!toolChoiceObj) {
+    return undefined;
+  }
+
+  const toolChoiceType = toString(toolChoiceObj.type);
+  if (toolChoiceType === 'none' || toolChoiceType === 'auto') {
+    return toolChoiceType;
+  }
+  if (toolChoiceType === 'required' || toolChoiceType === 'function') {
+    return 'any';
+  }
+
+  return undefined;
+}
+
+const UNSUPPORTED_CLOUD_CODE_SCHEMA_KEYS = new Set([
+  '$schema',
+  '$id',
+  '$defs',
+  'definitions',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'unevaluatedProperties',
+  'patternProperties',
+  'contains',
+  'minContains',
+  'maxContains',
+  'dependentSchemas',
+  'dependentRequired',
+  'if',
+  'then',
+  'else',
+  'not',
+  'allOf',
+  'oneOf',
+  'const',
+  'examples',
+]);
+
+function sanitizeSchemaForCloudCodeAssist(rawSchema: unknown): Record<string, unknown> {
+  const source = toOptionalObject(rawSchema) || {};
+  const sanitized: Record<string, unknown> = {};
+
+  const type = toString(source.type);
+  if (type) {
+    sanitized.type = type;
+  }
+
+  const description = toString(source.description);
+  if (description) {
+    sanitized.description = description;
+  }
+
+  if (Array.isArray(source.required)) {
+    sanitized.required = source.required.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  }
+
+  if (Array.isArray(source.enum)) {
+    sanitized.enum = source.enum.filter((item) => {
+      const itemType = typeof item;
+      return itemType === 'string' || itemType === 'number' || itemType === 'boolean' || item === null;
+    });
+  }
+
+  const numericKeys = ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems'] as const;
+  for (const key of numericKeys) {
+    const value = source[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      sanitized[key] = value;
+    }
+  }
+
+  const properties = toOptionalObject(source.properties);
+  if (properties) {
+    const sanitizedProperties: Record<string, unknown> = {};
+    for (const [propertyName, propertySchema] of Object.entries(properties)) {
+      sanitizedProperties[propertyName] = sanitizeSchemaForCloudCodeAssist(propertySchema);
+    }
+    sanitized.properties = sanitizedProperties;
+    if (!sanitized.type) {
+      sanitized.type = 'object';
+    }
+  }
+
+  if (source.items !== undefined) {
+    const itemsSchema = Array.isArray(source.items) ? source.items[0] : source.items;
+    sanitized.items = sanitizeSchemaForCloudCodeAssist(itemsSchema);
+    if (!sanitized.type) {
+      sanitized.type = 'array';
+    }
+  }
+
+  const passthroughKeys = ['format', 'nullable', 'default', 'example'] as const;
+  for (const key of passthroughKeys) {
+    const value = source[key];
+    if (value !== undefined) {
+      sanitized[key] = value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(source)) {
+    if (key.startsWith('$') || UNSUPPORTED_CLOUD_CODE_SCHEMA_KEYS.has(key)) {
+      continue;
+    }
+    if (key in sanitized) {
+      continue;
+    }
+    if (key === 'anyOf' && Array.isArray(value)) {
+      sanitized.anyOf = value.map((item) => sanitizeSchemaForCloudCodeAssist(item));
+      continue;
+    }
+  }
+
+  if (!sanitized.type) {
+    sanitized.type = 'object';
+  }
+
+  return sanitized;
+}
+
+function buildPiAiModel(modelId: string, baseURL: string): Record<string, unknown> {
+  const supportsImage = !modelId.includes('gpt-oss');
+  return {
+    id: modelId,
+    name: modelId,
+    api: 'google-gemini-cli',
+    provider: 'google-antigravity',
+    baseUrl: baseURL.trim(),
+    reasoning: true,
+    input: supportsImage ? ['text', 'image'] : ['text'],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: DEFAULT_PI_MODEL_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_PI_MODEL_MAX_TOKENS,
+  };
+}
+
+function buildPiAiContextFromOpenAIRequest(
+  openAIRequest: Record<string, unknown>,
+  modelId: string
+): {
+  context: Record<string, unknown>;
+  options: Record<string, unknown>;
+} {
+  const normalizedModelId = modelId.toLowerCase();
+  const isGemini3Model = normalizedModelId.includes('gemini-3');
+  const systemPrompts: string[] = [];
+  const messages: Array<Record<string, unknown>> = [];
+  const knownToolNameById = new Map<string, string>();
+
+  const sourceMessages = toArray(openAIRequest.messages);
+  for (const item of sourceMessages) {
+    const itemObj = toOptionalObject(item);
+    if (!itemObj) {
+      continue;
+    }
+
+    const role = toString(itemObj.role);
+    const timestamp = Date.now();
+
+    if (role === 'system') {
+      const text = normalizeOpenAIMessageText(itemObj.content).trim();
+      if (text) {
+        systemPrompts.push(text);
+      }
+      continue;
+    }
+
+    if (role === 'user') {
+      const content = normalizeOpenAIUserContent(itemObj.content);
+      if ((typeof content === 'string' && !content.trim())
+        || (Array.isArray(content) && content.length === 0)) {
+        continue;
+      }
+
+      messages.push({
+        role: 'user',
+        content,
+        timestamp,
+      });
+      continue;
+    }
+
+    if (role === 'assistant') {
+      const blocks: Array<Record<string, unknown>> = [];
+      const textContent = normalizeOpenAIMessageText(itemObj.content);
+      if (textContent.trim()) {
+        blocks.push({
+          type: 'text',
+          text: textContent,
+        });
+      }
+
+      const reasoningContent = toString(itemObj.reasoning_content) || toString(itemObj.reasoning);
+      if (reasoningContent.trim()) {
+        blocks.push({
+          type: 'thinking',
+          thinking: reasoningContent,
+        });
+      }
+
+      for (const rawToolCall of toArray(itemObj.tool_calls)) {
+        const toolCallObj = toOptionalObject(rawToolCall);
+        if (!toolCallObj) {
+          continue;
+        }
+
+        const functionObj = toOptionalObject(toolCallObj.function);
+        const toolCallId = toString(toolCallObj.id) || `tool_call_${Date.now()}`;
+        const toolCallName = toString(functionObj?.name) || 'tool';
+        const toolCallArgumentsRaw = toString(functionObj?.arguments) || '{}';
+        let toolCallArguments: Record<string, unknown> = {};
+
+        try {
+          const parsed = JSON.parse(toolCallArgumentsRaw);
+          toolCallArguments = toOptionalObject(parsed) || {};
+        } catch {
+          toolCallArguments = {};
+        }
+
+        const block: Record<string, unknown> = {
+          type: 'toolCall',
+          id: toolCallId,
+          name: toolCallName,
+          arguments: toolCallArguments,
+        };
+
+        const thoughtSignature = extractToolCallThoughtSignature(toolCallObj);
+        if (isGemini3Model && !isValidThoughtSignature(thoughtSignature)) {
+          // Gemini 3 history replay without valid thought signatures is rewritten by pi-ai
+          // into noisy "Historical context..." text, which pollutes follow-up turns.
+          // Skip those legacy tool-call blocks and keep the turn stable.
+          continue;
+        }
+        if (thoughtSignature) {
+          block.thoughtSignature = thoughtSignature;
+        }
+
+        blocks.push(block);
+        knownToolNameById.set(toolCallId, toolCallName);
+      }
+
+      if (blocks.length === 0) {
+        continue;
+      }
+
+      messages.push({
+        role: 'assistant',
+        content: blocks,
+        api: 'google-gemini-cli',
+        provider: 'google-antigravity',
+        model: modelId,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        stopReason: 'stop',
+        timestamp,
+      });
+      continue;
+    }
+
+    if (role === 'tool') {
+      const toolCallId = toString(itemObj.tool_call_id);
+      if (!toolCallId) {
+        continue;
+      }
+      if (isGemini3Model && !knownToolNameById.has(toolCallId)) {
+        continue;
+      }
+
+      const toolName = toString(itemObj.name) || knownToolNameById.get(toolCallId) || 'tool';
+      const toolResultText = normalizeOpenAIMessageText(itemObj.content);
+      messages.push({
+        role: 'toolResult',
+        toolCallId,
+        toolName,
+        content: [{
+          type: 'text',
+          text: toolResultText || '',
+        }],
+        isError: false,
+        timestamp,
+      });
+      continue;
+    }
+  }
+
+  const tools = toArray(openAIRequest.tools)
+    .map((tool) => {
+      const toolObj = toOptionalObject(tool);
+      const functionObj = toOptionalObject(toolObj?.function);
+      const name = toString(functionObj?.name);
+      if (!name) {
+        return null;
+      }
+
+      return {
+        name,
+        description: toString(functionObj?.description),
+        parameters: sanitizeSchemaForCloudCodeAssist(functionObj?.parameters),
+      };
+    })
+    .filter((tool): tool is {
+      name: string;
+      description: string;
+      parameters: Record<string, unknown>;
+    } => Boolean(tool));
+
+  const context: Record<string, unknown> = {
+    messages,
+  };
+  if (systemPrompts.length > 0) {
+    context.systemPrompt = systemPrompts.join('\n\n');
+  }
+  if (tools.length > 0) {
+    context.tools = tools;
+  }
+
+  const options: Record<string, unknown> = {};
+  if (typeof openAIRequest.max_tokens === 'number' && Number.isFinite(openAIRequest.max_tokens)) {
+    options.maxTokens = openAIRequest.max_tokens;
+  }
+  if (typeof openAIRequest.temperature === 'number' && Number.isFinite(openAIRequest.temperature)) {
+    options.temperature = openAIRequest.temperature;
+  }
+  const toolChoice = normalizeToolChoice(openAIRequest.tool_choice);
+  if (toolChoice) {
+    options.toolChoice = toolChoice;
+  }
+
+  return { context, options };
+}
+
+function mapPiAiStopReasonToOpenAIFinishReason(rawReason: unknown): 'stop' | 'length' | 'tool_calls' {
+  const reason = toString(rawReason);
+  if (reason === 'toolUse') {
+    return 'tool_calls';
+  }
+  if (reason === 'length') {
+    return 'length';
+  }
+  return 'stop';
+}
+
+function extractPiAiEventErrorMessage(eventObj: Record<string, unknown>): string {
+  const errorObj = toOptionalObject(eventObj.error);
+  const fromErrorField = toString(errorObj?.errorMessage) || toString(errorObj?.message);
+  if (fromErrorField) {
+    return fromErrorField;
+  }
+  const fromEventField = toString(eventObj.message);
+  if (fromEventField) {
+    return fromEventField;
+  }
+  return 'Upstream API request failed';
+}
+
+function isRetryableAuthError(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase();
+  return normalized.includes('401')
+    || normalized.includes('unauthorized')
+    || normalized.includes('re-authenticate')
+    || normalized.includes('oauth')
+    || normalized.includes('expired token');
+}
+
+function buildOpenAIResponseFromPiAiMessage(
+  messageObj: Record<string, unknown>,
+  modelId: string
+): Record<string, unknown> {
+  const contentBlocks = toArray(messageObj.content);
+  const textParts: string[] = [];
+  const thinkingParts: string[] = [];
+  const toolCalls: Array<Record<string, unknown>> = [];
+
+  for (const block of contentBlocks) {
+    const blockObj = toOptionalObject(block);
+    if (!blockObj) {
+      continue;
+    }
+
+    const blockType = toString(blockObj.type);
+    if (blockType === 'text') {
+      const text = toString(blockObj.text);
+      if (text) {
+        textParts.push(text);
+      }
+      continue;
+    }
+
+    if (blockType === 'thinking') {
+      const thinking = toString(blockObj.thinking);
+      if (thinking) {
+        thinkingParts.push(thinking);
+      }
+      continue;
+    }
+
+    if (blockType === 'toolCall') {
+      const toolCallId = toString(blockObj.id) || `tool_call_${Date.now()}`;
+      const toolCallName = toString(blockObj.name) || 'tool';
+      const argumentsObj = toOptionalObject(blockObj.arguments) || {};
+      const toolCall: Record<string, unknown> = {
+        id: toolCallId,
+        type: 'function',
+        function: {
+          name: toolCallName,
+          arguments: JSON.stringify(argumentsObj),
+        },
+      };
+
+      const thoughtSignature = toString(blockObj.thoughtSignature);
+      if (thoughtSignature) {
+        toolCall.extra_content = {
+          google: {
+            thought_signature: thoughtSignature,
+          },
+        };
+      }
+
+      toolCalls.push(toolCall);
+    }
+  }
+
+  const openAIMessage: Record<string, unknown> = {
+    role: 'assistant',
+    content: textParts.join(''),
+  };
+  if (thinkingParts.length > 0) {
+    openAIMessage.reasoning_content = thinkingParts.join('');
+  }
+  if (toolCalls.length > 0) {
+    openAIMessage.tool_calls = toolCalls;
+  }
+
+  const usageObj = toOptionalObject(messageObj.usage) || {};
+  const promptTokens = Number(usageObj.input) || 0;
+  const completionTokens = Number(usageObj.output) || 0;
+
+  return {
+    id: `chatcmpl-${Date.now()}`,
+    model: modelId,
+    choices: [{
+      index: 0,
+      message: openAIMessage,
+      finish_reason: mapPiAiStopReasonToOpenAIFinishReason(messageObj.stopReason),
+    }],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
+  };
+}
+
+async function collectPiAiFinalMessage(piStream: AsyncIterable<unknown>): Promise<Record<string, unknown>> {
+  let finalMessage: Record<string, unknown> | null = null;
+
+  for await (const rawEvent of piStream) {
+    const eventObj = toOptionalObject(rawEvent);
+    if (!eventObj) {
+      continue;
+    }
+
+    const eventType = toString(eventObj.type);
+    if (eventType === 'error') {
+      throw new Error(extractPiAiEventErrorMessage(eventObj));
+    }
+    if (eventType === 'done') {
+      finalMessage = toOptionalObject(eventObj.message) || null;
+    }
+  }
+
+  if (!finalMessage) {
+    throw new Error('Cloud Code Assist API returned an empty response');
+  }
+
+  return finalMessage;
+}
+
+async function relayPiAiStreamAsAnthropicSSE(
+  piStream: AsyncIterable<unknown>,
+  res: http.ServerResponse,
+  modelId: string
+): Promise<PiAiRelayResult> {
+  let started = false;
+  const state = createStreamState();
+
+  const ensureHeaders = () => {
+    if (started) {
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    started = true;
+  };
+
+  const flushMessageStop = () => {
+    if (!started || state.hasMessageStop || !state.hasMessageStart) {
+      return;
+    }
+    closeCurrentBlockIfNeeded(res, state);
+    emitSSE(res, 'message_stop', {
+      type: 'message_stop',
+    });
+    state.hasMessageStop = true;
+  };
+
+  for await (const rawEvent of piStream) {
+    const eventObj = toOptionalObject(rawEvent);
+    if (!eventObj) {
+      continue;
+    }
+
+    const eventType = toString(eventObj.type);
+    if (eventType === 'error') {
+      const errorMessage = extractPiAiEventErrorMessage(eventObj);
+      if (!started) {
+        return {
+          started: false,
+          errorMessage,
+          retryableAuthError: isRetryableAuthError(errorMessage),
+        };
+      }
+      emitSSE(res, 'error', createAnthropicErrorBody(errorMessage));
+      flushMessageStop();
+      res.end();
+      return {
+        started: true,
+        errorMessage,
+      };
+    }
+
+    ensureHeaders();
+
+    if (eventType === 'start') {
+      ensureMessageStart(res, state, {
+        id: `chatcmpl-${Date.now()}`,
+        model: modelId,
+      });
+      continue;
+    }
+
+    if (eventType === 'thinking_delta') {
+      ensureMessageStart(res, state, {
+        id: `chatcmpl-${Date.now()}`,
+        model: modelId,
+      });
+      ensureThinkingBlock(res, state);
+      emitSSE(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index: state.contentIndex,
+        delta: {
+          type: 'thinking_delta',
+          thinking: toString(eventObj.delta),
+        },
+      });
+      continue;
+    }
+
+    if (eventType === 'text_delta') {
+      ensureMessageStart(res, state, {
+        id: `chatcmpl-${Date.now()}`,
+        model: modelId,
+      });
+      ensureTextBlock(res, state);
+      emitSSE(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index: state.contentIndex,
+        delta: {
+          type: 'text_delta',
+          text: toString(eventObj.delta),
+        },
+      });
+      continue;
+    }
+
+    if (eventType === 'toolcall_end') {
+      ensureMessageStart(res, state, {
+        id: `chatcmpl-${Date.now()}`,
+        model: modelId,
+      });
+      const toolCallObj = toOptionalObject(eventObj.toolCall) || {};
+      const toolIndexRaw = eventObj.contentIndex;
+      const toolIndex = (
+        typeof toolIndexRaw === 'number'
+        && Number.isFinite(toolIndexRaw)
+      ) ? toolIndexRaw : Object.keys(state.toolCalls).length;
+
+      const toolCallState: ToolCallState = {
+        id: toString(toolCallObj.id) || `tool_call_${toolIndex}`,
+        name: toString(toolCallObj.name) || 'tool',
+      };
+
+      const thoughtSignature = toString(toolCallObj.thoughtSignature);
+      if (thoughtSignature) {
+        toolCallState.extraContent = {
+          google: {
+            thought_signature: thoughtSignature,
+          },
+        };
+      }
+
+      state.toolCalls[toolIndex] = {
+        ...(state.toolCalls[toolIndex] || {}),
+        ...toolCallState,
+      };
+      ensureToolUseBlock(res, state, toolIndex, state.toolCalls[toolIndex]);
+
+      const toolCallArgsObj = toOptionalObject(toolCallObj.arguments) || {};
+      emitSSE(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index: state.contentIndex,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: JSON.stringify(toolCallArgsObj),
+        },
+      });
+      continue;
+    }
+
+    if (eventType === 'done') {
+      ensureMessageStart(res, state, {
+        id: `chatcmpl-${Date.now()}`,
+        model: modelId,
+      });
+      const messageObj = toOptionalObject(eventObj.message) || {};
+      const usageObj = toOptionalObject(messageObj.usage) || {};
+      const finishReason = mapPiAiStopReasonToOpenAIFinishReason(eventObj.reason);
+      emitMessageDelta(res, state, finishReason, {
+        id: `chatcmpl-${Date.now()}`,
+        model: modelId,
+        usage: {
+          prompt_tokens: Number(usageObj.input) || 0,
+          completion_tokens: Number(usageObj.output) || 0,
+        },
+      });
+      continue;
+    }
+  }
+
+  if (!started) {
+    return {
+      started: false,
+      errorMessage: 'Cloud Code Assist API returned an empty response',
+      retryableAuthError: false,
+    };
+  }
+
+  flushMessageStop();
+  res.end();
+  return {
+    started: true,
+  };
+}
+
+async function handleAntigravityRequestViaPiAi(
+  openAIRequest: Record<string, unknown>,
+  stream: boolean,
+  res: http.ServerResponse,
+  config: OpenAICompatUpstreamConfig
+): Promise<void> {
+  const requestedModel = typeof openAIRequest.model === 'string'
+    ? openAIRequest.model
+    : config.providerModelId || config.model;
+  const normalizedModelId = normalizeAntigravityModelId(requestedModel);
+  const piModel = buildPiAiModel(normalizedModelId, config.baseURL);
+  const { context, options } = buildPiAiContextFromOpenAIRequest(openAIRequest, normalizedModelId);
+  const piAi = await loadPiAi();
+
+  const resolveApiKey = async (forceRefresh: boolean): Promise<string> => {
+    const resolvedRawApiKey = config.resolveAuthApiKey
+      ? await config.resolveAuthApiKey(forceRefresh)
+      : config.apiKey;
+    if (!resolvedRawApiKey) {
+      throw new Error('Antigravity OAuth is not connected. Please login first.');
+    }
+
+    const parsedPayload = parseUpstreamApiKeyPayload(resolvedRawApiKey);
+    return JSON.stringify({
+      token: parsedPayload.token,
+      projectId: parsedPayload.projectId,
+    });
+  };
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const forceRefresh = attempt > 0;
+    const requestTimeoutMs = Number(process.env.LOBSTER_ANTIGRAVITY_REQUEST_TIMEOUT_MS)
+      || DEFAULT_ANTIGRAVITY_REQUEST_TIMEOUT_MS;
+    const abortController = new AbortController();
+    const abortTimer = setTimeout(() => {
+      abortController.abort(new Error(`timeout-${requestTimeoutMs}`));
+    }, requestTimeoutMs);
+
+    try {
+      const apiKeyPayload = await resolveApiKey(forceRefresh);
+      const streamOptions: Record<string, unknown> = {
+        apiKey: apiKeyPayload,
+        ...options,
+        signal: abortController.signal,
+      };
+
+      const piStream = piAi.streamGoogleGeminiCli(
+        piModel as never,
+        context as never,
+        streamOptions as never
+      );
+
+      if (stream) {
+        const relay = await relayPiAiStreamAsAnthropicSSE(piStream, res, normalizedModelId);
+        if (!relay.started && relay.errorMessage) {
+          if (relay.retryableAuthError && attempt === 0 && config.resolveAuthApiKey) {
+            lastError = new Error(relay.errorMessage);
+            continue;
+          }
+          throw new Error(relay.errorMessage);
+        }
+        return;
+      }
+
+      const finalMessage = await collectPiAiFinalMessage(piStream);
+      const openAIResponse = buildOpenAIResponseFromPiAiMessage(finalMessage, normalizedModelId);
+      const anthropicResponse = openAIToAnthropic(openAIResponse);
+      writeJSON(res, 200, anthropicResponse);
+      return;
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      const isTimedOut = abortController.signal.aborted
+        && (`${rawMessage}`.includes(`timeout-${requestTimeoutMs}`)
+          || rawMessage === 'Request was aborted');
+      const message = isTimedOut
+        ? `Antigravity request timeout after ${Math.floor(requestTimeoutMs / 1000)}s`
+        : rawMessage;
+      if (attempt === 0 && config.resolveAuthApiKey && isRetryableAuthError(message)) {
+        lastError = error instanceof Error ? error : new Error(message);
+        continue;
+      }
+      lastError = error instanceof Error ? error : new Error(message);
+      break;
+    } finally {
+      clearTimeout(abortTimer);
+    }
+  }
+
+  throw lastError || new Error('Antigravity request failed');
 }
 
 function readRequestBody(req: http.IncomingMessage): Promise<string> {
@@ -893,6 +1902,65 @@ async function handleRequest(
     return;
   }
 
+  if (method === 'GET' && (url.pathname === '/v1/models' || url.pathname.startsWith('/v1/models/'))) {
+    if (!upstreamConfig) {
+      writeJSON(
+        res,
+        503,
+        createAnthropicErrorBody('OpenAI compatibility proxy is not configured', 'service_unavailable')
+      );
+      return;
+    }
+
+    const models = listProxyModels(upstreamConfig).map((id) => buildAnthropicModelObject(id));
+    if (url.pathname === '/v1/models') {
+      writeJSON(res, 200, {
+        type: 'list',
+        data: models,
+        first_id: models[0] ? toString(models[0].id) : null,
+        has_more: false,
+      });
+      return;
+    }
+
+    const modelId = decodeURIComponent(url.pathname.slice('/v1/models/'.length));
+    const matched = models.find((item) => toString(item.id) === modelId);
+    if (!matched) {
+      writeJSON(res, 404, createAnthropicErrorBody('Model not found', 'not_found_error'));
+      return;
+    }
+
+    writeJSON(res, 200, matched);
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/v1/messages/count_tokens') {
+    let requestBodyRaw = '';
+    try {
+      requestBodyRaw = await readRequestBody(req);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid request body';
+      writeJSON(res, 400, createAnthropicErrorBody(message, 'invalid_request_error'));
+      return;
+    }
+
+    let parsedRequestBody: unknown;
+    try {
+      parsedRequestBody = JSON.parse(requestBodyRaw);
+    } catch {
+      writeJSON(res, 400, createAnthropicErrorBody('Request body must be valid JSON', 'invalid_request_error'));
+      return;
+    }
+
+    const inputTokens = estimateAnthropicInputTokens(parsedRequestBody);
+    writeJSON(res, 200, {
+      input_tokens: inputTokens,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    });
+    return;
+  }
+
   if (method !== 'POST' || url.pathname !== '/v1/messages') {
     writeJSON(res, 404, createAnthropicErrorBody('Not found', 'not_found_error'));
     return;
@@ -928,15 +1996,61 @@ async function handleRequest(
   if (!openAIRequest.model) {
     openAIRequest.model = upstreamConfig.model;
   }
-  hydrateOpenAIRequestToolCalls(openAIRequest, upstreamConfig.provider, upstreamConfig.baseURL);
+  const upstreamKind =
+    upstreamConfig.upstreamKind
+    || (upstreamConfig.provider === 'antigravity' ? 'antigravity' : 'openai');
+
+  if (upstreamKind === 'antigravity') {
+    const requestedModel = typeof openAIRequest.model === 'string'
+      ? openAIRequest.model
+      : upstreamConfig.providerModelId || upstreamConfig.model;
+    openAIRequest.model = normalizeAntigravityModelId(requestedModel);
+  }
+
+  hydrateOpenAIRequestToolCalls(openAIRequest);
 
   const stream = Boolean(openAIRequest.stream);
 
-  const headers: Record<string, string> = {
+  if (upstreamKind === 'antigravity') {
+    try {
+      await handleAntigravityRequestViaPiAi(openAIRequest, stream, res, upstreamConfig);
+      lastProxyError = null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Antigravity request failed';
+      lastProxyError = message;
+      const statusCode = isRetryableAuthError(message) ? 401 : 502;
+      writeJSON(
+        res,
+        statusCode,
+        createAnthropicErrorBody(
+          message,
+          statusCode === 401 ? 'authentication_error' : 'api_error'
+        )
+      );
+    }
+    return;
+  }
+
+  const headersBase: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (upstreamConfig.apiKey) {
-    headers.Authorization = `Bearer ${upstreamConfig.apiKey}`;
+
+  const authHeaders: Record<string, string> = {};
+  const applyUpstreamAuthHeaders = async (): Promise<void> => {
+    Object.keys(authHeaders).forEach((key) => delete authHeaders[key]);
+
+    if (upstreamConfig.apiKey) {
+      authHeaders.Authorization = `Bearer ${upstreamConfig.apiKey}`;
+    }
+  };
+
+  try {
+    await applyUpstreamAuthHeaders();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to resolve upstream auth headers';
+    lastProxyError = message;
+    writeJSON(res, 401, createAnthropicErrorBody(message, 'authentication_error'));
+    return;
   }
 
   const targetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL);
@@ -949,7 +2063,10 @@ async function handleRequest(
     currentTargetURL = targetURL;
     return session.defaultSession.fetch(targetURL, {
       method: 'POST',
-      headers,
+      headers: {
+        ...headersBase,
+        ...authHeaders,
+      },
       body: JSON.stringify(payload),
     });
   };
@@ -1106,6 +2223,7 @@ export function configureCoworkOpenAICompatProxy(config: OpenAICompatUpstreamCon
     ...config,
     baseURL: config.baseURL.trim(),
     apiKey: config.apiKey?.trim(),
+    upstreamKind: config.upstreamKind ?? 'openai',
   };
   lastProxyError = null;
 }
@@ -1133,6 +2251,7 @@ export function getCoworkOpenAICompatProxyStatus(): OpenAICompatProxyStatus {
     hasUpstream: Boolean(upstreamConfig),
     upstreamBaseURL: upstreamConfig?.baseURL || null,
     upstreamModel: upstreamConfig?.model || null,
+    upstreamKind: upstreamConfig?.upstreamKind || null,
     lastError: lastProxyError,
   };
 }

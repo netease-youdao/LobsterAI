@@ -14,6 +14,39 @@ interface ApiStreamResponse {
   error?: string;
 }
 
+interface OAuthStatus {
+  providerKey: 'antigravity' | 'openai';
+  connected: boolean;
+  providerId: 'google-antigravity' | 'openai-codex';
+  profileId?: string;
+  email?: string;
+  expiresAtMs?: number;
+  projectId?: string;
+  connectedAt?: number;
+  lastSyncAt?: number;
+}
+
+interface OAuthModel {
+  id: string;
+  name: string;
+  supportsImage?: boolean;
+}
+
+interface OAuthSyncModelsResult {
+  providerKey: 'antigravity' | 'openai';
+  models: OAuthModel[];
+  source: 'remote' | 'cache' | 'default';
+  warning?: string;
+  syncedAt: number;
+}
+
+interface OAuthResolvedApiConfig {
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  apiType: 'anthropic' | 'openai';
+}
+
 // Cowork types for IPC
 interface CoworkSession {
   id: string;
@@ -211,6 +244,19 @@ interface IElectronAPI {
     onStreamDone: (requestId: string, callback: () => void) => () => void;
     onStreamError: (requestId: string, callback: (error: string) => void) => () => void;
     onStreamAbort: (requestId: string, callback: () => void) => () => void;
+  };
+  oauth: {
+    getStatus: (providerKey: 'antigravity' | 'openai') => Promise<{ success: boolean; status?: OAuthStatus; error?: string }>;
+    login: (providerKey: 'antigravity' | 'openai') => Promise<{ success: boolean; status?: OAuthStatus; error?: string }>;
+    disconnect: (providerKey: 'antigravity' | 'openai') => Promise<{ success: boolean; status?: OAuthStatus; error?: string }>;
+    syncModels: (
+      providerKey: 'antigravity' | 'openai',
+      force?: boolean
+    ) => Promise<{ success: boolean; result?: OAuthSyncModelsResult; error?: string }>;
+    resolveApiConfig: (
+      providerKey: 'antigravity' | 'openai',
+      modelId?: string
+    ) => Promise<{ success: boolean; config?: OAuthResolvedApiConfig; error?: string }>;
   };
   getApiConfig: () => Promise<CoworkApiConfig | null>;
   checkApiConfig: () => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;

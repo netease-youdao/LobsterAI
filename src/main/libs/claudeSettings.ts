@@ -17,7 +17,8 @@ type ProviderConfig = {
   enabled: boolean;
   apiKey: string;
   baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai' | 'native';
+  apiFormat?: 'anthropic' | 'openai' | 'antigravity' | 'native';
+  authMode?: 'api-key' | 'oauth';
   models?: ProviderModel[];
 };
 
@@ -35,9 +36,16 @@ export type ApiConfigResolution = {
 
 // Store getter function injected from main.ts
 let storeGetter: (() => SqliteStore | null) | null = null;
+let antigravityAuthResolver: ((forceRefresh?: boolean) => Promise<string>) | null = null;
 
 export function setStoreGetter(getter: () => SqliteStore | null): void {
   storeGetter = getter;
+}
+
+export function setAntigravityAuthResolver(
+  resolver: ((forceRefresh?: boolean) => Promise<string>) | null
+): void {
+  antigravityAuthResolver = resolver;
 }
 
 const getStore = (): SqliteStore | null => {
@@ -75,6 +83,9 @@ type MatchedProvider = {
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
+  if (providerName === 'antigravity' || apiFormat === 'antigravity') {
+    return 'antigravity';
+  }
   if (providerName === 'openai' || providerName === 'gemini') {
     return 'openai';
   }
@@ -121,7 +132,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
   }
 
-  if (apiFormat === 'anthropic' && !providerConfig.apiKey?.trim()) {
+  if (apiFormat === 'anthropic' && providerConfig.authMode !== 'oauth' && !providerConfig.apiKey?.trim()) {
     return { matched: null, error: `Provider ${providerName} requires API key for Anthropic-compatible mode.` };
   }
 
@@ -182,11 +193,54 @@ export function resolveCurrentApiConfig(): ApiConfigResolution {
     };
   }
 
+  if (matched.apiFormat === 'antigravity') {
+    if (!antigravityAuthResolver) {
+      return {
+        config: null,
+        error: 'Antigravity OAuth resolver is not initialized.',
+      };
+    }
+
+    const normalizeAntigravityModel = (modelId: string): string => {
+      const trimmed = modelId.trim();
+      return trimmed.startsWith('google-antigravity/')
+        ? trimmed.slice('google-antigravity/'.length)
+        : trimmed;
+    };
+
+    configureCoworkOpenAICompatProxy({
+      baseURL: resolvedBaseURL,
+      model: normalizeAntigravityModel(matched.modelId),
+      providerModelId: matched.modelId,
+      provider: matched.providerName,
+      upstreamKind: 'antigravity',
+      resolveAuthApiKey: async (forceRefresh?: boolean) => antigravityAuthResolver?.(forceRefresh ?? false),
+    });
+
+    const proxyBaseURL = getCoworkOpenAICompatProxyBaseURL();
+    if (!proxyBaseURL) {
+      return {
+        config: null,
+        error: 'OpenAI compatibility proxy base URL is unavailable.',
+      };
+    }
+
+    return {
+      config: {
+        apiKey: 'lobsterai-antigravity-oauth',
+        baseURL: proxyBaseURL,
+        model: matched.modelId,
+        apiType: 'openai',
+      },
+    };
+  }
+
   configureCoworkOpenAICompatProxy({
     baseURL: resolvedBaseURL,
     apiKey: resolvedApiKey || undefined,
     model: matched.modelId,
     provider: matched.providerName,
+    upstreamKind: 'openai',
   });
 
   const proxyBaseURL = getCoworkOpenAICompatProxyBaseURL();

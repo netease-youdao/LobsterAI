@@ -1,4 +1,4 @@
-export type AnthropicApiFormat = 'anthropic' | 'openai';
+export type AnthropicApiFormat = 'anthropic' | 'openai' | 'antigravity';
 
 export type OpenAIStreamChunk = {
   id?: string;
@@ -61,6 +61,9 @@ function stringifyUnknown(value: unknown): string {
 }
 
 export function normalizeProviderApiFormat(format: unknown): AnthropicApiFormat {
+  if (format === 'antigravity') {
+    return 'antigravity';
+  }
   if (format === 'openai') {
     return 'openai';
   }
