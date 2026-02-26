@@ -35,3 +35,6 @@ nul
 
 .playwright-mcp/
 .cowork-temp/
+
+# editorconfig files
+.vscode/
