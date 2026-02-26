@@ -71,6 +71,11 @@ type ProviderType = (typeof providerKeys)[number];
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
 type Model = NonNullable<ProviderConfig['models']>[number];
+type ProviderConnectionTestResult = {
+  success: boolean;
+  message: string;
+  provider: ProviderType;
+};
 
 interface ProviderExportEntry {
   enabled: boolean;
@@ -303,11 +308,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
+  const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(notice ?? null);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<ProviderConnectionTestResult | null>(null);
+  const [isTestResultModalOpen, setIsTestResultModalOpen] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isImportingProviders, setIsImportingProviders] = useState(false);
   const [isExportingProviders, setIsExportingProviders] = useState(false);
@@ -408,6 +415,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       initialLanguageRef.current = config.language;
       setTheme(config.theme);
       setLanguage(config.language);
+      setUseSystemProxy(config.useSystemProxy ?? false);
 
       // Load auto-launch setting
       window.electron.autoLaunch.get().then(({ enabled }) => {
@@ -641,6 +649,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setModelFormError(null);
     setActiveProvider(provider);
     // 切换 provider 时清除测试结果
+    setIsTestResultModalOpen(false);
     setTestResult(null);
   };
 
@@ -928,6 +937,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         providers: normalizedProviders, // Save all providers configuration
         theme,
         language,
+        useSystemProxy,
         shortcuts,
       });
 
@@ -1108,15 +1118,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     }
   };
 
+  const showTestResultModal = (
+    result: Omit<ProviderConnectionTestResult, 'provider'>,
+    provider: ProviderType
+  ) => {
+    setTestResult({
+      ...result,
+      provider,
+    });
+    setIsTestResultModalOpen(true);
+  };
+
   // 测试 API 连接
   const handleTestConnection = async () => {
+    const testingProvider = activeProvider;
+    const providerConfig = providers[testingProvider];
     setIsTesting(true);
+    setIsTestResultModalOpen(false);
     setTestResult(null);
 
-    const providerConfig = providers[activeProvider];
-
-    if (providerRequiresApiKey(activeProvider) && !providerConfig.apiKey) {
-      setTestResult({ success: false, message: i18nService.t('apiKeyRequired') });
+    if (providerRequiresApiKey(testingProvider) && !providerConfig.apiKey) {
+      showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
       setIsTesting(false);
       return;
     }
@@ -1124,7 +1146,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     // 获取第一个可用模型
     const firstModel = providerConfig.models?.[0];
     if (!firstModel) {
-      setTestResult({ success: false, message: i18nService.t('noModelsConfigured') });
+      showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider);
       setIsTesting(false);
       return;
     }
@@ -1133,10 +1155,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
       // Apply Coding Plan endpoint switch
       let effectiveBaseUrl = providerConfig.baseUrl;
-      let effectiveApiFormat = getEffectiveApiFormat(activeProvider, providerConfig.apiFormat);
+      let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
       
       // Handle Zhipu GLM Coding Plan endpoint switch
-      if (activeProvider === 'zhipu' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+      if (testingProvider === 'zhipu' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
         if (effectiveApiFormat === 'anthropic') {
           effectiveBaseUrl = 'https://open.bigmodel.cn/api/anthropic';
         } else {
@@ -1145,7 +1167,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         }
       }
       // Handle Qwen Coding Plan endpoint switch
-      if (activeProvider === 'qwen' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+      if (testingProvider === 'qwen' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
         if (effectiveApiFormat === 'anthropic') {
           effectiveBaseUrl = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
         } else {
@@ -1154,7 +1176,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         }
       }
       // Handle Volcengine Coding Plan endpoint switch
-      if (activeProvider === 'volcengine' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+      if (testingProvider === 'volcengine' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
         if (effectiveApiFormat === 'anthropic') {
           effectiveBaseUrl = 'https://ark.cn-beijing.volces.com/api/coding';
         } else {
@@ -1163,7 +1185,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         }
       }
       // Handle Moonshot Coding Plan endpoint switch
-      if (activeProvider === 'moonshot' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+      if (testingProvider === 'moonshot' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
         if (effectiveApiFormat === 'anthropic') {
           effectiveBaseUrl = 'https://api.kimi.com/coding';
         } else {
@@ -1198,10 +1220,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           }),
         });
       } else {
-        const useResponsesApi = shouldUseOpenAIResponsesForProvider(activeProvider);
+        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider);
         const openaiUrl = useResponsesApi
           ? buildOpenAIResponsesUrl(normalizedBaseUrl)
-          : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, activeProvider);
+          : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, testingProvider);
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
@@ -1218,7 +1240,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               model: firstModel.id,
               messages: [{ role: 'user', content: 'Hi' }],
             };
-        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(activeProvider, firstModel.id)) {
+        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(testingProvider, firstModel.id)) {
           openAIRequestBody.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
         } else {
           if (!useResponsesApi) {
@@ -1234,25 +1256,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       }
 
       if (response.ok) {
-        setTestResult({ success: true, message: i18nService.t('connectionSuccess') });
+        showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
       } else {
         const data = response.data || {};
         // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
         if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
-          setTestResult({ success: true, message: i18nService.t('connectionSuccess') });
+          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
           return;
         }
-        setTestResult({
-          success: false,
-          message: errorMessage,
-        });
+        showTestResultModal({ success: false, message: errorMessage }, testingProvider);
       }
     } catch (err) {
-      setTestResult({
+      showTestResultModal({
         success: false,
         message: err instanceof Error ? err.message : i18nService.t('connectionFailed'),
-      });
+      }, testingProvider);
     } finally {
       setIsTesting(false);
     }
@@ -1426,6 +1445,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         });
         return next;
       });
+      setIsTestResultModalOpen(false);
       setTestResult(null);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
@@ -1514,6 +1534,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         });
         return next;
       });
+      setIsTestResultModalOpen(false);
       setTestResult(null);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
@@ -1616,6 +1637,37 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                       autoLaunch ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+
+            {/* System proxy Section */}
+            <div>
+              <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('useSystemProxy')}
+              </h4>
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-sm dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                  {i18nService.t('useSystemProxyDescription')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={useSystemProxy}
+                  onClick={() => {
+                    setUseSystemProxy((prev) => !prev);
+                  }}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    useSystemProxy
+                      ? 'bg-claude-accent'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      useSystemProxy ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
@@ -2353,16 +2405,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
                   {isTesting ? i18nService.t('testing') : i18nService.t('testConnection')}
                 </button>
-                {testResult && (
-                  <div className={`flex items-center text-xs ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {testResult.success ? (
-                      <CheckCircleIcon className="h-4 w-4 mr-1" />
-                    ) : (
-                      <XCircleIcon className="h-4 w-4 mr-1" />
-                    )}
-                    <span className="truncate max-w-[200px]">{testResult.message}</span>
-                  </div>
-                )}
               </div>
 
               <div>
@@ -2578,6 +2620,61 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               </button>
             </div>
           </form>
+
+          {isTestResultModalOpen && testResult && (
+            <div
+              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4"
+              onClick={() => setIsTestResultModalOpen(false)}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label={i18nService.t('connectionTestResult')}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-md rounded-2xl dark:bg-claude-darkSurface bg-claude-bg dark:border-claude-darkBorder border-claude-border border shadow-modal p-4"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('connectionTestResult')}
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setIsTestResultModalOpen(false)}
+                    className="p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
+                  <span className="text-[11px]">•</span>
+                  <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {testResult.success ? (
+                      <CheckCircleIcon className="h-4 w-4" />
+                    ) : (
+                      <XCircleIcon className="h-4 w-4" />
+                    )}
+                    {testResult.success ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}
+                  </span>
+                </div>
+
+                <p className="mt-3 text-xs leading-5 dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
+                  {testResult.message}
+                </p>
+
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsTestResultModalOpen(false)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors active:scale-[0.98]"
+                  >
+                    {i18nService.t('close')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {(isAddingModel || isEditingModel) && (
             <div

@@ -61,6 +61,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noModelsAvailable: '暂无可用模型',
     addFirstModel: '添加第一个模型',
     testConnection: '测试连接',
+    connectionTestResult: '连接测试结果',
     testing: '测试中...',
     connectionSuccess: '连接成功',
     connectionFailed: '连接失败',
@@ -508,6 +509,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // 通用设置
     autoLaunch: '开机自启动',
     autoLaunchDescription: '系统启动时自动运行应用',
+    useSystemProxy: '使用系统代理',
+    useSystemProxyDescription: '开启后网络请求将跟随系统代理（保存后生效）',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -692,6 +695,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noModelsAvailable: 'No models available',
     addFirstModel: 'Add First Model',
     testConnection: 'Test Connection',
+    connectionTestResult: 'Connection Test Result',
     testing: 'Testing...',
     connectionSuccess: 'Connection successful',
     connectionFailed: 'Connection failed',
@@ -1139,6 +1143,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // General Settings
     autoLaunch: 'Launch at Login',
     autoLaunchDescription: 'Automatically start the app when you log in',
+    useSystemProxy: 'Use System Proxy',
+    useSystemProxyDescription: 'When enabled, network requests follow system proxy settings (applies after Save)',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',

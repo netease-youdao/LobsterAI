@@ -185,6 +185,8 @@ export interface AppConfig {
   theme: 'light' | 'dark' | 'system';
   // 语言配置
   language: 'zh' | 'en';
+  // 是否使用系统代理
+  useSystemProxy: boolean;
   // 语言初始化标记 (用于判断是否是首次启动)
   language_initialized?: boolean;
   // 应用配置
@@ -353,6 +355,7 @@ export const defaultConfig: AppConfig = {
   },
   theme: 'system',
   language: 'zh',
+  useSystemProxy: false,
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',
