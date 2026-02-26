@@ -120,13 +120,8 @@ When user asks: **"Search for Electron tech news"** or **"搜索 Electron 技术
 
 Execute:
 ```bash
-# macOS/Linux
 cd scripts
-python3 search_news.py "Electron" --limit 15
-
-# Windows
-cd scripts
-python search_news.py "Electron" --limit 15
+node search_news.js "Electron" --limit 15
 ```
 
 The script will:
@@ -144,23 +139,18 @@ Read the JSON and present results in Markdown format with translations.
 
 2. **Run search script**
    ```bash
-   # macOS/Linux (with smart routing)
    cd scripts
-   python3 search_news.py "[keyword]" --limit 15 --max-per-source 5
+   node search_news.js "[keyword]" --limit 15 --max-per-source 5
 
    # To search all sources (disable smart routing)
-   python3 search_news.py "[keyword]" --limit 15 --all-sources
-
-   # Windows
-   cd scripts
-   python search_news.py "[keyword]" --limit 15 --max-per-source 5
+   node search_news.js "[keyword]" --limit 15 --all-sources
    ```
 
    **Parameters:**
    - `--limit 15`: Fetch up to 15 articles from each source
    - `--max-per-source 5`: Display max 5 articles per source (ensures diversity)
    - `--no-balance`: Disable balancing (show all results sorted by heat)
-   - `--all-sources`: Search all 63 sources (disable smart routing)
+   - `--all-sources`: Search all 75 sources (disable smart routing)
 
 3. **Read JSON output**
    - Script outputs to stdout
@@ -301,14 +291,10 @@ Articles appearing on multiple sources rank higher, indicating broader industry 
 - Verify sources are enabled in [references/sources.json](references/sources.json)
 
 **Script errors:**
-- Ensure Python 3.6+ is installed (`python3 --version` on macOS/Linux, `python --version` on Windows)
+- Ensure Node.js 24+ is installed (`node --version`)
 - Check network connectivity
 - Review stderr output for specific error messages
 - Some sources may be temporarily unavailable
-
-**Windows-specific notes:**
-- Use `python` instead of `python3` in commands
-- Some Chinese sources may have encoding issues if system locale is not UTF-8 (already handled in code)
 
 **Slow performance:**
 - Reduce `--limit` parameter (default is 15)
