@@ -22,6 +22,12 @@ import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { initLogger, getLogFilePath } from './logger';
 import { cpRecursiveSync } from './fsCompat';
+import {
+  applySystemProxyEnv,
+  resolveSystemProxyUrl,
+  restoreOriginalProxyEnv,
+  setSystemProxyEnabled,
+} from './libs/systemProxy';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -752,8 +758,17 @@ let isQuitting = false;
 const activeStreamControllers = new Map<string, AbortController>();
 let lastReloadAt = 0;
 const MIN_RELOAD_INTERVAL_MS = 5000;
+type AppConfigSettings = {
+  theme?: string;
+  language?: string;
+  useSystemProxy?: boolean;
+};
 
-const resolveThemeFromConfig = (config?: { theme?: string }): 'light' | 'dark' => {
+const getUseSystemProxyFromConfig = (config?: { useSystemProxy?: boolean }): boolean => {
+  return config?.useSystemProxy === true;
+};
+
+const resolveThemeFromConfig = (config?: AppConfigSettings): 'light' | 'dark' => {
   if (config?.theme === 'dark') {
     return 'dark';
   }
@@ -764,12 +779,12 @@ const resolveThemeFromConfig = (config?: { theme?: string }): 'light' | 'dark' =
 };
 
 const getInitialTheme = (): 'light' | 'dark' => {
-  const config = getStore().get('app_config') as { theme?: string } | undefined;
+  const config = getStore().get<AppConfigSettings>('app_config');
   return resolveThemeFromConfig(config);
 };
 
 const getTitleBarOverlayOptions = () => {
-  const config = getStore().get('app_config') as { theme?: string } | undefined;
+  const config = getStore().get<AppConfigSettings>('app_config');
   const theme = resolveThemeFromConfig(config);
   return {
     color: TITLEBAR_COLORS[theme].color,
@@ -784,9 +799,34 @@ const updateTitleBarOverlay = () => {
     mainWindow.setTitleBarOverlay(getTitleBarOverlayOptions());
   }
   // Also update the window background color to match the theme
-  const config = getStore().get('app_config') as { theme?: string } | undefined;
+  const config = getStore().get<AppConfigSettings>('app_config');
   const theme = resolveThemeFromConfig(config);
   mainWindow.setBackgroundColor(theme === 'dark' ? '#0F1117' : '#F8F9FB');
+};
+
+const applyProxyPreference = async (useSystemProxy: boolean): Promise<void> => {
+  try {
+    await session.defaultSession.setProxy({ mode: useSystemProxy ? 'system' : 'direct' });
+  } catch (error) {
+    console.error('[Main] Failed to apply session proxy mode:', error);
+  }
+
+  setSystemProxyEnabled(useSystemProxy);
+
+  if (!useSystemProxy) {
+    restoreOriginalProxyEnv();
+    console.log('[Main] System proxy disabled (direct mode).');
+    return;
+  }
+
+  const proxyUrl = await resolveSystemProxyUrl('https://openrouter.ai');
+  applySystemProxyEnv(proxyUrl);
+
+  if (proxyUrl) {
+    console.log('[Main] System proxy enabled for process env:', proxyUrl);
+  } else {
+    console.warn('[Main] System proxy mode enabled, but no proxy endpoint was resolved (DIRECT).');
+  }
 };
 
 const emitWindowState = () => {
@@ -2095,12 +2135,6 @@ if (!gotTheLock) {
       emitWindowState();
     });
 
-    // [关键代码] 显式告诉 Electron 使用系统的代理配置
-    // 这会涵盖绝大多数 VPN（如 Clash, V2Ray 等开启了"系统代理"模式的情况）
-    mainWindow.webContents.session.setProxy({ mode: 'system' }).then(() => {
-      console.log('已设置为跟随系统代理');
-    });
-
     // 处理窗口关闭
     mainWindow.on('close', (e) => {
       // In development, close should actually quit so `npm run electron:dev`
@@ -2328,10 +2362,8 @@ if (!gotTheLock) {
       console.error('[Main] initApp: skill services failed:', error);
     }
 
-    // [关键代码] 显式告诉 Electron 使用系统的代理配置
-    // 这会涵盖绝大多数 VPN（如 Clash, V2Ray 等开启了"系统代理"模式的情况）
-    await session.defaultSession.setProxy({ mode: 'system' });
-    console.log('已设置为跟随系统代理');
+    const appConfig = getStore().get<AppConfigSettings>('app_config');
+    await applyProxyPreference(getUseSystemProxyFromConfig(appConfig));
 
     await startCoworkOpenAICompatProxy().catch((error) => {
       console.error('Failed to start OpenAI compatibility proxy:', error);
@@ -2360,15 +2392,25 @@ if (!gotTheLock) {
       setAutoLaunchEnabled(true);
     }
 
-    let lastLanguage = getStore().get<{ language?: string }>('app_config')?.language;
-    getStore().onDidChange('app_config', () => {
+    let lastLanguage = getStore().get<AppConfigSettings>('app_config')?.language;
+    let lastUseSystemProxy = getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config'));
+    getStore().onDidChange<AppConfigSettings>('app_config', (newConfig, oldConfig) => {
       updateTitleBarOverlay();
       // 仅在语言变更时刷新托盘菜单文本
-      const currentLanguage = getStore().get<{ language?: string }>('app_config')?.language;
+      const currentLanguage = newConfig?.language;
       if (currentLanguage !== lastLanguage) {
         lastLanguage = currentLanguage;
         updateTrayMenu(() => mainWindow, getStore());
       }
+
+      const previousUseSystemProxy = oldConfig
+        ? getUseSystemProxyFromConfig(oldConfig)
+        : lastUseSystemProxy;
+      const currentUseSystemProxy = getUseSystemProxyFromConfig(newConfig);
+      if (currentUseSystemProxy !== previousUseSystemProxy) {
+        void applyProxyPreference(currentUseSystemProxy);
+      }
+      lastUseSystemProxy = currentUseSystemProxy;
     });
 
     // 在 macOS 上，当点击 dock 图标时显示已有窗口或重新创建
