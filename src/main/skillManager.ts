@@ -2,8 +2,10 @@ import { app, BrowserWindow, session } from 'electron';
 import { execSync, spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import yaml from 'js-yaml';
 import extractZip from 'extract-zip';
 import { SqliteStore } from './sqliteStore';
+import { cpRecursiveSync } from './fsCompat';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -129,31 +131,31 @@ const CLAUDE_SKILLS_SUBDIR = 'skills';
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-const parseFrontmatter = (raw: string): { frontmatter: Record<string, string>; content: string } => {
+const parseFrontmatter = (raw: string): { frontmatter: Record<string, unknown>; content: string } => {
   const normalized = raw.replace(/^\uFEFF/, '');
   const match = normalized.match(FRONTMATTER_RE);
   if (!match) {
     return { frontmatter: {}, content: normalized };
   }
 
-  const frontmatter: Record<string, string> = {};
-  const lines = match[1].split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const kv = trimmed.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!kv) continue;
-    const key = kv[1];
-    const value = (kv[2] ?? '').trim().replace(/^['"]|['"]$/g, '');
-    frontmatter[key] = value;
+  let frontmatter: Record<string, unknown> = {};
+  try {
+    const parsed = yaml.load(match[1]);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      frontmatter = parsed as Record<string, unknown>;
+    }
+  } catch (e) {
+    console.warn('[skills] Failed to parse YAML frontmatter:', e);
   }
 
   const content = normalized.slice(match[0].length);
   return { frontmatter, content };
 };
 
-const isTruthy = (value?: string): boolean => {
+const isTruthy = (value?: unknown): boolean => {
+  if (value === true) return true;
   if (!value) return false;
+  if (typeof value !== 'string') return false;
   const normalized = value.trim().toLowerCase();
   return normalized === 'true' || normalized === 'yes' || normalized === '1';
 };
@@ -779,14 +781,19 @@ export class SkillManager {
       return;
     }
 
+    console.log('[skills] syncBundledSkillsToUserData: start');
     const userRoot = this.ensureSkillsRoot();
+    console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);
     const bundledRoot = this.getBundledSkillsRoot();
+    console.log('[skills] syncBundledSkillsToUserData: bundledRoot =', bundledRoot);
     if (!bundledRoot || bundledRoot === userRoot || !fs.existsSync(bundledRoot)) {
+      console.log('[skills] syncBundledSkillsToUserData: bundledRoot skipped (missing or same as userRoot)');
       return;
     }
 
     try {
       const bundledSkillDirs = listSkillDirs(bundledRoot);
+      console.log('[skills] syncBundledSkillsToUserData: found', bundledSkillDirs.length, 'bundled skills');
       bundledSkillDirs.forEach((dir) => {
         const id = path.basename(dir);
         const targetDir = path.join(userRoot, id);
@@ -806,14 +813,13 @@ export class SkillManager {
         }
 
         if (targetExists && !shouldRepair) return;
-
         try {
-          fs.cpSync(dir, targetDir, {
-            recursive: true,
+          console.log(`[skills] syncBundledSkillsToUserData: copying "${id}" from ${dir} to ${targetDir}`);
+          cpRecursiveSync(dir, targetDir, {
             dereference: true,
             force: shouldRepair,
-            errorOnExist: false,
           });
+          console.log(`[skills] syncBundledSkillsToUserData: copied "${id}" successfully`);
           if (shouldRepair) {
             console.log(`[skills] Repaired bundled skill "${id}" in user data`);
           }
@@ -825,8 +831,10 @@ export class SkillManager {
       const bundledConfig = path.join(bundledRoot, SKILLS_CONFIG_FILE);
       const targetConfig = path.join(userRoot, SKILLS_CONFIG_FILE);
       if (fs.existsSync(bundledConfig) && !fs.existsSync(targetConfig)) {
-        fs.cpSync(bundledConfig, targetConfig, { dereference: false });
+        console.log('[skills] syncBundledSkillsToUserData: copying skills.config.json');
+        cpRecursiveSync(bundledConfig, targetConfig);
       }
+      console.log('[skills] syncBundledSkillsToUserData: done');
     } catch (error) {
       console.warn('[skills] Failed to sync bundled skills:', error);
     }
@@ -1047,7 +1055,7 @@ export class SkillManager {
           targetDir = resolveWithin(root, `${folderName}-${suffix}`);
           suffix += 1;
         }
-        fs.cpSync(skillDir, targetDir, { recursive: true, dereference: false });
+        cpRecursiveSync(skillDir, targetDir);
       }
 
       cleanupPathSafely(cleanupPath);
@@ -1130,8 +1138,8 @@ export class SkillManager {
     try {
       const raw = fs.readFileSync(skillFile, 'utf8');
       const { frontmatter, content } = parseFrontmatter(raw);
-      const name = (frontmatter.name || path.basename(dir)).trim() || path.basename(dir);
-      const description = (frontmatter.description || extractDescription(content) || name).trim();
+      const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
+      const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
       const updatedAt = fs.statSync(skillFile).mtimeMs;
       const id = path.basename(dir);
@@ -1607,3 +1615,9 @@ export class SkillManager {
     return null;
   }
 }
+
+export const __skillManagerTestUtils = {
+  parseFrontmatter,
+  isTruthy,
+  extractDescription,
+};

@@ -6,6 +6,7 @@ import { execSync, spawn, spawnSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
+import { cpRecursiveSync } from './fsCompat';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -124,11 +125,8 @@ export class SkillServiceManager {
     }
 
     try {
-      fs.cpSync(bundledPath, skillPath, {
-        recursive: true,
-        dereference: true,
+      cpRecursiveSync(bundledPath, skillPath, {
         force: true,
-        errorOnExist: false,
       });
       console.log('[SkillServices] Repaired web-search runtime from bundled resources');
     } catch (error) {

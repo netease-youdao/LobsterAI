@@ -14,17 +14,19 @@ type ChangePayload<T = unknown> = {
 
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 
-// Get the path to sql.js WASM file
-function getWasmPath(): string {
-  if (app.isPackaged) {
-    // In production, the wasm file is in the unpacked resources
-    return path.join(
-      process.resourcesPath,
-      'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
-    );
-  }
-  // In development, use node_modules directly
-  return path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm');
+// Pre-read the sql.js WASM binary from disk.
+// Using fs.readFileSync (which handles non-ASCII paths via Windows wide-char APIs)
+// and passing the buffer directly to initSqlJs bypasses Emscripten's file loading,
+// which can fail or hang when the install path contains Chinese characters on Windows.
+function loadWasmBinary(): ArrayBuffer {
+  const wasmPath = app.isPackaged
+    ? path.join(
+        process.resourcesPath,
+        'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
+      )
+    : path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm');
+  const buf = fs.readFileSync(wasmPath);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
 export class SqliteStore {
@@ -44,9 +46,9 @@ export class SqliteStore {
 
     // Initialize SQL.js with WASM file path (cached promise for reuse)
     if (!SqliteStore.sqlPromise) {
-      const wasmPath = getWasmPath();
+      const wasmBinary = loadWasmBinary();
       SqliteStore.sqlPromise = initSqlJs({
-        locateFile: () => wasmPath,
+        wasmBinary,
       });
     }
     const SQL = await SqliteStore.sqlPromise;
