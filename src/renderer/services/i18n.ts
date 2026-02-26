@@ -460,8 +460,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     telegram: 'Telegram',
     discord: 'Discord',
     nim: '云信',
+    xiaomifeng: '小蜜蜂',
     connected: '已连接',
     disconnected: '未连接',
+    kickedByOtherClient: '账号已在其它地方登录',
     starting: '启动中',
     start: '启动',
     stop: '停止',
@@ -519,6 +521,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimGuideStep4: '为该账号生成 Token（建议长期有效）',
     nimAppKeyHint: '从云信控制台应用信息中获取',
     nimTokenHint: '为该账号生成的访问凭证（建议设置为长期有效）',
+    xiaomifengClientIdPlaceholder: '小蜜蜂助理Client ID',
 
     // 通用设置
     autoLaunch: '开机自启动',
@@ -1108,8 +1111,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     telegram: 'Telegram',
     discord: 'Discord',
     nim: 'NetEase IM',
+    xiaomifeng: 'Netease Bee',
     connected: 'Connected',
     disconnected: 'Disconnected',
+    kickedByOtherClient: 'Account logged in elsewhere',
     starting: 'Starting',
     start: 'Start',
     stop: 'Stop',
@@ -1167,6 +1172,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimGuideStep4: 'Generate a Token for this account (long-term validity recommended)',
     nimAppKeyHint: 'Obtain from app information in NetEase IM console',
     nimTokenHint: 'Access credential generated for this account (long-term validity recommended)',
+    xiaomifengClientIdPlaceholder: 'Netease Bee IM Client ID',
 
     // General Settings
     autoLaunch: 'Launch at Login',
