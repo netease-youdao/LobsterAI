@@ -542,6 +542,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             ...prev,  // 保留默认的 providers（包括新添加的 anthropic）
             ...config.providers,  // 覆盖已保存的配置
           };
+
+          // After merging, find the first enabled provider to set as activeProvider
+          // This ensures we don't use stale activeProvider from old config.api.baseUrl
+          const firstEnabledProvider = providerKeys.find(providerKey => merged[providerKey]?.enabled);
+          if (firstEnabledProvider) {
+            setActiveProvider(firstEnabledProvider);
+          }
+
           return Object.fromEntries(
             Object.entries(merged).map(([providerKey, providerConfig]) => {
               const models = providerConfig.models?.map(model => ({
