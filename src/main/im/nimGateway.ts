@@ -13,8 +13,16 @@ import {
   NimConfig,
   NimGatewayStatus,
   IMMessage,
+  IMMediaAttachment,
   DEFAULT_NIM_STATUS,
 } from './types';
+import {
+  downloadNimMedia,
+  sendNimMediaMessage,
+  inferMediaPlaceholder,
+  cleanupOldNimMediaFiles,
+} from './nimMedia';
+import { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
 
 // Message deduplication cache
 const processedMessages = new Map<string, number>();
@@ -141,6 +149,7 @@ export class NimGateway extends EventEmitter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts: number = 0;
   private readonly MAX_RECONNECT_DELAY_MS = 30_000;
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     super();
@@ -298,6 +307,14 @@ export class NimGateway extends EventEmitter {
           this.log('[NIM Gateway] Login successful');
           this.emit('connected');
           this.emit('status');
+
+          // 启动时清理旧媒体文件，并设置定期清理（每 24 小时）
+          this.cleanupMediaFiles();
+          if (!this.cleanupInterval) {
+            this.cleanupInterval = setInterval(() => {
+              this.cleanupMediaFiles();
+            }, 24 * 60 * 60 * 1000);
+          }
         } else if (loginStatus === 0) {
           this.status.connected = false;
           this.log('[NIM Gateway] Logged out');
@@ -446,6 +463,11 @@ export class NimGateway extends EventEmitter {
     this.messageService = null;
     this.messageCreator = null;
     this.conversationIdUtil = null;
+    // Clean up media cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
     // NOTE: intentionally NOT clearing this.config here so reconnectIfNeeded() can use it
   }
 
@@ -474,7 +496,26 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Parse V2 message attachment fields
+   * 与 openclaw-nim/src/client.ts 的 parseV2Attachment 一致
+   */
+  private parseV2Attachment(msg: any): { url?: string; name?: string; size?: number; width?: number; height?: number; duration?: number } | undefined {
+    const attachment = msg.attachment;
+    if (!attachment) return undefined;
+
+    return {
+      url: attachment.url,
+      name: attachment.name,
+      size: attachment.size,
+      width: attachment.width,
+      height: attachment.height,
+      duration: attachment.duration,
+    };
+  }
+
+  /**
    * Handle incoming V2 message from SDK
+   * 支持 text、image、audio、video、file 消息类型
    */
   private async handleIncomingMessage(msg: any): Promise<void> {
     try {
@@ -495,9 +536,10 @@ export class NimGateway extends EventEmitter {
 
       const msgType = convertMessageType(msg.messageType);
 
-      // Only handle text messages for now
-      if (msgType !== 'text') {
-        this.log(`[NIM Gateway] Ignoring non-text message type: ${msgType}`);
+      // 支持的消息类型：text, image, audio, video, file
+      const supportedTypes: NimMessageType[] = ['text', 'image', 'audio', 'video', 'file'];
+      if (!supportedTypes.includes(msgType)) {
+        this.log(`[NIM Gateway] Ignoring unsupported message type: ${msgType}`);
         return;
       }
 
@@ -509,10 +551,44 @@ export class NimGateway extends EventEmitter {
         return;
       }
 
-      const content = msg.text || '';
-      if (!content.trim()) {
-        this.log('[NIM Gateway] Ignoring empty message');
-        return;
+      // 构建消息内容和媒体附件
+      let content = '';
+      const attachments: IMMediaAttachment[] = [];
+
+      if (msgType === 'text') {
+        // 纯文本消息
+        content = msg.text || '';
+        if (!content.trim()) {
+          this.log('[NIM Gateway] Ignoring empty text message');
+          return;
+        }
+      } else if (['image', 'audio', 'video', 'file'].includes(msgType)) {
+        // 媒体消息：生成占位符文本，附带 URL（与 openclaw-nim/src/bot.ts 一致）
+        const attach = this.parseV2Attachment(msg);
+        const placeholder = inferMediaPlaceholder(msgType);
+        const attachUrl = attach?.url;
+        content = attachUrl ? `${placeholder} ${attachUrl}` : placeholder;
+
+        // 下载媒体文件
+        if (attachUrl) {
+          const nimMediaType = msgType as 'image' | 'audio' | 'video' | 'file';
+          const downloaded = await downloadNimMedia(
+            attachUrl,
+            {
+              name: attach?.name,
+              size: attach?.size,
+              width: attach?.width,
+              height: attach?.height,
+              duration: attach?.duration,
+            },
+            nimMediaType,
+            this.log,
+          );
+
+          if (downloaded) {
+            attachments.push(downloaded);
+          }
+        }
       }
 
       // Create IMMessage
@@ -524,6 +600,7 @@ export class NimGateway extends EventEmitter {
         content,
         chatType: 'direct',
         timestamp: msg.createTime || Date.now(),
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
 
       this.status.lastInboundAt = Date.now();
@@ -535,9 +612,10 @@ export class NimGateway extends EventEmitter {
         msgType,
         content: content.substring(0, 100),
         conversationId: msg.conversationId,
+        hasAttachments: attachments.length > 0,
       }, null, 2));
 
-      // Create reply function
+      // Create reply function with media support
       const replyFn = async (text: string) => {
         this.log('[NIM Gateway] 发送回复:', JSON.stringify({
           to: senderId,
@@ -545,7 +623,7 @@ export class NimGateway extends EventEmitter {
           reply: text.substring(0, 200),
         }, null, 2));
 
-        await this.sendLongText(senderId, text);
+        await this.sendReplyWithMedia(senderId, text);
         this.status.lastOutboundAt = Date.now();
       };
 
@@ -606,6 +684,74 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Send a media file message to a target account
+   */
+  private async sendMedia(to: string, filePath: string): Promise<void> {
+    if (!this.messageService || !this.messageCreator) {
+      throw new Error('NIM SDK not ready');
+    }
+
+    const conversationId = buildConversationId(this.conversationIdUtil, to, 'p2p');
+    await sendNimMediaMessage(
+      this.messageService,
+      this.messageCreator,
+      conversationId,
+      filePath,
+      this.log,
+    );
+  }
+
+  /**
+   * Send reply with media marker parsing
+   * 解析文本中的媒体标记（如 ![image](/path/to/img.png)），
+   * 先发送纯文本部分，再逐个发送媒体文件。
+   * 与 Telegram/DingTalk/Feishu Gateway 的 replyFn 行为一致。
+   */
+  private async sendReplyWithMedia(to: string, text: string): Promise<void> {
+    // 1. 解析媒体标记
+    const markers = parseMediaMarkers(text);
+
+    if (markers.length === 0) {
+      // 没有媒体标记，纯文本发送
+      await this.sendLongText(to, text);
+      return;
+    }
+
+    this.log(`[NIM Gateway] Found ${markers.length} media marker(s) in reply`);
+
+    // 2. 先发送去除标记后的文本（如果有）
+    const strippedText = stripMediaMarkers(text, markers);
+    if (strippedText.trim()) {
+      await this.sendLongText(to, strippedText);
+      // 文本和第一个媒体之间的间隔
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    // 3. 逐个发送媒体文件
+    for (let i = 0; i < markers.length; i++) {
+      const marker = markers[i];
+
+      try {
+        // 检查文件是否存在
+        if (!fs.existsSync(marker.path)) {
+          this.log(`[NIM Gateway] Media file not found: ${marker.path}`);
+          continue;
+        }
+
+        await this.sendMedia(to, marker.path);
+        this.log(`[NIM Gateway] Sent media: ${marker.type} ${marker.path}`);
+      } catch (error: any) {
+        console.error(`[NIM Gateway] Failed to send media ${marker.path}: ${error.message}`);
+      }
+
+      // 媒体之间的间隔
+      if (i < markers.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+  }
+
+  /**
    * Send a notification message to the last known sender
    */
   async sendNotification(text: string): Promise<void> {
@@ -614,5 +760,17 @@ export class NimGateway extends EventEmitter {
     }
     await this.sendLongText(this.lastSenderId, text);
     this.status.lastOutboundAt = Date.now();
+  }
+
+  /**
+   * Clean up old NIM inbound media files
+   * 应在 Gateway 启动时调用
+   */
+  cleanupMediaFiles(): void {
+    try {
+      cleanupOldNimMediaFiles(7);
+    } catch (error: any) {
+      console.warn(`[NIM Gateway] Media cleanup error: ${error.message}`);
+    }
   }
 }
