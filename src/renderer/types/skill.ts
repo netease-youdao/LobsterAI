@@ -9,4 +9,5 @@ export interface Skill {
   updatedAt: number;      // Timestamp
   prompt: string;         // System prompt content
   skillPath: string;      // Absolute path to SKILL.md
+  version?: string;       // Skill version from SKILL.md frontmatter
 }
