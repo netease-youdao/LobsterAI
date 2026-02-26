@@ -12,6 +12,7 @@ import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
+import { cpRecursiveSync } from '../fsCompat';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
 import { z } from 'zod';
 import { ensureSandboxReady, getSandboxRuntimeInfoIfReady, type SandboxRuntimeInfo } from './coworkSandboxRuntime';
@@ -1110,7 +1111,7 @@ export class CoworkRunner extends EventEmitter {
       }
 
       if (sourceStat.isDirectory()) {
-        fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
+        cpRecursiveSync(sourcePath, targetPath, { force: true });
       } else {
         fs.copyFileSync(sourcePath, targetPath);
       }
