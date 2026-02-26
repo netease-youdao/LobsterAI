@@ -1,4 +1,4 @@
-import { app, session } from 'electron';
+import { app } from 'electron';
 import { execSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
@@ -8,6 +8,7 @@ import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig } from './cla
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
+import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 
 function appendEnvPath(current: string | undefined, additions: string[]): string | undefined {
   const items = new Set<string>();
@@ -682,32 +683,6 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
 }
 
 /**
- * Resolve system proxy configuration from Electron session
- * @param targetUrl Target URL to resolve proxy for
- */
-async function resolveSystemProxy(targetUrl: string): Promise<string | null> {
-  try {
-    const proxyResult = await session.defaultSession.resolveProxy(targetUrl);
-    if (!proxyResult || proxyResult === 'DIRECT') {
-      return null;
-    }
-
-    // proxyResult format: "PROXY host:port" or "SOCKS5 host:port"
-    const match = proxyResult.match(/^(PROXY|SOCKS5?)\s+(.+)$/i);
-    if (match) {
-      const [, type, hostPort] = match;
-      const prefix = type.toUpperCase().startsWith('SOCKS') ? 'socks5' : 'http';
-      return `${prefix}://${hostPort}`;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Failed to resolve system proxy:', error);
-    return null;
-  }
-}
-
-/**
  * Get SKILLs directory path (handles both development and production)
  */
 export function getSkillsRoot(): string {
@@ -768,8 +743,13 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
     return env;
   }
 
+  // User can disable system proxy from settings.
+  if (!isSystemProxyEnabled()) {
+    return env;
+  }
+
   // Resolve proxy from system settings
-  const proxyUrl = await resolveSystemProxy('https://openrouter.ai');
+  const proxyUrl = await resolveSystemProxyUrl('https://openrouter.ai');
   if (proxyUrl) {
     env.http_proxy = proxyUrl;
     env.https_proxy = proxyUrl;
