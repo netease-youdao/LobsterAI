@@ -387,6 +387,7 @@ interface NimConfig {
   appKey: string;
   account: string;
   token: string;
+  accountWhitelist: string;
   debug?: boolean;
 }
 

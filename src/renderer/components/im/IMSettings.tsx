@@ -89,7 +89,7 @@ const IMSettings: React.FC = () => {
   };
 
   // Handle NIM config change
-  const handleNimChange = (field: 'appKey' | 'account' | 'token', value: string) => {
+  const handleNimChange = (field: 'appKey' | 'account' | 'token' | 'accountWhitelist', value: string) => {
     dispatch(setNimConfig({ [field]: value }));
   };
 
@@ -706,6 +706,24 @@ const IMSettings: React.FC = () => {
               />
               <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
                 {i18nService.t('nimTokenHint') || '为该账号生成的访问凭证（建议设置为长期有效）'}
+              </p>
+            </div>
+
+            {/* Account Whitelist */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('nimAccountWhitelist') || '白名单账号'}
+              </label>
+              <input
+                type="text"
+                value={config.nim.accountWhitelist}
+                onChange={(e) => handleNimChange('accountWhitelist', e.target.value)}
+                onBlur={handleSaveConfig}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                placeholder="account1,account2"
+              />
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('nimAccountWhitelistHint') || '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。'}
               </p>
             </div>
 

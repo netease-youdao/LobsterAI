@@ -170,6 +170,17 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Update runtime config without restarting the gateway.
+   * Used for hot-updating non-credential fields like accountWhitelist.
+   */
+  updateConfig(partial: Partial<NimConfig>): void {
+    if (this.config) {
+      this.config = { ...this.config, ...partial };
+      this.log('[NIM Gateway] Config updated (hot):', Object.keys(partial).join(', '));
+    }
+  }
+
+  /**
    * Public method for external reconnection triggers
    */
   reconnectIfNeeded(): void {
@@ -526,6 +537,22 @@ export class NimGateway extends EventEmitter {
       if (this.config && senderId === this.config.account) {
         this.log('[NIM Gateway] Ignoring self message');
         return;
+      }
+
+      // Whitelist filtering: if accountWhitelist is set, only process messages from whitelisted accounts
+      if (this.config?.accountWhitelist) {
+        const whitelist = this.config.accountWhitelist
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+
+        if (whitelist.length > 0) {
+          const whitelistSet = new Set(whitelist);
+          if (!whitelistSet.has(senderId)) {
+            this.log(`[NIM Gateway] Ignoring message from non-whitelisted account: ${senderId}`);
+            return;
+          }
+        }
       }
 
       // Deduplication

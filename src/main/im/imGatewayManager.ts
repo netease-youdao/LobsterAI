@@ -346,6 +346,14 @@ export class IMGatewayManager extends EventEmitter {
         this.restartGateway('nim').catch((err) => {
           console.error('[IMGatewayManager] Failed to restart NIM after config change:', err.message);
         });
+      } else {
+        // Hot-update non-credential fields (e.g. accountWhitelist) without restart
+        const nonCredentialChanged =
+          newNim.accountWhitelist !== oldNim.accountWhitelist;
+        if (nonCredentialChanged) {
+          console.log('[IMGatewayManager] NIM non-credential config changed, hot-updating...');
+          this.nimGateway.updateConfig(config.nim);
+        }
       }
     }
 

@@ -90,6 +90,7 @@ export interface NimConfig {
   appKey: string;
   account: string;
   token: string;
+  accountWhitelist: string;
   debug?: boolean;
 }
 
@@ -252,6 +253,7 @@ export const DEFAULT_NIM_CONFIG: NimConfig = {
   appKey: '',
   account: '',
   token: '',
+  accountWhitelist: '',
   debug: true,
 };
 
