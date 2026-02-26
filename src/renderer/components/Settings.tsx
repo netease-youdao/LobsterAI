@@ -142,7 +142,7 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   },
   zhipu: {
     anthropic: 'https://open.bigmodel.cn/api/anthropic',
-    openai: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    openai: 'https://open.bigmodel.cn/api/paas/v4',
   },
   minimax: {
     anthropic: 'https://api.minimaxi.com/anthropic',
@@ -704,6 +704,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         };
       }
 
+      // Handle codingPlanEnabled toggle for moonshot
+      if (field === 'codingPlanEnabled' && provider === 'moonshot') {
+        const codingPlanEnabled = value === 'true';
+        return {
+          ...prev,
+          moonshot: {
+            ...prev.moonshot,
+            codingPlanEnabled,
+          },
+        };
+      }
+
       return {
         ...prev,
         [provider]: {
@@ -1125,8 +1137,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       
       // Handle Zhipu GLM Coding Plan endpoint switch
       if (activeProvider === 'zhipu' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
-        effectiveBaseUrl = 'https://open.bigmodel.cn/api/coding/paas/v4';
-        effectiveApiFormat = 'openai';
+        if (effectiveApiFormat === 'anthropic') {
+          effectiveBaseUrl = 'https://open.bigmodel.cn/api/anthropic';
+        } else {
+          effectiveBaseUrl = 'https://open.bigmodel.cn/api/coding/paas/v4';
+          effectiveApiFormat = 'openai';
+        }
       }
       // Handle Qwen Coding Plan endpoint switch
       if (activeProvider === 'qwen' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
@@ -1143,6 +1159,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           effectiveBaseUrl = 'https://ark.cn-beijing.volces.com/api/coding';
         } else {
           effectiveBaseUrl = 'https://ark.cn-beijing.volces.com/api/coding/v3';
+          effectiveApiFormat = 'openai';
+        }
+      }
+      // Handle Moonshot Coding Plan endpoint switch
+      if (activeProvider === 'moonshot' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+        if (effectiveApiFormat === 'anthropic') {
+          effectiveBaseUrl = 'https://api.kimi.com/coding';
+        } else {
+          effectiveBaseUrl = 'https://api.kimi.com/coding/v1';
           effectiveApiFormat = 'openai';
         }
       }
@@ -2095,7 +2120,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   id={`${activeProvider}-baseUrl`}
                   value={
                     activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled
-                      ? 'https://open.bigmodel.cn/api/coding/paas/v4'
+                      ? (getEffectiveApiFormat('zhipu', providers.zhipu.apiFormat) === 'anthropic'
+                          ? 'https://open.bigmodel.cn/api/anthropic'
+                          : 'https://open.bigmodel.cn/api/coding/paas/v4')
                       : activeProvider === 'qwen' && providers.qwen.codingPlanEnabled
                         ? (getEffectiveApiFormat('qwen', providers.qwen.apiFormat) === 'anthropic'
                             ? 'https://coding.dashscope.aliyuncs.com/apps/anthropic'
@@ -2104,11 +2131,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                           ? (getEffectiveApiFormat('volcengine', providers.volcengine.apiFormat) === 'anthropic'
                               ? 'https://ark.cn-beijing.volces.com/api/coding'
                               : 'https://ark.cn-beijing.volces.com/api/coding/v3')
-                          : providers[activeProvider].baseUrl
+                          : activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled
+                            ? (getEffectiveApiFormat('moonshot', providers.moonshot.apiFormat) === 'anthropic'
+                                ? 'https://api.kimi.com/coding'
+                                : 'https://api.kimi.com/coding/v1')
+                            : providers[activeProvider].baseUrl
                   }
                   onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
-                  disabled={(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled)}
-                  className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs ${(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled)}
+                  className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs ${(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   placeholder={i18nService.t('baseUrlPlaceholder')}
                 />
                 {activeProvider === 'custom' && (
@@ -2146,6 +2177,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
                     <p className="text-[11px] text-claude-accent dark:text-claude-accent">
                       <span className="font-medium">Coding Plan:</span> {i18nService.t('volcengineCodingPlanEndpointHint')}
+                    </p>
+                  </div>
+                )}
+                {/* Moonshot Coding Plan 提示 */}
+                {activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled && (
+                  <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                    <p className="text-[11px] text-claude-accent dark:text-claude-accent">
+                      <span className="font-medium">Coding Plan:</span> {i18nService.t('moonshotCodingPlanEndpointHint')}
                     </p>
                   </div>
                 )}
@@ -2268,6 +2307,34 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                       type="checkbox"
                       checked={providers.volcengine.codingPlanEnabled ?? false}
                       onChange={(e) => handleProviderConfigChange('volcengine', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
+                  </label>
+                </div>
+              )}
+
+              {/* Moonshot Coding Plan 开关 (仅 Moonshot) */}
+              {activeProvider === 'moonshot' && (
+                <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                        Coding Plan
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                        Beta
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('moonshotCodingPlanHint')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-3">
+                    <input
+                      type="checkbox"
+                      checked={providers.moonshot.codingPlanEnabled ?? false}
+                      onChange={(e) => handleProviderConfigChange('moonshot', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
                       className="sr-only peer"
                     />
                     <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
