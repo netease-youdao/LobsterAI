@@ -2284,9 +2284,8 @@ async function handleRequest(
 
   // Some providers (e.g. MiniMax) reject requests with multiple system messages.
   // Merge all system messages into one before sending to these providers.
-  if (upstreamAPIType === 'chat_completions') {
-    mergeSystemMessagesForProvider(openAIRequest);
-  }
+  // This fix applies to both chat_completions and responses API types.
+  mergeSystemMessagesForProvider(openAIRequest);
 
   const upstreamRequest = upstreamAPIType === 'responses'
     ? convertChatCompletionsRequestToResponsesRequest(openAIRequest)
