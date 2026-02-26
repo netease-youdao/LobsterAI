@@ -2,6 +2,7 @@ import { app, BrowserWindow, session } from 'electron';
 import { execSync, spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import yaml from 'js-yaml';
 import extractZip from 'extract-zip';
 import { SqliteStore } from './sqliteStore';
 import { cpRecursiveSync } from './fsCompat';
@@ -130,31 +131,31 @@ const CLAUDE_SKILLS_SUBDIR = 'skills';
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-const parseFrontmatter = (raw: string): { frontmatter: Record<string, string>; content: string } => {
+const parseFrontmatter = (raw: string): { frontmatter: Record<string, unknown>; content: string } => {
   const normalized = raw.replace(/^\uFEFF/, '');
   const match = normalized.match(FRONTMATTER_RE);
   if (!match) {
     return { frontmatter: {}, content: normalized };
   }
 
-  const frontmatter: Record<string, string> = {};
-  const lines = match[1].split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const kv = trimmed.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!kv) continue;
-    const key = kv[1];
-    const value = (kv[2] ?? '').trim().replace(/^['"]|['"]$/g, '');
-    frontmatter[key] = value;
+  let frontmatter: Record<string, unknown> = {};
+  try {
+    const parsed = yaml.load(match[1]);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      frontmatter = parsed as Record<string, unknown>;
+    }
+  } catch (e) {
+    console.warn('[skills] Failed to parse YAML frontmatter:', e);
   }
 
   const content = normalized.slice(match[0].length);
   return { frontmatter, content };
 };
 
-const isTruthy = (value?: string): boolean => {
+const isTruthy = (value?: unknown): boolean => {
+  if (value === true) return true;
   if (!value) return false;
+  if (typeof value !== 'string') return false;
   const normalized = value.trim().toLowerCase();
   return normalized === 'true' || normalized === 'yes' || normalized === '1';
 };
@@ -1137,8 +1138,8 @@ export class SkillManager {
     try {
       const raw = fs.readFileSync(skillFile, 'utf8');
       const { frontmatter, content } = parseFrontmatter(raw);
-      const name = (frontmatter.name || path.basename(dir)).trim() || path.basename(dir);
-      const description = (frontmatter.description || extractDescription(content) || name).trim();
+      const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
+      const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
       const updatedAt = fs.statSync(skillFile).mtimeMs;
       const id = path.basename(dir);
@@ -1614,3 +1615,9 @@ export class SkillManager {
     return null;
   }
 }
+
+export const __skillManagerTestUtils = {
+  parseFrontmatter,
+  isTruthy,
+  extractDescription,
+};
