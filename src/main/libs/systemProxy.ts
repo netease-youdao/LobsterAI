@@ -33,16 +33,20 @@ function parseProxyRule(rule: string): string | null {
     return null;
   }
 
-  const match = normalizedRule.match(/^(PROXY|HTTPS?|SOCKS5?|SOCKS4?)\s+(.+)$/i);
+  // Match standard PAC format: TYPE host:port
+  // Strictly match host:port to avoid greedy capture of trailing content like ";SOCKS5 ..."
+  const match = normalizedRule.match(/^(PROXY|HTTPS?|SOCKS5?|SOCKS4?)\s+([\w.\-]+:\d+)$/i);
   if (!match) {
+    // Also try matching URL format: http://host:port (some proxy tools return URLs directly)
+    const urlMatch = normalizedRule.match(/^(https?|socks5?|socks4?):\/\/([\w.\-]+:\d+)\/?$/i);
+    if (urlMatch) {
+      return `${urlMatch[1].toLowerCase()}://${urlMatch[2]}`;
+    }
     return null;
   }
 
   const type = match[1].toUpperCase();
-  const hostPort = match[2].trim();
-  if (!hostPort) {
-    return null;
-  }
+  const hostPort = match[2];
 
   if (type === 'HTTPS') {
     return `https://${hostPort}`;
