@@ -28,6 +28,7 @@ import {
 } from './feishuMedia';
 import { parseMediaMarkers } from './dingtalkMediaParser';
 import { stringifyAsciiJson } from './jsonEncoding';
+import { isSystemProxyEnabled, resolveSystemProxyUrl } from '../libs/systemProxy';
 
 // Message deduplication cache
 const processedMessages = new Map<string, number>();
@@ -153,12 +154,31 @@ export class FeishuGateway extends EventEmitter {
       this.botOpenId = probeResult.botOpenId || null;
       this.log(`[Feishu Gateway] Bot info: ${probeResult.botName} (${this.botOpenId})`);
 
+      // Resolve proxy agent for WebSocket if system proxy is enabled
+      let proxyAgent: any = undefined;
+      if (isSystemProxyEnabled()) {
+        const feishuTarget = domain === Lark.Domain.Feishu
+          ? 'https://open.feishu.cn'
+          : 'https://open.larksuite.com';
+        const proxyUrl = await resolveSystemProxyUrl(feishuTarget);
+        if (proxyUrl) {
+          try {
+            const { HttpsProxyAgent } = require('https-proxy-agent');
+            proxyAgent = new HttpsProxyAgent(proxyUrl);
+            this.log(`[Feishu Gateway] Using proxy agent for WebSocket: ${proxyUrl}`);
+          } catch (e: any) {
+            console.warn(`[Feishu Gateway] Failed to create proxy agent: ${e.message}`);
+          }
+        }
+      }
+
       // Create WebSocket client
       this.wsClient = new Lark.WSClient({
         appId: config.appId,
         appSecret: config.appSecret,
         domain,
         loggerLevel: config.debug ? Lark.LoggerLevel.debug : Lark.LoggerLevel.info,
+        agent: proxyAgent,
       });
 
       // Create event dispatcher
