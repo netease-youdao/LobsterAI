@@ -89,6 +89,7 @@ export type SkillRecord = {
   updatedAt: number;
   prompt: string;
   skillPath: string;
+  version?: string;
 };
 
 type SkillStateMap = Record<string, { enabled: boolean }>;
@@ -1217,12 +1218,15 @@ export class SkillManager {
       const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
       const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
+      const version = typeof frontmatter.version === 'string' ? frontmatter.version
+        : typeof frontmatter.version === 'number' ? String(frontmatter.version)
+        : undefined;
       const updatedAt = fs.statSync(skillFile).mtimeMs;
       const id = path.basename(dir);
       const prompt = content.trim();
       const defaultEnabled = defaults[id]?.enabled ?? true;
       const enabled = state[id]?.enabled ?? defaultEnabled;
-      return { id, name, description, enabled, isOfficial, isBuiltIn, updatedAt, prompt, skillPath: skillFile };
+      return { id, name, description, enabled, isOfficial, isBuiltIn, updatedAt, prompt, skillPath: skillFile, version };
     } catch (error) {
       console.warn('[skills] Failed to parse skill:', dir, error);
       return null;
