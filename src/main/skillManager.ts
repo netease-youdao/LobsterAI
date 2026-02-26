@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import extractZip from 'extract-zip';
 import { SqliteStore } from './sqliteStore';
+import { cpRecursiveSync } from './fsCompat';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -779,14 +780,19 @@ export class SkillManager {
       return;
     }
 
+    console.log('[skills] syncBundledSkillsToUserData: start');
     const userRoot = this.ensureSkillsRoot();
+    console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);
     const bundledRoot = this.getBundledSkillsRoot();
+    console.log('[skills] syncBundledSkillsToUserData: bundledRoot =', bundledRoot);
     if (!bundledRoot || bundledRoot === userRoot || !fs.existsSync(bundledRoot)) {
+      console.log('[skills] syncBundledSkillsToUserData: bundledRoot skipped (missing or same as userRoot)');
       return;
     }
 
     try {
       const bundledSkillDirs = listSkillDirs(bundledRoot);
+      console.log('[skills] syncBundledSkillsToUserData: found', bundledSkillDirs.length, 'bundled skills');
       bundledSkillDirs.forEach((dir) => {
         const id = path.basename(dir);
         const targetDir = path.join(userRoot, id);
@@ -806,14 +812,13 @@ export class SkillManager {
         }
 
         if (targetExists && !shouldRepair) return;
-
         try {
-          fs.cpSync(dir, targetDir, {
-            recursive: true,
+          console.log(`[skills] syncBundledSkillsToUserData: copying "${id}" from ${dir} to ${targetDir}`);
+          cpRecursiveSync(dir, targetDir, {
             dereference: true,
             force: shouldRepair,
-            errorOnExist: false,
           });
+          console.log(`[skills] syncBundledSkillsToUserData: copied "${id}" successfully`);
           if (shouldRepair) {
             console.log(`[skills] Repaired bundled skill "${id}" in user data`);
           }
@@ -825,8 +830,10 @@ export class SkillManager {
       const bundledConfig = path.join(bundledRoot, SKILLS_CONFIG_FILE);
       const targetConfig = path.join(userRoot, SKILLS_CONFIG_FILE);
       if (fs.existsSync(bundledConfig) && !fs.existsSync(targetConfig)) {
-        fs.cpSync(bundledConfig, targetConfig, { dereference: false });
+        console.log('[skills] syncBundledSkillsToUserData: copying skills.config.json');
+        cpRecursiveSync(bundledConfig, targetConfig);
       }
+      console.log('[skills] syncBundledSkillsToUserData: done');
     } catch (error) {
       console.warn('[skills] Failed to sync bundled skills:', error);
     }
@@ -1047,7 +1054,7 @@ export class SkillManager {
           targetDir = resolveWithin(root, `${folderName}-${suffix}`);
           suffix += 1;
         }
-        fs.cpSync(skillDir, targetDir, { recursive: true, dereference: false });
+        cpRecursiveSync(skillDir, targetDir);
       }
 
       cleanupPathSafely(cleanupPath);
