@@ -1,12 +1,15 @@
 import { AppConfig, CONFIG_KEYS, defaultConfig } from '../config';
 import { localStore } from './store';
 
-const getFixedProviderApiFormat = (providerKey: string): 'anthropic' | 'openai' | null => {
+const getFixedProviderApiFormat = (providerKey: string): 'anthropic' | 'openai' | 'antigravity' | null => {
   if (providerKey === 'openai' || providerKey === 'gemini') {
     return 'openai';
   }
   if (providerKey === 'anthropic') {
     return 'anthropic';
+  }
+  if (providerKey === 'antigravity') {
+    return 'antigravity';
   }
   return null;
 };
@@ -38,10 +41,16 @@ const normalizeProviderBaseUrl = (providerKey: string, baseUrl: unknown): string
   return 'https://generativelanguage.googleapis.com/v1beta/openai';
 };
 
-const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'anthropic' | 'openai' => {
+const normalizeProviderApiFormat = (
+  providerKey: string,
+  apiFormat: unknown
+): 'anthropic' | 'openai' | 'antigravity' => {
   const fixed = getFixedProviderApiFormat(providerKey);
   if (fixed) {
     return fixed;
+  }
+  if (apiFormat === 'antigravity') {
+    return 'antigravity';
   }
   if (apiFormat === 'openai') {
     return 'openai';

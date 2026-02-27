@@ -1,7 +1,4 @@
-build/*
-!build/entitlements.mac.plist
-!build/icons/
-!build/icons/**
+build/
 release/
 node_modules
 dist
@@ -35,3 +32,4 @@ nul
 
 .playwright-mcp/
 .cowork-temp/
+scripts/.run/

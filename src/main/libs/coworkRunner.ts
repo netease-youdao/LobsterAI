@@ -66,7 +66,7 @@ const INFERRED_FILE_SEARCH_IGNORE = new Set(['.git', 'node_modules', '.cowork-te
 const SANDBOX_HISTORY_MAX_MESSAGES = 24;
 const SANDBOX_HISTORY_MAX_TOTAL_CHARS = 32000;
 const SANDBOX_HISTORY_MAX_MESSAGE_CHARS = 4000;
-const STREAM_UPDATE_THROTTLE_MS = 90;
+const STREAM_UPDATE_THROTTLE_MS = 160;
 const STREAMING_TEXT_MAX_CHARS = 120_000;
 const STREAMING_THINKING_MAX_CHARS = 60_000;
 const TOOL_RESULT_MAX_CHARS = 120_000;
@@ -82,6 +82,10 @@ const TASK_WORKSPACE_CONTAINER_DIR = '.lobsterai-tasks';
 const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
 const BLOCKED_BUILTIN_WEB_TOOLS = new Set(['websearch', 'webfetch']);
+const DOC_SKILL_READ_REPEAT_LIMIT = 4;
+const DOC_SKILL_READ_PATH_RE = /(?:^|\/)SKILLs\/[^/]+\/SKILL\.md$/i;
+const DENIED_TOOL_LOOP_LIMIT = 8;
+const DENIED_TOOL_LOOP_RESET_MS = 30_000;
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
 const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
 const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item)\b/i;
@@ -1881,6 +1885,134 @@ export class CoworkRunner extends EventEmitter {
     };
   }
 
+  private extractAvailableSkillIds(systemPrompt: string): Set<string> {
+    const ids = new Set<string>();
+    if (!systemPrompt || !systemPrompt.includes('<available_skills>')) {
+      return ids;
+    }
+
+    const skillIdRe = /<skill>\s*<id>(.*?)<\/id>/g;
+    let match: RegExpExecArray | null;
+    while ((match = skillIdRe.exec(systemPrompt)) !== null) {
+      const id = match[1]?.trim();
+      if (id) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
+  private resolveRequestedSkillId(toolInput: Record<string, unknown>): string | null {
+    const raw = typeof toolInput.skill === 'string'
+      ? toolInput.skill
+      : '';
+    const value = raw.trim().replace(/^\//, '');
+    return value || null;
+  }
+
+  private denyRoutedDocSkillInvocation(
+    sessionId: string,
+    toolInput: Record<string, unknown>,
+    routedSkillIds: Set<string>
+  ): PermissionResult | null {
+    const requestedSkillId = this.resolveRequestedSkillId(toolInput);
+    if (!requestedSkillId || !routedSkillIds.has(requestedSkillId)) {
+      return null;
+    }
+
+    coworkLog('WARN', 'toolPolicy', 'Blocked Skill invocation for routed doc skill', {
+      sessionId,
+      requestedSkillId,
+    });
+    return {
+      behavior: 'deny',
+      message: `Skill "${requestedSkillId}" is a routed SKILL.md document, not a callable Skill tool command. Read the <location> SKILL.md once and then execute its steps via Bash/Read.`,
+    };
+  }
+
+  private denyRepeatedDocSkillRead(
+    sessionId: string,
+    toolInput: Record<string, unknown>,
+    docSkillReadCounts: Map<string, number>
+  ): PermissionResult | null {
+    const rawPath = typeof toolInput.file_path === 'string'
+      ? toolInput.file_path.trim()
+      : '';
+    if (!rawPath) {
+      return null;
+    }
+
+    const normalizedPath = rawPath.replace(/\\/g, '/');
+    if (!DOC_SKILL_READ_PATH_RE.test(normalizedPath)) {
+      return null;
+    }
+
+    const nextCount = (docSkillReadCounts.get(normalizedPath) ?? 0) + 1;
+    docSkillReadCounts.set(normalizedPath, nextCount);
+    if (nextCount <= DOC_SKILL_READ_REPEAT_LIMIT) {
+      return null;
+    }
+
+    coworkLog('WARN', 'toolPolicy', 'Blocked repeated SKILL.md read to prevent loop', {
+      sessionId,
+      path: normalizedPath,
+      count: nextCount,
+      limit: DOC_SKILL_READ_REPEAT_LIMIT,
+    });
+    return {
+      behavior: 'deny',
+      message: `You already read this SKILL.md ${nextCount - 1} times. Stop re-reading and either execute its commands or provide the answer.`,
+    };
+  }
+
+  private buildDeniedToolLoopKey(toolName: string, toolInput: Record<string, unknown>): string {
+    const normalizedToolName = String(toolName ?? 'unknown').trim() || 'unknown';
+    if (normalizedToolName === 'Read') {
+      const filePath = typeof toolInput.file_path === 'string'
+        ? toolInput.file_path.trim()
+        : '';
+      return filePath ? `${normalizedToolName}:${filePath}` : normalizedToolName;
+    }
+    if (normalizedToolName === 'Skill') {
+      const skill = typeof toolInput.skill === 'string'
+        ? toolInput.skill.trim().replace(/^\//, '')
+        : '';
+      return skill ? `${normalizedToolName}:${skill}` : normalizedToolName;
+    }
+    return normalizedToolName;
+  }
+
+  private guardDeniedToolLoop(
+    sessionId: string,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    deniedToolLoopCounters: Map<string, { count: number; lastAt: number }>,
+    denyMessage?: string
+  ): string | null {
+    const key = this.buildDeniedToolLoopKey(toolName, toolInput);
+    const now = Date.now();
+    const prev = deniedToolLoopCounters.get(key);
+    const count = prev && now - prev.lastAt <= DENIED_TOOL_LOOP_RESET_MS
+      ? prev.count + 1
+      : 1;
+    deniedToolLoopCounters.set(key, { count, lastAt: now });
+
+    if (count < DENIED_TOOL_LOOP_LIMIT) {
+      return null;
+    }
+
+    coworkLog('ERROR', 'toolPolicy', 'Detected denied tool loop, aborting current run', {
+      sessionId,
+      toolName,
+      key,
+      count,
+      denyMessage,
+    });
+    return (
+      `Detected repeated denied tool calls (${key}) and aborted this run to prevent infinite loop.`
+    );
+  }
+
   private truncateCommandPreview(command: string, maxLength = 120): string {
     const compact = command.replace(/\s+/g, ' ').trim();
     if (compact.length <= maxLength) return compact;
@@ -2350,6 +2482,10 @@ export class CoworkRunner extends EventEmitter {
 
     const claudeCodePath = getClaudeCodePath();
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
+    const routedSkillIds = this.extractAvailableSkillIds(systemPrompt);
+    const docSkillReadCounts = new Map<string, number>();
+    const deniedToolLoopCounters = new Map<string, { count: number; lastAt: number }>();
+    let forcedAbortError: string | null = null;
     let stderrTail = '';
 
     // When packaged, process.execPath is the Electron binary.
@@ -2394,6 +2530,9 @@ export class CoworkRunner extends EventEmitter {
         toolInput: unknown,
         { signal }: { signal: AbortSignal }
       ): Promise<PermissionResult> => {
+        if (forcedAbortError) {
+          return { behavior: 'deny', message: forcedAbortError };
+        }
         if (abortController.signal.aborted || signal.aborted) {
           return { behavior: 'deny', message: 'Session aborted' };
         }
@@ -2404,8 +2543,70 @@ export class CoworkRunner extends EventEmitter {
             ? (toolInput as Record<string, unknown>)
             : { value: toolInput };
 
+        if (resolvedName === 'Skill') {
+          const denyDocSkillResult = this.denyRoutedDocSkillInvocation(sessionId, resolvedInput, routedSkillIds);
+          if (denyDocSkillResult) {
+            const denyMessage = denyDocSkillResult.behavior === 'deny'
+              ? denyDocSkillResult.message
+              : undefined;
+            const loopError = this.guardDeniedToolLoop(
+              sessionId,
+              resolvedName,
+              resolvedInput,
+              deniedToolLoopCounters,
+              denyMessage
+            );
+            if (loopError) {
+              forcedAbortError = loopError;
+              if (!abortController.signal.aborted) {
+                abortController.abort();
+              }
+            }
+            return denyDocSkillResult;
+          }
+        }
+
+        if (resolvedName === 'Read') {
+          const denyRepeatedReadResult = this.denyRepeatedDocSkillRead(sessionId, resolvedInput, docSkillReadCounts);
+          if (denyRepeatedReadResult) {
+            const denyMessage = denyRepeatedReadResult.behavior === 'deny'
+              ? denyRepeatedReadResult.message
+              : undefined;
+            const loopError = this.guardDeniedToolLoop(
+              sessionId,
+              resolvedName,
+              resolvedInput,
+              deniedToolLoopCounters,
+              denyMessage
+            );
+            if (loopError) {
+              forcedAbortError = loopError;
+              if (!abortController.signal.aborted) {
+                abortController.abort();
+              }
+            }
+            return denyRepeatedReadResult;
+          }
+        }
+
         const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'local', resolvedName);
         if (blockedToolResult) {
+          const denyMessage = blockedToolResult.behavior === 'deny'
+            ? blockedToolResult.message
+            : undefined;
+          const loopError = this.guardDeniedToolLoop(
+            sessionId,
+            resolvedName,
+            resolvedInput,
+            deniedToolLoopCounters,
+            denyMessage
+          );
+          if (loopError) {
+            forcedAbortError = loopError;
+            if (!abortController.signal.aborted) {
+              abortController.abort();
+            }
+          }
           return blockedToolResult;
         }
 
@@ -2616,6 +2817,11 @@ export class CoworkRunner extends EventEmitter {
       }
       coworkLog('INFO', 'runClaudeCodeLocal', `Event iteration completed, total events: ${eventCount}`);
 
+      if (forcedAbortError) {
+        this.handleError(sessionId, forcedAbortError);
+        return;
+      }
+
       if (this.isSessionStopRequested(sessionId, activeSession)) {
         this.store.updateSession(sessionId, { status: 'idle' });
         return;
@@ -2632,6 +2838,10 @@ export class CoworkRunner extends EventEmitter {
       }
     } catch (error) {
       if (this.isSessionStopRequested(sessionId, activeSession)) {
+        if (forcedAbortError) {
+          this.handleError(sessionId, forcedAbortError);
+          return;
+        }
         this.store.updateSession(sessionId, { status: 'idle' });
         return;
       }

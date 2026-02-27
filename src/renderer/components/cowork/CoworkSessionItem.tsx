@@ -425,4 +425,15 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   );
 };
 
-export default CoworkSessionItem;
+const areSessionItemPropsEqual = (prev: CoworkSessionItemProps, next: CoworkSessionItemProps): boolean => (
+  prev.hasUnread === next.hasUnread
+  && prev.isActive === next.isActive
+  && prev.session.id === next.session.id
+  && prev.session.title === next.session.title
+  && prev.session.status === next.session.status
+  && prev.session.pinned === next.session.pinned
+  && prev.session.updatedAt === next.session.updatedAt
+  && prev.session.createdAt === next.session.createdAt
+);
+
+export default React.memo(CoworkSessionItem, areSessionItemPropsEqual);

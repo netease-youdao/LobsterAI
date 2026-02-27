@@ -79,6 +79,15 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(`api:stream:${requestId}:abort`, handler);
     },
   },
+  oauth: {
+    getStatus: (providerKey: 'antigravity' | 'openai') => ipcRenderer.invoke('oauth:getStatus', providerKey),
+    login: (providerKey: 'antigravity' | 'openai') => ipcRenderer.invoke('oauth:login', providerKey),
+    disconnect: (providerKey: 'antigravity' | 'openai') => ipcRenderer.invoke('oauth:disconnect', providerKey),
+    syncModels: (providerKey: 'antigravity' | 'openai', force?: boolean) =>
+      ipcRenderer.invoke('oauth:syncModels', { providerKey, force }),
+    resolveApiConfig: (providerKey: 'antigravity' | 'openai', modelId?: string) =>
+      ipcRenderer.invoke('oauth:resolveApiConfig', { providerKey, modelId }),
+  },
   ipcRenderer: {
     send: (channel: string, ...args: any[]) => {
       ipcRenderer.send(channel, ...args);

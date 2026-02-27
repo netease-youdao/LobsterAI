@@ -172,7 +172,15 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      authMode?: 'api-key' | 'oauth';
+      apiFormat?: 'anthropic' | 'openai' | 'antigravity';
+      oauth?: {
+        providerId: string;
+        profileId?: string;
+        email?: string;
+        connectedAt?: number;
+        lastSyncAt?: number;
+      };
       codingPlanEnabled?: boolean;
       models?: Array<{
         id: string;
@@ -290,6 +298,22 @@ export const defaultConfig: AppConfig = {
         { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
       ]
     },
+    antigravity: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://daily-cloudcode-pa.sandbox.googleapis.com',
+      authMode: 'oauth',
+      apiFormat: 'antigravity',
+      oauth: {
+        providerId: 'google-antigravity',
+      },
+      models: [
+        { id: 'google-antigravity/claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)', supportsImage: true },
+        { id: 'google-antigravity/claude-sonnet-4-6', name: 'Claude Sonnet 4.6', supportsImage: true },
+        { id: 'google-antigravity/gemini-3-flash', name: 'Gemini 3 Flash', supportsImage: true },
+        { id: 'google-antigravity/gemini-3.1-pro-low', name: 'Gemini 3.1 Pro (Low)', supportsImage: true }
+      ]
+    },
     qwen: {
       enabled: false,
       apiKey: '',
@@ -377,7 +401,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'xiaomi', 'volcengine', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'antigravity', 'xiaomi', 'volcengine', 'ollama', 'custom'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 

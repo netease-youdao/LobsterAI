@@ -917,6 +917,7 @@ export class SkillManager {
       '- If none clearly apply: do not read any SKILL.md.',
       '- For the selected skill, treat <location> as the canonical SKILL.md path.',
       '- Resolve relative paths mentioned by that SKILL.md against its directory (dirname(<location>)), not the workspace root.',
+      '- Entries in <available_skills> are LobsterAI routing docs, not callable Skill tool commands. Do NOT call the Skill tool with these ids.',
       'Constraints: never read more than one skill up front; only read additional skills if the first one explicitly references them.',
       '',
       '<available_skills>',

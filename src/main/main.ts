@@ -8,7 +8,12 @@ import { CoworkStore } from './coworkStore';
 import { CoworkRunner } from './libs/coworkRunner';
 import { SkillManager } from './skillManager';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter } from './libs/claudeSettings';
+import {
+  getCurrentApiConfig,
+  resolveCurrentApiConfig,
+  setAntigravityAuthResolver,
+  setStoreGetter,
+} from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle } from './libs/coworkUtil';
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
@@ -22,6 +27,8 @@ import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
 import { initLogger, getLogFilePath } from './logger';
+import { OAuthService } from './oauth/service';
+import type { SupportedOAuthProviderKey } from './oauth/types';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -473,6 +480,7 @@ let skillManager: SkillManager | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let scheduledTaskStore: ScheduledTaskStore | null = null;
 let scheduler: Scheduler | null = null;
+let oauthService: OAuthService | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
 
 const initStore = async (): Promise<SqliteStore> => {
@@ -495,6 +503,13 @@ const getStore = (): SqliteStore => {
     throw new Error('Store not initialized. Call initStore() first.');
   }
   return store;
+};
+
+const getOAuthService = (): OAuthService => {
+  if (!oauthService) {
+    oauthService = new OAuthService(getStore());
+  }
+  return oauthService;
 };
 
 const getCoworkStore = () => {
@@ -1740,6 +1755,77 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('oauth:getStatus', async (_event, providerKey: SupportedOAuthProviderKey) => {
+    try {
+      const service = getOAuthService();
+      return { success: true, status: service.getStatus(providerKey) };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get OAuth status',
+      };
+    }
+  });
+
+  ipcMain.handle('oauth:login', async (_event, providerKey: SupportedOAuthProviderKey) => {
+    try {
+      const service = getOAuthService();
+      const status = await service.login(providerKey);
+      return { success: true, status };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'OAuth login failed',
+      };
+    }
+  });
+
+  ipcMain.handle('oauth:disconnect', async (_event, providerKey: SupportedOAuthProviderKey) => {
+    try {
+      const service = getOAuthService();
+      service.disconnect(providerKey);
+      const status = service.getStatus(providerKey);
+      return { success: true, status };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to disconnect OAuth',
+      };
+    }
+  });
+
+  ipcMain.handle('oauth:syncModels', async (_event, options: {
+    providerKey: SupportedOAuthProviderKey;
+    force?: boolean;
+  }) => {
+    try {
+      const service = getOAuthService();
+      const result = await service.syncModels(options.providerKey, options.force ?? false);
+      return { success: true, result };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to sync models',
+      };
+    }
+  });
+
+  ipcMain.handle('oauth:resolveApiConfig', async (_event, options: {
+    providerKey: SupportedOAuthProviderKey;
+    modelId?: string;
+  }) => {
+    try {
+      const service = getOAuthService();
+      const resolved = await service.resolveApiConfig(options.providerKey, options.modelId);
+      return { success: true, config: resolved };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to resolve OAuth API config',
+      };
+    }
+  });
+
   // Dialog handlers
   ipcMain.handle('dialog:selectDirectory', async (event) => {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender);
@@ -2321,6 +2407,11 @@ if (!gotTheLock) {
     }
     // Inject store getter into claudeSettings
     setStoreGetter(() => store);
+    setAntigravityAuthResolver(async (forceRefresh?: boolean) => {
+      const service = getOAuthService();
+      const resolved = await service.resolveApiKey('antigravity', forceRefresh ?? false);
+      return resolved.apiKey;
+    });
     console.log('[Main] initApp: setStoreGetter done');
     const manager = getSkillManager();
     console.log('[Main] initApp: getSkillManager done');

@@ -28,8 +28,12 @@ import type {
   CoworkContinueOptions,
 } from '../types/cowork';
 
+const STREAM_MESSAGE_UPDATE_FLUSH_MS = 120;
+
 class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
+  private pendingMessageUpdates = new Map<string, { sessionId: string; messageId: string; content: string }>();
+  private messageUpdateFlushTimer: number | null = null;
   private initialized = false;
 
   async init(): Promise<void> {
@@ -56,6 +60,8 @@ class CoworkService {
 
     // Message listener - also check if session exists (for IM-created sessions)
     const messageCleanup = cowork.onStreamMessage(async ({ sessionId, message }) => {
+      this.flushPendingMessageUpdates();
+
       // Check if session exists in current list
       const state = store.getState().cowork;
       const sessionExists = state.sessions.some(s => s.id === sessionId);
@@ -79,7 +85,7 @@ class CoworkService {
 
     // Message update listener (for streaming content updates)
     const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content }) => {
-      store.dispatch(updateMessageContent({ sessionId, messageId, content }));
+      this.enqueueMessageUpdate({ sessionId, messageId, content });
     });
     this.streamListenerCleanups.push(messageUpdateCleanup);
 
@@ -97,18 +103,51 @@ class CoworkService {
 
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
+      this.flushPendingMessageUpdates();
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
     });
     this.streamListenerCleanups.push(completeCleanup);
 
     // Error listener
     const errorCleanup = cowork.onStreamError(({ sessionId }) => {
+      this.flushPendingMessageUpdates();
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
     });
     this.streamListenerCleanups.push(errorCleanup);
   }
 
+  private enqueueMessageUpdate(update: { sessionId: string; messageId: string; content: string }): void {
+    const key = `${update.sessionId}:${update.messageId}`;
+    this.pendingMessageUpdates.set(key, update);
+
+    if (this.messageUpdateFlushTimer !== null) {
+      return;
+    }
+
+    this.messageUpdateFlushTimer = window.setTimeout(() => {
+      this.messageUpdateFlushTimer = null;
+      this.flushPendingMessageUpdates();
+    }, STREAM_MESSAGE_UPDATE_FLUSH_MS);
+  }
+
+  private flushPendingMessageUpdates(): void {
+    if (this.pendingMessageUpdates.size === 0) {
+      return;
+    }
+
+    const updates = Array.from(this.pendingMessageUpdates.values());
+    this.pendingMessageUpdates.clear();
+    for (const update of updates) {
+      store.dispatch(updateMessageContent(update));
+    }
+  }
+
   private cleanupListeners(): void {
+    if (this.messageUpdateFlushTimer !== null) {
+      window.clearTimeout(this.messageUpdateFlushTimer);
+      this.messageUpdateFlushTimer = null;
+    }
+    this.flushPendingMessageUpdates();
     this.streamListenerCleanups.forEach(cleanup => cleanup());
     this.streamListenerCleanups = [];
   }

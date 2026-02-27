@@ -52,6 +52,18 @@ const markSessionUnread = (state: CoworkState, sessionId: string) => {
   state.unreadSessionIds.push(sessionId);
 };
 
+const clearSessionStreamingFlags = (session: CoworkSession): void => {
+  for (const message of session.messages) {
+    if (!message.metadata?.isStreaming) {
+      continue;
+    }
+    message.metadata = {
+      ...message.metadata,
+      isStreaming: false,
+    };
+  }
+};
+
 const coworkSlice = createSlice({
   name: 'cowork',
   initialState,
@@ -76,6 +88,9 @@ const coworkSlice = createSlice({
     setCurrentSession(state, action: PayloadAction<CoworkSession | null>) {
       state.currentSession = action.payload;
       if (action.payload) {
+        if (action.payload.status !== 'running') {
+          clearSessionStreamingFlags(action.payload);
+        }
         state.currentSessionId = action.payload.id;
         if (!action.payload.id.startsWith('temp-')) {
           const { id, title, status, pinned, createdAt, updatedAt } = action.payload;
@@ -134,6 +149,9 @@ const coworkSlice = createSlice({
       if (state.currentSession?.id === sessionId) {
         state.currentSession.status = status;
         state.currentSession.updatedAt = Date.now();
+        if (status !== 'running') {
+          clearSessionStreamingFlags(state.currentSession);
+        }
         // Streaming state is tied to the currently opened session only
         state.isStreaming = status === 'running';
       }
@@ -174,9 +192,15 @@ const coworkSlice = createSlice({
       const { sessionId, messageId, content } = action.payload;
 
       if (state.currentSession?.id === sessionId) {
-        const messageIndex = state.currentSession.messages.findIndex(m => m.id === messageId);
-        if (messageIndex !== -1) {
-          state.currentSession.messages[messageIndex].content = content;
+        const messages = state.currentSession.messages;
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          if (messages[i].id !== messageId) {
+            continue;
+          }
+          if (messages[i].content !== content) {
+            messages[i].content = content;
+          }
+          break;
         }
       }
 

@@ -1,4 +1,4 @@
-export type AnthropicApiFormat = 'anthropic' | 'openai';
+export type AnthropicApiFormat = 'anthropic' | 'openai' | 'antigravity';
 
 export type OpenAIStreamChunk = {
   id?: string;
@@ -60,7 +60,82 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function normalizeToolChoice(toolChoice: unknown): unknown {
+  if (typeof toolChoice === 'string') {
+    if (toolChoice === 'auto' || toolChoice === 'none' || toolChoice === 'required') {
+      return toolChoice;
+    }
+    if (toolChoice === 'any') {
+      return 'required';
+    }
+    return undefined;
+  }
+
+  const choiceObj = toOptionalObject(toolChoice);
+  if (!choiceObj) {
+    return undefined;
+  }
+
+  const choiceType = toString(choiceObj.type);
+  if (choiceType === 'auto' || choiceType === 'none') {
+    return choiceType;
+  }
+  if (choiceType === 'any' || choiceType === 'required') {
+    return 'required';
+  }
+
+  if (choiceType === 'tool' || choiceType === 'function') {
+    const toolName = toString(choiceObj.name)
+      || toString(toOptionalObject(choiceObj.function)?.name);
+    if (!toolName) {
+      return undefined;
+    }
+    return {
+      type: 'function',
+      function: {
+        name: toolName,
+      },
+    };
+  }
+
+  return undefined;
+}
+
+const UNSUPPORTED_SCHEMA_KEYS = new Set([
+  '$schema',
+  '$id',
+  '$defs',
+  'definitions',
+  'unevaluatedProperties',
+  'patternProperties',
+  'contains',
+  'minContains',
+  'maxContains',
+  'dependentSchemas',
+  'dependentRequired',
+  'if',
+  'then',
+  'else',
+  'not',
+  'allOf',
+  'oneOf',
+  'const',
+  'examples',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+]);
+
 export function normalizeProviderApiFormat(format: unknown): AnthropicApiFormat {
+  if (format === 'antigravity') {
+    return 'antigravity';
+  }
   if (format === 'openai') {
     return 'openai';
   }
@@ -91,6 +166,12 @@ function cleanSchema(schema: unknown): unknown {
   const obj = toObject(schema);
   const output: Record<string, unknown> = { ...obj };
 
+  for (const key of Object.keys(output)) {
+    if (key.startsWith('$') || UNSUPPORTED_SCHEMA_KEYS.has(key)) {
+      delete output[key];
+    }
+  }
+
   if (output.format === 'uri') {
     delete output.format;
   }
@@ -109,6 +190,67 @@ function cleanSchema(schema: unknown): unknown {
   }
 
   return output;
+}
+
+function splitCompleteTextByThinkTags(
+  text: string
+): Array<{ type: 'text' | 'thinking'; value: string }> {
+  if (!text || !text.includes('<think>')) {
+    return text ? [{ type: 'text', value: text }] : [];
+  }
+
+  const OPEN_TAG = '<think>';
+  const CLOSE_TAG = '</think>';
+  const parts: Array<{ type: 'text' | 'thinking'; value: string }> = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const openIndex = text.indexOf(OPEN_TAG, cursor);
+    if (openIndex < 0) {
+      const tail = text.slice(cursor);
+      if (tail) {
+        parts.push({ type: 'text', value: tail });
+      }
+      break;
+    }
+
+    if (openIndex > cursor) {
+      parts.push({ type: 'text', value: text.slice(cursor, openIndex) });
+    }
+
+    const closeIndex = text.indexOf(CLOSE_TAG, openIndex + OPEN_TAG.length);
+    if (closeIndex < 0) {
+      const remaining = text.slice(openIndex);
+      if (remaining) {
+        parts.push({ type: 'text', value: remaining });
+      }
+      break;
+    }
+
+    const thinking = text.slice(openIndex + OPEN_TAG.length, closeIndex);
+    if (thinking) {
+      parts.push({ type: 'thinking', value: thinking });
+    }
+    cursor = closeIndex + CLOSE_TAG.length;
+  }
+
+  return parts;
+}
+
+function pushTextWithThinkTags(
+  target: Array<Record<string, unknown>>,
+  text: string
+): void {
+  for (const part of splitCompleteTextByThinkTags(text)) {
+    if (!part.value) {
+      continue;
+    }
+    if (part.type === 'thinking') {
+      target.push({ type: 'thinking', thinking: part.value });
+    } else {
+      target.push({ type: 'text', text: part.value });
+    }
+  }
 }
 
 function convertMessageToOpenAI(role: string, content: unknown): Array<Record<string, unknown>> {
@@ -268,19 +410,38 @@ export function anthropicToOpenAI(body: unknown): Record<string, unknown> {
 
   output.messages = messages;
 
-  if (source.max_tokens !== undefined) {
-    output.max_tokens = source.max_tokens;
+  const maxTokens = toFiniteNumber(source.max_tokens);
+  if (maxTokens !== null) {
+    const rounded = Math.floor(maxTokens);
+    if (rounded > 0) {
+      output.max_tokens = rounded;
+    }
   }
-  if (source.temperature !== undefined) {
-    output.temperature = source.temperature;
+
+  const temperature = toFiniteNumber(source.temperature);
+  if (temperature !== null && temperature >= 0 && temperature <= 2) {
+    output.temperature = temperature;
   }
-  if (source.top_p !== undefined) {
-    output.top_p = source.top_p;
+
+  const topP = toFiniteNumber(source.top_p);
+  if (topP !== null && topP > 0 && topP <= 1) {
+    output.top_p = topP;
   }
+
   if (source.stop_sequences !== undefined) {
-    output.stop = source.stop_sequences;
+    if (typeof source.stop_sequences === 'string' && source.stop_sequences) {
+      output.stop = source.stop_sequences;
+    } else if (Array.isArray(source.stop_sequences)) {
+      const stops = source.stop_sequences
+        .filter((item): item is string => typeof item === 'string')
+        .filter((item) => item.length > 0);
+      if (stops.length > 0) {
+        output.stop = stops;
+      }
+    }
   }
-  if (source.stream !== undefined) {
+
+  if (typeof source.stream === 'boolean') {
     output.stream = source.stream;
   }
 
@@ -288,22 +449,30 @@ export function anthropicToOpenAI(body: unknown): Record<string, unknown> {
     .filter((tool) => toString(toObject(tool).type) !== 'BatchTool')
     .map((tool) => {
       const toolObj = toObject(tool);
+      const toolName = toString(toolObj.name);
+      if (!toolName) {
+        return null;
+      }
       return {
         type: 'function',
         function: {
-          name: toString(toolObj.name),
+          name: toolName,
           description: toolObj.description,
           parameters: cleanSchema(toolObj.input_schema ?? {}),
         },
       };
-    });
+    })
+    .filter((tool) => Boolean(tool)) as Array<Record<string, unknown>>;
 
   if (tools.length > 0) {
     output.tools = tools;
   }
 
-  if (source.tool_choice !== undefined) {
-    output.tool_choice = source.tool_choice;
+  if (source.tool_choice !== undefined && tools.length > 0) {
+    const normalizedToolChoice = normalizeToolChoice(source.tool_choice);
+    if (normalizedToolChoice !== undefined) {
+      output.tool_choice = normalizedToolChoice;
+    }
   }
 
   return output;
@@ -324,12 +493,12 @@ export function openAIToAnthropic(body: unknown): Record<string, unknown> {
 
   const textContent = message.content;
   if (typeof textContent === 'string' && textContent) {
-    content.push({ type: 'text', text: textContent });
+    pushTextWithThinkTags(content, textContent);
   } else if (Array.isArray(textContent)) {
     for (const part of textContent) {
       const partObj = toObject(part);
       if (partObj.type === 'text' && typeof partObj.text === 'string' && partObj.text) {
-        content.push({ type: 'text', text: partObj.text });
+        pushTextWithThinkTags(content, partObj.text);
       }
     }
   }

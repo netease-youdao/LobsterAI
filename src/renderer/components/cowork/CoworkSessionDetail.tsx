@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
@@ -795,7 +795,7 @@ const CopyButton: React.FC<{
   );
 };
 
-const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = ({ message, skills }) => {
+const UserMessageItemBase: React.FC<{ message: CoworkMessage; skills: Skill[] }> = ({ message, skills }) => {
   const [isHovered, setIsHovered] = useState(false);
 
   // Get skills used for this message
@@ -846,7 +846,12 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
   );
 };
 
-const AssistantMessageItem: React.FC<{
+const UserMessageItem = React.memo(
+  UserMessageItemBase,
+  (prev, next) => prev.message === next.message && prev.skills === next.skills
+);
+
+const AssistantMessageItemBase: React.FC<{
   message: CoworkMessage;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
@@ -859,6 +864,7 @@ const AssistantMessageItem: React.FC<{
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
+  const isStreamingMessage = Boolean(message.metadata?.isStreaming);
 
   return (
     <div
@@ -867,11 +873,17 @@ const AssistantMessageItem: React.FC<{
       onMouseLeave={() => setIsHovered(false)}
     >
       <div className="dark:text-claude-darkText text-claude-text">
-        <MarkdownContent
-          content={displayContent}
-          className="prose dark:prose-invert max-w-none"
-          resolveLocalFilePath={resolveLocalFilePath}
-        />
+        {isStreamingMessage ? (
+          <div className="whitespace-pre-wrap break-words leading-6">
+            {displayContent}
+          </div>
+        ) : (
+          <MarkdownContent
+            content={displayContent}
+            className="prose dark:prose-invert max-w-none"
+            resolveLocalFilePath={resolveLocalFilePath}
+          />
+        )}
       </div>
       {showCopyButton && (
         <div className="flex items-center gap-1.5 mt-1">
@@ -885,17 +897,25 @@ const AssistantMessageItem: React.FC<{
   );
 };
 
+const AssistantMessageItem = React.memo(
+  AssistantMessageItemBase,
+  (prev, next) => (
+    prev.message === next.message
+    && prev.resolveLocalFilePath === next.resolveLocalFilePath
+    && prev.mapDisplayText === next.mapDisplayText
+    && prev.showCopyButton === next.showCopyButton
+  )
+);
+
 // Streaming activity bar shown between messages and input
 const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ messages }) => {
-  // Walk messages backwards to find the latest tool_use without a paired tool_result
-  const getStatusText = (): string => {
-    const toolUseIds = new Set<string>();
+  const statusText = useMemo(() => {
+    // Walk messages backwards to find the latest tool_use without a paired tool_result
     const toolResultIds = new Set<string>();
     for (const msg of messages) {
       const id = msg.metadata?.toolUseId;
       if (typeof id === 'string') {
         if (msg.type === 'tool_result') toolResultIds.add(id);
-        if (msg.type === 'tool_use') toolUseIds.add(id);
       }
     }
     // Walk backwards to find latest unresolved tool_use
@@ -912,7 +932,7 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
       }
     }
     return `${i18nService.t('coworkToolRunning')}`;
-  };
+  }, [messages]);
 
   return (
     <div className="shrink-0 animate-fade-in px-4">
@@ -920,7 +940,7 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
         <div className="streaming-bar" />
         <div className="py-1">
           <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-            {getStatusText()}
+            {statusText}
           </span>
         </div>
       </div>
@@ -1548,7 +1568,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      messagesEndRef.current.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll]);
 
@@ -1556,10 +1576,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return null;
   }
 
-  const displayItems = buildDisplayItems(currentSession.messages);
-  const turns = buildConversationTurns(displayItems);
+  const displayItems = useMemo(
+    () => buildDisplayItems(currentSession.messages),
+    [currentSession.messages]
+  );
+  const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
-  const renderConversationTurns = () => {
+  const renderedConversationTurns = useMemo(() => {
     if (turns.length === 0) {
       if (!isStreaming) return null;
       return (
@@ -1604,7 +1627,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         </React.Fragment>
       );
     });
-  };
+  }, [isStreaming, mapDisplayText, resolveLocalFilePath, skills, turns]);
 
   return (
     <div ref={detailRootRef} className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
@@ -1793,7 +1816,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         onScroll={handleMessagesScroll}
         className="flex-1 overflow-y-auto min-h-0 pt-3"
       >
-        {renderConversationTurns()}
+        {renderedConversationTurns}
         <div ref={messagesEndRef} className="h-20" />
       </div>
 
