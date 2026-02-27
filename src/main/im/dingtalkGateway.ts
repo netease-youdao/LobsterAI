@@ -813,6 +813,20 @@ export class DingTalkGateway extends EventEmitter {
   }
 
   /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): { conversationType: '1' | '2'; userId?: string; openConversationId?: string; sessionWebhook: string } | null {
+    return this.lastConversation;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(target: { conversationType: '1' | '2'; userId?: string; openConversationId?: string; sessionWebhook: string }): void {
+    this.lastConversation = target;
+  }
+
+  /**
    * Send a notification message to the last known conversation.
    */
   async sendNotification(text: string): Promise<void> {
@@ -820,6 +834,21 @@ export class DingTalkGateway extends EventEmitter {
       throw new Error('No conversation available for notification');
     }
     await this.sendBySession(this.lastConversation.sessionWebhook, text);
+    this.status.lastOutboundAt = Date.now();
+  }
+
+  /**
+   * Send a notification message with media support to the last known conversation.
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    if (!this.lastConversation) {
+      throw new Error('No conversation available for notification');
+    }
+    await this.sendWithMedia(this.lastConversation.sessionWebhook, text, {
+      conversationType: this.lastConversation.conversationType,
+      userId: this.lastConversation.userId,
+      openConversationId: this.lastConversation.openConversationId,
+    });
     this.status.lastOutboundAt = Date.now();
   }
 }

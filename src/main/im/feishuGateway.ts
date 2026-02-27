@@ -875,6 +875,20 @@ export class FeishuGateway extends EventEmitter {
   }
 
   /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): string | null {
+    return this.lastChatId;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(chatId: string): void {
+    this.lastChatId = chatId;
+  }
+
+  /**
    * Send a notification message to the last known chat.
    */
   async sendNotification(text: string): Promise<void> {
@@ -882,6 +896,17 @@ export class FeishuGateway extends EventEmitter {
       throw new Error('No conversation available for notification');
     }
     await this.sendMessage(this.lastChatId, text);
+    this.status.lastOutboundAt = Date.now();
+  }
+
+  /**
+   * Send a notification message with media support to the last known chat.
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    if (!this.lastChatId || !this.restClient) {
+      throw new Error('No conversation available for notification');
+    }
+    await this.sendWithMedia(this.lastChatId, text, undefined);
     this.status.lastOutboundAt = Date.now();
   }
 }
