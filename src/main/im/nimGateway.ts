@@ -779,6 +779,20 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): string | null {
+    return this.lastSenderId;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(senderId: string): void {
+    this.lastSenderId = senderId;
+  }
+
+  /**
    * Send a notification message to the last known sender
    */
   async sendNotification(text: string): Promise<void> {
@@ -790,14 +804,20 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
-   * Clean up old NIM inbound media files
-   * 应在 Gateway 启动时调用
+   * Clean up downloaded media files (called periodically)
    */
   cleanupMediaFiles(): void {
     try {
-      cleanupOldNimMediaFiles(7);
+      let baseDir: string;
+      try {
+        baseDir = app.getPath('userData');
+      } catch {
+        baseDir = path.join(os.homedir(), '.lobsterai');
+      }
+      const mediaDir = path.join(baseDir, 'nim-media');
+      cleanupOldNimMediaFiles(mediaDir, this.log);
     } catch (error: any) {
-      console.warn(`[NIM Gateway] Media cleanup error: ${error.message}`);
+      this.log('[NIM Gateway] Media cleanup error:', error.message);
     }
   }
 }

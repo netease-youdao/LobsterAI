@@ -478,6 +478,20 @@ export class DiscordGateway extends EventEmitter {
   }
 
   /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): string | null {
+    return this.lastChannelId;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(channelId: string): void {
+    this.lastChannelId = channelId;
+  }
+
+  /**
    * Send a notification message to the last known channel.
    */
   async sendNotification(text: string): Promise<void> {
@@ -497,5 +511,61 @@ export class DiscordGateway extends EventEmitter {
     } else {
       throw new Error('Channel is not text-based or not accessible');
     }
+  }
+
+  /**
+   * Send a notification message with media support to the last known channel.
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    if (!this.client || !this.lastChannelId) {
+      throw new Error('No conversation available for notification');
+    }
+
+    const channel = await this.client.channels.fetch(this.lastChannelId);
+    if (!channel || !channel.isTextBased() || !('send' in channel)) {
+      throw new Error('Channel is not text-based or not accessible');
+    }
+
+    const markers = parseMediaMarkers(text);
+    const validFiles: Array<{ path: string; name?: string }> = [];
+
+    for (const marker of markers) {
+      let filePath = marker.path;
+      if (filePath.startsWith('~/')) {
+        filePath = path.join(process.env.HOME || '', filePath.slice(2));
+      }
+      if (fs.existsSync(filePath)) {
+        validFiles.push({ path: filePath, name: marker.name });
+      } else {
+        console.warn(`[Discord Gateway] Notification media file not found: ${filePath}`);
+      }
+    }
+
+    const textContent = validFiles.length > 0 ? stripMediaMarkers(text, markers) : text;
+    const attachments = validFiles.map(file => {
+      const attachment = new AttachmentBuilder(file.path);
+      if (file.name) {
+        const ext = path.extname(file.path);
+        attachment.setName(`${file.name}${ext}`);
+      }
+      return attachment;
+    });
+
+    const MAX_LENGTH = 1900;
+    const chunks = this.splitMessage(textContent, MAX_LENGTH);
+
+    for (let i = 0; i < chunks.length; i++) {
+      if (i === 0 && attachments.length > 0) {
+        await (channel as any).send({ content: chunks[i] || undefined, files: attachments });
+      } else if (chunks[i]) {
+        await (channel as any).send(chunks[i]);
+      }
+    }
+
+    if (chunks.length === 0 && attachments.length > 0) {
+      await (channel as any).send({ files: attachments });
+    }
+
+    this.status.lastOutboundAt = Date.now();
   }
 }

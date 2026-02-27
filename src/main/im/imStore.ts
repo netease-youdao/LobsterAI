@@ -301,6 +301,22 @@ export class IMStore {
     return hasDingTalk || hasFeishu || hasTelegram || hasDiscord || hasNim;
   }
 
+  // ==================== Notification Target Persistence ====================
+
+  /**
+   * Get persisted notification target for a platform
+   */
+  getNotificationTarget(platform: IMPlatform): any | null {
+    return this.getConfigValue<any>(`notification_target:${platform}`) ?? null;
+  }
+
+  /**
+   * Persist notification target for a platform
+   */
+  setNotificationTarget(platform: IMPlatform, target: any): void {
+    this.setConfigValue(`notification_target:${platform}`, target);
+  }
+
   // ==================== Session Mapping Operations ====================
 
   /**
