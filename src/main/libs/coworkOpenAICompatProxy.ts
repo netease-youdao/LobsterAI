@@ -61,6 +61,25 @@ type StreamState = {
 };
 
 type ThinkTagParserState = Pick<StreamState, 'inThinkTag' | 'thinkTagCarry'>;
+type UpstreamAPIType = 'chat_completions' | 'responses';
+type ResponsesFunctionCallState = {
+  outputIndex: number;
+  callId: string;
+  itemId: string;
+  name: string;
+  extraContent?: unknown;
+  argumentsBuffer: string;
+  finalArguments: string;
+  emitted: boolean;
+  metadataEmitted: boolean;
+};
+type ResponsesStreamContext = {
+  functionCallByOutputIndex: Map<number, ResponsesFunctionCallState>;
+  functionCallByCallId: Map<string, ResponsesFunctionCallState>;
+  functionCallByItemId: Map<string, ResponsesFunctionCallState>;
+  nextToolIndex: number;
+  hasAnyDelta: boolean;
+};
 
 const PROXY_BIND_HOST = '0.0.0.0';
 const LOCAL_HOST = '127.0.0.1';
@@ -110,6 +129,38 @@ function toString(value: unknown): string {
 
 function toArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return JSON.stringify(value ?? '');
+  } catch {
+    return '';
+  }
+}
+
+function normalizeFunctionArguments(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value === undefined) {
+    return '';
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
 }
 
 function normalizeScheduledTaskWorkingDirectory(value: unknown): string {
@@ -262,6 +313,24 @@ function extractErrorMessage(raw: string): string {
   return trimmed;
 }
 
+function resolveUpstreamAPIType(provider?: string): UpstreamAPIType {
+  return provider?.toLowerCase() === 'openai' ? 'responses' : 'chat_completions';
+}
+
+function buildOpenAIResponsesURL(baseURL: string): string {
+  const normalized = baseURL.trim().replace(/\/+$/, '');
+  if (!normalized) {
+    return '/v1/responses';
+  }
+  if (normalized.endsWith('/responses')) {
+    return normalized;
+  }
+  if (normalized.endsWith('/v1')) {
+    return `${normalized}/responses`;
+  }
+  return `${normalized}/v1/responses`;
+}
+
 function buildOpenAIChatTargetUrls(baseURL: string): string[] {
   const primary = buildOpenAIChatCompletionsURL(baseURL);
   const urls = new Set<string>([primary]);
@@ -324,14 +393,503 @@ function buildCloudCodeStreamGenerateContentURLs(baseURL: string): string[] {
   return Array.from(urls);
 }
 
-function buildUpstreamTargetUrls(
-  baseURL: string,
-  endpointMode: 'openai-chat' | 'cloudcode-sse'
-): string[] {
-  if (endpointMode === 'cloudcode-sse') {
-    return buildCloudCodeStreamGenerateContentURLs(baseURL);
+function buildUpstreamTargetUrlsByAPIType(baseURL: string, apiType: UpstreamAPIType): string[] {
+  if (apiType === 'responses') {
+    return [buildOpenAIResponsesURL(baseURL)];
   }
   return buildOpenAIChatTargetUrls(baseURL);
+}
+
+function extractTextFromChatContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  const chunks: string[] = [];
+  for (const part of toArray(content)) {
+    const partObj = toOptionalObject(part);
+    if (!partObj) {
+      continue;
+    }
+    const partText = toString(partObj.text);
+    if (partText) {
+      chunks.push(partText);
+    }
+  }
+  return chunks.join('');
+}
+
+function convertUserChatContentToResponsesInput(content: unknown): Array<Record<string, unknown>> {
+  if (typeof content === 'string') {
+    return content ? [{ type: 'input_text', text: content }] : [];
+  }
+
+  const parts: Array<Record<string, unknown>> = [];
+  for (const item of toArray(content)) {
+    const itemObj = toOptionalObject(item);
+    if (!itemObj) {
+      continue;
+    }
+
+    const itemType = toString(itemObj.type);
+    if (itemType === 'text') {
+      const text = toString(itemObj.text);
+      if (text) {
+        parts.push({ type: 'input_text', text });
+      }
+      continue;
+    }
+
+    if (itemType === 'image_url') {
+      const imageURLObj = toOptionalObject(itemObj.image_url);
+      const imageURL = toString(imageURLObj?.url) || toString(itemObj.image_url);
+      if (imageURL) {
+        parts.push({ type: 'input_image', image_url: imageURL });
+      }
+    }
+  }
+
+  return parts;
+}
+
+function normalizeResponsesToolsFromChat(toolsInput: unknown): Array<Record<string, unknown>> {
+  const normalizedTools: Array<Record<string, unknown>> = [];
+
+  for (const tool of toArray(toolsInput)) {
+    const toolObj = toOptionalObject(tool);
+    if (!toolObj) {
+      continue;
+    }
+
+    const toolType = toString(toolObj.type);
+    if (toolType !== 'function') {
+      normalizedTools.push(toolObj);
+      continue;
+    }
+
+    const functionObj = toOptionalObject(toolObj.function);
+    const name = toString(toolObj.name) || toString(functionObj?.name);
+    if (!name) {
+      continue;
+    }
+
+    const normalized: Record<string, unknown> = {
+      type: 'function',
+      name,
+    };
+
+    const description = toString(toolObj.description) || toString(functionObj?.description);
+    if (description) {
+      normalized.description = description;
+    }
+
+    const parameters = toolObj.parameters ?? functionObj?.parameters;
+    if (parameters !== undefined) {
+      normalized.parameters = parameters;
+    }
+
+    const strict = toolObj.strict ?? functionObj?.strict;
+    if (typeof strict === 'boolean') {
+      normalized.strict = strict;
+    }
+
+    normalizedTools.push(normalized);
+  }
+
+  return normalizedTools;
+}
+
+function normalizeResponsesToolChoiceFromChat(toolChoice: unknown): unknown {
+  if (typeof toolChoice === 'string') {
+    return toolChoice;
+  }
+
+  const toolChoiceObj = toOptionalObject(toolChoice);
+  if (!toolChoiceObj) {
+    return toolChoice;
+  }
+
+  const normalizedType = toString(toolChoiceObj.type).toLowerCase();
+  if (normalizedType === 'any') {
+    return 'required';
+  }
+  if (normalizedType === 'auto' || normalizedType === 'none' || normalizedType === 'required') {
+    return normalizedType;
+  }
+  if (normalizedType === 'function' || normalizedType === 'tool') {
+    const functionObj = toOptionalObject(toolChoiceObj.function);
+    const name = toString(toolChoiceObj.name) || toString(functionObj?.name);
+    if (name) {
+      return {
+        type: 'function',
+        name,
+      };
+    }
+  }
+
+  return toolChoice;
+}
+
+function convertChatCompletionsRequestToResponsesRequest(
+  chatRequest: Record<string, unknown>
+): Record<string, unknown> {
+  const request: Record<string, unknown> = {};
+  const input: Array<Record<string, unknown>> = [];
+  const instructions: string[] = [];
+  const unresolvedFunctionCalls = new Map<string, { name: string; hasOutput: boolean }>();
+
+  if (chatRequest.model !== undefined) {
+    request.model = chatRequest.model;
+  }
+  if (chatRequest.stream !== undefined) {
+    request.stream = chatRequest.stream;
+  }
+  if (chatRequest.temperature !== undefined) {
+    request.temperature = chatRequest.temperature;
+  }
+  if (chatRequest.top_p !== undefined) {
+    request.top_p = chatRequest.top_p;
+  }
+
+  const normalizedTools = normalizeResponsesToolsFromChat(chatRequest.tools);
+  if (normalizedTools.length > 0) {
+    request.tools = normalizedTools;
+  }
+  if (chatRequest.tool_choice !== undefined) {
+    request.tool_choice = normalizeResponsesToolChoiceFromChat(chatRequest.tool_choice);
+  }
+
+  const maxOutputTokens = toNumber(chatRequest.max_output_tokens)
+    ?? toNumber(chatRequest.max_completion_tokens)
+    ?? toNumber(chatRequest.max_tokens);
+  if (maxOutputTokens !== null) {
+    request.max_output_tokens = maxOutputTokens;
+  }
+
+  for (const message of toArray(chatRequest.messages)) {
+    const messageObj = toOptionalObject(message);
+    if (!messageObj) {
+      continue;
+    }
+
+    const role = toString(messageObj.role);
+    if (role === 'system') {
+      const text = extractTextFromChatContent(messageObj.content);
+      if (text) {
+        instructions.push(text);
+      }
+      continue;
+    }
+
+    if (role === 'tool') {
+      const toolCallId = toString(messageObj.tool_call_id);
+      const output = stringifyUnknown(messageObj.content);
+      if (toolCallId && output) {
+        input.push({
+          type: 'function_call_output',
+          call_id: toolCallId,
+          output,
+        });
+      }
+      continue;
+    }
+
+    if (role === 'assistant') {
+      const text = extractTextFromChatContent(messageObj.content);
+      if (text) {
+        input.push({
+          role: 'assistant',
+          content: [{ type: 'output_text', text }],
+        });
+      }
+
+      for (const toolCall of toArray(messageObj.tool_calls)) {
+        const toolCallObj = toOptionalObject(toolCall);
+        const functionObj = toOptionalObject(toolCallObj?.function);
+        if (!toolCallObj || !functionObj) {
+          continue;
+        }
+
+        const callId = toString(toolCallObj.call_id) || toString(toolCallObj.id);
+        const name = toString(functionObj.name);
+        const argumentsText = normalizeFunctionArguments(functionObj.arguments) || '{}';
+        if (!callId || !name) {
+          continue;
+        }
+
+        const functionCallItem: Record<string, unknown> = {
+          type: 'function_call',
+          call_id: callId,
+          name,
+          arguments: argumentsText,
+        };
+        const extraContent = normalizeToolCallExtraContent(toolCallObj);
+        if (extraContent !== undefined) {
+          functionCallItem.extra_content = extraContent;
+        }
+        input.push(functionCallItem);
+        unresolvedFunctionCalls.set(callId, {
+          name,
+          hasOutput: false,
+        });
+      }
+      continue;
+    }
+
+    const userParts = convertUserChatContentToResponsesInput(messageObj.content);
+    if (userParts.length > 0) {
+      input.push({
+        role: role || 'user',
+        content: userParts,
+      });
+    }
+  }
+
+  if (instructions.length > 0) {
+    request.instructions = instructions.join('\n\n');
+  }
+
+  for (const messageItem of input) {
+    if (toString(messageItem.type) !== 'function_call_output') {
+      continue;
+    }
+    const callId = toString(messageItem.call_id);
+    if (!callId) {
+      continue;
+    }
+    const existing = unresolvedFunctionCalls.get(callId);
+    if (existing) {
+      existing.hasOutput = true;
+      unresolvedFunctionCalls.set(callId, existing);
+    }
+  }
+
+  for (const [callId, callInfo] of unresolvedFunctionCalls.entries()) {
+    if (callInfo.hasOutput) {
+      continue;
+    }
+    input.push({
+      type: 'function_call_output',
+      call_id: callId,
+      output: JSON.stringify({
+        error: `Missing tool output for function call "${callId}" (${callInfo.name || 'unknown'}). Auto-closed by compatibility proxy.`,
+      }),
+    });
+  }
+
+  request.input = input;
+  return request;
+}
+
+function normalizeToolName(value: unknown): string {
+  return toString(value).trim().toLowerCase();
+}
+
+function filterOpenAIToolsForProvider(
+  openAIRequest: Record<string, unknown>,
+  provider?: string
+): void {
+  if (provider !== 'openai') {
+    return;
+  }
+
+  const tools = toArray(openAIRequest.tools);
+  if (tools.length === 0) {
+    return;
+  }
+
+  const filteredTools = tools.filter((tool) => {
+    const toolObj = toOptionalObject(tool);
+    if (!toolObj) return true;
+    const functionObj = toOptionalObject(toolObj.function);
+    const toolName = normalizeToolName(toolObj.name) || normalizeToolName(functionObj?.name);
+    if (!toolName) return true;
+    return toolName !== 'skill';
+  });
+
+  if (filteredTools.length !== tools.length) {
+    openAIRequest.tools = filteredTools;
+    const toolChoiceObj = toOptionalObject(openAIRequest.tool_choice);
+    if (toolChoiceObj) {
+      const forcedName = normalizeToolName(toolChoiceObj.name)
+        || normalizeToolName(toOptionalObject(toolChoiceObj.function)?.name);
+      if (forcedName === 'skill') {
+        openAIRequest.tool_choice = 'auto';
+      }
+    }
+  }
+}
+
+function createResponsesStreamContext(): ResponsesStreamContext {
+  return {
+    functionCallByOutputIndex: new Map<number, ResponsesFunctionCallState>(),
+    functionCallByCallId: new Map<string, ResponsesFunctionCallState>(),
+    functionCallByItemId: new Map<string, ResponsesFunctionCallState>(),
+    nextToolIndex: 0,
+    hasAnyDelta: false,
+  };
+}
+
+function resolveResponsesObject(body: unknown): Record<string, unknown> {
+  const source = toOptionalObject(body);
+  if (!source) {
+    return {};
+  }
+  const nested = toOptionalObject(source.response);
+  if (nested) {
+    return nested;
+  }
+  return source;
+}
+
+function extractResponsesReasoningText(itemObj: Record<string, unknown>): string {
+  const summaryTexts: string[] = [];
+  for (const summaryItem of toArray(itemObj.summary)) {
+    const summaryObj = toOptionalObject(summaryItem);
+    if (!summaryObj) {
+      continue;
+    }
+    const summaryText = toString(summaryObj.text);
+    if (summaryText) {
+      summaryTexts.push(summaryText);
+    }
+  }
+  if (summaryTexts.length > 0) {
+    return summaryTexts.join('');
+  }
+
+  const directText = toString(itemObj.text);
+  if (directText) {
+    return directText;
+  }
+  return '';
+}
+
+function detectResponsesFinishReason(responseObj: Record<string, unknown>): string {
+  const output = toArray(responseObj.output);
+  const hasFunctionCall = output.some((item) => toString(toOptionalObject(item)?.type) === 'function_call');
+  if (hasFunctionCall) {
+    return 'tool_calls';
+  }
+
+  const status = toString(responseObj.status);
+  const incompleteReason = toString(toOptionalObject(responseObj.incomplete_details)?.reason);
+  if (
+    status === 'incomplete'
+    && (incompleteReason === 'max_output_tokens' || incompleteReason === 'max_tokens')
+  ) {
+    return 'length';
+  }
+  return 'stop';
+}
+
+function convertResponsesToOpenAIResponse(body: unknown): Record<string, unknown> {
+  const responseObj = resolveResponsesObject(body);
+  const output = toArray(responseObj.output);
+
+  const textParts: Array<{ type: 'text'; text: string }> = [];
+  const reasoningParts: string[] = [];
+  const toolCalls: Array<Record<string, unknown>> = [];
+
+  for (const item of output) {
+    const itemObj = toOptionalObject(item);
+    if (!itemObj) {
+      continue;
+    }
+
+    const itemType = toString(itemObj.type);
+    if (itemType === 'message') {
+      for (const contentItem of toArray(itemObj.content)) {
+        const contentObj = toOptionalObject(contentItem);
+        if (!contentObj) {
+          continue;
+        }
+        const contentType = toString(contentObj.type);
+        if (contentType === 'output_text' || contentType === 'text' || contentType === 'input_text') {
+          const text = toString(contentObj.text);
+          if (text) {
+            textParts.push({ type: 'text', text });
+          }
+        }
+      }
+      continue;
+    }
+
+    if (itemType === 'reasoning') {
+      const reasoningText = extractResponsesReasoningText(itemObj);
+      if (reasoningText) {
+        reasoningParts.push(reasoningText);
+      }
+      continue;
+    }
+
+    if (itemType === 'function_call') {
+      const callId = toString(itemObj.call_id) || toString(itemObj.id);
+      const name = toString(itemObj.name);
+      if (!callId || !name) {
+        continue;
+      }
+      const toolCall: Record<string, unknown> = {
+        id: callId,
+        type: 'function',
+        function: {
+          name,
+          arguments: normalizeFunctionArguments(itemObj.arguments) || '{}',
+        },
+      };
+      const extraContent = normalizeToolCallExtraContent(itemObj);
+      if (extraContent !== undefined) {
+        toolCall.extra_content = extraContent;
+      }
+      toolCalls.push(toolCall);
+    }
+  }
+
+  const message: Record<string, unknown> = {
+    role: 'assistant',
+  };
+  if (textParts.length === 1 && textParts[0].type === 'text') {
+    message.content = textParts[0].text;
+  } else if (textParts.length > 1) {
+    message.content = textParts;
+  } else {
+    message.content = null;
+  }
+  if (toolCalls.length > 0) {
+    message.tool_calls = toolCalls;
+  }
+  if (reasoningParts.length > 0) {
+    message.reasoning_content = reasoningParts.join('');
+  }
+
+  const usage = toOptionalObject(responseObj.usage);
+  return {
+    id: toString(responseObj.id),
+    model: toString(responseObj.model),
+    choices: [
+      {
+        message,
+        finish_reason: detectResponsesFinishReason(responseObj),
+      },
+    ],
+    usage: {
+      prompt_tokens: toNumber(usage?.input_tokens) ?? toNumber(usage?.prompt_tokens) ?? 0,
+      completion_tokens: toNumber(usage?.output_tokens) ?? toNumber(usage?.completion_tokens) ?? 0,
+    },
+  };
+}
+
+function cacheToolCallExtraContentFromResponsesResponse(body: unknown): void {
+  const responseObj = resolveResponsesObject(body);
+  for (const item of toArray(responseObj.output)) {
+    const itemObj = toOptionalObject(item);
+    if (!itemObj || toString(itemObj.type) !== 'function_call') {
+      continue;
+    }
+    const toolCallId = toString(itemObj.call_id) || toString(itemObj.id);
+    const extraContent = normalizeToolCallExtraContent(itemObj);
+    cacheToolCallExtraContent(toolCallId, extraContent);
+  }
 }
 
 function getAntigravityHeaders(): Record<string, string> {
@@ -3209,6 +3767,628 @@ function processOpenAIChunk(
   }
 }
 
+function parseSSEPacket(packet: string): { event: string; payload: string } {
+  const lines = packet.split(/\r?\n/);
+  const dataLines: string[] = [];
+  let event = '';
+
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      event = line.slice(6).trimStart();
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  return {
+    event,
+    payload: dataLines.join('\n'),
+  };
+}
+
+function findSSEPacketBoundary(
+  buffer: string
+): { index: number; separatorLength: number } | null {
+  const match = /\r?\n\r?\n/.exec(buffer);
+  if (!match || typeof match.index !== 'number') {
+    return null;
+  }
+
+  return {
+    index: match.index,
+    separatorLength: match[0].length,
+  };
+}
+
+function extractResponsesFunctionCallMetadata(
+  payloadObj: Record<string, unknown>,
+  itemObj: Record<string, unknown> | null
+): {
+  outputIndex: number | null;
+  callId: string;
+  itemId: string;
+  name: string;
+  extraContent: unknown;
+} {
+  const outputIndex = toNumber(payloadObj.output_index) ?? toNumber(itemObj?.output_index);
+  const callId = toString(payloadObj.call_id) || toString(itemObj?.call_id);
+  const itemId = toString(payloadObj.item_id) || toString(itemObj?.id);
+  const name = toString(payloadObj.name) || toString(itemObj?.name);
+  const extraContent = itemObj ? normalizeToolCallExtraContent(itemObj) : undefined;
+  return {
+    outputIndex,
+    callId,
+    itemId,
+    name,
+    extraContent,
+  };
+}
+
+function registerResponsesFunctionCallState(
+  context: ResponsesStreamContext,
+  payloadObj: Record<string, unknown>,
+  itemObj: Record<string, unknown> | null
+): ResponsesFunctionCallState {
+  const metadata = extractResponsesFunctionCallMetadata(payloadObj, itemObj);
+
+  let callState = metadata.callId
+    ? context.functionCallByCallId.get(metadata.callId)
+    : undefined;
+  if (!callState && metadata.itemId) {
+    callState = context.functionCallByItemId.get(metadata.itemId);
+  }
+  if (!callState && metadata.outputIndex !== null) {
+    callState = context.functionCallByOutputIndex.get(metadata.outputIndex);
+  }
+
+  if (!callState) {
+    const outputIndex = metadata.outputIndex !== null
+      ? metadata.outputIndex
+      : context.nextToolIndex;
+    callState = {
+      outputIndex,
+      callId: '',
+      itemId: '',
+      name: '',
+      extraContent: undefined,
+      argumentsBuffer: '',
+      finalArguments: '',
+      emitted: false,
+      metadataEmitted: false,
+    };
+    context.functionCallByOutputIndex.set(outputIndex, callState);
+    context.nextToolIndex = Math.max(context.nextToolIndex, outputIndex + 1);
+  } else if (metadata.outputIndex !== null && callState.outputIndex !== metadata.outputIndex) {
+    context.functionCallByOutputIndex.delete(callState.outputIndex);
+    callState.outputIndex = metadata.outputIndex;
+    context.functionCallByOutputIndex.set(callState.outputIndex, callState);
+    context.nextToolIndex = Math.max(context.nextToolIndex, callState.outputIndex + 1);
+  } else {
+    context.nextToolIndex = Math.max(context.nextToolIndex, callState.outputIndex + 1);
+  }
+
+  if (metadata.callId) {
+    callState.callId = metadata.callId;
+    context.functionCallByCallId.set(metadata.callId, callState);
+  }
+  if (metadata.itemId) {
+    callState.itemId = metadata.itemId;
+    context.functionCallByItemId.set(metadata.itemId, callState);
+  }
+  if (metadata.name) {
+    callState.name = metadata.name;
+  }
+  if (metadata.extraContent !== undefined) {
+    callState.extraContent = metadata.extraContent;
+  }
+
+  context.functionCallByOutputIndex.set(callState.outputIndex, callState);
+  return callState;
+}
+
+function syncToolCallStateWithResponsesFunctionCall(
+  state: StreamState,
+  callState: ResponsesFunctionCallState
+): ToolCallState {
+  const toolCall = state.toolCalls[callState.outputIndex] ?? {};
+  if (callState.callId) {
+    toolCall.id = callState.callId;
+  } else if (callState.itemId) {
+    toolCall.id = callState.itemId;
+  } else if (!toolCall.id) {
+    toolCall.id = `tool_call_${callState.outputIndex}`;
+  }
+  if (callState.name) {
+    toolCall.name = callState.name;
+  }
+  if (callState.extraContent !== undefined) {
+    toolCall.extraContent = callState.extraContent;
+  }
+  state.toolCalls[callState.outputIndex] = toolCall;
+  if (toolCall.id && toolCall.extraContent !== undefined) {
+    cacheToolCallExtraContent(toolCall.id, toolCall.extraContent);
+  }
+  return toolCall;
+}
+
+function emitResponsesFunctionCallChunk(
+  res: http.ServerResponse,
+  state: StreamState,
+  callState: ResponsesFunctionCallState,
+  options: {
+    includeName: boolean;
+    argumentsText?: string;
+    responseId?: string;
+    model?: string;
+  }
+): void {
+  const toolCall = syncToolCallStateWithResponsesFunctionCall(state, callState);
+
+  const functionObj: Record<string, unknown> = {};
+  if (options.includeName && toolCall.name) {
+    functionObj.name = toolCall.name;
+  }
+
+  const argumentsText = options.argumentsText ?? '';
+  if (argumentsText) {
+    functionObj.arguments = argumentsText;
+  }
+
+  if (Object.keys(functionObj).length === 0) {
+    return;
+  }
+
+  processOpenAIChunk(res, state, {
+    id: options.responseId || undefined,
+    model: options.model || undefined,
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: callState.outputIndex,
+              id: toolCall.id,
+              type: 'function',
+              function: functionObj,
+            },
+          ],
+        },
+      },
+    ],
+  }, false);
+}
+
+function emitResponsesFunctionCallMetadataOnce(
+  res: http.ServerResponse,
+  state: StreamState,
+  context: ResponsesStreamContext,
+  callState: ResponsesFunctionCallState,
+  responseId?: string,
+  model?: string
+): void {
+  if (callState.metadataEmitted) {
+    return;
+  }
+  if (!callState.name) {
+    return;
+  }
+
+  emitResponsesFunctionCallChunk(res, state, callState, {
+    includeName: true,
+    responseId,
+    model,
+  });
+  callState.metadataEmitted = true;
+  context.hasAnyDelta = true;
+}
+
+function emitResponsesFunctionCallArgumentsOnce(
+  res: http.ServerResponse,
+  state: StreamState,
+  context: ResponsesStreamContext,
+  callState: ResponsesFunctionCallState,
+  argumentsText: string,
+  responseId?: string,
+  model?: string
+): void {
+  if (callState.emitted) {
+    return;
+  }
+
+  const resolvedArguments = argumentsText
+    || callState.finalArguments
+    || callState.argumentsBuffer
+    || '{}';
+  if (!resolvedArguments) {
+    return;
+  }
+
+  callState.finalArguments = resolvedArguments;
+  emitResponsesFunctionCallChunk(res, state, callState, {
+    includeName: true,
+    argumentsText: resolvedArguments,
+    responseId,
+    model,
+  });
+  callState.emitted = true;
+  callState.metadataEmitted = true;
+  context.hasAnyDelta = true;
+}
+
+function emitResponsesCompletedFunctionCalls(
+  res: http.ServerResponse,
+  state: StreamState,
+  context: ResponsesStreamContext,
+  responseObj: Record<string, unknown>
+): void {
+  const responseId = toString(responseObj.id);
+  const model = toString(responseObj.model);
+
+  for (const [index, item] of toArray(responseObj.output).entries()) {
+    const itemObj = toOptionalObject(item);
+    if (!itemObj || toString(itemObj.type) !== 'function_call') {
+      continue;
+    }
+
+    const payloadObj: Record<string, unknown> = {
+      response_id: responseId,
+      model,
+      call_id: toString(itemObj.call_id),
+      item_id: toString(itemObj.id),
+      name: toString(itemObj.name),
+    };
+    const itemOutputIndex = toNumber(itemObj.output_index);
+    if (itemOutputIndex !== null) {
+      payloadObj.output_index = itemOutputIndex;
+    } else {
+      payloadObj.output_index = index;
+    }
+
+    const callState = registerResponsesFunctionCallState(context, payloadObj, itemObj);
+    emitResponsesFunctionCallMetadataOnce(
+      res,
+      state,
+      context,
+      callState,
+      responseId,
+      model
+    );
+
+    const finalizedArguments = normalizeFunctionArguments(itemObj.arguments)
+      || callState.finalArguments
+      || callState.argumentsBuffer
+      || '{}';
+    emitResponsesFunctionCallArgumentsOnce(
+      res,
+      state,
+      context,
+      callState,
+      finalizedArguments,
+      responseId,
+      model
+    );
+  }
+}
+
+function emitResponsesFallbackContent(
+  res: http.ServerResponse,
+  state: StreamState,
+  responseObj: Record<string, unknown>,
+  context: ResponsesStreamContext
+): void {
+  const syntheticOpenAIResponse = convertResponsesToOpenAIResponse(responseObj);
+  const firstChoice = toOptionalObject(toArray(syntheticOpenAIResponse.choices)[0]);
+  const message = toOptionalObject(firstChoice?.message);
+  if (!message) {
+    return;
+  }
+
+  const reasoning = toString(message.reasoning_content) || toString(message.reasoning);
+  if (reasoning) {
+    processOpenAIChunk(res, state, {
+      id: toString(syntheticOpenAIResponse.id),
+      model: toString(syntheticOpenAIResponse.model),
+      choices: [{ delta: { reasoning } }],
+    }, false);
+  }
+
+  const messageContent = message.content;
+  if (typeof messageContent === 'string' && messageContent) {
+    processOpenAIChunk(res, state, {
+      id: toString(syntheticOpenAIResponse.id),
+      model: toString(syntheticOpenAIResponse.model),
+      choices: [{ delta: { content: messageContent } }],
+    }, false);
+  } else if (Array.isArray(messageContent)) {
+    for (const part of messageContent) {
+      const partObj = toOptionalObject(part);
+      const text = toString(partObj?.text);
+      if (text) {
+        processOpenAIChunk(res, state, {
+          id: toString(syntheticOpenAIResponse.id),
+          model: toString(syntheticOpenAIResponse.model),
+          choices: [{ delta: { content: text } }],
+        }, false);
+      }
+    }
+  }
+
+  for (const toolCall of toArray(message.tool_calls)) {
+    const toolCallObj = toOptionalObject(toolCall);
+    const functionObj = toOptionalObject(toolCallObj?.function);
+    if (!toolCallObj || !functionObj) {
+      continue;
+    }
+
+    const payloadObj: Record<string, unknown> = {
+      response_id: toString(syntheticOpenAIResponse.id),
+      model: toString(syntheticOpenAIResponse.model),
+      call_id: toString(toolCallObj.id),
+      name: toString(functionObj.name),
+    };
+    const callState = registerResponsesFunctionCallState(context, payloadObj, null);
+    emitResponsesFunctionCallMetadataOnce(
+      res,
+      state,
+      context,
+      callState,
+      toString(syntheticOpenAIResponse.id),
+      toString(syntheticOpenAIResponse.model)
+    );
+    emitResponsesFunctionCallArgumentsOnce(
+      res,
+      state,
+      context,
+      callState,
+      toString(functionObj.arguments) || '{}',
+      toString(syntheticOpenAIResponse.id),
+      toString(syntheticOpenAIResponse.model)
+    );
+  }
+}
+
+function processResponsesStreamEvent(
+  res: http.ServerResponse,
+  state: StreamState,
+  context: ResponsesStreamContext,
+  event: string,
+  payloadObj: Record<string, unknown>
+): void {
+  const eventType = event || toString(payloadObj.type);
+
+  const responseObjFromPayload = toOptionalObject(payloadObj.response);
+  if (responseObjFromPayload) {
+    processOpenAIChunk(res, state, {
+      id: toString(responseObjFromPayload.id),
+      model: toString(responseObjFromPayload.model),
+      choices: [],
+    }, false);
+  }
+
+  if (eventType === 'response.created') {
+    return;
+  }
+
+  if (eventType === 'response.output_text.delta' || eventType === 'response.output.delta') {
+    const textDelta = toString(payloadObj.delta);
+    if (textDelta) {
+      processOpenAIChunk(res, state, {
+        id: toString(payloadObj.response_id),
+        model: toString(payloadObj.model),
+        choices: [{ delta: { content: textDelta } }],
+      }, false);
+      context.hasAnyDelta = true;
+    }
+    return;
+  }
+
+  if (
+    eventType === 'response.reasoning_summary_text.delta'
+    || eventType === 'response.reasoning.delta'
+  ) {
+    const thinkingDelta = toString(payloadObj.delta);
+    if (thinkingDelta) {
+      processOpenAIChunk(res, state, {
+        id: toString(payloadObj.response_id),
+        model: toString(payloadObj.model),
+        choices: [{ delta: { reasoning: thinkingDelta } }],
+      }, false);
+      context.hasAnyDelta = true;
+    }
+    return;
+  }
+
+  if (eventType === 'response.output_item.added' || eventType === 'response.output_item.done') {
+    const itemObj = toOptionalObject(payloadObj.item);
+    if (!itemObj) {
+      return;
+    }
+
+    if (toString(itemObj.type) === 'function_call') {
+      const callState = registerResponsesFunctionCallState(context, payloadObj, itemObj);
+      const responseId = toString(payloadObj.response_id);
+      const model = toString(payloadObj.model);
+      emitResponsesFunctionCallMetadataOnce(
+        res,
+        state,
+        context,
+        callState,
+        responseId,
+        model
+      );
+
+      if (eventType === 'response.output_item.done' && !callState.emitted) {
+        const inlineArguments = normalizeFunctionArguments(itemObj.arguments);
+        if (inlineArguments) {
+          emitResponsesFunctionCallArgumentsOnce(
+            res,
+            state,
+            context,
+            callState,
+            inlineArguments,
+            responseId,
+            model
+          );
+        }
+      }
+    }
+    return;
+  }
+
+  if (eventType === 'response.function_call_arguments.delta') {
+    const callState = registerResponsesFunctionCallState(context, payloadObj, null);
+    const argumentsDelta = normalizeFunctionArguments(payloadObj.delta);
+    if (!argumentsDelta) {
+      return;
+    }
+    callState.argumentsBuffer += argumentsDelta;
+    return;
+  }
+
+  if (eventType === 'response.function_call_arguments.done') {
+    const callState = registerResponsesFunctionCallState(context, payloadObj, null);
+    const argumentsDone = normalizeFunctionArguments(payloadObj.arguments)
+      || callState.argumentsBuffer
+      || '{}';
+    callState.finalArguments = argumentsDone;
+    emitResponsesFunctionCallArgumentsOnce(
+      res,
+      state,
+      context,
+      callState,
+      argumentsDone,
+      toString(payloadObj.response_id),
+      toString(payloadObj.model)
+    );
+    return;
+  }
+
+  if (eventType === 'response.completed') {
+    const responseObj = resolveResponsesObject(payloadObj);
+    if (!context.hasAnyDelta) {
+      emitResponsesFallbackContent(res, state, responseObj, context);
+    }
+    emitResponsesCompletedFunctionCalls(res, state, context, responseObj);
+
+    const usage = toOptionalObject(responseObj.usage);
+    processOpenAIChunk(res, state, {
+      id: toString(responseObj.id),
+      model: toString(responseObj.model),
+      choices: [{ finish_reason: detectResponsesFinishReason(responseObj) }],
+      usage: {
+        prompt_tokens: toNumber(usage?.input_tokens) ?? toNumber(usage?.prompt_tokens) ?? 0,
+        completion_tokens: toNumber(usage?.output_tokens) ?? toNumber(usage?.completion_tokens) ?? 0,
+      },
+    }, false);
+  }
+}
+
+async function handleResponsesStreamResponse(
+  upstreamResponse: Response,
+  res: http.ServerResponse
+): Promise<void> {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  if (!upstreamResponse.body) {
+    emitSSE(res, 'error', createAnthropicErrorBody('Upstream returned empty stream', 'stream_error'));
+    res.end();
+    return;
+  }
+
+  const reader = upstreamResponse.body.getReader();
+  const decoder = new TextDecoder();
+  const state = createStreamState();
+  const context = createResponsesStreamContext();
+
+  let buffer = '';
+  let sawDoneMarker = false;
+
+  const flushDone = () => {
+    if (!state.hasMessageStart) {
+      return;
+    }
+    if (!state.hasMessageStop) {
+      closeCurrentBlockIfNeeded(res, state);
+      emitSSE(res, 'message_stop', {
+        type: 'message_stop',
+      });
+      state.hasMessageStop = true;
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = findSSEPacketBoundary(buffer);
+    while (boundary) {
+      const packet = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.index + boundary.separatorLength);
+
+      const parsedPacket = parseSSEPacket(packet);
+      const payload = parsedPacket.payload;
+      if (!payload) {
+        boundary = findSSEPacketBoundary(buffer);
+        continue;
+      }
+
+      if (payload === '[DONE]') {
+        flushDone();
+        sawDoneMarker = true;
+        break;
+      }
+
+      try {
+        const parsed = JSON.parse(payload) as Record<string, unknown>;
+        processResponsesStreamEvent(res, state, context, parsedPacket.event, parsed);
+      } catch {
+        // Ignore malformed stream chunks.
+      }
+
+      boundary = findSSEPacketBoundary(buffer);
+    }
+
+    if (sawDoneMarker) {
+      break;
+    }
+  }
+
+  if (sawDoneMarker) {
+    try {
+      await reader.cancel();
+    } catch {
+      // noop
+    }
+  }
+
+  closeCurrentBlockIfNeeded(res, state);
+  if (state.hasMessageStart && !state.hasMessageStop) {
+    emitSSE(res, 'message_stop', {
+      type: 'message_stop',
+    });
+    state.hasMessageStop = true;
+  }
+  res.end();
+}
+
+async function handleChatCompletionsStreamResponse(
+  upstreamResponse: Response,
+  res: http.ServerResponse,
+  parseThinkTags: boolean
+): Promise<void> {
+  await handleStreamResponse(upstreamResponse, res, parseThinkTags);
+}
+
 async function handleStreamResponse(
   upstreamResponse: Response,
   res: http.ServerResponse,
@@ -3398,6 +4578,227 @@ async function handleCreateScheduledTask(
   }
 }
 
+async function handleListScheduledTasks(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+  try {
+    const tasks = scheduledTaskDeps.getScheduledTaskStore().listTasks();
+    writeJSON(res, 200, { success: true, tasks } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to list scheduled tasks:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleGetScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+  try {
+    const task = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
+    if (!task) {
+      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+      return;
+    }
+    writeJSON(res, 200, { success: true, task } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to get scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleUpdateScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+
+  const existing = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
+  if (!existing) {
+    writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+    return;
+  }
+
+  let body: string;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid request body' } as any);
+    return;
+  }
+
+  let input: any;
+  try {
+    input = JSON.parse(body);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid JSON' } as any);
+    return;
+  }
+
+  if (input.schedule !== undefined) {
+    if (!input.schedule?.type) {
+      writeJSON(res, 400, { success: false, error: 'schedule.type is required when schedule is provided' } as any);
+      return;
+    }
+    if (!['at', 'interval', 'cron'].includes(input.schedule.type)) {
+      writeJSON(res, 400, { success: false, error: 'Invalid schedule type. Must be: at, interval, cron' } as any);
+      return;
+    }
+    if (input.schedule.type === 'cron' && !input.schedule.expression) {
+      writeJSON(res, 400, { success: false, error: 'Cron schedule requires expression field' } as any);
+      return;
+    }
+    if (input.schedule.type === 'at') {
+      if (!input.schedule.datetime) {
+        writeJSON(res, 400, { success: false, error: 'At schedule requires datetime field' } as any);
+        return;
+      }
+      if (new Date(input.schedule.datetime).getTime() <= Date.now()) {
+        writeJSON(res, 400, { success: false, error: 'Execution time must be in the future for one-time (at) tasks' } as any);
+        return;
+      }
+    }
+  }
+
+  if (input.expiresAt !== undefined && input.expiresAt !== null) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (input.expiresAt <= todayStr) {
+      writeJSON(res, 400, { success: false, error: 'Expiration date must be in the future' } as any);
+      return;
+    }
+  }
+
+  const updateInput: Partial<ScheduledTaskInput> = { ...input };
+  if (input.workingDirectory !== undefined) {
+    updateInput.workingDirectory = normalizeScheduledTaskWorkingDirectory(input.workingDirectory);
+  }
+
+  try {
+    const task = scheduledTaskDeps.getScheduledTaskStore().updateTask(id, updateInput);
+    if (!task) {
+      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+      return;
+    }
+    scheduledTaskDeps.getScheduler().reschedule();
+
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('scheduledTask:statusUpdate', {
+        taskId: task.id,
+        state: task.state,
+      });
+    }
+
+    console.log(`[CoworkProxy] Scheduled task updated via API: ${task.id} "${task.name}"`);
+    writeJSON(res, 200, { success: true, task } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to update scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleDeleteScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+
+  const existing = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
+  if (!existing) {
+    writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+    return;
+  }
+
+  try {
+    scheduledTaskDeps.getScheduledTaskStore().deleteTask(id);
+    scheduledTaskDeps.getScheduler().reschedule();
+
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('scheduledTask:statusUpdate', {
+        taskId: id,
+        state: null,
+      });
+    }
+
+    console.log(`[CoworkProxy] Scheduled task deleted via API: ${id} "${existing.name}"`);
+    writeJSON(res, 200, { success: true } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to delete scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleToggleScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+
+  let body: string;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid request body' } as any);
+    return;
+  }
+
+  let input: any;
+  try {
+    input = JSON.parse(body);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid JSON' } as any);
+    return;
+  }
+
+  if (typeof input.enabled !== 'boolean') {
+    writeJSON(res, 400, { success: false, error: 'Field "enabled" (boolean) is required' } as any);
+    return;
+  }
+
+  try {
+    const { task, warning } = scheduledTaskDeps.getScheduledTaskStore().toggleTask(id, input.enabled);
+    if (!task) {
+      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+      return;
+    }
+    scheduledTaskDeps.getScheduler().reschedule();
+
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('scheduledTask:statusUpdate', {
+        taskId: task.id,
+        state: task.state,
+      });
+    }
+
+    console.log(`[CoworkProxy] Scheduled task toggled via API: ${task.id} "${task.name}" enabled=${input.enabled}`);
+    writeJSON(res, 200, { success: true, task, warning } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to toggle scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
 async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -3405,10 +4806,39 @@ async function handleRequest(
   const method = (req.method || 'GET').toUpperCase();
   const url = new URL(req.url || '/', `http://${LOCAL_HOST}`);
 
-  // Scheduled task creation API
-  if (method === 'POST' && url.pathname === '/api/scheduled-tasks') {
+  if (method === 'GET' && url.pathname === '/healthz') {
+    writeJSON(res, 200, {
+      ok: true,
+      running: Boolean(proxyServer),
+      hasUpstream: Boolean(upstreamConfig),
+      lastError: lastProxyError,
+    });
+    return;
+  }
+
+  const TASK_LIST_PATH = '/api/scheduled-tasks';
+  const TASK_ITEM_RE = /^\/api\/scheduled-tasks\/([^/]+)$/;
+  const TASK_TOGGLE_RE = /^\/api\/scheduled-tasks\/([^/]+)\/toggle$/;
+
+  if (method === 'GET' && url.pathname === TASK_LIST_PATH) {
+    await handleListScheduledTasks(req, res);
+    return;
+  }
+  if (method === 'POST' && url.pathname === TASK_LIST_PATH) {
     await handleCreateScheduledTask(req, res);
     return;
+  }
+  const toggleMatch = TASK_TOGGLE_RE.exec(url.pathname);
+  if (method === 'POST' && toggleMatch) {
+    await handleToggleScheduledTask(req, res, decodeURIComponent(toggleMatch[1]));
+    return;
+  }
+  const itemMatch = TASK_ITEM_RE.exec(url.pathname);
+  if (itemMatch) {
+    const id = decodeURIComponent(itemMatch[1]);
+    if (method === 'GET') { await handleGetScheduledTask(req, res, id); return; }
+    if (method === 'PUT') { await handleUpdateScheduledTask(req, res, id); return; }
+    if (method === 'DELETE') { await handleDeleteScheduledTask(req, res, id); return; }
   }
 
   if (method === 'GET' && (url.pathname === '/v1/models' || url.pathname.startsWith('/v1/models/'))) {
@@ -3522,6 +4952,7 @@ async function handleRequest(
     openAIRequest.model = normalizeAntigravityModelId(requestedModel);
   }
 
+  filterOpenAIToolsForProvider(openAIRequest, upstreamConfig.provider);
   hydrateOpenAIRequestToolCalls(openAIRequest);
   const mergedSystemsBeforeSend = mergeSystemMessagesForProvider(openAIRequest, upstreamConfig.provider);
   if (mergedSystemsBeforeSend.changed) {
@@ -3533,11 +4964,11 @@ async function handleRequest(
     });
   }
 
-  const stream = Boolean(openAIRequest.stream);
+  const initialStream = Boolean(openAIRequest.stream);
 
   if (upstreamKind === 'antigravity' && endpointMode !== 'cloudcode-sse') {
     try {
-      await handleAntigravityRequestViaPiAi(openAIRequest, stream, res, upstreamConfig);
+      await handleAntigravityRequestViaPiAi(openAIRequest, initialStream, res, upstreamConfig);
       lastProxyError = null;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Antigravity request failed';
@@ -3596,7 +5027,7 @@ async function handleRequest(
     try {
       await handleCloudCodeAssistRequest(
         openAIRequest,
-        stream,
+        initialStream,
         res,
         upstreamConfig,
         authHeaders,
@@ -3620,7 +5051,12 @@ async function handleRequest(
     return;
   }
 
-  const targetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, endpointMode);
+  const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
+  const upstreamRequest = upstreamAPIType === 'responses'
+    ? convertChatCompletionsRequestToResponsesRequest(openAIRequest)
+    : openAIRequest;
+  const stream = Boolean(upstreamRequest.stream);
+  const targetURLs = buildUpstreamTargetUrlsByAPIType(upstreamConfig.baseURL, upstreamAPIType);
   let currentTargetURL = targetURLs[0];
 
   const sendUpstreamRequest = async (
@@ -3640,7 +5076,7 @@ async function handleRequest(
 
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await sendUpstreamRequest(openAIRequest, targetURLs[0]);
+    upstreamResponse = await sendUpstreamRequest(upstreamRequest, targetURLs[0]);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Network error';
     lastProxyError = message;
@@ -3655,7 +5091,7 @@ async function handleRequest(
   ) {
     try {
       await applyUpstreamAuthHeaders(true);
-      upstreamResponse = await sendUpstreamRequest(openAIRequest, currentTargetURL);
+      upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to refresh upstream auth';
       lastProxyError = message;
@@ -3669,7 +5105,7 @@ async function handleRequest(
       for (let i = 1; i < targetURLs.length; i += 1) {
         const retryURL = targetURLs[i];
         try {
-          upstreamResponse = await sendUpstreamRequest(openAIRequest, retryURL);
+          upstreamResponse = await sendUpstreamRequest(upstreamRequest, retryURL);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Network error';
           lastProxyError = message;
@@ -3691,7 +5127,7 @@ async function handleRequest(
 
       // Some OpenAI-compatible providers enforce strict chat settings / schema constraints.
       // Retry with compatible settings when we can derive safe adjustments.
-      if (upstreamResponse.status === 400) {
+      if (upstreamAPIType === 'chat_completions' && upstreamResponse.status === 400) {
         console.warn('[cowork-openai-compat-proxy] Upstream 400', {
           provider: upstreamConfig?.provider || 'unknown',
           upstreamBaseURL: upstreamConfig?.baseURL || '',
@@ -3703,7 +5139,7 @@ async function handleRequest(
         const clampResult = clampMaxTokensFromError(openAIRequest, firstErrorMessage);
         if (clampResult.changed) {
           try {
-            upstreamResponse = await sendUpstreamRequest(openAIRequest, currentTargetURL);
+            upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
             if (!upstreamResponse.ok) {
               const retryErrorText = await upstreamResponse.text();
               firstErrorMessage = extractErrorMessage(retryErrorText);
@@ -3724,7 +5160,7 @@ async function handleRequest(
           const retryChanges = applyStrictProviderRetryAdjustments(openAIRequest, upstreamConfig?.provider);
           if (retryChanges.length > 0) {
             try {
-              upstreamResponse = await sendUpstreamRequest(openAIRequest, currentTargetURL);
+              upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
               if (!upstreamResponse.ok) {
                 const retryErrorText = await upstreamResponse.text();
                 firstErrorMessage = extractErrorMessage(retryErrorText);
@@ -3758,7 +5194,11 @@ async function handleRequest(
 
   if (stream) {
     const parseThinkTags = shouldMergeSystemMessages(upstreamConfig?.provider);
-    await handleStreamResponse(upstreamResponse, res, parseThinkTags);
+    if (upstreamAPIType === 'responses') {
+      await handleResponsesStreamResponse(upstreamResponse, res);
+    } else {
+      await handleChatCompletionsStreamResponse(upstreamResponse, res, parseThinkTags);
+    }
     return;
   }
 
@@ -3771,11 +5211,28 @@ async function handleRequest(
     return;
   }
 
-  cacheToolCallExtraContentFromOpenAIResponse(upstreamJSON);
+  if (upstreamAPIType === 'responses') {
+    const syntheticOpenAIResponse = convertResponsesToOpenAIResponse(upstreamJSON);
+    cacheToolCallExtraContentFromOpenAIResponse(syntheticOpenAIResponse);
+    cacheToolCallExtraContentFromResponsesResponse(upstreamJSON);
+    const anthropicResponse = openAIToAnthropic(syntheticOpenAIResponse);
+    writeJSON(res, 200, anthropicResponse);
+    return;
+  }
 
+  cacheToolCallExtraContentFromOpenAIResponse(upstreamJSON);
   const anthropicResponse = openAIToAnthropic(upstreamJSON);
   writeJSON(res, 200, anthropicResponse);
 }
+
+export const __openAICompatProxyTestUtils = {
+  createStreamState,
+  createResponsesStreamContext,
+  findSSEPacketBoundary,
+  processResponsesStreamEvent,
+  convertChatCompletionsRequestToResponsesRequest,
+  filterOpenAIToolsForProvider,
+};
 
 export async function startCoworkOpenAICompatProxy(): Promise<void> {
   if (proxyServer) {
