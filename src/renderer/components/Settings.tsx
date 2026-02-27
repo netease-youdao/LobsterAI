@@ -184,6 +184,43 @@ const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
 );
+const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
+const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
+
+const copyTextFallback = (text: string): boolean => {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  return copied;
+};
+
+const copyTextToClipboard = async (text: string): Promise<boolean> => {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (clipboardError) {
+      console.warn('Navigator clipboard write failed, trying fallback:', clipboardError);
+    }
+  }
+
+  try {
+    return copyTextFallback(text);
+  } catch (fallbackError) {
+    console.error('Fallback clipboard copy failed:', fallbackError);
+    return false;
+  }
+};
+
 const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
   if (provider === 'openai' || provider === 'gemini') {
     return 'openai';
@@ -331,6 +368,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const emailCopiedTimerRef = useRef<number | null>(null);
   
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
@@ -350,9 +388,28 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
   // About tab
   const [appVersion, setAppVersion] = useState('');
+  const [emailCopied, setEmailCopied] = useState(false);
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
+  }, []);
+
+  const handleCopyContactEmail = useCallback(async () => {
+    const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
+    if (copied) {
+      setEmailCopied(true);
+      if (emailCopiedTimerRef.current != null) {
+        window.clearTimeout(emailCopiedTimerRef.current);
+      }
+      emailCopiedTimerRef.current = window.setTimeout(() => {
+        setEmailCopied(false);
+        emailCopiedTimerRef.current = null;
+      }, 1200);
+    }
+  }, []);
+
+  const handleOpenUserManual = useCallback(() => {
+    void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
   }, []);
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
@@ -382,6 +439,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
+
+  useEffect(() => () => {
+    if (emailCopiedTimerRef.current != null) {
+      window.clearTimeout(emailCopiedTimerRef.current);
+    }
+  }, []);
 
   const loadCoworkSandboxStatus = useCallback(async () => {
     setCoworkSandboxLoading(true);
@@ -2563,25 +2626,37 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               </div>
               <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutContactEmail')}</span>
-                <a
-                  href="mailto:lobsterai.project@rd.netease.com"
-                  className="text-sm text-claude-accent hover:underline"
-                >
-                  lobsterai.project@rd.netease.com
-                </a>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCopyContactEmail();
+                    }}
+                    title={i18nService.t('copyToClipboard')}
+                    className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary bg-transparent border-none appearance-none p-0 m-0 cursor-pointer focus:outline-none"
+                  >
+                    {ABOUT_CONTACT_EMAIL}
+                  </button>
+                  {emailCopied && (
+                    <span className="text-[11px] leading-4 text-emerald-600 dark:text-emerald-400">
+                      {language === 'zh' ? '已复制' : 'Copied'}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex items-center justify-between px-4 py-3">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutUserManual')}</span>
-                <a
-                  href="#"
+                <button
+                  type="button"
                   onClick={(e) => {
-                    e.preventDefault();
-                    window.electron.shell.openExternal('https://lobsterai.youdao.com/#/docs/lobsterai_user_manual');
+                    e.stopPropagation();
+                    handleOpenUserManual();
                   }}
-                  className="text-sm text-claude-accent hover:underline"
+                  className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
                 >
-                  https://lobsterai.youdao.com/#/docs/lobsterai_user_manual
-                </a>
+                  {ABOUT_USER_MANUAL_URL}
+                </button>
               </div>
             </div>
 
