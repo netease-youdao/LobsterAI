@@ -45,11 +45,21 @@ if [[ ! -x "node_modules/.bin/electron" ]]; then
   exit 1
 fi
 
+TESTCASE_DIR=''
+if [[ -d "tests/oauth_tests" ]]; then
+  TESTCASE_DIR="tests/oauth_tests"
+elif [[ -d "scripts/testcases" ]]; then
+  TESTCASE_DIR="scripts/testcases"
+else
+  echo "未找到 testcase 目录（tests/oauth_tests 或 scripts/testcases）"
+  exit 1
+fi
+
 TESTCASES=(
-  "scripts/testcases/testcase_01_oauth_profile.mjs"
-  "scripts/testcases/testcase_02_fetch_models.mjs"
-  "scripts/testcases/testcase_03_chat_gemini3.mjs"
-  "scripts/testcases/testcase_08_cloudcode_model_matrix.mjs"
+  "${TESTCASE_DIR}/testcase_01_oauth_profile.mjs"
+  "${TESTCASE_DIR}/testcase_02_fetch_models.mjs"
+  "${TESTCASE_DIR}/testcase_03_chat_gemini3.mjs"
+  "${TESTCASE_DIR}/testcase_08_cloudcode_model_matrix.mjs"
 )
 
 FAILED=0
@@ -68,10 +78,10 @@ if [[ "$FAILED" -ne 0 ]]; then
 fi
 
 ELECTRON_TESTCASES=(
-  "scripts/testcases/testcase_04_chat_cowork_flow.mjs"
-  "scripts/testcases/testcase_05_proxy_stream.mjs"
-  "scripts/testcases/testcase_06_proxy_models.mjs"
-  "scripts/testcases/testcase_07_proxy_cloudcode_think_fallback.mjs"
+  "${TESTCASE_DIR}/testcase_04_chat_cowork_flow.mjs"
+  "${TESTCASE_DIR}/testcase_05_proxy_stream.mjs"
+  "${TESTCASE_DIR}/testcase_06_proxy_models.mjs"
+  "${TESTCASE_DIR}/testcase_07_proxy_cloudcode_think_fallback.mjs"
 )
 
 for testcase in "${ELECTRON_TESTCASES[@]}"; do
