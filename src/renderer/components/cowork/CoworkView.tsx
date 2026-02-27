@@ -158,7 +158,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
             type: 'user',
             content: prompt,
             timestamp: now,
-            metadata: sessionSkillIds.length > 0 ? { skillIds: sessionSkillIds } : undefined,
+            metadata: (sessionSkillIds.length > 0 || (imageAttachments && imageAttachments.length > 0))
+              ? {
+                ...(sessionSkillIds.length > 0 ? { skillIds: sessionSkillIds } : {}),
+                ...(imageAttachments && imageAttachments.length > 0 ? { imageAttachments } : {}),
+              }
+              : undefined,
           },
         ],
       };

@@ -152,12 +152,29 @@ const sanitizeCoworkMessageForIpc = (message: any): any => {
   if (!message || typeof message !== 'object') {
     return message;
   }
+
+  // Preserve imageAttachments in metadata as-is (base64 data can be very large
+  // and must not be truncated by the generic sanitizer).
+  let sanitizedMetadata: unknown;
+  if (message.metadata && typeof message.metadata === 'object') {
+    const { imageAttachments, ...rest } = message.metadata as Record<string, unknown>;
+    const sanitizedRest = sanitizeIpcPayload(rest) as Record<string, unknown> | undefined;
+    sanitizedMetadata = {
+      ...(sanitizedRest && typeof sanitizedRest === 'object' ? sanitizedRest : {}),
+      ...(Array.isArray(imageAttachments) && imageAttachments.length > 0
+        ? { imageAttachments }
+        : {}),
+    };
+  } else {
+    sanitizedMetadata = undefined;
+  }
+
   return {
     ...message,
     content: typeof message.content === 'string'
       ? truncateIpcString(message.content, IPC_MESSAGE_CONTENT_MAX_CHARS)
       : '',
-    metadata: message.metadata ? sanitizeIpcPayload(message.metadata) : undefined,
+    metadata: sanitizedMetadata,
   };
 };
 
