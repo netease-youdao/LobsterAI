@@ -804,18 +804,22 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Send a notification message with media support to the last known sender
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    if (!this.lastSenderId || !this.messageService) {
+      throw new Error('No conversation available for notification');
+    }
+    await this.sendReplyWithMedia(this.lastSenderId, text);
+    this.status.lastOutboundAt = Date.now();
+  }
+
+  /**
    * Clean up downloaded media files (called periodically)
    */
   cleanupMediaFiles(): void {
     try {
-      let baseDir: string;
-      try {
-        baseDir = app.getPath('userData');
-      } catch {
-        baseDir = path.join(os.homedir(), '.lobsterai');
-      }
-      const mediaDir = path.join(baseDir, 'nim-media');
-      cleanupOldNimMediaFiles(mediaDir, this.log);
+      cleanupOldNimMediaFiles();
     } catch (error: any) {
       this.log('[NIM Gateway] Media cleanup error:', error.message);
     }
