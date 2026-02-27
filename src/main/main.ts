@@ -21,7 +21,6 @@ import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './au
 import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { initLogger, getLogFilePath } from './logger';
-import { cpRecursiveSync } from './fsCompat';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -33,7 +32,6 @@ import {
 app.name = APP_NAME;
 app.setName(APP_NAME);
 
-const LEGACY_APP_NAMES = ['OctoBot', 'octobot'];
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 const MIN_MEMORY_USER_MEMORIES_MAX_ITEMS = 1;
 const MAX_MEMORY_USER_MEMORIES_MAX_ITEMS = 60;
@@ -247,41 +245,6 @@ const configureUserDataPath = (): void => {
   if (currentUserDataPath !== preferredUserDataPath) {
     app.setPath('userData', preferredUserDataPath);
     console.log(`[Main] userData path updated: ${currentUserDataPath} -> ${preferredUserDataPath}`);
-  }
-};
-
-const migrateLegacyUserData = (): void => {
-  const appDataPath = app.getPath('appData');
-  const userDataPath = app.getPath('userData');
-  const legacyRoots = LEGACY_APP_NAMES
-    .map(name => path.join(appDataPath, name))
-    .filter(legacyPath => legacyPath !== userDataPath && fs.existsSync(legacyPath));
-
-  if (legacyRoots.length === 0) {
-    return;
-  }
-
-  if (!fs.existsSync(userDataPath)) {
-    fs.mkdirSync(userDataPath, { recursive: true });
-  }
-
-  for (const legacyRoot of legacyRoots) {
-    try {
-      const entries = fs.readdirSync(legacyRoot);
-      for (const entry of entries) {
-        const sourcePath = path.join(legacyRoot, entry);
-        const targetPath = path.join(userDataPath, entry);
-        if (fs.existsSync(targetPath)) {
-          continue;
-        }
-        cpRecursiveSync(sourcePath, targetPath, {
-          dereference: true,
-        });
-      }
-      console.log(`[Main] Migrated missing user data from legacy directory: ${legacyRoot}`);
-    } catch (error) {
-      console.warn(`[Main] Failed to migrate legacy user data from ${legacyRoot}:`, error);
-    }
   }
 };
 
@@ -2304,9 +2267,6 @@ if (!gotTheLock) {
     console.log('[Main] initApp: waiting for app.whenReady()');
     await app.whenReady();
     console.log('[Main] initApp: app is ready');
-
-    migrateLegacyUserData();
-    console.log('[Main] initApp: legacy data migration done');
 
     // Note: Calendar permission is checked on-demand when calendar operations are requested
     // We don't trigger permission dialogs at startup to avoid annoying users

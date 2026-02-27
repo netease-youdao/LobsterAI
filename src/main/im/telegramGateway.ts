@@ -842,11 +842,91 @@ export class TelegramGateway extends EventEmitter {
   /**
    * Send a notification message to the last known chat.
    */
+  /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): number | null {
+    return this.lastChatId;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(chatId: number): void {
+    this.lastChatId = chatId;
+  }
+
+  /**
+   * Send a notification message to the last known chat.
+   */
   async sendNotification(text: string): Promise<void> {
     if (!this.bot || !this.lastChatId) {
       throw new Error('No conversation available for notification');
     }
     await this.bot.api.sendMessage(this.lastChatId, text);
+    this.status.lastOutboundAt = Date.now();
+  }
+
+  /**
+   * Send a notification message with media support to the last known chat.
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    if (!this.bot || !this.lastChatId) {
+      throw new Error('No conversation available for notification');
+    }
+
+    const chatId = this.lastChatId;
+    const markers = parseMediaMarkers(text);
+    const validFiles: Array<{ path: string; name?: string; type: string }> = [];
+
+    for (const marker of markers) {
+      let filePath = marker.path;
+      if (filePath.startsWith('~/')) {
+        filePath = path.join(process.env.HOME || '', filePath.slice(2));
+      }
+      if (fs.existsSync(filePath)) {
+        validFiles.push({ path: filePath, name: marker.name, type: marker.type });
+      } else {
+        console.warn(`[Telegram Gateway] Notification media file not found: ${filePath}`);
+      }
+    }
+
+    // Send media files
+    for (const file of validFiles) {
+      try {
+        const fileBuffer = fs.readFileSync(file.path);
+        const fileName = path.basename(file.path);
+        const inputFile = new InputFile(fileBuffer, fileName);
+        const ext = path.extname(file.path).toLowerCase();
+
+        if (file.type === 'image' || ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext)) {
+          await this.bot.api.sendPhoto(chatId, inputFile, { caption: file.name });
+        } else if (file.type === 'video' || ['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
+          await this.bot.api.sendVideo(chatId, inputFile, { caption: file.name });
+        } else if (file.type === 'audio' || ['.mp3', '.ogg', '.wav', '.m4a', '.aac'].includes(ext)) {
+          await this.bot.api.sendAudio(chatId, inputFile, { caption: file.name, title: file.name });
+        } else {
+          await this.bot.api.sendDocument(chatId, inputFile, { caption: file.name });
+        }
+      } catch (mediaError: any) {
+        console.error(`[Telegram Gateway] Failed to send notification media: ${mediaError.message}`);
+      }
+    }
+
+    // Send text content with splitting
+    const textContent = text.trim();
+    if (textContent) {
+      const MAX_LENGTH = 4000;
+      const chunks = this.splitMessage(textContent, MAX_LENGTH);
+      for (const chunk of chunks) {
+        try {
+          await this.bot.api.sendMessage(chatId, chunk, { parse_mode: 'Markdown' });
+        } catch {
+          await this.bot.api.sendMessage(chatId, chunk);
+        }
+      }
+    }
+
     this.status.lastOutboundAt = Date.now();
   }
 }
