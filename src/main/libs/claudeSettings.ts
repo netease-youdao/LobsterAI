@@ -31,11 +31,25 @@ type ProviderConfig = {
   models?: ProviderModel[];
 };
 
+type CustomProviderConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  apiKey: string;
+  baseUrl: string;
+  apiFormat?: 'anthropic' | 'openai' | 'native';
+  models?: ProviderModel[];
+};
+
 type AppConfig = {
   model?: {
     defaultModel?: string;
+    defaultModelProviderKey?: string;
+    defaultModelCustomProviderId?: string;
   };
   providers?: Record<string, ProviderConfig>;
+  customProviders?: CustomProviderConfig[];
+  activeCustomProviderId?: string;
 };
 
 export type ApiConfigResolution = {
@@ -83,6 +97,7 @@ type MatchedProvider = {
   modelId: string;
   apiFormat: AnthropicApiFormat;
   baseURL: string;
+  customProviderId?: string;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
@@ -101,10 +116,18 @@ function providerRequiresApiKey(providerName: string): boolean {
 
 function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvider | null; error?: string } {
   const providers = appConfig.providers ?? {};
+  const customProviders = appConfig.customProviders ?? [];
+  const customGloballyEnabled = providers.custom?.enabled === true;
 
   const resolveFallbackModel = (): string | undefined => {
     for (const provider of Object.values(providers)) {
       if (!provider?.enabled || !provider.models || provider.models.length === 0) {
+        continue;
+      }
+      return provider.models[0].id;
+    }
+    for (const provider of customProviders) {
+      if (!customGloballyEnabled || !provider.models || provider.models.length === 0) {
         continue;
       }
       return provider.models[0].id;
@@ -117,18 +140,58 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: 'No available model configured in enabled providers.' };
   }
 
-  const providerEntry = Object.entries(providers).find(([, provider]) => {
-    if (!provider?.enabled || !provider.models) {
+  const candidates: Array<{ providerName: string; providerConfig: ProviderConfig; customProviderId?: string }> = [
+    ...Object.entries(providers)
+      .filter(([providerName]) => !(providerName === 'custom' && customProviders.length > 0))
+      .map(([providerName, providerConfig]) => ({
+        providerName,
+        providerConfig,
+      })),
+    ...customProviders.map((provider) => ({
+      providerName: 'custom',
+      providerConfig: {
+        enabled: customGloballyEnabled,
+        apiKey: provider.apiKey,
+        baseUrl: provider.baseUrl,
+        apiFormat: provider.apiFormat,
+        models: provider.models,
+      } as ProviderConfig,
+      customProviderId: provider.id,
+    })),
+  ];
+
+  const preferProviderKey = appConfig.model?.defaultModelProviderKey;
+  const preferCustomProviderId = appConfig.model?.defaultModelCustomProviderId ?? appConfig.activeCustomProviderId;
+  const findCandidate = (
+    predicate?: (candidate: { providerName: string; providerConfig: ProviderConfig; customProviderId?: string }) => boolean
+  ) => candidates.find((candidate) => {
+    if (!candidate.providerConfig?.enabled || !candidate.providerConfig.models) {
       return false;
     }
-    return provider.models.some((model) => model.id === modelId);
+    if (predicate && !predicate(candidate)) {
+      return false;
+    }
+    return candidate.providerConfig.models.some((model) => model.id === modelId);
   });
+
+  const providerEntry = (
+    (preferProviderKey === 'custom'
+      ? findCandidate((candidate) => (
+          candidate.providerName === 'custom'
+          && (!preferCustomProviderId || candidate.customProviderId === preferCustomProviderId)
+        ))
+      : undefined)
+    ?? (preferProviderKey
+      ? findCandidate((candidate) => candidate.providerName === preferProviderKey)
+      : undefined)
+    ?? findCandidate()
+  );
 
   if (!providerEntry) {
     return { matched: null, error: `No enabled provider found for model: ${modelId}` };
   }
 
-  const [providerName, providerConfig] = providerEntry;
+  const { providerName, providerConfig, customProviderId } = providerEntry;
   let apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
   let baseURL = providerConfig.baseUrl?.trim();
 
@@ -175,6 +238,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       modelId,
       apiFormat,
       baseURL,
+      customProviderId,
     },
   };
 }

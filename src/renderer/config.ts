@@ -1,4 +1,31 @@
 // 配置类型定义
+export type ProviderApiFormat = 'anthropic' | 'openai';
+
+export interface ProviderModelConfig {
+  id: string;
+  name: string;
+  supportsImage?: boolean;
+}
+
+export interface BaseProviderConfig {
+  enabled: boolean;
+  apiKey: string;
+  baseUrl: string;
+  apiFormat?: ProviderApiFormat;
+  codingPlanEnabled?: boolean;
+  models?: ProviderModelConfig[];
+}
+
+export interface CustomProviderConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  apiKey: string;
+  baseUrl: string;
+  apiFormat?: ProviderApiFormat;
+  models?: ProviderModelConfig[];
+}
+
 export interface AppConfig {
   // API 配置
   api: {
@@ -13,6 +40,8 @@ export interface AppConfig {
       supportsImage?: boolean;
     }>;
     defaultModel: string;
+    defaultModelProviderKey?: string;
+    defaultModelCustomProviderId?: string;
   };
   // 多模型提供商配置
   providers?: {
@@ -181,6 +210,10 @@ export interface AppConfig {
       }>;
     };
   };
+  // Custom 提供商配置（支持多个）
+  customProviders?: CustomProviderConfig[];
+  // 当前激活的 Custom 提供商 ID
+  activeCustomProviderId?: string;
   // 主题配置
   theme: 'light' | 'dark' | 'system';
   // 语言配置
@@ -215,6 +248,7 @@ export const defaultConfig: AppConfig = {
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
     ],
     defaultModel: 'deepseek-chat',
+    defaultModelProviderKey: 'deepseek',
   },
   providers: {
     openai: {
@@ -353,6 +387,18 @@ export const defaultConfig: AppConfig = {
       models: []
     }
   },
+  customProviders: [
+    {
+      id: 'custom-default',
+      name: 'Custom 1',
+      enabled: false,
+      apiKey: '',
+      baseUrl: '',
+      apiFormat: 'openai',
+      models: [],
+    },
+  ],
+  activeCustomProviderId: 'custom-default',
   theme: 'system',
   language: 'zh',
   useSystemProxy: false,

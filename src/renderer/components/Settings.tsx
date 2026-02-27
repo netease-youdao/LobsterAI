@@ -23,7 +23,7 @@ import type {
 } from '../types/cowork';
 import IMSettings from './im/IMSettings';
 import EmailSkillConfig from './skills/EmailSkillConfig';
-import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
+import { defaultConfig, type AppConfig, type CustomProviderConfig, getVisibleProviders } from '../config';
 import {
   OpenAIIcon,
   DeepSeekIcon,
@@ -71,10 +71,12 @@ type ProviderType = (typeof providerKeys)[number];
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
 type Model = NonNullable<ProviderConfig['models']>[number];
+type CustomProvider = CustomProviderConfig;
 type ProviderConnectionTestResult = {
   success: boolean;
   message: string;
   provider: ProviderType;
+  providerDisplayName?: string;
 };
 
 interface ProviderExportEntry {
@@ -88,7 +90,7 @@ interface ProviderExportEntry {
 
 interface ProvidersExportPayload {
   type: typeof EXPORT_FORMAT_TYPE;
-  version: 2;
+  version: 3;
   exportedAt: string;
   encryption: {
     algorithm: 'AES-GCM';
@@ -96,6 +98,16 @@ interface ProvidersExportPayload {
     keyDerivation: 'PBKDF2';
   };
   providers: Record<string, ProviderExportEntry>;
+  customProviders?: Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    apiKey: PasswordEncryptedPayload;
+    baseUrl: string;
+    apiFormat?: 'anthropic' | 'openai';
+    models?: Model[];
+  }>;
+  activeCustomProviderId?: string;
 }
 
 interface ProvidersImportEntry {
@@ -118,6 +130,18 @@ interface ProvidersImportPayload {
     keyDerivation?: string;
   };
   providers?: Record<string, ProvidersImportEntry>;
+  customProviders?: Array<{
+    id?: string;
+    name?: string;
+    enabled?: boolean;
+    apiKey?: EncryptedPayload | PasswordEncryptedPayload | string;
+    apiKeyEncrypted?: string;
+    apiKeyIv?: string;
+    baseUrl?: string;
+    apiFormat?: 'anthropic' | 'openai' | 'native';
+    models?: Model[];
+  }>;
+  activeCustomProviderId?: string;
 }
 
 const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode }> = {
@@ -181,6 +205,78 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
 
 const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
+const normalizeCustomProviderNameKey = (name: string): string => (
+  name.trim().replace(/\s+/g, ' ').toLowerCase()
+);
+const sanitizeCustomProviderName = (name: string): string => (
+  name.trim().replace(/\s+/g, ' ')
+);
+const getNextCustomProviderName = (customProviders: CustomProvider[]): string => {
+  let index = customProviders.length + 1;
+  while (true) {
+    const candidate = `Custom ${index}`;
+    const normalizedCandidate = normalizeCustomProviderNameKey(candidate);
+    if (!customProviders.some((provider) => normalizeCustomProviderNameKey(provider.name) === normalizedCandidate)) {
+      return candidate;
+    }
+    index += 1;
+  }
+};
+const createCustomProviderId = () => `custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const createDefaultCustomProvider = (index = 0): CustomProvider => {
+  const fallback = defaultConfig.customProviders?.[0];
+  return {
+    id: index === 0 ? (fallback?.id ?? 'custom-default') : createCustomProviderId(),
+    name: index === 0 ? (fallback?.name ?? 'Custom 1') : `Custom ${index + 1}`,
+    enabled: fallback?.enabled ?? false,
+    apiKey: fallback?.apiKey ?? '',
+    baseUrl: fallback?.baseUrl ?? '',
+    apiFormat: fallback?.apiFormat ?? 'openai',
+    models: fallback?.models?.map((model) => ({
+      ...model,
+      supportsImage: model.supportsImage ?? false,
+    })) ?? [],
+  };
+};
+const normalizeCustomProviders = (customProviders: AppConfig['customProviders']): CustomProvider[] => {
+  const source = customProviders && customProviders.length > 0
+    ? customProviders
+    : [createDefaultCustomProvider(0)];
+  return source.map((provider, index) => ({
+    id: provider.id?.trim() || createDefaultCustomProvider(index).id,
+    name: provider.name?.trim() || `Custom ${index + 1}`,
+    enabled: !!provider.enabled,
+    apiKey: provider.apiKey ?? '',
+    baseUrl: provider.baseUrl ?? '',
+    apiFormat: provider.apiFormat === 'openai' ? 'openai' : 'anthropic',
+    models: provider.models?.map((model) => ({
+      ...model,
+      supportsImage: model.supportsImage ?? false,
+    })) ?? [],
+  }));
+};
+const resolveActiveCustomProviderId = (
+  customProviders: CustomProvider[],
+  activeCustomProviderId?: string
+): string => {
+  if (activeCustomProviderId && customProviders.some((provider) => provider.id === activeCustomProviderId)) {
+    return activeCustomProviderId;
+  }
+  return customProviders[0]?.id ?? '';
+};
+const toLegacyCustomProviderConfig = (
+  customProvider: CustomProvider,
+  enabledOverride?: boolean
+): ProviderConfig => ({
+  enabled: enabledOverride ?? customProvider.enabled,
+  apiKey: customProvider.apiKey,
+  baseUrl: customProvider.baseUrl,
+  apiFormat: customProvider.apiFormat,
+  models: customProvider.models?.map((model) => ({
+    ...model,
+    supportsImage: model.supportsImage ?? false,
+  })),
+});
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
 );
@@ -295,6 +391,10 @@ const getDefaultProviders = (): ProvidersConfig => {
   ) as ProvidersConfig;
 };
 
+const getDefaultCustomProviders = (): CustomProvider[] => (
+  normalizeCustomProviders(defaultConfig.customProviders)
+);
+
 const getDefaultActiveProvider = (): ProviderType => {
   const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
   const firstEnabledProvider = providerKeys.find(providerKey => providers[providerKey]?.enabled);
@@ -327,6 +427,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const [customProviders, setCustomProviders] = useState<CustomProvider[]>(() => getDefaultCustomProviders());
+  const [activeCustomProviderId, setActiveCustomProviderId] = useState<string>(() => (
+    resolveActiveCustomProviderId(getDefaultCustomProviders(), defaultConfig.activeCustomProviderId)
+  ));
+  const [selectedCustomProviderId, setSelectedCustomProviderId] = useState<string>(() => (
+    resolveActiveCustomProviderId(getDefaultCustomProviders(), defaultConfig.activeCustomProviderId)
+  ));
   
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
@@ -350,6 +457,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
   const imConfig = useSelector((state: RootState) => state.im.config);
+  const selectedCustomProvider = useMemo(() => {
+    return customProviders.find((provider) => provider.id === selectedCustomProviderId)
+      ?? customProviders.find((provider) => provider.id === activeCustomProviderId)
+      ?? customProviders[0]
+      ?? createDefaultCustomProvider(0);
+  }, [customProviders, selectedCustomProviderId, activeCustomProviderId]);
+  const isCustomGloballyEnabled = !!providers.custom?.enabled;
+  const activeProviderConfig = activeProvider === 'custom'
+    ? selectedCustomProvider
+    : providers[activeProvider];
+  const activeProviderEnabled = activeProvider === 'custom'
+    ? isCustomGloballyEnabled
+    : activeProviderConfig.enabled;
+  const customProviderForSidebar = useMemo(() => {
+    const sidebarCustomProviderId = activeProvider === 'custom'
+      ? selectedCustomProviderId
+      : activeCustomProviderId;
+    return customProviders.find((provider) => provider.id === sidebarCustomProviderId)
+      ?? customProviders[0]
+      ?? createDefaultCustomProvider(0);
+  }, [customProviders, activeCustomProviderId, selectedCustomProviderId, activeProvider]);
 
   const [coworkExecutionMode, setCoworkExecutionMode] = useState<CoworkExecutionMode>(coworkConfig.executionMode || 'local');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
@@ -539,6 +667,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               baseUrl: config.api.baseUrl
             }
           }));
+        } else {
+          setActiveProvider('custom');
         }
       }
       
@@ -568,6 +698,43 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           ) as ProvidersConfig;
         });
       }
+
+      const nextCustomProvidersRaw = normalizeCustomProviders(
+        config.customProviders && config.customProviders.length > 0
+          ? config.customProviders
+          : config.providers?.custom
+            ? [{
+                id: 'custom-legacy',
+                name: 'Custom 1',
+                enabled: config.providers.custom.enabled,
+                apiKey: config.providers.custom.apiKey,
+                baseUrl: config.providers.custom.baseUrl,
+                apiFormat: getEffectiveApiFormat('custom', config.providers.custom.apiFormat),
+                models: config.providers.custom.models?.map((model) => ({
+                  ...model,
+                  supportsImage: model.supportsImage ?? false,
+                })) ?? [],
+              }]
+            : undefined
+      );
+      const { providers: nextCustomProviders } = dedupeCustomProviderNames(nextCustomProvidersRaw);
+      const nextActiveCustomProviderId = resolveActiveCustomProviderId(
+        nextCustomProviders,
+        config.activeCustomProviderId
+      );
+      const activeCustomProvider = nextCustomProviders.find(
+        (provider) => provider.id === nextActiveCustomProviderId
+      ) ?? nextCustomProviders[0];
+      setCustomProviders(nextCustomProviders);
+      setActiveCustomProviderId(nextActiveCustomProviderId);
+      setSelectedCustomProviderId(nextActiveCustomProviderId);
+      setProviders(prev => ({
+        ...prev,
+        custom: toLegacyCustomProviderConfig(
+          activeCustomProvider,
+          config.providers?.custom?.enabled ?? prev.custom?.enabled ?? false
+        ),
+      }));
       
       // 加载快捷键设置
       if (config.shortcuts) {
@@ -621,12 +788,37 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     const visibleKeys = getVisibleProviders(language);
     const filtered: Partial<ProvidersConfig> = {};
     for (const key of visibleKeys) {
-      if (providers[key as keyof ProvidersConfig]) {
+      if (key === 'custom') {
+        filtered.custom = toLegacyCustomProviderConfig(customProviderForSidebar, providers.custom?.enabled ?? false);
+      } else if (providers[key as keyof ProvidersConfig]) {
         filtered[key as keyof ProvidersConfig] = providers[key as keyof ProvidersConfig];
       }
     }
     return filtered as ProvidersConfig;
-  }, [language, providers]);
+  }, [language, providers, customProviderForSidebar]);
+
+  useEffect(() => {
+    setProviders((prev) => ({
+      ...prev,
+      custom: toLegacyCustomProviderConfig(customProviderForSidebar, prev.custom?.enabled ?? false),
+    }));
+  }, [customProviderForSidebar]);
+
+  useEffect(() => {
+    if (customProviders.length === 0) {
+      const fallback = createDefaultCustomProvider(0);
+      setCustomProviders([fallback]);
+      setActiveCustomProviderId(fallback.id);
+      setSelectedCustomProviderId(fallback.id);
+      return;
+    }
+    if (!customProviders.some((provider) => provider.id === activeCustomProviderId)) {
+      setActiveCustomProviderId(resolveActiveCustomProviderId(customProviders, undefined));
+    }
+    if (!customProviders.some((provider) => provider.id === selectedCustomProviderId)) {
+      setSelectedCustomProviderId(resolveActiveCustomProviderId(customProviders, activeCustomProviderId));
+    }
+  }, [customProviders, activeCustomProviderId, selectedCustomProviderId]);
 
   // Ensure activeProvider is always in visibleProviders when language changes
   useEffect(() => {
@@ -648,13 +840,109 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setNewModelSupportsImage(false);
     setModelFormError(null);
     setActiveProvider(provider);
+    if (provider === 'custom') {
+      setSelectedCustomProviderId(activeCustomProviderId);
+    }
     // 切换 provider 时清除测试结果
     setIsTestResultModalOpen(false);
     setTestResult(null);
   };
 
+  const handleAddCustomProvider = () => {
+    const nextIndex = customProviders.length;
+    const nextProvider: CustomProvider = {
+      ...createDefaultCustomProvider(nextIndex),
+      id: createCustomProviderId(),
+      name: getNextCustomProviderName(customProviders),
+      enabled: false,
+      apiKey: '',
+      baseUrl: '',
+      apiFormat: 'openai',
+      models: [],
+    };
+    setCustomProviders((prev) => [...prev, nextProvider]);
+    setSelectedCustomProviderId(nextProvider.id);
+    setActiveCustomProviderId(nextProvider.id);
+    setActiveProvider('custom');
+    setError(null);
+  };
+
+  const handleSelectCustomProvider = (providerId: string) => {
+    setSelectedCustomProviderId(providerId);
+    setActiveCustomProviderId(providerId);
+    setIsAddingModel(false);
+    setIsEditingModel(false);
+    setEditingModelId(null);
+    setNewModelName('');
+    setNewModelId('');
+    setNewModelSupportsImage(false);
+    setModelFormError(null);
+    setError(null);
+  };
+
+  const handleRenameCustomProvider = (providerId: string, name: string) => {
+    const sanitized = sanitizeCustomProviderName(name);
+    const normalized = normalizeCustomProviderNameKey(sanitized);
+    const duplicated = !!sanitized && customProviders.some((provider) => (
+      provider.id !== providerId
+      && normalizeCustomProviderNameKey(provider.name) === normalized
+    ));
+    if (duplicated) {
+      setError(i18nService.t('customProviderNameExists'));
+      return;
+    }
+    setCustomProviders((prev) => prev.map((provider) => (
+      provider.id === providerId
+        ? {
+            ...provider,
+            name: sanitized,
+          }
+        : provider
+    )));
+    setError(null);
+  };
+
+  const handleDeleteCustomProvider = (providerId: string) => {
+    if (customProviders.length <= 1) {
+      setError(i18nService.t('customProviderMinOne'));
+      return;
+    }
+    const nextProviders = customProviders.filter((provider) => provider.id !== providerId);
+    const nextActiveId = resolveActiveCustomProviderId(
+      nextProviders,
+      activeCustomProviderId === providerId ? undefined : activeCustomProviderId
+    );
+    setCustomProviders(nextProviders);
+    setActiveCustomProviderId(nextActiveId);
+    setSelectedCustomProviderId(nextActiveId);
+  };
+
   // Handle provider configuration change
   const handleProviderConfigChange = (provider: ProviderType, field: string, value: string) => {
+    if (provider === 'custom') {
+      setCustomProviders(prev => prev.map((customProvider) => {
+        if (customProvider.id !== selectedCustomProvider.id) {
+          return customProvider;
+        }
+        if (field === 'apiFormat') {
+          const nextApiFormat = getEffectiveApiFormat('custom', value);
+          const nextBaseUrl = shouldAutoSwitchProviderBaseUrl('custom', customProvider.baseUrl)
+            ? (getProviderDefaultBaseUrl('custom', nextApiFormat) ?? customProvider.baseUrl)
+            : customProvider.baseUrl;
+          return {
+            ...customProvider,
+            apiFormat: nextApiFormat,
+            baseUrl: nextBaseUrl,
+          };
+        }
+        return {
+          ...customProvider,
+          [field]: value,
+        };
+      }));
+      return;
+    }
+
     setProviders(prev => {
       if (field === 'apiFormat') {
         const nextApiFormat = getEffectiveApiFormat(provider, value);
@@ -886,12 +1174,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
   // Toggle provider enabled status
   const toggleProviderEnabled = (provider: ProviderType) => {
-    const providerConfig = providers[provider];
-    const isEnabling = !providerConfig.enabled;
-    const missingApiKey = providerRequiresApiKey(provider) && !providerConfig.apiKey.trim();
+    const providerConfig = provider === 'custom' ? customProviderForSidebar : providers[provider];
+    const isEnabling = provider === 'custom' ? !isCustomGloballyEnabled : !providerConfig.enabled;
+    const missingApiKey = provider === 'custom'
+      ? providerRequiresApiKey(provider) && customProviders.every((customProvider) => !customProvider.apiKey.trim())
+      : providerRequiresApiKey(provider) && !providerConfig.apiKey.trim();
 
     if (isEnabling && missingApiKey) {
       setError(i18nService.t('apiKeyRequired'));
+      return;
+    }
+
+    if (provider === 'custom') {
+      setProviders((prev) => ({
+        ...prev,
+        custom: {
+          ...prev.custom,
+          enabled: !prev.custom.enabled,
+        },
+      }));
+      setError(null);
       return;
     }
 
@@ -910,6 +1212,35 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setError(null);
 
     try {
+      const emptyNameProvider = customProviders.find((provider) => !sanitizeCustomProviderName(provider.name));
+      if (emptyNameProvider) {
+        throw new Error(i18nService.t('customProviderNameRequired'));
+      }
+      const customNameSet = new Set<string>();
+      for (const customProvider of customProviders) {
+        const normalizedName = normalizeCustomProviderNameKey(customProvider.name);
+        if (customNameSet.has(normalizedName)) {
+          throw new Error(i18nService.t('customProviderNameExists'));
+        }
+        customNameSet.add(normalizedName);
+      }
+
+      const normalizedCustomProviders = normalizeCustomProviders(
+        customProviders.map((provider) => ({
+          ...provider,
+          name: sanitizeCustomProviderName(provider.name),
+        }))
+      );
+      const normalizedActiveCustomProviderId = resolveActiveCustomProviderId(
+        normalizedCustomProviders,
+        activeCustomProviderId
+      );
+      const normalizedActiveCustomProvider = normalizedCustomProviders.find(
+        (provider) => provider.id === normalizedActiveCustomProviderId
+      ) ?? normalizedCustomProviders[0];
+      const normalizedSelectedCustomProvider = normalizedCustomProviders.find(
+        (provider) => provider.id === selectedCustomProvider.id
+      ) ?? normalizedActiveCustomProvider;
       const normalizedProviders = Object.fromEntries(
         Object.entries(providers).map(([providerKey, providerConfig]) => [
           providerKey,
@@ -919,15 +1250,35 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           },
         ])
       ) as ProvidersConfig;
-
-      // Find the first enabled provider to use as the primary API
-      const firstEnabledProvider = Object.entries(normalizedProviders).find(
-        ([_, config]) => config.enabled
+      const customGloballyEnabled = !!normalizedProviders.custom.enabled;
+      normalizedProviders.custom = toLegacyCustomProviderConfig(
+        normalizedActiveCustomProvider,
+        customGloballyEnabled
       );
 
-      const primaryProvider = firstEnabledProvider
-        ? firstEnabledProvider[1]
+      // Find the first enabled provider to use as the primary API
+      const providerCandidates: Array<{ providerName: string; config: ProviderConfig; customProviderId?: string }> = [
+        ...Object.entries(normalizedProviders)
+          .filter(([providerName]) => providerName !== 'custom')
+          .map(([providerName, config]) => ({ providerName, config })),
+        ...normalizedCustomProviders.map((provider) => ({
+          providerName: 'custom',
+          config: toLegacyCustomProviderConfig(
+            provider,
+            customGloballyEnabled && !!provider.apiKey.trim()
+          ),
+          customProviderId: provider.id,
+        })),
+      ];
+      const firstEnabledProvider = providerCandidates.find(
+        ({ config }) => config.enabled
+      );
+      const fallbackProvider = activeProvider === 'custom'
+        ? toLegacyCustomProviderConfig(normalizedSelectedCustomProvider)
         : normalizedProviders[activeProvider];
+      const primaryProvider = firstEnabledProvider?.config ?? fallbackProvider;
+      setActiveCustomProviderId(normalizedActiveCustomProviderId);
+      setSelectedCustomProviderId(normalizedSelectedCustomProvider.id);
 
       await configService.updateConfig({
         api: {
@@ -935,6 +1286,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           baseUrl: primaryProvider.baseUrl,
         },
         providers: normalizedProviders, // Save all providers configuration
+        customProviders: normalizedCustomProviders,
+        activeCustomProviderId: normalizedActiveCustomProviderId,
         theme,
         language,
         useSystemProxy,
@@ -954,18 +1307,44 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       });
 
       // 更新 Redux store 中的可用模型列表
-      const allModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
+      const allModels: Array<{
+        id: string;
+        name: string;
+        provider?: string;
+        providerKey?: string;
+        customProviderId?: string;
+        supportsImage?: boolean;
+      }> = [];
       Object.entries(normalizedProviders).forEach(([providerName, config]) => {
+        if (providerName === 'custom') {
+          return;
+        }
         if (config.enabled && config.models) {
           config.models.forEach(model => {
             allModels.push({
               id: model.id,
               name: model.name,
               provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
           });
         }
+      });
+      normalizedCustomProviders.forEach((provider) => {
+        if (!customGloballyEnabled || !provider.models) {
+          return;
+        }
+        provider.models.forEach((model) => {
+          allModels.push({
+            id: model.id,
+            name: model.name,
+            provider: `Custom (${provider.name})`,
+            providerKey: 'custom',
+            customProviderId: provider.id,
+            supportsImage: model.supportsImage ?? false,
+          });
+        });
       });
       dispatch(setAvailableModels(allModels));
 
@@ -1038,12 +1417,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   };
 
   const handleDeleteModel = (modelId: string) => {
-    if (!providers[activeProvider].models) return;
+    if (!activeProviderConfig.models) return;
     
-    const updatedModels = providers[activeProvider].models.filter(
+    const updatedModels = activeProviderConfig.models.filter(
       model => model.id !== modelId
     );
-    
+
+    if (activeProvider === 'custom') {
+      setCustomProviders((prev) => prev.map((provider) => (
+        provider.id === selectedCustomProvider.id
+          ? {
+              ...provider,
+              models: updatedModels,
+            }
+          : provider
+      )));
+      return;
+    }
+
     setProviders(prev => ({
       ...prev,
       [activeProvider]: {
@@ -1061,7 +1452,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       return;
     }
 
-    const currentModels = providers[activeProvider].models ?? [];
+    const currentModels = activeProviderConfig.models ?? [];
     const duplicateModel = currentModels.find(
       model => model.id === modelId && (!isEditingModel || model.id !== editingModelId)
     );
@@ -1079,13 +1470,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       ? currentModels.map(model => (model.id === editingModelId ? nextModel : model))
       : [...currentModels, nextModel];
 
-    setProviders(prev => ({
-      ...prev,
-      [activeProvider]: {
-        ...prev[activeProvider],
-        models: updatedModels
-      }
-    }));
+    if (activeProvider === 'custom') {
+      setCustomProviders((prev) => prev.map((provider) => (
+        provider.id === selectedCustomProvider.id
+          ? {
+              ...provider,
+              models: updatedModels,
+            }
+          : provider
+      )));
+    } else {
+      setProviders(prev => ({
+        ...prev,
+        [activeProvider]: {
+          ...prev[activeProvider],
+          models: updatedModels
+        }
+      }));
+    }
 
     setIsAddingModel(false);
     setIsEditingModel(false);
@@ -1120,11 +1522,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
   const showTestResultModal = (
     result: Omit<ProviderConnectionTestResult, 'provider'>,
-    provider: ProviderType
+    provider: ProviderType,
+    providerDisplayName?: string
   ) => {
     setTestResult({
       ...result,
       provider,
+      providerDisplayName,
     });
     setIsTestResultModalOpen(true);
   };
@@ -1132,13 +1536,25 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   // 测试 API 连接
   const handleTestConnection = async () => {
     const testingProvider = activeProvider;
-    const providerConfig = providers[testingProvider];
+    const providerConfig = testingProvider === 'custom' ? selectedCustomProvider : providers[testingProvider];
+    const providerDisplayName = testingProvider === 'custom'
+      ? `Custom (${selectedCustomProvider.name})`
+      : (providerMeta[testingProvider]?.label ?? testingProvider);
     setIsTesting(true);
     setIsTestResultModalOpen(false);
     setTestResult(null);
 
+    if (testingProvider === 'custom' && !isCustomGloballyEnabled) {
+      showTestResultModal({
+        success: false,
+        message: i18nService.t('providerStatusOff'),
+      }, testingProvider, providerDisplayName);
+      setIsTesting(false);
+      return;
+    }
+
     if (providerRequiresApiKey(testingProvider) && !providerConfig.apiKey) {
-      showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
+      showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider, providerDisplayName);
       setIsTesting(false);
       return;
     }
@@ -1146,7 +1562,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     // 获取第一个可用模型
     const firstModel = providerConfig.models?.[0];
     if (!firstModel) {
-      showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider);
+      showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider, providerDisplayName);
       setIsTesting(false);
       return;
     }
@@ -1256,30 +1672,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       }
 
       if (response.ok) {
-        showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
+        showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider, providerDisplayName);
       } else {
         const data = response.data || {};
         // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
         if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
-          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
+          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider, providerDisplayName);
           return;
         }
-        showTestResultModal({ success: false, message: errorMessage }, testingProvider);
+        showTestResultModal({ success: false, message: errorMessage }, testingProvider, providerDisplayName);
       }
     } catch (err) {
       showTestResultModal({
         success: false,
         message: err instanceof Error ? err.message : i18nService.t('connectionFailed'),
-      }, testingProvider);
+      }, testingProvider, providerDisplayName);
     } finally {
       setIsTesting(false);
     }
   };
 
   const buildProvidersExport = async (password: string): Promise<ProvidersExportPayload> => {
+    const exportActiveCustomProvider = customProviders.find(
+      (provider) => provider.id === activeCustomProviderId
+    ) ?? customProviders[0] ?? createDefaultCustomProvider(0);
     const entries = await Promise.all(
-      Object.entries(providers).map(async ([providerKey, providerConfig]) => {
+      Object.entries(providers).map(async ([providerKey, rawProviderConfig]) => {
+        const providerConfig = providerKey === 'custom'
+          ? toLegacyCustomProviderConfig(exportActiveCustomProvider, providers.custom?.enabled ?? false)
+          : rawProviderConfig;
         const apiKey = await encryptWithPassword(providerConfig.apiKey, password);
         return [
           providerKey,
@@ -1294,10 +1716,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         ] as const;
       })
     );
+    const customEntries = await Promise.all(
+      customProviders.map(async (provider) => ({
+        id: provider.id,
+        name: provider.name,
+        enabled: provider.enabled,
+        apiKey: await encryptWithPassword(provider.apiKey, password),
+        baseUrl: provider.baseUrl,
+        apiFormat: getEffectiveApiFormat('custom', provider.apiFormat),
+        models: provider.models,
+      }))
+    );
 
     return {
       type: EXPORT_FORMAT_TYPE,
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
       encryption: {
         algorithm: 'AES-GCM',
@@ -1305,6 +1738,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         keyDerivation: 'PBKDF2',
       },
       providers: Object.fromEntries(entries),
+      customProviders: customEntries,
+      activeCustomProviderId,
     };
   };
 
@@ -1313,6 +1748,51 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       ...model,
       supportsImage: model.supportsImage ?? false,
     }));
+
+  const dedupeCustomProviderNames = (providersToDedupe: CustomProvider[]): {
+    providers: CustomProvider[];
+    renamed: boolean;
+  } => {
+    const usedNames = new Set<string>();
+    let renamed = false;
+    const providers = providersToDedupe.map((provider, index) => {
+      const baseName = sanitizeCustomProviderName(provider.name) || `Custom ${index + 1}`;
+      let candidate = baseName;
+      let suffix = 2;
+      while (usedNames.has(normalizeCustomProviderNameKey(candidate))) {
+        candidate = `${baseName} (${suffix})`;
+        suffix += 1;
+        renamed = true;
+      }
+      usedNames.add(normalizeCustomProviderNameKey(candidate));
+      return {
+        ...provider,
+        name: candidate,
+      };
+    });
+    return { providers, renamed };
+  };
+
+  const applyImportedCustomProviders = (
+    importedCustomProviders: CustomProvider[] | undefined,
+    importedActiveCustomProviderId?: string
+  ) => {
+    if (!importedCustomProviders || importedCustomProviders.length === 0) {
+      return;
+    }
+    const normalizedProfiles = normalizeCustomProviders(importedCustomProviders);
+    const { providers: dedupedProfiles, renamed } = dedupeCustomProviderNames(normalizedProfiles);
+    const resolvedActiveId = resolveActiveCustomProviderId(
+      dedupedProfiles,
+      importedActiveCustomProviderId
+    );
+    setCustomProviders(dedupedProfiles);
+    setActiveCustomProviderId(resolvedActiveId);
+    setSelectedCustomProviderId(resolvedActiveId);
+    if (renamed) {
+      setNoticeMessage(i18nService.t('customProviderNamesAdjustedImport'));
+    }
+  };
 
   const DEFAULT_EXPORT_PASSWORD = EXPORT_PASSWORD;
 
@@ -1364,13 +1844,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         return;
       }
 
-      if (!payload || payload.type !== EXPORT_FORMAT_TYPE || !payload.providers) {
+      if (!payload || payload.type !== EXPORT_FORMAT_TYPE || (!payload.providers && !payload.customProviders)) {
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
 
-      // Check if it's version 2 (password-based encryption)
-      if (payload.version === 2 && payload.encryption?.keySource === 'password') {
+      // Check if it's version 2+/3 (password-based encryption)
+      if ((payload.version === 2 || payload.version === 3) && payload.encryption?.keySource === 'password') {
         await processImportPayloadWithPassword(payload);
         return;
       }
@@ -1392,6 +1872,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setIsImportingProviders(true);
     try {
       const providerUpdates: Partial<ProvidersConfig> = {};
+      const importedCustomProviders: CustomProvider[] = [];
       let hadDecryptFailure = false;
       for (const providerKey of providerKeys) {
         const providerData = payload.providers?.[providerKey];
@@ -1430,21 +1911,71 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         };
       }
 
-      if (Object.keys(providerUpdates).length === 0) {
+      if (payload.customProviders) {
+        for (let index = 0; index < payload.customProviders.length; index += 1) {
+          const customData = payload.customProviders[index];
+          let apiKey: string | undefined;
+          if (typeof customData.apiKey === 'string') {
+            apiKey = customData.apiKey;
+          } else if (customData.apiKey && typeof customData.apiKey === 'object') {
+            try {
+              apiKey = await decryptSecret(customData.apiKey as EncryptedPayload);
+            } catch (error) {
+              hadDecryptFailure = true;
+              console.warn(`Failed to decrypt custom provider key for index ${index}`, error);
+            }
+          } else if (typeof customData.apiKeyEncrypted === 'string' && typeof customData.apiKeyIv === 'string') {
+            try {
+              apiKey = await decryptSecret({ encrypted: customData.apiKeyEncrypted, iv: customData.apiKeyIv });
+            } catch (error) {
+              hadDecryptFailure = true;
+              console.warn(`Failed to decrypt custom provider key for index ${index}`, error);
+            }
+          }
+          importedCustomProviders.push({
+            id: customData.id?.trim() || createCustomProviderId(),
+            name: customData.name?.trim() || `Custom ${index + 1}`,
+            enabled: !!customData.enabled,
+            apiKey: apiKey ?? '',
+            baseUrl: typeof customData.baseUrl === 'string' ? customData.baseUrl : '',
+            apiFormat: getEffectiveApiFormat('custom', customData.apiFormat),
+            models: normalizeModels(customData.models) ?? [],
+          });
+        }
+      }
+
+      if (Object.keys(providerUpdates).length === 0 && importedCustomProviders.length === 0) {
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
 
-      setProviders(prev => {
-        const next = { ...prev };
-        Object.entries(providerUpdates).forEach(([providerKey, update]) => {
-          next[providerKey] = {
-            ...prev[providerKey],
-            ...update,
-          };
+      if (Object.keys(providerUpdates).length > 0) {
+        setProviders(prev => {
+          const next = { ...prev };
+          Object.entries(providerUpdates).forEach(([providerKey, update]) => {
+            next[providerKey] = {
+              ...prev[providerKey],
+              ...update,
+            };
+          });
+          return next;
         });
-        return next;
-      });
+      }
+      if (importedCustomProviders.length > 0) {
+        applyImportedCustomProviders(importedCustomProviders, payload.activeCustomProviderId);
+      } else if (providerUpdates.custom) {
+        applyImportedCustomProviders([
+          {
+            id: createCustomProviderId(),
+            name: 'Custom 1',
+            enabled: providerUpdates.custom.enabled,
+            apiKey: providerUpdates.custom.apiKey,
+            baseUrl: providerUpdates.custom.baseUrl,
+            apiFormat: getEffectiveApiFormat('custom', providerUpdates.custom.apiFormat),
+            models: normalizeModels(providerUpdates.custom.models) ?? [],
+          }
+        ]);
+      }
       setIsTestResultModalOpen(false);
       setTestResult(null);
       if (hadDecryptFailure) {
@@ -1464,7 +1995,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   };
 
   const processImportPayloadWithPassword = async (payload: ProvidersImportPayload) => {
-    if (!payload.providers) {
+    if (!payload.providers && !payload.customProviders) {
       return;
     }
 
@@ -1472,10 +2003,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
     try {
       const providerUpdates: Partial<ProvidersConfig> = {};
+      const importedCustomProviders: CustomProvider[] = [];
       let hadDecryptFailure = false;
 
       for (const providerKey of providerKeys) {
-        const providerData = payload.providers[providerKey];
+        const providerData = payload.providers?.[providerKey];
         if (!providerData) {
           continue;
         }
@@ -1508,7 +2040,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         };
       }
 
-      if (Object.keys(providerUpdates).length === 0) {
+      if (payload.customProviders) {
+        for (let index = 0; index < payload.customProviders.length; index += 1) {
+          const customData = payload.customProviders[index];
+          let apiKey: string | undefined;
+          if (typeof customData.apiKey === 'string') {
+            apiKey = customData.apiKey;
+          } else if (customData.apiKey && typeof customData.apiKey === 'object') {
+            const apiKeyObj = customData.apiKey as PasswordEncryptedPayload;
+            if (apiKeyObj.salt) {
+              try {
+                apiKey = await decryptWithPassword(apiKeyObj, DEFAULT_EXPORT_PASSWORD);
+              } catch (error) {
+                hadDecryptFailure = true;
+                console.warn(`Failed to decrypt custom provider key for index ${index}`, error);
+              }
+            }
+          }
+          importedCustomProviders.push({
+            id: customData.id?.trim() || createCustomProviderId(),
+            name: customData.name?.trim() || `Custom ${index + 1}`,
+            enabled: !!customData.enabled,
+            apiKey: apiKey ?? '',
+            baseUrl: typeof customData.baseUrl === 'string' ? customData.baseUrl : '',
+            apiFormat: getEffectiveApiFormat('custom', customData.apiFormat),
+            models: normalizeModels(customData.models) ?? [],
+          });
+        }
+      }
+
+      if (Object.keys(providerUpdates).length === 0 && importedCustomProviders.length === 0) {
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
@@ -1516,7 +2077,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       // Check if any key was successfully decrypted
       const anyKeyDecrypted = Object.entries(providerUpdates).some(
         ([key, update]) => update?.apiKey && update.apiKey !== providers[key]?.apiKey
-      );
+      ) || importedCustomProviders.some((provider) => !!provider.apiKey);
 
       if (!anyKeyDecrypted && hadDecryptFailure) {
         // All decryptions failed - likely wrong password
@@ -1524,16 +2085,33 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         return;
       }
 
-      setProviders(prev => {
-        const next = { ...prev };
-        Object.entries(providerUpdates).forEach(([providerKey, update]) => {
-          next[providerKey] = {
-            ...prev[providerKey],
-            ...update,
-          };
+      if (Object.keys(providerUpdates).length > 0) {
+        setProviders(prev => {
+          const next = { ...prev };
+          Object.entries(providerUpdates).forEach(([providerKey, update]) => {
+            next[providerKey] = {
+              ...prev[providerKey],
+              ...update,
+            };
+          });
+          return next;
         });
-        return next;
-      });
+      }
+      if (importedCustomProviders.length > 0) {
+        applyImportedCustomProviders(importedCustomProviders, payload.activeCustomProviderId);
+      } else if (providerUpdates.custom) {
+        applyImportedCustomProviders([
+          {
+            id: createCustomProviderId(),
+            name: 'Custom 1',
+            enabled: providerUpdates.custom.enabled,
+            apiKey: providerUpdates.custom.apiKey,
+            baseUrl: providerUpdates.custom.baseUrl,
+            apiFormat: getEffectiveApiFormat('custom', providerUpdates.custom.apiFormat),
+            models: normalizeModels(providerUpdates.custom.models) ?? [],
+          }
+        ]);
+      }
       setIsTestResultModalOpen(false);
       setTestResult(null);
       if (hadDecryptFailure) {
@@ -2076,7 +2654,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               {Object.entries(visibleProviders).map(([provider, config]) => {
                 const providerKey = provider as ProviderType;
                 const providerInfo = providerMeta[providerKey];
-                const missingApiKey = providerRequiresApiKey(providerKey) && !config.apiKey.trim();
+                const missingApiKey = providerKey === 'custom'
+                  ? providerRequiresApiKey(providerKey) && customProviders.every((customProvider) => !customProvider.apiKey.trim())
+                  : providerRequiresApiKey(providerKey) && !config.apiKey.trim();
                 const canToggleProvider = config.enabled || !missingApiKey;
                 return (
                   <div
@@ -2138,14 +2718,78 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 </h3>
                 <div
                   className={`px-2 py-0.5 rounded-lg text-xs font-medium ${
-                    providers[activeProvider].enabled
+                    activeProviderEnabled
                       ? 'bg-green-500/20 text-green-600 dark:text-green-400'
                       : 'bg-red-500/20 text-red-600 dark:text-red-400'
                   }`}
                 >
-                  {providers[activeProvider].enabled ? i18nService.t('providerStatusOn') : i18nService.t('providerStatusOff')}
+                  {activeProviderEnabled ? i18nService.t('providerStatusOn') : i18nService.t('providerStatusOff')}
                 </div>
               </div>
+
+              {activeProvider === 'custom' && (
+                <div className="space-y-2 rounded-xl border dark:border-claude-darkBorder border-claude-border p-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('customProviderProfiles')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleAddCustomProvider}
+                      className="inline-flex items-center text-xs text-claude-accent hover:text-claude-accentHover"
+                    >
+                      <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
+                      {i18nService.t('add')}
+                    </button>
+                  </div>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {customProviders.map((provider) => (
+                      <div
+                        key={provider.id}
+                        className={`rounded-lg border p-2 transition-colors ${
+                          provider.id === selectedCustomProvider.id
+                            ? 'border-claude-accent/40 bg-claude-accent/10 dark:bg-claude-accent/20'
+                            : 'dark:border-claude-darkBorder border-claude-border'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleSelectCustomProvider(provider.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleSelectCustomProvider(provider.id);
+                              }
+                            }}
+                            className="flex-1"
+                          >
+                            <input
+                              type="text"
+                              value={provider.name}
+                              onChange={(e) => handleRenameCustomProvider(provider.id, e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full rounded-md bg-transparent px-1 py-0.5 text-xs dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-1 focus:ring-claude-accent/40"
+                              placeholder={i18nService.t('customProviderName')}
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCustomProvider(provider.id)}
+                            className="p-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-red-500"
+                            title={i18nService.t('delete')}
+                          >
+                            <TrashIcon className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {providerRequiresApiKey(activeProvider) && (
                 <div>
@@ -2155,7 +2799,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <input
                     type="password"
                     id={`${activeProvider}-apiKey`}
-                    value={providers[activeProvider].apiKey}
+                    value={activeProviderConfig.apiKey}
                     onChange={(e) => handleProviderConfigChange(activeProvider, 'apiKey', e.target.value)}
                     className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
                     placeholder={i18nService.t('apiKeyPlaceholder')}
@@ -2187,7 +2831,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                             ? (getEffectiveApiFormat('moonshot', providers.moonshot.apiFormat) === 'anthropic'
                                 ? 'https://api.kimi.com/coding'
                                 : 'https://api.kimi.com/coding/v1')
-                            : providers[activeProvider].baseUrl
+                            : activeProviderConfig.baseUrl
                   }
                   onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
                   disabled={(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled)}
@@ -2254,7 +2898,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                         type="radio"
                         name={`${activeProvider}-apiFormat`}
                         value="anthropic"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) !== 'openai'}
+                        checked={getEffectiveApiFormat(activeProvider, activeProviderConfig.apiFormat) !== 'openai'}
                         onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'anthropic')}
                         className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface"
                       />
@@ -2267,7 +2911,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                         type="radio"
                         name={`${activeProvider}-apiFormat`}
                         value="openai"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) === 'openai'}
+                        checked={getEffectiveApiFormat(activeProvider, activeProviderConfig.apiFormat) === 'openai'}
                         onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'openai')}
                         className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface"
                       />
@@ -2399,7 +3043,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey)}
+                  disabled={
+                    isTesting
+                    || (activeProvider === 'custom' && !isCustomGloballyEnabled)
+                    || (providerRequiresApiKey(activeProvider) && !activeProviderConfig.apiKey)
+                  }
                   className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                 >
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
@@ -2424,7 +3072,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
                 {/* Models List */}
                 <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                  {providers[activeProvider].models?.map(model => (
+                  {activeProviderConfig.models?.map(model => (
                     <div
                       key={model.id}
                       className="dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-2 rounded-xl dark:border-claude-darkBorder border-claude-border border transition-colors hover:border-claude-accent group"
@@ -2460,7 +3108,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                     </div>
                   ))}
 
-                  {(!providers[activeProvider].models || providers[activeProvider].models.length === 0) && (
+                  {(!activeProviderConfig.models || activeProviderConfig.models.length === 0) && (
                     <div className="dark:bg-claude-darkSurface/20 bg-claude-surface/20 p-2.5 rounded-xl border dark:border-claude-darkBorder/50 border-claude-border/50 text-center">
                       <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('noModelsAvailable')}</p>
                       <button
@@ -2647,7 +3295,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 </div>
 
                 <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
+                  <span>{testResult.providerDisplayName ?? providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
                   <span className="text-[11px]">•</span>
                   <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                     {testResult.success ? (

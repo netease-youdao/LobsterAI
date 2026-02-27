@@ -5,8 +5,16 @@ export interface Model {
   id: string;
   name: string;
   provider?: string; // 模型所属的提供商
+  providerKey?: string;
+  customProviderId?: string;
   supportsImage?: boolean;
 }
+
+const isSameModel = (left: Model, right: Model): boolean => {
+  return left.id === right.id
+    && (left.providerKey ?? '') === (right.providerKey ?? '')
+    && (left.customProviderId ?? '') === (right.customProviderId ?? '');
+};
 
 // 从 providers 配置中构建初始可用模型列表
 function buildInitialModels(): Model[] {
@@ -15,13 +23,14 @@ function buildInitialModels(): Model[] {
     Object.entries(defaultConfig.providers).forEach(([providerName, config]) => {
       if (config.enabled && config.models) {
         config.models.forEach(model => {
-          models.push({
-            id: model.id,
-            name: model.name,
-            provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
-            supportsImage: model.supportsImage ?? false,
+            models.push({
+              id: model.id,
+              name: model.name,
+              provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              providerKey: providerName,
+              supportsImage: model.supportsImage ?? false,
+            });
           });
-        });
       }
     });
   }
@@ -55,7 +64,7 @@ const modelSlice = createSlice({
       availableModels = action.payload;
       // 同步选中模型信息，确保名称与最新配置一致
       if (action.payload.length > 0) {
-        const matchedModel = action.payload.find(m => m.id === state.selectedModel.id);
+        const matchedModel = action.payload.find(m => isSameModel(m, state.selectedModel));
         if (matchedModel) {
           state.selectedModel = matchedModel;
         } else {
