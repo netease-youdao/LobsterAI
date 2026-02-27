@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
-import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import CoworkPromptInput from './CoworkPromptInput';
 import MarkdownContent from '../MarkdownContent';
@@ -26,7 +26,7 @@ import { getCompactFolderName } from '../../utils/path';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
-  onContinue: (prompt: string, skillPrompt?: string) => void;
+  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => void;
   onStop: () => void;
   onNavigateHome?: () => void;
   isSidebarCollapsed?: boolean;

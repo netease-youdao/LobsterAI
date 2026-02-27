@@ -2007,6 +2007,7 @@ export class CoworkRunner extends EventEmitter {
       autoApprove?: boolean;
       workspaceRoot?: string;
       confirmationMode?: 'modal' | 'text';
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
     } = {}
   ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
@@ -2076,13 +2077,13 @@ export class CoworkRunner extends EventEmitter {
 
     // Run claude-code using the SDK
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt);
+      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork session error:', error);
     }
   }
 
-  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[] } = {}): Promise<void> {
+  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
@@ -2090,6 +2091,7 @@ export class CoworkRunner extends EventEmitter {
       await this.startSession(sessionId, prompt, {
         skillIds: options.skillIds,
         systemPrompt: options.systemPrompt,
+        imageAttachments: options.imageAttachments,
       });
       return;
     }
@@ -2097,11 +2099,18 @@ export class CoworkRunner extends EventEmitter {
     // Ensure status returns to running for resumed turns on active sessions.
     this.store.updateSession(sessionId, { status: 'running' });
 
-    // Add user message with skill info
+    // Add user message with skill info and imageAttachments
+    const messageMetadata: Record<string, unknown> = {};
+    if (options.skillIds?.length) {
+      messageMetadata.skillIds = options.skillIds;
+    }
+    if (options.imageAttachments?.length) {
+      messageMetadata.imageAttachments = options.imageAttachments;
+    }
     const userMessage = this.store.addMessage(sessionId, {
       type: 'user',
       content: prompt,
-      metadata: options.skillIds?.length ? { skillIds: options.skillIds } : undefined,
+      metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
     });
     this.emit('message', sessionId, userMessage);
 
@@ -2128,7 +2137,7 @@ export class CoworkRunner extends EventEmitter {
     );
 
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt);
+      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork continue error:', error);
     }
@@ -2314,7 +2323,8 @@ export class CoworkRunner extends EventEmitter {
     activeSession: ActiveSession,
     prompt: string,
     cwd: string,
-    systemPrompt: string
+    systemPrompt: string,
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
   ): Promise<void> {
     const { sessionId, abortController } = activeSession;
     const config = this.store.getConfig();
@@ -2601,7 +2611,49 @@ export class CoworkRunner extends EventEmitter {
         }),
       };
 
-      const result = await query({ prompt, options } as any);
+      // Build prompt: if we have image attachments, use SDKUserMessage with content blocks
+      // instead of a plain string prompt, so the model can see the images.
+      let queryPrompt: string | AsyncIterable<unknown>;
+      if (imageAttachments && imageAttachments.length > 0) {
+        const contentBlocks: Array<Record<string, unknown>> = [];
+        // Add text block
+        if (prompt.trim()) {
+          contentBlocks.push({ type: 'text', text: prompt });
+        }
+        // Add image blocks
+        for (const img of imageAttachments) {
+          contentBlocks.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: img.mimeType,
+              data: img.base64Data,
+            },
+          });
+        }
+        const userMessage: {
+          type: 'user';
+          message: { role: 'user'; content: Array<Record<string, unknown>> };
+          parent_tool_use_id: string | null;
+          session_id: string;
+        } = {
+          type: 'user' as const,
+          message: {
+            role: 'user' as const,
+            content: contentBlocks,
+          },
+          parent_tool_use_id: null,
+          session_id: '',
+        };
+        // Create a one-shot async iterable that yields the single message
+        queryPrompt = (async function* () {
+          yield userMessage;
+        })();
+      } else {
+        queryPrompt = prompt;
+      }
+
+      const result = await query({ prompt: queryPrompt, options } as any);
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');
       let eventCount = 0;
       for await (const event of result as AsyncIterable<unknown>) {
@@ -2661,7 +2713,8 @@ export class CoworkRunner extends EventEmitter {
     activeSession: ActiveSession,
     prompt: string,
     cwd: string,
-    systemPrompt: string
+    systemPrompt: string,
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
   ): Promise<void> {
     const { sessionId } = activeSession;
     if (this.isSessionStopRequested(sessionId, activeSession)) {
@@ -2718,7 +2771,7 @@ export class CoworkRunner extends EventEmitter {
       );
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
       return;
     }
 
@@ -2732,7 +2785,7 @@ export class CoworkRunner extends EventEmitter {
     if (executionMode === 'local') {
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
       return;
     }
 
@@ -2757,7 +2810,7 @@ export class CoworkRunner extends EventEmitter {
       }
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
       return;
     }
 
@@ -2793,7 +2846,7 @@ export class CoworkRunner extends EventEmitter {
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
       this.activeSessions.set(sessionId, activeSession);
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
     }
   }
 

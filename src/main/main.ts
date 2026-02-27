@@ -1019,6 +1019,7 @@ if (!gotTheLock) {
     systemPrompt?: string;
     title?: string;
     activeSkillIds?: string[];
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
   }) => {
     try {
       const coworkStoreInstance = getCoworkStore();
@@ -1050,10 +1051,19 @@ if (!gotTheLock) {
       // Update session status to 'running' before starting async task
       // This ensures the frontend receives the correct status immediately
       coworkStoreInstance.updateSession(session.id, { status: 'running' });
+
+      // Build metadata, include imageAttachments if present
+      const messageMetadata: Record<string, unknown> = {};
+      if (options.activeSkillIds?.length) {
+        messageMetadata.skillIds = options.activeSkillIds;
+      }
+      if (options.imageAttachments?.length) {
+        messageMetadata.imageAttachments = options.imageAttachments;
+      }
       coworkStoreInstance.addMessage(session.id, {
         type: 'user',
         content: options.prompt,
-        metadata: options.activeSkillIds?.length ? { skillIds: options.activeSkillIds } : undefined,
+        metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
 
       // Start the session asynchronously (skip initial user message since we already added it)
@@ -1062,6 +1072,7 @@ if (!gotTheLock) {
         skillIds: options.activeSkillIds,
         workspaceRoot: selectedWorkspaceRoot,
         confirmationMode: 'modal',
+        imageAttachments: options.imageAttachments,
       }).catch(error => {
         console.error('Cowork session error:', error);
       });
@@ -1084,10 +1095,15 @@ if (!gotTheLock) {
     prompt: string;
     systemPrompt?: string;
     activeSkillIds?: string[];
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
   }) => {
     try {
       const runner = getCoworkRunner();
-      runner.continueSession(options.sessionId, options.prompt, { systemPrompt: options.systemPrompt, skillIds: options.activeSkillIds }).catch(error => {
+      runner.continueSession(options.sessionId, options.prompt, {
+        systemPrompt: options.systemPrompt,
+        skillIds: options.activeSkillIds,
+        imageAttachments: options.imageAttachments,
+      }).catch(error => {
         console.error('Cowork continue error:', error);
       });
 
@@ -1811,6 +1827,49 @@ if (!gotTheLock) {
           success: false,
           path: null,
           error: error instanceof Error ? error.message : 'Failed to save inline file',
+        };
+      }
+    }
+  );
+
+  // Read a local file as a data URL (data:<mime>;base64,...)
+  const MAX_READ_AS_DATA_URL_BYTES = 20 * 1024 * 1024;
+  const MIME_BY_EXT: Record<string, string> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.svg': 'image/svg+xml',
+  };
+  ipcMain.handle(
+    'dialog:readFileAsDataUrl',
+    async (_event, filePath?: string): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
+      try {
+        if (typeof filePath !== 'string' || !filePath.trim()) {
+          return { success: false, error: 'Missing file path' };
+        }
+        const resolvedPath = path.resolve(filePath.trim());
+        const stat = await fs.promises.stat(resolvedPath);
+        if (!stat.isFile()) {
+          return { success: false, error: 'Not a file' };
+        }
+        if (stat.size > MAX_READ_AS_DATA_URL_BYTES) {
+          return {
+            success: false,
+            error: `File too large (max ${Math.floor(MAX_READ_AS_DATA_URL_BYTES / (1024 * 1024))}MB)`,
+          };
+        }
+        const buffer = await fs.promises.readFile(resolvedPath);
+        const ext = path.extname(resolvedPath).toLowerCase();
+        const mimeType = MIME_BY_EXT[ext] || 'application/octet-stream';
+        const base64 = buffer.toString('base64');
+        return { success: true, dataUrl: `data:${mimeType};base64,${base64}` };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to read file',
         };
       }
     }

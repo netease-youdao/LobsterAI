@@ -162,6 +162,7 @@ class CoworkService {
       prompt: options.prompt,
       systemPrompt: options.systemPrompt,
       activeSkillIds: options.activeSkillIds,
+      imageAttachments: options.imageAttachments,
     });
     if (!result.success) {
       store.dispatch(setStreaming(false));
