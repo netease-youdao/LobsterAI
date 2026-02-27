@@ -828,6 +828,30 @@ function isMaxTokensUnsupportedError(errorMessage: string): boolean {
     && normalized.includes('not supported');
 }
 
+/**
+ * Detect errors where the upstream model does not support tool calling.
+ * Ollama returns messages like "registry.ollama.ai/library/gemma3:1b does not support tools".
+ */
+function isToolsUnsupportedError(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase();
+  return normalized.includes('does not support tools')
+    || normalized.includes('tool use is not supported');
+}
+
+/**
+ * Strip tools and tool_choice from an OpenAI-format request.
+ * Returns true if tools were actually removed.
+ */
+function stripToolsFromRequest(openAIRequest: Record<string, unknown>): boolean {
+  const tools = openAIRequest.tools;
+  if (!tools || (Array.isArray(tools) && tools.length === 0)) {
+    return false;
+  }
+  delete openAIRequest.tools;
+  delete openAIRequest.tool_choice;
+  return true;
+}
+
 function convertMaxTokensToMaxCompletionTokens(
   openAIRequest: Record<string, unknown>
 ): { changed: boolean; convertedTo?: number } {
@@ -2013,6 +2037,7 @@ async function handleChatCompletionsStreamResponse(
   });
 
   if (!upstreamResponse.body) {
+    console.warn('[CoworkProxy] Stream: upstream returned empty body');
     emitSSE(res, 'error', createAnthropicErrorBody('Upstream returned empty stream', 'stream_error'));
     res.end();
     return;
@@ -2024,9 +2049,11 @@ async function handleChatCompletionsStreamResponse(
 
   let buffer = '';
   let sawDoneMarker = false;
+  let chunkCount = 0;
 
   const flushDone = () => {
     if (!state.hasMessageStart) {
+      console.warn('[CoworkProxy] Stream: flushDone called but no message_start was emitted');
       return;
     }
     if (!state.hasMessageStop) {
@@ -2038,12 +2065,16 @@ async function handleChatCompletionsStreamResponse(
     }
   };
 
+  console.log('[CoworkProxy] Stream: starting to read upstream SSE chunks');
+
   while (true) {
     const { value, done } = await reader.read();
     if (done) {
+      console.log(`[CoworkProxy] Stream: upstream done after ${chunkCount} chunks, sawDoneMarker=${sawDoneMarker}`);
       break;
     }
 
+    chunkCount++;
     buffer += decoder.decode(value, { stream: true });
 
     let boundary = findSSEPacketBoundary(buffer);
@@ -2225,6 +2256,8 @@ async function handleRequest(
     return;
   }
 
+  console.log(`[CoworkProxy] ${method} ${url.pathname}`);
+
   if (method !== 'POST' || url.pathname !== '/v1/messages') {
     writeJSON(res, 404, createAnthropicErrorBody('Not found', 'not_found_error'));
     return;
@@ -2293,6 +2326,8 @@ async function handleRequest(
     : openAIRequest;
   const stream = Boolean(upstreamRequest.stream);
 
+  console.log(`[CoworkProxy] Upstream: apiType=${upstreamAPIType}, model=${upstreamRequest.model}, stream=${stream}, provider=${upstreamConfig.provider}`);
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -2308,6 +2343,7 @@ async function handleRequest(
     targetURL: string
   ): Promise<Response> => {
     currentTargetURL = targetURL;
+    console.log(`[CoworkProxy] Sending upstream request to: ${targetURL}`);
     return session.defaultSession.fetch(targetURL, {
       method: 'POST',
       headers,
@@ -2316,10 +2352,16 @@ async function handleRequest(
   };
 
   let upstreamResponse: Response;
+  const fetchStartTime = Date.now();
   try {
+    console.log(`[CoworkProxy] Awaiting upstream fetch (stream=${stream}, model=${upstreamRequest.model})...`);
     upstreamResponse = await sendUpstreamRequest(upstreamRequest, targetURLs[0]);
+    const fetchDuration = Date.now() - fetchStartTime;
+    console.log(`[CoworkProxy] Upstream response: status=${upstreamResponse.status}, ok=${upstreamResponse.ok}, fetchTime=${fetchDuration}ms, stream=${stream}`);
   } catch (error) {
+    const fetchDuration = Date.now() - fetchStartTime;
     const message = error instanceof Error ? error.message : 'Network error';
+    console.error(`[CoworkProxy] Upstream fetch error after ${fetchDuration}ms (stream=${stream}): ${message}`);
     lastProxyError = message;
     writeJSON(res, 502, createAnthropicErrorBody(message));
     return;
@@ -2345,12 +2387,37 @@ async function handleRequest(
 
     if (!upstreamResponse.ok) {
       const firstErrorText = await upstreamResponse.text();
+      console.error(`[CoworkProxy] Upstream error: status=${upstreamResponse.status}, body=${firstErrorText.slice(0, 500)}`);
       let firstErrorMessage = extractErrorMessage(firstErrorText);
       if (firstErrorMessage === 'Upstream API request failed') {
         firstErrorMessage = `Upstream API request failed (${upstreamResponse.status}) ${currentTargetURL}`;
       }
 
       if (upstreamAPIType === 'chat_completions' && upstreamResponse.status === 400) {
+        // Some Ollama models do not support tool calling.
+        // When the upstream returns "does not support tools", strip tools and retry.
+        if (isToolsUnsupportedError(firstErrorMessage)) {
+          const stripped = stripToolsFromRequest(upstreamRequest);
+          if (stripped) {
+            try {
+              upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
+              if (!upstreamResponse.ok) {
+                const retryErrorText = await upstreamResponse.text();
+                firstErrorMessage = extractErrorMessage(retryErrorText);
+              } else {
+                console.info(
+                  '[CoworkProxy] Retried request after stripping unsupported tools'
+                );
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Network error';
+              lastProxyError = message;
+              writeJSON(res, 502, createAnthropicErrorBody(message));
+              return;
+            }
+          }
+        }
+
         if (isMaxTokensUnsupportedError(firstErrorMessage)) {
           const convertResult = convertMaxTokensToMaxCompletionTokens(upstreamRequest);
           if (convertResult.changed) {
@@ -2410,14 +2477,17 @@ async function handleRequest(
   lastProxyError = null;
 
   if (stream) {
+    console.log(`[CoworkProxy] Handling streaming response (type=${upstreamAPIType})`);
     if (upstreamAPIType === 'responses') {
       await handleResponsesStreamResponse(upstreamResponse, res);
     } else {
       await handleChatCompletionsStreamResponse(upstreamResponse, res);
     }
+    console.log('[CoworkProxy] Streaming response completed');
     return;
   }
 
+  console.log('[CoworkProxy] Handling non-streaming response');
   let upstreamJSON: unknown;
   try {
     upstreamJSON = await upstreamResponse.json();

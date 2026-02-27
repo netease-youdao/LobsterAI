@@ -338,8 +338,8 @@ export const defaultConfig: AppConfig = {
     ollama: {
       enabled: false,
       apiKey: '',
-      baseUrl: 'http://localhost:11434',
-      apiFormat: 'anthropic',
+      baseUrl: 'http://localhost:11434/v1',
+      apiFormat: 'openai',
       models: [
         { id: 'qwen3-coder-next', name: 'Qwen3-Coder-Next', supportsImage: false },
         { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false }

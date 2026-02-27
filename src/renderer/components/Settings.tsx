@@ -1054,12 +1054,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   };
 
   const handleSaveNewModel = () => {
-    const modelName = newModelName.trim();
     const modelId = newModelId.trim();
-    if (!modelName || !modelId) {
-      setModelFormError(i18nService.t('modelNameAndIdRequired'));
-      return;
+
+    if (activeProvider === 'ollama') {
+      // For Ollama, only the model name (stored as modelId) is required
+      if (!modelId) {
+        setModelFormError(i18nService.t('ollamaModelNameRequired'));
+        return;
+      }
+    } else {
+      const modelName = newModelName.trim();
+      if (!modelName || !modelId) {
+        setModelFormError(i18nService.t('modelNameAndIdRequired'));
+        return;
+      }
     }
+
+    // For Ollama, auto-fill display name from modelId if not provided
+    const modelName = activeProvider === 'ollama'
+      ? (newModelName.trim() && newModelName.trim() !== modelId ? newModelName.trim() : modelId)
+      : newModelName.trim();
 
     const currentModels = providers[activeProvider].models ?? [];
     const duplicateModel = currentModels.find(
@@ -2709,41 +2723,92 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 )}
 
                 <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                      {i18nService.t('modelName')}
-                    </label>
-                    <input
-                      autoFocus
-                      type="text"
-                      value={newModelName}
-                      onChange={(e) => {
-                        setNewModelName(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                      placeholder="GPT-4"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                      {i18nService.t('modelId')}
-                    </label>
-                    <input
-                      type="text"
-                      value={newModelId}
-                      onChange={(e) => {
-                        setNewModelId(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                      placeholder="gpt-4"
-                    />
-                  </div>
+                  {activeProvider === 'ollama' ? (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('ollamaModelName')}
+                        </label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={newModelId}
+                          onChange={(e) => {
+                            setNewModelId(e.target.value);
+                            if (!newModelName || newModelName === newModelId) {
+                              setNewModelName(e.target.value);
+                            }
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder={i18nService.t('ollamaModelNamePlaceholder')}
+                        />
+                        <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
+                          {i18nService.t('ollamaModelNameHint')}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('ollamaDisplayName')}
+                        </label>
+                        <input
+                          type="text"
+                          value={newModelName === newModelId ? '' : newModelName}
+                          onChange={(e) => {
+                            setNewModelName(e.target.value || newModelId);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder={i18nService.t('ollamaDisplayNamePlaceholder')}
+                        />
+                        <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
+                          {i18nService.t('ollamaDisplayNameHint')}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('modelName')}
+                        </label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={newModelName}
+                          onChange={(e) => {
+                            setNewModelName(e.target.value);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder="GPT-4"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('modelId')}
+                        </label>
+                        <input
+                          type="text"
+                          value={newModelId}
+                          onChange={(e) => {
+                            setNewModelId(e.target.value);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder="gpt-4"
+                        />
+                      </div>
+                    </>
+                  )}
                   <div className="flex items-center space-x-2">
                     <input
                       id={`${activeProvider}-supportsImage`}
