@@ -1219,14 +1219,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
           ? `${normalizedBaseUrl}/messages`
           : `${normalizedBaseUrl}/v1/messages`;
+        // Send both x-api-key and Authorization: Bearer for maximum compatibility.
+        // Native Anthropic API accepts x-api-key; third-party gateways (e.g. NetEase AIGW)
+        // often require Authorization: Bearer instead. Sending both works everywhere.
+        const anthropicHeaders: Record<string, string> = {
+          'x-api-key': providerConfig.apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        };
+        if (testingProvider !== 'anthropic') {
+          anthropicHeaders.Authorization = `Bearer ${providerConfig.apiKey}`;
+        }
         response = await window.electron.api.fetch({
           url: anthropicUrl,
           method: 'POST',
-          headers: {
-            'x-api-key': providerConfig.apiKey,
-            'anthropic-version': '2023-06-01',
-            'Content-Type': 'application/json',
-          },
+          headers: anthropicHeaders,
           body: JSON.stringify({
             model: firstModel.id,
             max_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,

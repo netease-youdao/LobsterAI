@@ -528,14 +528,21 @@ class ApiService {
         this.cleanupFunctions = [removeDataListener, removeDoneListener, removeErrorListener, removeAbortListener];
 
         // 发起流式请求
+        // Send both x-api-key and Authorization: Bearer for maximum compatibility.
+        // Native Anthropic API accepts x-api-key; third-party gateways (e.g. NetEase AIGW)
+        // often require Authorization: Bearer instead. Sending both works everywhere.
+        const anthropicHeaders: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'x-api-key': config.apiKey,
+          'anthropic-version': '2023-06-01',
+        };
+        if (config.provider && config.provider !== 'anthropic') {
+          anthropicHeaders.Authorization = `Bearer ${config.apiKey}`;
+        }
         window.electron.api.stream({
           url: `${config.baseUrl}/v1/messages`,
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': config.apiKey,
-            'anthropic-version': '2023-06-01',
-          },
+          headers: anthropicHeaders,
           body: JSON.stringify(requestBody),
           requestId,
         }).then((response) => {
