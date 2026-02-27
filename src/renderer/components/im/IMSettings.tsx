@@ -255,13 +255,25 @@ const IMSettings: React.FC = () => {
 
   const handleConnectivityTest = async (platform: IMPlatform) => {
     setConnectivityModalPlatform(platform);
-    // 1. Persist latest config to backend
+    // 1. Persist latest config to backend (without changing enabled state)
     await imService.updateConfig(config);
-    // 2. Stop the gateway (ensure clean state)
-    await imService.stopGateway(platform);
-    // 3. Start the gateway with latest config
-    await imService.startGateway(platform);
-    // 4. Run connectivity test
+
+    const isEnabled = isPlatformEnabled(platform);
+
+    if (isEnabled) {
+      // Gateway is ON: restart it to pick up the latest credentials, then run the
+      // gateway_running check (which also calls runAuthProbe internally via testGateway).
+      await imService.stopGateway(platform);
+      await imService.startGateway(platform);
+    }
+    // When the gateway is OFF we skip stop/start entirely.
+    // The main process testGateway → runAuthProbe will spawn an isolated
+    // temporary NimGateway (for NIM) or use stateless HTTP calls for other
+    // platforms, so no historical messages are ingested and the main
+    // gateway state is never touched.
+
+    // Run connectivity test (always passes configOverride so the backend uses
+    // the latest unsaved credential values from the form).
     await runConnectivityTest(platform, {
       [platform]: config[platform],
     } as Partial<IMGatewayConfig>);

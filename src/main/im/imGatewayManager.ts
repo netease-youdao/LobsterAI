@@ -947,14 +947,10 @@ export class IMGatewayManager extends EventEmitter {
       return `Telegram 鉴权通过（Bot: ${username}）。`;
     }
     if (platform === 'nim') {
-      // If the gateway is already connected, the credentials are valid
-      if (this.nimGateway.isConnected()) {
-        return `云信鉴权通过（Account: ${config.nim.account}，网关已连接）。`;
-      }
-      // Without AppSecret we cannot call the REST API for a stateless probe.
-      // Just confirm that all required fields are non-empty; the real credential
-      // check will happen when the user enables the gateway and the SDK logs in.
-      return `云信配置已填写（Account: ${config.nim.account}）。请启用渠道，SDK 登录时将完成实际凭证验证。`;
+      // Use an isolated temporary NimGateway instance so the probe never
+      // touches the main gateway's state and never fires onMessageCallback.
+      await this.testNimConnectivity(config.nim);
+      return `云信鉴权通过（Account: ${config.nim.account}，SDK 登录成功）。`;
     }
     const response = await fetchJsonWithTimeout<DiscordUserResponse>('https://discord.com/api/v10/users/@me', {
       headers: {
@@ -963,6 +959,46 @@ export class IMGatewayManager extends EventEmitter {
     }, CONNECTIVITY_TIMEOUT_MS);
     const username = response.username ? `${response.username}#${response.discriminator || '0000'}` : 'unknown';
     return `Discord 鉴权通过（Bot: ${username}）。`;
+  }
+
+  /**
+   * Test NIM connectivity using an isolated temporary NimGateway instance.
+   * The temporary instance has NO onMessageCallback, so it will never process
+   * any incoming (historical) messages during the login probe.
+   * The main this.nimGateway instance is never touched.
+   */
+  private async testNimConnectivity(nimConfig: IMGatewayConfig['nim']): Promise<void> {
+    // Keep below CONNECTIVITY_TIMEOUT_MS (10s) so the outer withTimeout fires last
+    const NIM_TEST_TIMEOUT_MS = 9_000;
+    let tmpGateway: NimGateway | null = new NimGateway();
+    // Intentionally do NOT call setMessageCallback – any incoming messages are silently ignored.
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error('NIM 登录超时（15s），请检查网络或凭据'));
+        }, NIM_TEST_TIMEOUT_MS);
+
+        tmpGateway!.once('connected', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+
+        tmpGateway!.once('error', (err: Error) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+
+        // Start is async but we rely on events; catch any synchronous throw
+        tmpGateway!.start(nimConfig).catch(reject);
+      });
+    } finally {
+      // Always destroy the temporary instance, even if the test failed
+      try {
+        await tmpGateway.stop();
+      } catch (_) { /* ignore stop errors */ }
+      tmpGateway = null;
+    }
   }
 
   private resolveFeishuDomain(domain: string, Lark: any): any {
