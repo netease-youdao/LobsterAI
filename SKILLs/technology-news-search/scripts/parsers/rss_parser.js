@@ -7,9 +7,8 @@
  * instead of fragile regex patterns.
  */
 
-// 从应用主目录的 node_modules 加载 rss-parser
-// 应用会设置 NODE_PATH，所以 require('rss-parser') 会自动找到
-const Parser = require('rss-parser');
+// 使用预打包的 rss-parser（esbuild bundle），无需外部 node_modules
+const Parser = require('../vendor/rss-parser.bundle');
 
 const parser = new Parser({
   timeout: 10000,

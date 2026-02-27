@@ -819,11 +819,13 @@ export class SkillManager {
 
         // Check if skill needs repair
         let shouldRepair = false;
+        let needsCleanCopy = false;
         if (targetExists) {
           // Version-based update: if bundled has a version and it's newer, force update
           const bundledVer = this.getSkillVersion(dir);
           if (bundledVer && compareVersions(bundledVer, this.getSkillVersion(targetDir) || '0.0.0') > 0) {
             shouldRepair = true;
+            needsCleanCopy = true;
           }
           // web-search has specific broken checks
           else if (id === 'web-search' && isWebSearchSkillBroken(targetDir)) {
@@ -839,11 +841,17 @@ export class SkillManager {
         try {
           console.log(`[skills] syncBundledSkillsToUserData: copying "${id}" from ${dir} to ${targetDir}`);
 
-          // Preserve .env file before force overwrite
+          // Preserve .env file before clean copy
           let envBackup: Buffer | null = null;
           const envPath = path.join(targetDir, '.env');
-          if (shouldRepair && fs.existsSync(envPath)) {
+          if (needsCleanCopy && fs.existsSync(envPath)) {
             envBackup = fs.readFileSync(envPath);
+          }
+
+          // Version-based update: delete target dir first to remove stale files
+          // (e.g. old .py scripts, __pycache__, leftover package-lock.json)
+          if (needsCleanCopy) {
+            fs.rmSync(targetDir, { recursive: true, force: true });
           }
 
           cpRecursiveSync(dir, targetDir, {
@@ -851,7 +859,7 @@ export class SkillManager {
             force: shouldRepair,
           });
 
-          // Restore .env file
+          // Restore .env file after clean copy
           if (envBackup !== null) {
             fs.writeFileSync(envPath, envBackup);
           }
