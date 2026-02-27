@@ -751,6 +751,9 @@ const isWebSearchSkillBroken = (skillRoot: string): boolean => {
     if (!serverEntryContent.includes("TextDecoder('gb18030'")) {
       return true;
     }
+    if (serverEntryContent.includes('scoreDecodedJsonText') && serverEntryContent.includes('Request body decoded using gb18030 (score')) {
+      return true;
+    }
   } catch {
     return true;
   }
