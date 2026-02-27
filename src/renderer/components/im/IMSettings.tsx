@@ -127,7 +127,6 @@ const IMSettings: React.FC = () => {
       }
     }
   };
-  };
 
   const getCheckTitle = (code: IMConnectivityCheck['code']): string => {
     return i18nService.t(`imConnectivityCheckTitle_${code}`);
