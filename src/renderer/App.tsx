@@ -268,6 +268,10 @@ const App: React.FC = () => {
       unsubscribe();
 
       if (!downloadResult.success) {
+        // If user cancelled, handleCancelDownload already set the state — don't overwrite
+        if (downloadResult.error === 'Download cancelled') {
+          return;
+        }
         setUpdateModalState('error');
         setUpdateError(downloadResult.error || i18nService.t('updateDownloadFailed'));
         return;
@@ -283,8 +287,13 @@ const App: React.FC = () => {
       // If successful, app will quit and relaunch
     } catch (error) {
       unsubscribe();
+      const msg = error instanceof Error ? error.message : '';
+      // If user cancelled, handleCancelDownload already set the state — don't overwrite
+      if (msg === 'Download cancelled') {
+        return;
+      }
       setUpdateModalState('error');
-      setUpdateError(error instanceof Error ? error.message : i18nService.t('updateDownloadFailed'));
+      setUpdateError(msg || i18nService.t('updateDownloadFailed'));
     }
   }, [updateInfo, showToast]);
 
