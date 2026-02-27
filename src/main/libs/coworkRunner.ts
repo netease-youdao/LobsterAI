@@ -2341,6 +2341,12 @@ export class CoworkRunner extends EventEmitter {
       this.activeSessions.delete(sessionId);
       return;
     }
+    coworkLog('INFO', 'runClaudeCodeLocal', 'Resolved API config', {
+      apiType: apiConfig.apiType,
+      baseURL: apiConfig.baseURL,
+      model: apiConfig.model,
+      hasApiKey: Boolean(apiConfig.apiKey),
+    });
 
     const claudeCodePath = getClaudeCodePath();
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
@@ -2597,12 +2603,18 @@ export class CoworkRunner extends EventEmitter {
 
       const result = await query({ prompt, options } as any);
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');
+      let eventCount = 0;
       for await (const event of result as AsyncIterable<unknown>) {
         if (this.isSessionStopRequested(sessionId, activeSession)) {
           break;
         }
+        eventCount++;
+        const eventPayload = event as Record<string, unknown> | null;
+        const eventType = eventPayload && typeof eventPayload === 'object' ? String(eventPayload.type ?? '') : typeof event;
+        coworkLog('INFO', 'runClaudeCodeLocal', `Event #${eventCount}: type=${eventType}`);
         this.handleClaudeEvent(sessionId, event);
       }
+      coworkLog('INFO', 'runClaudeCodeLocal', `Event iteration completed, total events: ${eventCount}`);
 
       if (this.isSessionStopRequested(sessionId, activeSession)) {
         this.store.updateSession(sessionId, { status: 'idle' });
