@@ -532,7 +532,7 @@ const App: React.FC = () => {
       )}
       {showUpdateModal && updateInfo && (
         <AppUpdateModal
-          latestVersion={updateInfo.latestVersion}
+          updateInfo={updateInfo}
           onCancel={() => setShowUpdateModal(false)}
           onConfirm={handleConfirmUpdate}
         />

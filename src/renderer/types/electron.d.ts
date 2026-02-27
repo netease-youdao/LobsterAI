@@ -172,6 +172,7 @@ type CoworkPermissionResult =
 
 interface IElectronAPI {
   platform: string;
+  arch: string;
   store: {
     get: (key: string) => Promise<any>;
     set: (key: string, value: any) => Promise<void>;

@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
   platform: process.platform,
+  arch: process.arch,
   store: {
     get: (key: string) => ipcRenderer.invoke('store:get', key),
     set: (key: string, value: any) => ipcRenderer.invoke('store:set', key, value),
