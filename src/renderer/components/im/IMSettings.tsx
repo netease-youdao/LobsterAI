@@ -44,6 +44,7 @@ const IMSettings: React.FC = () => {
   const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<IMPlatform | null>(null);
   const [language, setLanguage] = useState<'zh' | 'en'>(i18nService.getLanguage());
   const [allowedUserIdInput, setAllowedUserIdInput] = useState('');
+  const [configLoaded, setConfigLoaded] = useState(false);
 
   // Subscribe to language changes
   useEffect(() => {
@@ -55,8 +56,15 @@ const IMSettings: React.FC = () => {
 
   // Initialize IM service and subscribe status updates
   useEffect(() => {
-    void imService.init();
+    let cancelled = false;
+    void imService.init().then(() => {
+      if (!cancelled) {
+        setConfigLoaded(true);
+      }
+    });
     return () => {
+      cancelled = true;
+      setConfigLoaded(false);
       imService.destroy();
     };
   }, []);
@@ -86,9 +94,10 @@ const IMSettings: React.FC = () => {
     dispatch(setNimConfig({ [field]: value }));
   };
 
-  // Save config on blur
+  // Save config on blur (only save current platform to avoid overwriting other platforms with defaults)
   const handleSaveConfig = async () => {
-    await imService.updateConfig(config);
+    if (!configLoaded) return;
+    await imService.updateConfig({ [activePlatform]: config[activePlatform] });
   };
 
   const getCheckTitle = (code: IMConnectivityCheck['code']): string => {
