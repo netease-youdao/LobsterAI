@@ -188,7 +188,7 @@ export class Scheduler {
 
         // Send IM notifications
         if (task.notifyPlatforms && task.notifyPlatforms.length > 0) {
-          await this.sendNotifications(task, success, durationMs, error);
+          await this.sendNotifications(task, success, durationMs, error, sessionId);
         }
 
         // Emit final updates
@@ -257,7 +257,8 @@ export class Scheduler {
     task: ScheduledTask,
     success: boolean,
     durationMs: number,
-    error: string | null
+    error: string | null,
+    sessionId: string | null,
   ): Promise<void> {
     const imManager = this.getIMGatewayManager?.();
     if (!imManager) return;
@@ -267,14 +268,41 @@ export class Scheduler {
       ? `${durationMs}ms`
       : `${(durationMs / 1000).toFixed(1)}s`;
 
-    let message = `📋 定时任务通知\n\n任务: ${task.name}\n状态: ${status}\n耗时: ${durationStr}`;
+    let header = `📋 定时任务通知\n\n任务: ${task.name}\n状态: ${status}\n耗时: ${durationStr}`;
     if (error) {
-      message += `\n错误: ${error}`;
+      header += `\n错误: ${error}`;
+    }
+
+    // Extract full AI reply from completed cowork session (includes media markers)
+    let fullReplyText = '';
+    if (sessionId && success) {
+      try {
+        const session = this.coworkStore.getSession(sessionId);
+        if (session) {
+          const assistantMessages = session.messages.filter(
+            (msg) => msg.type === 'assistant' && msg.content && !msg.metadata?.isThinking
+          );
+          fullReplyText = assistantMessages.map(m => m.content).join('\n\n');
+        }
+      } catch (err: unknown) {
+        console.warn(`[Scheduler] Failed to extract session result for notification:`, err);
+      }
+    }
+
+    // Build the complete notification message with header + result
+    let message = header;
+    if (fullReplyText) {
+      const MAX_RESULT_LENGTH = 1500;
+      const resultSnippet = fullReplyText.length > MAX_RESULT_LENGTH
+        ? fullReplyText.slice(0, MAX_RESULT_LENGTH) + '…'
+        : fullReplyText;
+      message += `\n\n📝 执行结果:\n${resultSnippet}`;
     }
 
     for (const platform of task.notifyPlatforms) {
       try {
-        await imManager.sendNotification(platform, message);
+        // Use sendNotificationWithMedia to support media files in AI reply
+        await imManager.sendNotificationWithMedia(platform, message);
         console.log(`[Scheduler] Notification sent via ${platform} for task ${task.id}`);
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);

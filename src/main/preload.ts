@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
   platform: process.platform,
+  arch: process.arch,
   store: {
     get: (key: string) => ipcRenderer.invoke('store:get', key),
     set: (key: string, value: any) => ipcRenderer.invoke('store:set', key, value),
@@ -231,6 +232,16 @@ contextBridge.exposeInMainWorld('electron', {
   appInfo: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
+  },
+  appUpdate: {
+    download: (url: string) => ipcRenderer.invoke('appUpdate:download', url),
+    cancelDownload: () => ipcRenderer.invoke('appUpdate:cancelDownload'),
+    install: (filePath: string) => ipcRenderer.invoke('appUpdate:install', filePath),
+    onDownloadProgress: (callback: (data: any) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('appUpdate:downloadProgress', handler);
+      return () => ipcRenderer.removeListener('appUpdate:downloadProgress', handler);
+    },
   },
   log: {
     getPath: () => ipcRenderer.invoke('log:getPath'),

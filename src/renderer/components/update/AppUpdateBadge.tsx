@@ -11,7 +11,7 @@ const AppUpdateBadge: React.FC<AppUpdateBadgeProps> = ({ latestVersion, onClick 
     <button
       type="button"
       onClick={onClick}
-      className="non-draggable inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/12 px-3 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-500/18 dark:text-emerald-400 transition-colors"
+      className="non-draggable inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/12 px-3 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-500/18 dark:text-emerald-400 transition-colors whitespace-nowrap"
       title={`${i18nService.t('updateAvailablePill')} ${latestVersion}`}
       aria-label={`${i18nService.t('updateAvailablePill')} ${latestVersion}`}
     >

@@ -48,6 +48,10 @@ type StreamState = {
 
 type UpstreamAPIType = 'chat_completions' | 'responses';
 
+function getAlternateUpstreamAPIType(apiType: UpstreamAPIType): UpstreamAPIType {
+  return apiType === 'responses' ? 'chat_completions' : 'responses';
+}
+
 type ResponsesFunctionCallState = {
   outputIndex: number;
   callId: string;
@@ -826,6 +830,30 @@ function isMaxTokensUnsupportedError(errorMessage: string): boolean {
   return normalized.includes('max_tokens')
     && normalized.includes('max_completion_tokens')
     && normalized.includes('not supported');
+}
+
+/**
+ * Detect errors where the upstream model does not support tool calling.
+ * Ollama returns messages like "registry.ollama.ai/library/gemma3:1b does not support tools".
+ */
+function isToolsUnsupportedError(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase();
+  return normalized.includes('does not support tools')
+    || normalized.includes('tool use is not supported');
+}
+
+/**
+ * Strip tools and tool_choice from an OpenAI-format request.
+ * Returns true if tools were actually removed.
+ */
+function stripToolsFromRequest(openAIRequest: Record<string, unknown>): boolean {
+  const tools = openAIRequest.tools;
+  if (!tools || (Array.isArray(tools) && tools.length === 0)) {
+    return false;
+  }
+  delete openAIRequest.tools;
+  delete openAIRequest.tool_choice;
+  return true;
 }
 
 function convertMaxTokensToMaxCompletionTokens(
@@ -2013,6 +2041,7 @@ async function handleChatCompletionsStreamResponse(
   });
 
   if (!upstreamResponse.body) {
+    console.warn('[CoworkProxy] Stream: upstream returned empty body');
     emitSSE(res, 'error', createAnthropicErrorBody('Upstream returned empty stream', 'stream_error'));
     res.end();
     return;
@@ -2024,9 +2053,11 @@ async function handleChatCompletionsStreamResponse(
 
   let buffer = '';
   let sawDoneMarker = false;
+  let chunkCount = 0;
 
   const flushDone = () => {
     if (!state.hasMessageStart) {
+      console.warn('[CoworkProxy] Stream: flushDone called but no message_start was emitted');
       return;
     }
     if (!state.hasMessageStop) {
@@ -2038,12 +2069,16 @@ async function handleChatCompletionsStreamResponse(
     }
   };
 
+  console.log('[CoworkProxy] Stream: starting to read upstream SSE chunks');
+
   while (true) {
     const { value, done } = await reader.read();
     if (done) {
+      console.log(`[CoworkProxy] Stream: upstream done after ${chunkCount} chunks, sawDoneMarker=${sawDoneMarker}`);
       break;
     }
 
+    chunkCount++;
     buffer += decoder.decode(value, { stream: true });
 
     let boundary = findSSEPacketBoundary(buffer);
@@ -2202,6 +2237,234 @@ async function handleCreateScheduledTask(
   }
 }
 
+async function handleListScheduledTasks(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+  try {
+    const tasks = scheduledTaskDeps.getScheduledTaskStore().listTasks();
+    writeJSON(res, 200, { success: true, tasks } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to list scheduled tasks:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleGetScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+  try {
+    const task = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
+    if (!task) {
+      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+      return;
+    }
+    writeJSON(res, 200, { success: true, task } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to get scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleUpdateScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+
+  // Verify task exists first
+  const existing = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
+  if (!existing) {
+    writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+    return;
+  }
+
+  let body: string;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid request body' } as any);
+    return;
+  }
+
+  let input: any;
+  try {
+    input = JSON.parse(body);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid JSON' } as any);
+    return;
+  }
+
+  // Validate schedule if provided
+  if (input.schedule !== undefined) {
+    if (!input.schedule?.type) {
+      writeJSON(res, 400, { success: false, error: 'schedule.type is required when schedule is provided' } as any);
+      return;
+    }
+    if (!['at', 'interval', 'cron'].includes(input.schedule.type)) {
+      writeJSON(res, 400, { success: false, error: 'Invalid schedule type. Must be: at, interval, cron' } as any);
+      return;
+    }
+    if (input.schedule.type === 'cron' && !input.schedule.expression) {
+      writeJSON(res, 400, { success: false, error: 'Cron schedule requires expression field' } as any);
+      return;
+    }
+    if (input.schedule.type === 'at') {
+      if (!input.schedule.datetime) {
+        writeJSON(res, 400, { success: false, error: 'At schedule requires datetime field' } as any);
+        return;
+      }
+      if (new Date(input.schedule.datetime).getTime() <= Date.now()) {
+        writeJSON(res, 400, { success: false, error: 'Execution time must be in the future for one-time (at) tasks' } as any);
+        return;
+      }
+    }
+  }
+
+  // Validate expiresAt if provided
+  if (input.expiresAt !== undefined && input.expiresAt !== null) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (input.expiresAt <= todayStr) {
+      writeJSON(res, 400, { success: false, error: 'Expiration date must be in the future' } as any);
+      return;
+    }
+  }
+
+  // Normalize workingDirectory if provided
+  const updateInput: Partial<ScheduledTaskInput> = { ...input };
+  if (input.workingDirectory !== undefined) {
+    updateInput.workingDirectory = normalizeScheduledTaskWorkingDirectory(input.workingDirectory);
+  }
+
+  try {
+    const task = scheduledTaskDeps.getScheduledTaskStore().updateTask(id, updateInput);
+    if (!task) {
+      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+      return;
+    }
+    scheduledTaskDeps.getScheduler().reschedule();
+
+    // Notify renderer to refresh task list
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('scheduledTask:statusUpdate', {
+        taskId: task.id,
+        state: task.state,
+      });
+    }
+
+    console.log(`[CoworkProxy] Scheduled task updated via API: ${task.id} "${task.name}"`);
+    writeJSON(res, 200, { success: true, task } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to update scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleDeleteScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+
+  const existing = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
+  if (!existing) {
+    writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+    return;
+  }
+
+  try {
+    scheduledTaskDeps.getScheduledTaskStore().deleteTask(id);
+    scheduledTaskDeps.getScheduler().reschedule();
+
+    // Notify renderer to refresh task list
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('scheduledTask:statusUpdate', {
+        taskId: id,
+        state: null,
+      });
+    }
+
+    console.log(`[CoworkProxy] Scheduled task deleted via API: ${id} "${existing.name}"`);
+    writeJSON(res, 200, { success: true } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to delete scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
+async function handleToggleScheduledTask(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string
+): Promise<void> {
+  if (!scheduledTaskDeps) {
+    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
+    return;
+  }
+
+  let body: string;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid request body' } as any);
+    return;
+  }
+
+  let input: any;
+  try {
+    input = JSON.parse(body);
+  } catch {
+    writeJSON(res, 400, { success: false, error: 'Invalid JSON' } as any);
+    return;
+  }
+
+  if (typeof input.enabled !== 'boolean') {
+    writeJSON(res, 400, { success: false, error: 'Field "enabled" (boolean) is required' } as any);
+    return;
+  }
+
+  try {
+    const { task, warning } = scheduledTaskDeps.getScheduledTaskStore().toggleTask(id, input.enabled);
+    if (!task) {
+      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
+      return;
+    }
+    scheduledTaskDeps.getScheduler().reschedule();
+
+    // Notify renderer to refresh task list
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('scheduledTask:statusUpdate', {
+        taskId: task.id,
+        state: task.state,
+      });
+    }
+
+    console.log(`[CoworkProxy] Scheduled task toggled via API: ${task.id} "${task.name}" enabled=${input.enabled}`);
+    writeJSON(res, 200, { success: true, task, warning } as any);
+  } catch (err: any) {
+    console.error('[CoworkProxy] Failed to toggle scheduled task:', err);
+    writeJSON(res, 500, { success: false, error: err.message } as any);
+  }
+}
+
 async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -2219,11 +2482,35 @@ async function handleRequest(
     return;
   }
 
-  // Scheduled task creation API
-  if (method === 'POST' && url.pathname === '/api/scheduled-tasks') {
+  // Scheduled task API
+  const TASK_LIST_PATH = '/api/scheduled-tasks';
+  const TASK_ITEM_RE = /^\/api\/scheduled-tasks\/([^/]+)$/;
+  const TASK_TOGGLE_RE = /^\/api\/scheduled-tasks\/([^/]+)\/toggle$/;
+
+  if (method === 'GET' && url.pathname === TASK_LIST_PATH) {
+    await handleListScheduledTasks(req, res);
+    return;
+  }
+  if (method === 'POST' && url.pathname === TASK_LIST_PATH) {
     await handleCreateScheduledTask(req, res);
     return;
   }
+
+  // Toggle check BEFORE item check (more specific path)
+  const toggleMatch = TASK_TOGGLE_RE.exec(url.pathname);
+  if (method === 'POST' && toggleMatch) {
+    await handleToggleScheduledTask(req, res, toggleMatch[1]);
+    return;
+  }
+
+  const itemMatch = TASK_ITEM_RE.exec(url.pathname);
+  if (itemMatch) {
+    const id = itemMatch[1];
+    if (method === 'GET') { await handleGetScheduledTask(req, res, id); return; }
+    if (method === 'PUT') { await handleUpdateScheduledTask(req, res, id); return; }
+    if (method === 'DELETE') { await handleDeleteScheduledTask(req, res, id); return; }
+  }
+  console.log(`[CoworkProxy] ${method} ${url.pathname}`);
 
   if (method !== 'POST' || url.pathname !== '/v1/messages') {
     writeJSON(res, 404, createAnthropicErrorBody('Not found', 'not_found_error'));
@@ -2256,7 +2543,7 @@ async function handleRequest(
     return;
   }
 
-  const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
+  const initialUpstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
   const openAIRequest = anthropicToOpenAI(parsedRequestBody);
   if (!openAIRequest.model) {
     openAIRequest.model = upstreamConfig.model;
@@ -2278,20 +2565,23 @@ async function handleRequest(
   remapMessageRolesForMiniMax(openAIRequest, upstreamConfig.provider);
   hydrateOpenAIRequestToolCalls(openAIRequest, upstreamConfig.provider, upstreamConfig.baseURL);
 
-  if (upstreamAPIType === 'chat_completions') {
+  if (initialUpstreamAPIType === 'chat_completions') {
     normalizeMaxTokensFieldForOpenAIProvider(openAIRequest, upstreamConfig.provider);
   }
 
   // Some providers (e.g. MiniMax) reject requests with multiple system messages.
   // Merge all system messages into one before sending to these providers.
-  if (upstreamAPIType === 'chat_completions') {
+  if (initialUpstreamAPIType === 'chat_completions') {
     mergeSystemMessagesForProvider(openAIRequest);
   }
 
-  const upstreamRequest = upstreamAPIType === 'responses'
+  let activeUpstreamAPIType: UpstreamAPIType = initialUpstreamAPIType;
+  let upstreamRequest = activeUpstreamAPIType === 'responses'
     ? convertChatCompletionsRequestToResponsesRequest(openAIRequest)
     : openAIRequest;
-  const stream = Boolean(upstreamRequest.stream);
+  let stream = Boolean(upstreamRequest.stream);
+
+  console.log(`[CoworkProxy] Upstream: apiType=${activeUpstreamAPIType}, model=${upstreamRequest.model}, stream=${stream}, provider=${upstreamConfig.provider}`);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -2300,7 +2590,7 @@ async function handleRequest(
     headers.Authorization = `Bearer ${upstreamConfig.apiKey}`;
   }
 
-  const targetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, upstreamAPIType);
+  let targetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, activeUpstreamAPIType);
   let currentTargetURL = targetURLs[0];
 
   const sendUpstreamRequest = async (
@@ -2308,6 +2598,7 @@ async function handleRequest(
     targetURL: string
   ): Promise<Response> => {
     currentTargetURL = targetURL;
+    console.log(`[CoworkProxy] Sending upstream request to: ${targetURL}`);
     return session.defaultSession.fetch(targetURL, {
       method: 'POST',
       headers,
@@ -2316,10 +2607,16 @@ async function handleRequest(
   };
 
   let upstreamResponse: Response;
+  const fetchStartTime = Date.now();
   try {
+    console.log(`[CoworkProxy] Awaiting upstream fetch (stream=${stream}, model=${upstreamRequest.model})...`);
     upstreamResponse = await sendUpstreamRequest(upstreamRequest, targetURLs[0]);
+    const fetchDuration = Date.now() - fetchStartTime;
+    console.log(`[CoworkProxy] Upstream response: status=${upstreamResponse.status}, ok=${upstreamResponse.ok}, fetchTime=${fetchDuration}ms, stream=${stream}`);
   } catch (error) {
+    const fetchDuration = Date.now() - fetchStartTime;
     const message = error instanceof Error ? error.message : 'Network error';
+    console.error(`[CoworkProxy] Upstream fetch error after ${fetchDuration}ms (stream=${stream}): ${message}`);
     lastProxyError = message;
     writeJSON(res, 502, createAnthropicErrorBody(message));
     return;
@@ -2343,14 +2640,69 @@ async function handleRequest(
       }
     }
 
+    if (!upstreamResponse.ok && upstreamResponse.status === 404) {
+      const alternateAPIType = getAlternateUpstreamAPIType(activeUpstreamAPIType);
+      const alternateRequest = alternateAPIType === 'responses'
+        ? convertChatCompletionsRequestToResponsesRequest(openAIRequest)
+        : openAIRequest;
+      const alternateTargetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, alternateAPIType);
+
+      for (let i = 0; i < alternateTargetURLs.length; i += 1) {
+        const retryURL = alternateTargetURLs[i];
+        try {
+          upstreamResponse = await sendUpstreamRequest(alternateRequest, retryURL);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Network error';
+          lastProxyError = message;
+          writeJSON(res, 502, createAnthropicErrorBody(message));
+          return;
+        }
+        if (upstreamResponse.ok || upstreamResponse.status !== 404) {
+          activeUpstreamAPIType = alternateAPIType;
+          upstreamRequest = alternateRequest;
+          targetURLs = alternateTargetURLs;
+          stream = Boolean(upstreamRequest.stream);
+          console.info(
+            `[CoworkProxy] Retried with ${alternateAPIType} after 404 from ${currentTargetURL}`
+          );
+          break;
+        }
+      }
+    }
+
     if (!upstreamResponse.ok) {
       const firstErrorText = await upstreamResponse.text();
+      console.error(`[CoworkProxy] Upstream error: status=${upstreamResponse.status}, body=${firstErrorText.slice(0, 500)}`);
       let firstErrorMessage = extractErrorMessage(firstErrorText);
       if (firstErrorMessage === 'Upstream API request failed') {
         firstErrorMessage = `Upstream API request failed (${upstreamResponse.status}) ${currentTargetURL}`;
       }
 
-      if (upstreamAPIType === 'chat_completions' && upstreamResponse.status === 400) {
+      if (activeUpstreamAPIType === 'chat_completions' && upstreamResponse.status === 400) {
+        // Some Ollama models do not support tool calling.
+        // When the upstream returns "does not support tools", strip tools and retry.
+        if (isToolsUnsupportedError(firstErrorMessage)) {
+          const stripped = stripToolsFromRequest(upstreamRequest);
+          if (stripped) {
+            try {
+              upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
+              if (!upstreamResponse.ok) {
+                const retryErrorText = await upstreamResponse.text();
+                firstErrorMessage = extractErrorMessage(retryErrorText);
+              } else {
+                console.info(
+                  '[CoworkProxy] Retried request after stripping unsupported tools'
+                );
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Network error';
+              lastProxyError = message;
+              writeJSON(res, 502, createAnthropicErrorBody(message));
+              return;
+            }
+          }
+        }
+
         if (isMaxTokensUnsupportedError(firstErrorMessage)) {
           const convertResult = convertMaxTokensToMaxCompletionTokens(upstreamRequest);
           if (convertResult.changed) {
@@ -2410,14 +2762,17 @@ async function handleRequest(
   lastProxyError = null;
 
   if (stream) {
-    if (upstreamAPIType === 'responses') {
+    console.log(`[CoworkProxy] Handling streaming response (type=${activeUpstreamAPIType})`);
+    if (activeUpstreamAPIType === 'responses') {
       await handleResponsesStreamResponse(upstreamResponse, res);
     } else {
       await handleChatCompletionsStreamResponse(upstreamResponse, res);
     }
+    console.log('[CoworkProxy] Streaming response completed');
     return;
   }
 
+  console.log('[CoworkProxy] Handling non-streaming response');
   let upstreamJSON: unknown;
   try {
     upstreamJSON = await upstreamResponse.json();
@@ -2427,7 +2782,7 @@ async function handleRequest(
     return;
   }
 
-  if (upstreamAPIType === 'responses') {
+  if (activeUpstreamAPIType === 'responses') {
     const syntheticOpenAIResponse = convertResponsesToOpenAIResponse(upstreamJSON);
     cacheToolCallExtraContentFromOpenAIResponse(syntheticOpenAIResponse);
     cacheToolCallExtraContentFromResponsesResponse(upstreamJSON);

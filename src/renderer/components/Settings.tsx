@@ -8,7 +8,7 @@ import { coworkService } from '../services/cowork';
 import { imService } from '../services/im';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, PlusCircleIcon, TrashIcon, PencilIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, ShieldCheckIcon, EnvelopeIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, PlusCircleIcon, TrashIcon, PencilIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, ShieldCheckIcon, EnvelopeIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
 import BrainIcon from './icons/BrainIcon';
 import { useDispatch, useSelector } from 'react-redux';
 import { setAvailableModels } from '../store/slices/modelSlice';
@@ -40,7 +40,7 @@ import {
   CustomProviderIcon,
 } from './icons/providers';
 
-type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email';
+type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -454,6 +454,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const [newModelId, setNewModelId] = useState('');
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [modelFormError, setModelFormError] = useState<string | null>(null);
+
+  // About tab
+  const [appVersion, setAppVersion] = useState('');
+
+  useEffect(() => {
+    window.electron.appInfo.getVersion().then(setAppVersion);
+  }, []);
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
   const imConfig = useSelector((state: RootState) => state.im.config);
@@ -1445,12 +1452,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   };
 
   const handleSaveNewModel = () => {
-    const modelName = newModelName.trim();
     const modelId = newModelId.trim();
-    if (!modelName || !modelId) {
-      setModelFormError(i18nService.t('modelNameAndIdRequired'));
-      return;
+
+    if (activeProvider === 'ollama') {
+      // For Ollama, only the model name (stored as modelId) is required
+      if (!modelId) {
+        setModelFormError(i18nService.t('ollamaModelNameRequired'));
+        return;
+      }
+    } else {
+      const modelName = newModelName.trim();
+      if (!modelName || !modelId) {
+        setModelFormError(i18nService.t('modelNameAndIdRequired'));
+        return;
+      }
     }
+
+    // For Ollama, auto-fill display name from modelId if not provided
+    const modelName = activeProvider === 'ollama'
+      ? (newModelName.trim() && newModelName.trim() !== modelId ? newModelName.trim() : modelId)
+      : newModelName.trim();
 
     const currentModels = activeProviderConfig.models ?? [];
     const duplicateModel = currentModels.find(
@@ -2139,6 +2160,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
     { key: 'coworkSandbox',  label: i18nService.t('coworkSandbox'),  icon: <ShieldCheckIcon className="h-5 w-5" /> },
     { key: 'shortcuts',      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
+    { key: 'about',          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
   ], [language]);
 
   const activeTabLabel = useMemo(() => {
@@ -3173,6 +3195,51 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       case 'im':
         return <IMSettings />;
 
+      case 'about':
+        return (
+          <div className="flex flex-col items-center pt-6 pb-4">
+            {/* Logo & App Name */}
+            <img src="logo.png" alt="LobsterAI" className="w-16 h-16 mb-3" />
+            <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
+            <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
+
+            {/* Info Card */}
+            <div className="w-full mt-8 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
+                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutVersion')}</span>
+                <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{appVersion}</span>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
+                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutContactEmail')}</span>
+                <a
+                  href="mailto:lobsterai.project@rd.netease.com"
+                  className="text-sm text-claude-accent hover:underline"
+                >
+                  lobsterai.project@rd.netease.com
+                </a>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutUserManual')}</span>
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.electron.shell.openExternal('https://lobsterai.youdao.com/#/docs/lobsterai_user_manual');
+                  }}
+                  className="text-sm text-claude-accent hover:underline"
+                >
+                  https://lobsterai.youdao.com/#/docs/lobsterai_user_manual
+                </a>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-6">
+              &copy; {new Date().getFullYear()} NetEase Youdao
+            </p>
+          </div>
+        );
+
       default:
         return null;
     }
@@ -3357,41 +3424,92 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 )}
 
                 <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                      {i18nService.t('modelName')}
-                    </label>
-                    <input
-                      autoFocus
-                      type="text"
-                      value={newModelName}
-                      onChange={(e) => {
-                        setNewModelName(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                      placeholder="GPT-4"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                      {i18nService.t('modelId')}
-                    </label>
-                    <input
-                      type="text"
-                      value={newModelId}
-                      onChange={(e) => {
-                        setNewModelId(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                      placeholder="gpt-4"
-                    />
-                  </div>
+                  {activeProvider === 'ollama' ? (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('ollamaModelName')}
+                        </label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={newModelId}
+                          onChange={(e) => {
+                            setNewModelId(e.target.value);
+                            if (!newModelName || newModelName === newModelId) {
+                              setNewModelName(e.target.value);
+                            }
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder={i18nService.t('ollamaModelNamePlaceholder')}
+                        />
+                        <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
+                          {i18nService.t('ollamaModelNameHint')}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('ollamaDisplayName')}
+                        </label>
+                        <input
+                          type="text"
+                          value={newModelName === newModelId ? '' : newModelName}
+                          onChange={(e) => {
+                            setNewModelName(e.target.value || newModelId);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder={i18nService.t('ollamaDisplayNamePlaceholder')}
+                        />
+                        <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
+                          {i18nService.t('ollamaDisplayNameHint')}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('modelName')}
+                        </label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={newModelName}
+                          onChange={(e) => {
+                            setNewModelName(e.target.value);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder="GPT-4"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('modelId')}
+                        </label>
+                        <input
+                          type="text"
+                          value={newModelId}
+                          onChange={(e) => {
+                            setNewModelId(e.target.value);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder="gpt-4"
+                        />
+                      </div>
+                    </>
+                  )}
                   <div className="flex items-center space-x-2">
                     <input
                       id={`${activeProvider}-supportsImage`}
