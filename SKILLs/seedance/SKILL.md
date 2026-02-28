@@ -9,7 +9,7 @@ version: 1.0.0
 
 使用火山引擎 Seedance 模型生成高质量 AI 视频，支持文本生成视频（T2V）、图片生成视频（I2V）、音画同步等多种创作模式。
 
-> ✨ **Node.js 版本**：此脚本使用 Node.js 实现，无需 Python 环境。Windows 和 Mac 用户都可以开箱即用。
+> ✨ **Node.js 版本**：此脚本使用 Node.js 实现，无需 Python 环境。通过入口脚本自动检测 Node.js 运行时（优先使用系统 node，回退到 LobsterAI 内置运行时），Windows 和 Mac 用户都可以开箱即用。
 
 ## 配置
 
@@ -101,7 +101,7 @@ Seedance 视频生成是一个异步过程：
 根据文字描述生成视频，适合创意激发和概念验证。
 
 ```bash
-node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "一只小猫在草地上玩耍，阳光明媚，镜头缓缓推进" \
   --duration 5 \
   --output generated_video.mp4
@@ -118,14 +118,14 @@ node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
 
 ```bash
 # 使用本地图片
-node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "女孩睁开眼，温柔地看向镜头，头发被风吹动" \
   --image "/Users/yourname/Pictures/girl.jpg" \
   --duration 5 \
   --output i2v_video.mp4
 
 # 使用网络图片
-node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "女孩睁开眼，温柔地看向镜头，头发被风吹动" \
   --image "https://example.com/first_frame.jpg" \
   --duration 5 \
@@ -145,7 +145,7 @@ node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
 提供首帧和尾帧，生成过渡动画。**支持本地图片**。
 
 ```bash
-node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "360度环绕运镜，流畅过渡" \
   --image "/Users/yourname/Pictures/first_frame.jpg" \
   --image "/Users/yourname/Pictures/last_frame.jpg" \
@@ -158,7 +158,7 @@ node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
 融合多张参考图的特征生成视频。**支持混合使用本地图片和网络图片**。
 
 ```bash
-node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "[图1]戴着眼镜穿着蓝色T恤的男生和[图2]的柯基小狗，坐在[图3]的草坪上，视频卡通风格" \
   --image "/Users/yourname/Pictures/person.jpg" \
   --image "https://example.com/dog.jpg" \
@@ -173,7 +173,7 @@ node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
 生成包含音频的视频（环境音、动作音、背景音乐等）。**支持本地图片**。
 
 ```bash
-node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "镜头围绕人物推镜头拉近，特写人物面部，她正在用京剧唱腔唱'月移花影，疑是玉人来'，唱词充满情感" \
   --image "/Users/yourname/Pictures/actress.jpg" \
   --audio \
@@ -250,7 +250,7 @@ node "$SKILLS_ROOT/seedance/scripts/generate_video.js" \
 
 ```bash
 # 命令行方式
-python3 "$SKILLS_ROOT/seedance/scripts/generate_video.py" \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "你的提示词" \
   --model "doubao-seedance-2-0-260128" \
   --duration 5
@@ -411,7 +411,7 @@ python3 "$SKILLS_ROOT/seedance/scripts/generate_video.py" \
 
 ### 短视频创作
 ```bash
-node scripts/generate_video.js \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "产品展示：智能手表从不同角度旋转展示" \
   --ratio "9:16" \
   --duration 5
@@ -419,7 +419,7 @@ node scripts/generate_video.js \
 
 ### 动画短片
 ```bash
-node scripts/generate_video.js \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "卡通风格，小兔子在森林里蹦蹦跳跳" \
   --ratio "16:9" \
   --duration 8 \
@@ -428,7 +428,7 @@ node scripts/generate_video.js \
 
 ### 社交媒体内容
 ```bash
-node scripts/generate_video.js \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "美食特写：热气腾腾的拉面，筷子夹起面条" \
   --ratio "1:1" \
   --duration 3
@@ -436,7 +436,7 @@ node scripts/generate_video.js \
 
 ### 教学演示
 ```bash
-node scripts/generate_video.js \
+bash "$SKILLS_ROOT/seedance/scripts/generate-video.sh" \
   --prompt "科普动画：地球自转，太阳光照射地球表面" \
   --ratio "16:9" \
   --duration 10

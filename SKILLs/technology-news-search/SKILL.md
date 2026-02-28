@@ -87,7 +87,7 @@ This skill searches multiple technology news sources simultaneously, automatical
 
 To disable smart routing and search all available sources (respects network availability):
 ```bash
-python3 search_news.py "keyword" --all-sources
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "keyword" --all-sources
 ```
 
 ## Supported Technical Domains
@@ -121,8 +121,7 @@ When user asks: **"Search for Electron tech news"** or **"搜索 Electron 技术
 
 Execute:
 ```bash
-cd scripts
-node search_news.js "Electron" --limit 15
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "Electron" --limit 15
 ```
 
 The script will:
@@ -140,11 +139,10 @@ Read the JSON and present results in Markdown format with translations.
 
 2. **Run search script**
    ```bash
-   cd scripts
-   node search_news.js "[keyword]" --limit 15 --max-per-source 5
+   bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "[keyword]" --limit 15 --max-per-source 5
 
    # To search all sources (disable smart routing)
-   node search_news.js "[keyword]" --limit 15 --all-sources
+   bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "[keyword]" --limit 15 --all-sources
    ```
 
    **Parameters:**
@@ -183,10 +181,10 @@ Read the JSON and present results in Markdown format with translations.
 **Customization:**
 ```bash
 # Show more articles per source
-python3 search_news.py "AI" --max-per-source 10
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "AI" --max-per-source 10
 
 # Disable balancing (show all by heat score only)
-python3 search_news.py "AI" --no-balance
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "AI" --no-balance
 ```
 
 **How it works:**
@@ -292,7 +290,7 @@ Articles appearing on multiple sources rank higher, indicating broader industry 
 - Verify sources are enabled in [references/sources.json](references/sources.json)
 
 **Script errors:**
-- Ensure Node.js 24+ is installed (`node --version`)
+- Ensure Node.js is available or LobsterAI Electron is running
 - Check network connectivity
 - Review stderr output for specific error messages
 - Some sources may be temporarily unavailable
