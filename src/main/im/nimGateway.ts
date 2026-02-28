@@ -606,6 +606,20 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): string | null {
+    return this.lastSenderId;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(senderId: string): void {
+    this.lastSenderId = senderId;
+  }
+
+  /**
    * Send a notification message to the last known sender
    */
   async sendNotification(text: string): Promise<void> {
@@ -614,5 +628,16 @@ export class NimGateway extends EventEmitter {
     }
     await this.sendLongText(this.lastSenderId, text);
     this.status.lastOutboundAt = Date.now();
+  }
+
+  /**
+   * Send a notification message with media support to the last known sender.
+   * NIM is text-only, so media markers are stripped from the text.
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    const { parseMediaMarkers, stripMediaMarkers } = await import('./dingtalkMediaParser');
+    const markers = parseMediaMarkers(text);
+    const cleanText = markers.length > 0 ? stripMediaMarkers(text, markers) : text;
+    await this.sendNotification(cleanText || text);
   }
 }

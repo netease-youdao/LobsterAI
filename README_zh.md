@@ -364,6 +364,12 @@ PR 描述中请包含：变更说明、关联 issue、UI 变更附截图，以�
 
 [MIT License](LICENSE)
 
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=netease-youdao/LobsterAI&type=date&legend=top-left)](https://www.star-history.com/#netease-youdao/LobsterAI&type=date&legend=top-left)
+
+
 ---
 
 由[网易有道](https://www.youdao.com/)开发维护。

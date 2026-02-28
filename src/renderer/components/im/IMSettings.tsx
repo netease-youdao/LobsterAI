@@ -299,8 +299,8 @@ const IMSettings: React.FC = () => {
               onClick={() => setActivePlatform(platform)}
               className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
                 activePlatform === platform
-                  ? 'bg-claude-accent/10 dark:bg-claude-accent/20 border border-claude-accent/30'
-                  : 'bg-claude-surfaceHover/80 dark:bg-claude-darkSurface/55 dark:bg-gradient-to-br dark:from-claude-darkSurface/70 dark:to-claude-darkSurfaceHover/70 hover:bg-claude-surface dark:hover:from-claude-darkSurface/80 dark:hover:to-claude-darkSurfaceHover/80 dark:border-claude-darkBorder/70 border-claude-border/80 border'
+                  ? 'bg-claude-accent/10 dark:bg-claude-accent/20 border border-claude-accent/30 shadow-subtle'
+                  : 'dark:bg-claude-darkSurface/50 bg-claude-surface hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover border border-transparent'
               }`}
             >
               <div className="flex flex-1 items-center">

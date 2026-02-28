@@ -17,6 +17,9 @@ const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.c
 // Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
 const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
 const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
+// Moonshot/Kimi Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const MOONSHOT_CODING_PLAN_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1';
+const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
 
 type ProviderModel = {
   id: string;
@@ -156,6 +159,17 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       baseURL = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
     } else {
       baseURL = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
+      apiFormat = 'openai';
+    }
+  }
+
+  // Handle Moonshot/Kimi Coding Plan endpoint switch
+  // Coding Plan supports both OpenAI and Anthropic compatible formats
+  if (providerName === 'moonshot' && providerConfig.codingPlanEnabled) {
+    if (apiFormat === 'anthropic') {
+      baseURL = MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL;
+    } else {
+      baseURL = MOONSHOT_CODING_PLAN_OPENAI_BASE_URL;
       apiFormat = 'openai';
     }
   }

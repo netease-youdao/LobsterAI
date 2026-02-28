@@ -94,6 +94,74 @@ export class SkillServiceManager {
     }
   }
 
+  private hasLegacyWebSearchEncodingHeuristic(serverEntry: string): boolean {
+    try {
+      const content = fs.readFileSync(serverEntry, 'utf-8');
+      return content.includes('scoreDecodedJsonText')
+        && content.includes('Request body decoded using gb18030 (score');
+    } catch {
+      return true;
+    }
+  }
+
+  private isWebSearchDistOutdated(skillPath: string): boolean {
+    const serverEntry = path.join(skillPath, 'dist', 'server', 'index.js');
+    if (!fs.existsSync(serverEntry)) {
+      return true;
+    }
+
+    if (this.hasLegacyWebSearchEncodingHeuristic(serverEntry)) {
+      return true;
+    }
+
+    const sourceDir = path.join(skillPath, 'server');
+    if (!fs.existsSync(sourceDir)) {
+      return false;
+    }
+
+    let distMtimeMs = 0;
+    try {
+      distMtimeMs = fs.statSync(serverEntry).mtimeMs;
+    } catch {
+      return true;
+    }
+
+    const queue: string[] = [sourceDir];
+    while (queue.length > 0) {
+      const current = queue.pop();
+      if (!current) continue;
+
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch {
+        return true;
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          queue.push(fullPath);
+          continue;
+        }
+
+        if (!entry.isFile() || !entry.name.endsWith('.ts')) {
+          continue;
+        }
+
+        try {
+          if (fs.statSync(fullPath).mtimeMs > distMtimeMs) {
+            return true;
+          }
+        } catch {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   private isWebSearchRuntimeHealthy(skillPath: string): boolean {
     const requiredPaths = [
       path.join(skillPath, 'scripts', 'start-server.sh'),
@@ -102,7 +170,8 @@ export class SkillServiceManager {
       path.join(skillPath, 'node_modules', 'iconv-lite', 'encodings', 'index.js'),
     ];
     return requiredPaths.every(requiredPath => fs.existsSync(requiredPath))
-      && this.hasWebSearchRuntimeScriptSupport(skillPath);
+      && this.hasWebSearchRuntimeScriptSupport(skillPath)
+      && !this.isWebSearchDistOutdated(skillPath);
   }
 
   private hasCommand(command: string, env: NodeJS.ProcessEnv): boolean {
@@ -172,9 +241,10 @@ export class SkillServiceManager {
       execSync('npm install', { cwd: skillPath, stdio: 'ignore', env });
     }
 
-    if (!fs.existsSync(distDir)) {
+    const shouldCompileDist = !fs.existsSync(distDir) || this.isWebSearchDistOutdated(skillPath);
+    if (shouldCompileDist) {
       if (!npmAvailable) {
-        throw new Error('Web-search dist files are missing and npm is not available to rebuild them');
+        throw new Error('Web-search dist files are missing/outdated and npm is not available to rebuild them');
       }
       console.log('[SkillServices] Compiling web-search TypeScript...');
       execSync('npm run build', { cwd: skillPath, stdio: 'ignore', env });

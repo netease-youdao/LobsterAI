@@ -364,6 +364,11 @@ Please include in your PR description: a summary of changes, linked issue (if an
 
 [MIT License](LICENSE)
 
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=netease-youdao/LobsterAI&type=date&legend=top-left)](https://www.star-history.com/#netease-youdao/LobsterAI&type=date&legend=top-left)
+
 ---
 
 Built and maintained by [NetEase Youdao](https://www.youdao.com/).
