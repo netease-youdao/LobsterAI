@@ -269,9 +269,12 @@ class ApiService {
   // 检测当前选择的模型属于哪个 provider
   private detectProvider(modelId: string, providerHint?: string): string {
     const normalizedHint = providerHint?.toLowerCase();
+    if (normalizedHint?.startsWith('custom')) {
+      return 'custom';
+    }
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -300,9 +303,56 @@ class ApiService {
     return 'openai'; // 默认使用 OpenAI 兼容格式
   }
 
-  // 获取指定 provider 的配置
-  private getProviderConfig(provider: string): ApiConfig | null {
+  private resolveCustomProvider(customProviderId?: string) {
     const appConfig = configService.getConfig();
+    const customProviders = appConfig.customProviders ?? [];
+    if (customProviders.length > 0) {
+      const activeId = appConfig.activeCustomProviderId;
+      const target = customProviders.find((provider) => provider.id === customProviderId)
+        ?? customProviders.find((provider) => provider.id === activeId)
+        ?? customProviders[0];
+      if (target) {
+        return {
+          provider: target,
+          providerId: target.id,
+        };
+      }
+    }
+
+    const legacyCustom = appConfig.providers?.custom;
+    if (legacyCustom) {
+      return {
+        provider: legacyCustom,
+        providerId: 'legacy-custom',
+      };
+    }
+    return null;
+  }
+
+  // 获取指定 provider 的配置
+  private getProviderConfig(provider: string, customProviderId?: string): ApiConfig | null {
+    const appConfig = configService.getConfig();
+
+    if (provider === 'custom') {
+      const customEnabled = appConfig.providers?.custom?.enabled === true;
+      if (!customEnabled) {
+        return null;
+      }
+      const resolvedCustomProvider = this.resolveCustomProvider(customProviderId);
+      if (!resolvedCustomProvider) {
+        return null;
+      }
+      const providerConfig = resolvedCustomProvider.provider;
+      if (providerConfig.apiKey || !this.providerRequiresApiKey(provider)) {
+        return {
+          apiKey: providerConfig.apiKey,
+          baseUrl: providerConfig.baseUrl,
+          provider,
+          apiFormat: this.normalizeApiFormat(providerConfig.apiFormat),
+        };
+      }
+      return null;
+    }
 
     if (appConfig?.providers?.[provider]) {
       const providerConfig = appConfig.providers[provider];
@@ -376,7 +426,7 @@ class ApiService {
     }
 
     const selectedModel = store.getState().model.selectedModel;
-    const provider = this.detectProvider(selectedModel.id, selectedModel.provider);
+    const provider = this.detectProvider(selectedModel.id, selectedModel.providerKey ?? selectedModel.provider);
     const supportsImages = !!selectedModel.supportsImage;
     const userMessage: ChatUserMessageInput = typeof message === 'string'
       ? { content: message }
@@ -384,9 +434,11 @@ class ApiService {
 
     // 尝试获取模型对应 provider 的配置
     let effectiveConfig = this.config;
-    const providerConfig = this.getProviderConfig(provider);
+    const providerConfig = this.getProviderConfig(provider, selectedModel.customProviderId);
     if (providerConfig) {
       effectiveConfig = providerConfig;
+    } else if (provider === 'custom') {
+      throw new ApiError('Custom provider is not configured or not enabled. Please check your Custom profile settings.');
     }
 
     if (this.providerRequiresApiKey(provider) && !effectiveConfig.apiKey) {

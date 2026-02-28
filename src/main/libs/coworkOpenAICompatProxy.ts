@@ -48,6 +48,10 @@ type StreamState = {
 
 type UpstreamAPIType = 'chat_completions' | 'responses';
 
+function getAlternateUpstreamAPIType(apiType: UpstreamAPIType): UpstreamAPIType {
+  return apiType === 'responses' ? 'chat_completions' : 'responses';
+}
+
 type ResponsesFunctionCallState = {
   outputIndex: number;
   callId: string;
@@ -2539,7 +2543,7 @@ async function handleRequest(
     return;
   }
 
-  const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
+  const initialUpstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
   const openAIRequest = anthropicToOpenAI(parsedRequestBody);
   if (!openAIRequest.model) {
     openAIRequest.model = upstreamConfig.model;
@@ -2561,22 +2565,23 @@ async function handleRequest(
   remapMessageRolesForMiniMax(openAIRequest, upstreamConfig.provider);
   hydrateOpenAIRequestToolCalls(openAIRequest, upstreamConfig.provider, upstreamConfig.baseURL);
 
-  if (upstreamAPIType === 'chat_completions') {
+  if (initialUpstreamAPIType === 'chat_completions') {
     normalizeMaxTokensFieldForOpenAIProvider(openAIRequest, upstreamConfig.provider);
   }
 
   // Some providers (e.g. MiniMax) reject requests with multiple system messages.
   // Merge all system messages into one before sending to these providers.
-  if (upstreamAPIType === 'chat_completions') {
+  if (initialUpstreamAPIType === 'chat_completions') {
     mergeSystemMessagesForProvider(openAIRequest);
   }
 
-  const upstreamRequest = upstreamAPIType === 'responses'
+  let activeUpstreamAPIType: UpstreamAPIType = initialUpstreamAPIType;
+  let upstreamRequest = activeUpstreamAPIType === 'responses'
     ? convertChatCompletionsRequestToResponsesRequest(openAIRequest)
     : openAIRequest;
-  const stream = Boolean(upstreamRequest.stream);
+  let stream = Boolean(upstreamRequest.stream);
 
-  console.log(`[CoworkProxy] Upstream: apiType=${upstreamAPIType}, model=${upstreamRequest.model}, stream=${stream}, provider=${upstreamConfig.provider}`);
+  console.log(`[CoworkProxy] Upstream: apiType=${activeUpstreamAPIType}, model=${upstreamRequest.model}, stream=${stream}, provider=${upstreamConfig.provider}`);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -2585,7 +2590,7 @@ async function handleRequest(
     headers.Authorization = `Bearer ${upstreamConfig.apiKey}`;
   }
 
-  const targetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, upstreamAPIType);
+  let targetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, activeUpstreamAPIType);
   let currentTargetURL = targetURLs[0];
 
   const sendUpstreamRequest = async (
@@ -2635,6 +2640,36 @@ async function handleRequest(
       }
     }
 
+    if (!upstreamResponse.ok && upstreamResponse.status === 404) {
+      const alternateAPIType = getAlternateUpstreamAPIType(activeUpstreamAPIType);
+      const alternateRequest = alternateAPIType === 'responses'
+        ? convertChatCompletionsRequestToResponsesRequest(openAIRequest)
+        : openAIRequest;
+      const alternateTargetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, alternateAPIType);
+
+      for (let i = 0; i < alternateTargetURLs.length; i += 1) {
+        const retryURL = alternateTargetURLs[i];
+        try {
+          upstreamResponse = await sendUpstreamRequest(alternateRequest, retryURL);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Network error';
+          lastProxyError = message;
+          writeJSON(res, 502, createAnthropicErrorBody(message));
+          return;
+        }
+        if (upstreamResponse.ok || upstreamResponse.status !== 404) {
+          activeUpstreamAPIType = alternateAPIType;
+          upstreamRequest = alternateRequest;
+          targetURLs = alternateTargetURLs;
+          stream = Boolean(upstreamRequest.stream);
+          console.info(
+            `[CoworkProxy] Retried with ${alternateAPIType} after 404 from ${currentTargetURL}`
+          );
+          break;
+        }
+      }
+    }
+
     if (!upstreamResponse.ok) {
       const firstErrorText = await upstreamResponse.text();
       console.error(`[CoworkProxy] Upstream error: status=${upstreamResponse.status}, body=${firstErrorText.slice(0, 500)}`);
@@ -2643,7 +2678,7 @@ async function handleRequest(
         firstErrorMessage = `Upstream API request failed (${upstreamResponse.status}) ${currentTargetURL}`;
       }
 
-      if (upstreamAPIType === 'chat_completions' && upstreamResponse.status === 400) {
+      if (activeUpstreamAPIType === 'chat_completions' && upstreamResponse.status === 400) {
         // Some Ollama models do not support tool calling.
         // When the upstream returns "does not support tools", strip tools and retry.
         if (isToolsUnsupportedError(firstErrorMessage)) {
@@ -2727,8 +2762,8 @@ async function handleRequest(
   lastProxyError = null;
 
   if (stream) {
-    console.log(`[CoworkProxy] Handling streaming response (type=${upstreamAPIType})`);
-    if (upstreamAPIType === 'responses') {
+    console.log(`[CoworkProxy] Handling streaming response (type=${activeUpstreamAPIType})`);
+    if (activeUpstreamAPIType === 'responses') {
       await handleResponsesStreamResponse(upstreamResponse, res);
     } else {
       await handleChatCompletionsStreamResponse(upstreamResponse, res);
@@ -2747,7 +2782,7 @@ async function handleRequest(
     return;
   }
 
-  if (upstreamAPIType === 'responses') {
+  if (activeUpstreamAPIType === 'responses') {
     const syntheticOpenAIResponse = convertResponsesToOpenAIResponse(upstreamJSON);
     cacheToolCallExtraContentFromOpenAIResponse(syntheticOpenAIResponse);
     cacheToolCallExtraContentFromResponsesResponse(upstreamJSON);

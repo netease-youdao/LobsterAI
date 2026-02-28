@@ -18,6 +18,7 @@ import { scheduledTaskService } from './services/scheduledTask';
 import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS } from './services/appUpdate';
 import { defaultConfig } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
+import type { Model } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
 import type { ApiConfig } from './services/api';
 import type { CoworkPermissionResult } from './types/cowork';
@@ -50,6 +51,64 @@ const App: React.FC = () => {
   const pendingPermission = pendingPermissions[0] ?? null;
   const isWindows = window.electron.platform === 'win32';
 
+  const buildModelsFromConfig = useCallback((config: ReturnType<typeof configService.getConfig>): Model[] => {
+    const providerModels: Model[] = [];
+    if (config.providers) {
+      Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
+        if (providerName === 'custom') {
+          return;
+        }
+        if (providerConfig.enabled && providerConfig.models) {
+          providerConfig.models.forEach((model) => {
+            providerModels.push({
+              id: model.id,
+              name: model.name,
+              provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              providerKey: providerName,
+              supportsImage: model.supportsImage ?? false,
+            });
+          });
+        }
+      });
+    }
+
+    if (config.providers?.custom?.enabled && config.customProviders) {
+      config.customProviders.forEach((customProvider) => {
+        if (!customProvider.models) {
+          return;
+        }
+        customProvider.models.forEach((model) => {
+          providerModels.push({
+            id: model.id,
+            name: model.name,
+            provider: `Custom (${customProvider.name})`,
+            providerKey: 'custom',
+            customProviderId: customProvider.id,
+            supportsImage: model.supportsImage ?? false,
+          });
+        });
+      });
+    }
+
+    if (providerModels.length > 0) {
+      return providerModels;
+    }
+
+    return config.model.availableModels.map((model) => ({
+      id: model.id,
+      name: model.name,
+      supportsImage: model.supportsImage ?? false,
+    }));
+  }, []);
+
+  const resolvePreferredModel = useCallback((models: Model[], config: ReturnType<typeof configService.getConfig>): Model => {
+    return models.find((model) => (
+      model.id === config.model.defaultModel
+      && (model.providerKey ?? '') === (config.model.defaultModelProviderKey ?? '')
+      && (model.customProviderId ?? '') === (config.model.defaultModelCustomProviderId ?? '')
+    )) ?? models.find((model) => model.id === config.model.defaultModel) ?? models[0]!;
+  }, []);
+
   // 初始化应用
   useEffect(() => {
     if (hasInitialized.current) {
@@ -79,31 +138,11 @@ const App: React.FC = () => {
         };
         apiService.setConfig(apiConfig);
 
-        // 从 providers 配置中加载可用模型列表到 Redux
-        const providerModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
-        if (config.providers) {
-          Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
-            if (providerConfig.enabled && providerConfig.models) {
-              providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-                providerModels.push({
-                  id: model.id,
-                  name: model.name,
-                  provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
-                  supportsImage: model.supportsImage ?? false,
-                });
-              });
-            }
-          });
-        }
-        const fallbackModels = config.model.availableModels.map(model => ({
-          id: model.id,
-          name: model.name,
-          supportsImage: model.supportsImage ?? false,
-        }));
-        const resolvedModels = providerModels.length > 0 ? providerModels : fallbackModels;
+        // 从 provider 配置中加载可用模型列表到 Redux（含多个 custom 配置）
+        const resolvedModels = buildModelsFromConfig(config);
         if (resolvedModels.length > 0) {
           dispatch(setAvailableModels(resolvedModels));
-          const preferredModel = resolvedModels.find(model => model.id === config.model.defaultModel) ?? resolvedModels[0];
+          const preferredModel = resolvePreferredModel(resolvedModels, config);
           dispatch(setSelectedModel(preferredModel));
         }
         
@@ -119,7 +158,7 @@ const App: React.FC = () => {
     };
 
     initializeApp();
-  }, []);
+  }, [buildModelsFromConfig, resolvePreferredModel]);
 
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {
@@ -154,14 +193,22 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isInitialized || !selectedModel?.id) return;
     const config = configService.getConfig();
-    if (config.model.defaultModel === selectedModel.id) return;
+    if (
+      config.model.defaultModel === selectedModel.id
+      && (config.model.defaultModelProviderKey ?? '') === (selectedModel.providerKey ?? '')
+      && (config.model.defaultModelCustomProviderId ?? '') === (selectedModel.customProviderId ?? '')
+    ) {
+      return;
+    }
     void configService.updateConfig({
       model: {
         ...config.model,
         defaultModel: selectedModel.id,
+        defaultModelProviderKey: selectedModel.providerKey,
+        defaultModelCustomProviderId: selectedModel.customProviderId,
       },
     });
-  }, [isInitialized, selectedModel?.id]);
+  }, [isInitialized, selectedModel?.id, selectedModel?.providerKey, selectedModel?.customProviderId]);
 
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {
     setSettingsOptions({
@@ -322,23 +369,9 @@ const App: React.FC = () => {
       baseUrl: config.api.baseUrl,
     });
 
-    if (config.providers) {
-      const allModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
-      Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
-        if (providerConfig.enabled && providerConfig.models) {
-          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-            allModels.push({
-              id: model.id,
-              name: model.name,
-              provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
-              supportsImage: model.supportsImage ?? false,
-            });
-          });
-        }
-      });
-      if (allModels.length > 0) {
-        dispatch(setAvailableModels(allModels));
-      }
+    const allModels = buildModelsFromConfig(config);
+    if (allModels.length > 0) {
+      dispatch(setAvailableModels(allModels));
     }
   };
 

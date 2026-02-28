@@ -15,6 +15,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
   const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
 
+  const getModelIdentity = (model: typeof availableModels[number]): string => (
+    `${model.providerKey ?? ''}::${model.customProviderId ?? ''}::${model.id}`
+  );
+
+  const selectedModelIdentity = getModelIdentity(selectedModel);
+
   // 点击外部区域关闭下拉框
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -65,10 +71,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
           <div className="max-h-64 overflow-y-auto">
           {availableModels.map((model) => (
             <button
-              key={model.id}
+              key={getModelIdentity(model)}
               onClick={() => handleModelSelect(model)}
               className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
-                model.id === selectedModel.id ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+                getModelIdentity(model) === selectedModelIdentity ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
               }`}
             >
               <div className="flex flex-col">
@@ -77,7 +83,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
                   <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
                 )}
               </div>
-              {model.id === selectedModel.id && (
+              {getModelIdentity(model) === selectedModelIdentity && (
                 <CheckIcon className="h-4 w-4 text-claude-accent" />
               )}
             </button>
