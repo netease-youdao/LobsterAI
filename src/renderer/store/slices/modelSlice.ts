@@ -5,7 +5,26 @@ export interface Model {
   id: string;
   name: string;
   provider?: string; // 模型所属的提供商
+  providerKey?: string; // 模型所属的提供商 key（用于唯一标识）
   supportsImage?: boolean;
+}
+
+export function getModelIdentityKey(model: Pick<Model, 'id' | 'providerKey'>): string {
+  return `${model.providerKey ?? ''}::${model.id}`;
+}
+
+export function isSameModelIdentity(
+  modelA: Pick<Model, 'id' | 'providerKey'>,
+  modelB: Pick<Model, 'id' | 'providerKey'>
+): boolean {
+  if (modelA.id !== modelB.id) {
+    return false;
+  }
+  if (modelA.providerKey && modelB.providerKey) {
+    return modelA.providerKey === modelB.providerKey;
+  }
+  // 兼容旧配置：缺失 providerKey 时回退到 id 匹配
+  return true;
 }
 
 // 从 providers 配置中构建初始可用模型列表
@@ -19,6 +38,7 @@ function buildInitialModels(): Model[] {
             id: model.id,
             name: model.name,
             provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+            providerKey: providerName,
             supportsImage: model.supportsImage ?? false,
           });
         });
@@ -30,6 +50,7 @@ function buildInitialModels(): Model[] {
 
 // 初始可用模型列表（会在运行时更新）
 export let availableModels: Model[] = buildInitialModels();
+const defaultModelProvider = defaultConfig.model.defaultModelProvider;
 
 interface ModelState {
   selectedModel: Model;
@@ -38,7 +59,10 @@ interface ModelState {
 
 const initialState: ModelState = {
   // 使用 config 中的默认模型
-  selectedModel: availableModels.find(model => model.id === defaultConfig.model.defaultModel) || availableModels[0],
+  selectedModel: availableModels.find(
+    model => model.id === defaultConfig.model.defaultModel
+      && (!defaultModelProvider || model.providerKey === defaultModelProvider)
+  ) || availableModels[0],
   availableModels: availableModels,
 };
 
@@ -55,7 +79,7 @@ const modelSlice = createSlice({
       availableModels = action.payload;
       // 同步选中模型信息，确保名称与最新配置一致
       if (action.payload.length > 0) {
-        const matchedModel = action.payload.find(m => m.id === state.selectedModel.id);
+        const matchedModel = action.payload.find(m => isSameModelIdentity(m, state.selectedModel));
         if (matchedModel) {
           state.selectedModel = matchedModel;
         } else {

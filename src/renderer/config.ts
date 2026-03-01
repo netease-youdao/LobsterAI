@@ -13,6 +13,7 @@ export interface AppConfig {
       supportsImage?: boolean;
     }>;
     defaultModel: string;
+    defaultModelProvider?: string;
   };
   // 多模型提供商配置
   providers?: {
@@ -215,6 +216,7 @@ export const defaultConfig: AppConfig = {
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
     ],
     defaultModel: 'deepseek-chat',
+    defaultModelProvider: 'deepseek',
   },
   providers: {
     openai: {

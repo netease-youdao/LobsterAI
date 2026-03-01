@@ -1024,7 +1024,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       });
 
       // 更新 Redux store 中的可用模型列表
-      const allModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
+      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
       Object.entries(normalizedProviders).forEach(([providerName, config]) => {
         if (config.enabled && config.models) {
           config.models.forEach(model => {
@@ -1032,6 +1032,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               id: model.id,
               name: model.name,
               provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
           });
