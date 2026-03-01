@@ -9,9 +9,6 @@ import { CoworkView } from './components/cowork';
 import { SkillsView } from './components/skills';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import { WorkflowView } from './components/workflow';
-import AgentsPanel from './components/cowork/AgentsPanel';
-import SidebarToggleIcon from './components/icons/SidebarToggleIcon';
-import ComposeIcon from './components/icons/ComposeIcon';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import { configService } from './services/config';
@@ -34,7 +31,7 @@ import AppUpdateModal from './components/update/AppUpdateModal';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'agents' | 'agentWorkflow'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'agentWorkflow'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -185,10 +182,6 @@ const App: React.FC = () => {
 
   const handleShowScheduledTasks = useCallback(() => {
     setMainView('scheduledTasks');
-  }, []);
-
-  const handleShowAgents = useCallback(() => {
-    setMainView('agents');
   }, []);
 
   const handleShowWorkflow = useCallback(() => {
@@ -563,7 +556,6 @@ const App: React.FC = () => {
           onShowSkills={handleShowSkills}
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
-          onShowAgents={handleShowAgents}
           onShowWorkflow={handleShowWorkflow}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
@@ -578,7 +570,6 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
-                onNavigateHome={() => setMainView('cowork')}
               />
             ) : mainView === 'scheduledTasks' ? (
               <ScheduledTasksView
@@ -586,43 +577,18 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
-                onNavigateHome={() => setMainView('cowork')}
               />
-            ) : mainView === 'agents' ? (
-              <div className="flex flex-col h-full">
-                <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
-                  <div className="flex items-center space-x-3 h-8">
-                    {isSidebarCollapsed && (
-                      <div className={`non-draggable flex items-center gap-1 ${window.electron.platform === 'darwin' ? 'pl-[68px]' : ''}`}>
-                        <button
-                          type="button"
-                          onClick={handleToggleSidebar}
-                          className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-                        >
-                          <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleNewChat}
-                          className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-                        >
-                          <ComposeIcon className="h-4 w-4" />
-                        </button>
-                        {isSidebarCollapsed ? updateBadge : null}
-                      </div>
-                    )}
-                    <h1 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
-                      {i18nService.t('agentsTab')}
-                    </h1>
-                  </div>
-                  <WindowTitleBar inline />
-                </div>
-                <div className="flex-1 overflow-y-auto p-4">
-                  <AgentsPanel onNavigateHome={() => setMainView('cowork')} />
-                </div>
-              </div>
             ) : mainView === 'agentWorkflow' ? (
-              <WorkflowView />
+              <WorkflowView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                onShowSkills={handleShowSkills}
+                onViewSession={async (sessionId: string) => {
+                  await coworkService.loadSession(sessionId);
+                  setMainView('cowork');
+                }}
+              />
             ) : (
               <CoworkView
                 onRequestAppSettings={handleShowSettings}

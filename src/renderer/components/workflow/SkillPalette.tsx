@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useDrag } from 'react-dnd';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
@@ -11,12 +11,42 @@ import {
   RocketLaunchIcon,
   PlusIcon,
   XMarkIcon,
+  Squares2X2Icon,
+  CubeIcon,
+  TrashIcon,
+  WrenchScrewdriverIcon,
+  BugAntIcon,
+  CheckCircleIcon,
+  PencilSquareIcon,
+  BookOpenIcon,
+  ArrowPathIcon,
+  CubeTransparentIcon,
+  ServerStackIcon,
+  ChartBarIcon,
+  CircleStackIcon,
+  TableCellsIcon,
+  PaintBrushIcon,
+  RectangleGroupIcon,
+  ArrowsRightLeftIcon,
+  LinkIcon,
+  CpuChipIcon,
+  SparklesIcon,
+  ChatBubbleBottomCenterTextIcon,
+  CloudIcon,
+  ClipboardDocumentListIcon,
+  UserGroupIcon,
+  MagnifyingGlassIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  StopCircleIcon,
 } from '@heroicons/react/24/outline';
 import { addSkill, removeSkill, addAgent } from '../../store/slices/workflowSlice';
+import { coworkService } from '../../services/cowork';
 import type { Skill } from './workflowTypes';
-import { PREDEFINED_SKILLS } from './workflowTypes';
+import { PREDEFINED_SKILLS, AGENT_TEMPLATES, PREDEFINED_SKILLS as ALL_SKILLS } from './workflowTypes';
 import { i18nService } from '../../services/i18n';
 
+// Icon mapping for all skills
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   CodeBracketIcon,
   EyeIcon,
@@ -24,17 +54,122 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   BeakerIcon,
   DocumentTextIcon,
   RocketLaunchIcon,
+  WrenchScrewdriverIcon,
+  BugAntIcon,
+  CheckCircleIcon,
+  PencilSquareIcon,
+  BookOpenIcon,
+  ArrowPathIcon,
+  CubeTransparentIcon,
+  ServerStackIcon,
+  ChartBarIcon,
+  CircleStackIcon,
+  TableCellsIcon,
+  PaintBrushIcon,
+  RectangleGroupIcon,
+  ArrowsRightLeftIcon,
+  LinkIcon,
+  CpuChipIcon,
+  SparklesIcon,
+  ChatBubbleBottomCenterTextIcon,
+  CloudIcon,
+  ClipboardDocumentListIcon,
+  UserGroupIcon,
+  MagnifyingGlassIcon,
+  CubeIcon,
 };
 
+// Avatar colors
+const AGENT_COLORS = [
+  '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#3B82F6',
+  '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1',
+];
+
 interface SkillPaletteProps {
-  onSkillDragStart?: (skill: Skill) => void;
+  onAgentCreated?: (agentId: string) => void;
+  onViewSession?: (sessionId: string) => void;
+  onShowSkills?: (skillId: string) => void;
 }
 
-const SkillPalette: React.FC<SkillPaletteProps> = ({ onSkillDragStart: _onSkillDragStart }) => {
+const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSession, onShowSkills }) => {
   const dispatch = useDispatch();
   const customSkills = useSelector((state: RootState) => state.workflow.skills);
-  const agents = useSelector((state: RootState) => state.workflow.agents);
+  const workflowAgents = useSelector((state: RootState) => state.workflow.agents);
+  const sessions = useSelector((state: RootState) => state.cowork.sessions);
   const [newSkillName, setNewSkillName] = useState('');
+  const [showAgents, setShowAgents] = useState(false);
+  const [skillsExpanded, setSkillsExpanded] = useState(true);
+
+  // Load sessions on mount
+  useEffect(() => {
+    coworkService.loadSessions();
+  }, []);
+
+  // Format relative time
+  const formatRelativeTime = (timestamp: number): string => {
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return i18nService.t('coworkJustNow') || 'Just now';
+    if (minutes < 60) return i18nService.t('coworkMinutesAgo')?.replace('{n}', String(minutes)) || `${minutes}m ago`;
+    if (hours < 24) return i18nService.t('coworkHoursAgo')?.replace('{n}', String(hours)) || `${hours}h ago`;
+    return i18nService.t('coworkDaysAgo')?.replace('{n}', String(days)) || `${days}d ago`;
+  };
+
+  // Get status color
+  const getSessionStatusColor = (status: string): string => {
+    switch (status) {
+      case 'running': return 'bg-green-500';
+      case 'completed': return 'bg-blue-500';
+      case 'error': return 'bg-red-500';
+      default: return 'bg-gray-400';
+    }
+  };
+
+  // Get status i18n key
+  const getSessionStatusText = (status: string): string => {
+    switch (status) {
+      case 'running': return i18nService.t('coworkStatusRunning');
+      case 'completed': return i18nService.t('coworkStatusCompleted');
+      case 'error': return i18nService.t('coworkStatusError');
+      default: return i18nService.t('coworkStatusIdle');
+    }
+  };
+
+  // Handle view session
+  const handleViewSession = useCallback((sessionId: string) => {
+    if (onViewSession) {
+      onViewSession(sessionId);
+    }
+  }, [onViewSession]);
+
+  // Handle stop session
+  const handleStopSession = useCallback(async (sessionId: string) => {
+    await coworkService.stopSession(sessionId);
+    showToast(i18nService.t('coworkSessionStopped') || '⏹ Session stopped');
+  }, []);
+
+  // Handle delete session
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    await coworkService.deleteSession(sessionId);
+    showToast(i18nService.t('coworkSessionDeleted') || '🗑️ Session deleted');
+  }, []);
+
+  // Handle add session to canvas as agent
+  const handleAddSessionToCanvas = useCallback((_sessionId: string, sessionTitle: string) => {
+    const agentCount = workflowAgents.length + 1;
+    dispatch(addAgent({
+      name: sessionTitle || `Agent ${agentCount}`,
+      soulPrompt: `This agent represents the Cowork session: ${sessionTitle}`,
+    }));
+    showToast(`✅ ${sessionTitle || 'Agent'} added to canvas`);
+    if (onAgentCreated) {
+      setTimeout(() => onAgentCreated('last'), 100);
+    }
+  }, [workflowAgents, dispatch, onAgentCreated]);
 
   const handleAddCustomSkill = useCallback(() => {
     if (!newSkillName.trim()) return;
@@ -62,10 +197,43 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onSkillDragStart: _onSkillD
     dispatch(removeSkill(skillId));
   }, [dispatch]);
 
-  const handleAddAgent = useCallback(() => {
-    const agentCount = agents.length + 1;
-    dispatch(addAgent(`Agent ${agentCount}`));
-  }, [agents, dispatch]);
+  const showToast = useCallback((message: string) => {
+    window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+  }, []);
+
+  const handleAddAgent = useCallback((templateId?: string) => {
+    const agentCount = workflowAgents.length + 1;
+
+    if (templateId) {
+      const template = AGENT_TEMPLATES.find(t => t.id === templateId);
+      if (template) {
+        const templateSkills = template.suggestedSkills
+          .map(skillId => ALL_SKILLS.find(s => s.id === skillId))
+          .filter((s): s is Skill => s !== undefined);
+
+        dispatch(addAgent({
+          name: template.name,
+          soulPrompt: template.soulPrompt,
+          skills: templateSkills,
+        }));
+
+        showToast(`✅ ${template.name} created successfully`);
+        if (onAgentCreated) {
+          setTimeout(() => onAgentCreated('last'), 100);
+        }
+        return;
+      }
+    }
+
+    dispatch(addAgent({
+      name: `Agent ${agentCount}`,
+    }));
+
+    showToast(`✅ Agent ${agentCount} created successfully`);
+    if (onAgentCreated) {
+      setTimeout(() => onAgentCreated('last'), 100);
+    }
+  }, [workflowAgents, dispatch, showToast, onAgentCreated]);
 
   return (
     <div className="w-full h-full flex flex-col dark:bg-claude-darkSurface bg-claude-surface border-r dark:border-claude-darkBorder border-claude-border">
@@ -76,61 +244,233 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onSkillDragStart: _onSkillD
         </h2>
       </div>
 
-      {/* Skills Section */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-4">
-          <h3 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
-            {i18nService.t('workflowAddSkill')}
-          </h3>
-
-          {/* Predefined Skills */}
-          <div className="flex flex-wrap gap-2 mb-4">
-            {PREDEFINED_SKILLS.map((skill) => (
-              <DraggableSkill
-                key={skill.id}
-                skill={skill}
-              />
-            ))}
-          </div>
-
-          {/* Custom Skills */}
-          {customSkills.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-4 pt-3 border-t dark:border-claude-darkBorder border-claude-border">
-              {customSkills.map((skill) => (
-                <div key={skill.id} className="relative group">
-                  <DraggableSkill skill={skill} />
-                  <button
-                    onClick={() => handleRemoveCustomSkill(skill.id)}
-                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-                  >
-                    <XMarkIcon className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Add Custom Skill Input */}
-          <div className="mt-3">
-            <input
-              type="text"
-              value={newSkillName}
-              onChange={(e) => setNewSkillName(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={i18nService.t('workflowCustomSkill')}
-              className="w-full px-3 py-2 text-sm rounded-lg border dark:bg-claude-darkBg bg-claude-bg dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text placeholder-gray-400 focus:outline-none focus:border-claude-accent"
-            />
-          </div>
+      {/* Tab Toggle - Pill style */}
+      <div className="p-4 pb-2">
+        <div className="flex bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover rounded-lg p-0.5">
+          <button
+            onClick={() => setShowAgents(false)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md text-xs font-medium transition-all ${!showAgents
+              ? 'bg-claude-surface dark:bg-claude-darkSurface shadow-sm text-claude-accent'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+              }`}
+          >
+            <Squares2X2Icon className="w-3.5 h-3.5" />
+            Templates
+          </button>
+          <button
+            onClick={() => setShowAgents(true)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md text-xs font-medium transition-all ${showAgents
+              ? 'bg-claude-surface dark:bg-claude-darkSurface shadow-sm text-claude-accent'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+              }`}
+          >
+            <CubeIcon className="w-3.5 h-3.5" />
+            Active
+            {sessions.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 text-xs bg-claude-accent text-white rounded-full">
+                {sessions.length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
-      {/* Add Agent Button */}
-      <div className="p-4 border-t dark:border-claude-darkBorder border-claude-border">
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        {/* Templates View */}
+        {!showAgents && (
+          <div className="p-3 pt-0 space-y-3">
+            {/* Template List */}
+            <div>
+              <h3 className="text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                Agent Templates
+              </h3>
+              <div className="space-y-1.5">
+                {AGENT_TEMPLATES.map((template) => (
+                  <button
+                    key={template.id}
+                    onClick={() => handleAddAgent(template.id)}
+                    className="w-full flex items-center gap-2 p-1.5 rounded-lg border dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors text-left"
+                  >
+                    <div
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-semibold shrink-0"
+                      style={{ backgroundColor: template.color }}
+                    >
+                      {template.name.split(' ').map(w => w[0]).join('').substring(0, 2)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium dark:text-claude-darkText text-claude-text truncate">
+                        {template.name}
+                      </p>
+                      <p className="text-[10px] text-gray-400 dark:text-gray-500 truncate">
+                        {template.suggestedSkills.map(s => s.replace('-', ' ')).join(', ')}
+                      </p>
+                    </div>
+                    <PlusIcon className="w-3.5 h-3.5 text-gray-400" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Collapsible Skills Section */}
+            <div className="pt-4 border-t dark:border-claude-darkBorder border-claude-border">
+              <button
+                onClick={() => setSkillsExpanded(!skillsExpanded)}
+                className="w-full flex items-center justify-between mb-3"
+              >
+                <h3 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  {i18nService.t('workflowSkills')}
+                </h3>
+                {skillsExpanded ? (
+                  <ChevronDownIcon className="w-4 h-4 text-gray-400" />
+                ) : (
+                  <ChevronRightIcon className="w-4 h-4 text-gray-400" />
+                )}
+              </button>
+
+              {skillsExpanded && (
+                <>
+                  {/* Predefined Skills - Grid */}
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    {PREDEFINED_SKILLS.map((skill) => (
+                      <DraggableSkill key={skill.id} skill={skill} compact onClick={() => onShowSkills?.(skill.id)} />
+                    ))}
+                  </div>
+
+                  {/* Custom Skills */}
+                  {customSkills.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-3 pt-3 border-t dark:border-claude-darkBorder border-claude-border">
+                      {customSkills.map((skill) => (
+                        <div key={skill.id} className="relative group">
+                          <DraggableSkill skill={skill} onClick={() => onShowSkills?.(skill.id)} />
+                          <button
+                            onClick={() => handleRemoveCustomSkill(skill.id)}
+                            className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Add Custom Skill */}
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      value={newSkillName}
+                      onChange={(e) => setNewSkillName(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={i18nService.t('workflowCustomSkill')}
+                      className="w-full px-3 py-2 text-sm rounded-lg border dark:bg-claude-darkBg bg-claude-bg dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text placeholder-gray-400 focus:outline-none focus:border-claude-accent"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Active Agents View - Now showing Cowork Sessions */}
+        {showAgents && (
+          <div className="p-3 pt-0">
+            {sessions.length === 0 ? (
+              <div className="text-center py-6">
+                <ChatBubbleBottomCenterTextIcon className="w-10 h-10 mx-auto text-gray-300 dark:text-gray-600 mb-2" />
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {i18nService.t('coworkNoTasks') || 'No tasks yet'}
+                </p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                  {i18nService.t('coworkNoTasksHint') || 'Create a new task from the home page'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {sessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className="flex items-center gap-2 p-2 rounded-lg border dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50 transition-colors"
+                  >
+                    {/* Avatar - smaller */}
+                    <div
+                      className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-semibold shrink-0"
+                      style={{ backgroundColor: AGENT_COLORS[Math.abs(session.id.charCodeAt(0)) % AGENT_COLORS.length] }}
+                    >
+                      {session.title.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase()}
+                    </div>
+
+                    {/* Info - more compact */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium dark:text-claude-darkText text-claude-text truncate">
+                        {session.title}
+                      </p>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <div className={`w-1.5 h-1.5 rounded-full ${getSessionStatusColor(session.status)}`} />
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                          {getSessionStatusText(session.status)}
+                        </span>
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500">·</span>
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                          {formatRelativeTime(session.updatedAt)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons - compact */}
+                    <div className="flex items-center gap-0.5">
+                      {/* Add to Canvas Button */}
+                      <button
+                        onClick={() => handleAddSessionToCanvas(session.id, session.title)}
+                        className="p-1 rounded-lg hover:bg-green-500/10 text-gray-400 hover:text-green-500 transition-colors"
+                        title={i18nService.t('workflowAddToCanvas') || 'Add to canvas'}
+                      >
+                        <PlusIcon className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* View Button */}
+                      <button
+                        onClick={() => handleViewSession(session.id)}
+                        className="p-1 rounded-lg hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover text-gray-400 hover:text-claude-accent transition-colors"
+                        title={i18nService.t('coworkViewTask') || 'View task'}
+                      >
+                        <EyeIcon className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Stop Button - only show when running */}
+                      {session.status === 'running' && (
+                        <button
+                          onClick={() => handleStopSession(session.id)}
+                          className="p-1 rounded-lg hover:bg-orange-500/10 text-gray-400 hover:text-orange-500 transition-colors"
+                          title={i18nService.t('coworkStopTask') || 'Stop task'}
+                        >
+                          <StopCircleIcon className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+
+                      {/* Delete Button */}
+                      <button
+                        onClick={() => handleDeleteSession(session.id)}
+                        className="p-1 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors"
+                        title={i18nService.t('coworkDeleteTask') || 'Delete task'}
+                      >
+                        <TrashIcon className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Add Empty Agent Button */}
+      <div className="p-3 border-t dark:border-claude-darkBorder border-claude-border">
         <button
-          onClick={handleAddAgent}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-claude-accent hover:bg-claude-accentHover text-white rounded-xl font-medium transition-colors"
+          onClick={() => handleAddAgent()}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-claude-accent hover:bg-claude-accentHover text-white rounded-lg text-xs font-medium transition-colors"
         >
-          <PlusIcon className="w-5 h-5" />
+          <PlusIcon className="w-4 h-4" />
           {i18nService.t('workflowAddAgent')}
         </button>
       </div>
@@ -141,9 +481,11 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onSkillDragStart: _onSkillD
 // Draggable Skill Component
 interface DraggableSkillProps {
   skill: Skill;
+  compact?: boolean;
+  onClick?: () => void;
 }
 
-const DraggableSkill: React.FC<DraggableSkillProps> = ({ skill }) => {
+const DraggableSkill: React.FC<DraggableSkillProps> = ({ skill, compact, onClick }) => {
   const [{ isDragging }, drag] = useDrag(() => ({
     type: 'SKILL',
     item: skill,
@@ -157,14 +499,20 @@ const DraggableSkill: React.FC<DraggableSkillProps> = ({ skill }) => {
   return (
     <div
       ref={drag}
+      onClick={onClick}
       className={`
-        inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-white cursor-grab transition-all
+        inline-flex items-center gap-1.5 rounded-lg font-medium text-white cursor-grab transition-all max-w-full overflow-hidden
         ${isDragging ? 'opacity-50 scale-95' : 'hover:scale-105'}
+        ${compact ? 'px-2 py-1.5 text-[10px]' : 'px-2.5 py-1.5 text-xs'}
+        ${onClick ? 'cursor-pointer' : ''}
       `}
       style={{ backgroundColor: skill.color }}
+      title={i18nService.t(`skill.${skill.id}`) || skill.name}
     >
-      <IconComponent className="w-3.5 h-3.5" />
-      <span>{skill.name}</span>
+      <IconComponent className={compact ? 'w-3 h-3 shrink-0' : 'w-3.5 h-3.5 shrink-0'} />
+      <span className="truncate flex-1 text-left leading-tight">
+        {i18nService.t(`skill.${skill.id}`) || skill.name}
+      </span>
     </div>
   );
 };

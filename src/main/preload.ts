@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electron', {
     autoRoutingPrompt: () => ipcRenderer.invoke('skills:autoRoutingPrompt'),
     getConfig: (skillId: string) => ipcRenderer.invoke('skills:getConfig', skillId),
     setConfig: (skillId: string, config: Record<string, string>) => ipcRenderer.invoke('skills:setConfig', skillId, config),
+    setPrompt: (skillId: string, prompt: string) => ipcRenderer.invoke('skills:setPrompt', skillId, prompt),
     testEmailConnectivity: (skillId: string, config: Record<string, string>) =>
       ipcRenderer.invoke('skills:testEmailConnectivity', skillId, config),
     onChanged: (callback: () => void) => {

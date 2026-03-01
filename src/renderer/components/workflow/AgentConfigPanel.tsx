@@ -4,16 +4,81 @@ import {
   XMarkIcon,
   SparklesIcon,
   PencilIcon,
+  PlusIcon,
+  WrenchIcon,
+  WrenchScrewdriverIcon,
+  CodeBracketIcon,
+  EyeIcon,
+  ShieldCheckIcon,
+  BeakerIcon,
+  DocumentTextIcon,
+  RocketLaunchIcon,
+  BugAntIcon,
+  CheckCircleIcon,
+  PencilSquareIcon,
+  BookOpenIcon,
+  ArrowPathIcon,
+  CubeTransparentIcon,
+  ServerStackIcon,
+  ChartBarIcon,
+  CircleStackIcon,
+  TableCellsIcon,
+  PaintBrushIcon,
+  RectangleGroupIcon,
+  ArrowsRightLeftIcon,
+  LinkIcon,
+  CpuChipIcon,
+  ChatBubbleBottomCenterTextIcon,
+  CloudIcon,
+  ClipboardDocumentListIcon,
+  UserGroupIcon,
+  MagnifyingGlassIcon,
+  CubeIcon,
 } from '@heroicons/react/24/outline';
 import { renameAgent, updateAgentSoul, removeAgent } from '../../store/slices/workflowSlice';
 import type { WorkflowAgent, Skill } from './workflowTypes';
 import { PREDEFINED_SKILLS, AGENT_COLORS } from './workflowTypes';
+import { i18nService } from '../../services/i18n';
+
+// Icon mapping for skills
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  CodeBracketIcon,
+  EyeIcon,
+  ShieldCheckIcon,
+  BeakerIcon,
+  DocumentTextIcon,
+  RocketLaunchIcon,
+  WrenchScrewdriverIcon,
+  BugAntIcon,
+  CheckCircleIcon,
+  PencilSquareIcon,
+  BookOpenIcon,
+  ArrowPathIcon,
+  CubeTransparentIcon,
+  ServerStackIcon,
+  ChartBarIcon,
+  CircleStackIcon,
+  TableCellsIcon,
+  PaintBrushIcon,
+  RectangleGroupIcon,
+  ArrowsRightLeftIcon,
+  LinkIcon,
+  CpuChipIcon,
+  SparklesIcon,
+  ChatBubbleBottomCenterTextIcon,
+  CloudIcon,
+  ClipboardDocumentListIcon,
+  UserGroupIcon,
+  MagnifyingGlassIcon,
+  CubeIcon,
+};
 
 interface AgentConfigPanelProps {
   agent: WorkflowAgent | null;
   onClose: () => void;
   onRemoveSkill: (agentId: string, skillId: string) => void;
   onAddSkill: (agentId: string, skill: Skill) => void;
+  onShowSkills?: (skillId: string) => void;
 }
 
 const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
@@ -21,6 +86,7 @@ const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
   onClose,
   onRemoveSkill,
   onAddSkill,
+  onShowSkills,
 }) => {
   const dispatch = useDispatch();
   const [name, setName] = useState(agent?.name || '');
@@ -145,47 +211,92 @@ const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
 
         {/* Skills */}
         <div>
-          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
-            Skills
+          <label className="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 mb-3">
+            <WrenchIcon className="w-4 h-4" />
+            {i18nService.t('workflowSkills')}
           </label>
 
-          {/* Current Skills */}
-          {agent.skills.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {agent.skills.map((skill) => (
-                <div
-                  key={skill.id}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-white"
-                  style={{ backgroundColor: skill.color }}
-                >
-                  <span>{skill.name}</span>
-                  <button
-                    onClick={() => handleRemoveSkill(skill.id)}
-                    className="hover:bg-white/20 rounded-full p-0.5"
+          {/* Current Skills - with icons */}
+          <div className="space-y-2 mb-4">
+            {agent.skills.length > 0 ? (
+              agent.skills.map((skill) => {
+                const IconComponent = ICON_MAP[skill.icon] || WrenchScrewdriverIcon;
+                return (
+                  <div
+                    key={skill.id}
+                    className="flex items-center gap-3 p-2.5 rounded-lg border dark:border-claude-darkBorder border-claude-border"
+                    style={{ backgroundColor: `${skill.color}15`, borderColor: `${skill.color}40` }}
                   >
-                    <XMarkIcon className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+                    <div
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0"
+                      style={{ backgroundColor: skill.color }}
+                      onClick={onShowSkills ? () => onShowSkills(skill.id) : undefined}
+                    >
+                      <IconComponent className="w-3.5 h-3.5" />
+                    </div>
+                    <div
+                      className="flex-1 min-w-0 cursor-pointer"
+                      onClick={onShowSkills ? () => onShowSkills(skill.id) : undefined}
+                    >
+                      <p className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate hover:text-claude-accent transition-colors">
+                        {i18nService.t(`skill.${skill.id}`) || skill.name}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleRemoveSkill(skill.id)}
+                      className="p-1.5 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      <XMarkIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-center py-4 px-3 rounded-lg border border-dashed dark:border-claude-darkBorder border-claude-border">
+                <p className="text-xs text-gray-400 dark:text-gray-500">
+                  No skills assigned yet
+                </p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                  Add skills from the list below
+                </p>
+              </div>
+            )}
+          </div>
 
           {/* Available Skills to Add */}
           {availableSkills.length > 0 && (
             <div className="pt-3 border-t dark:border-claude-darkBorder border-claude-border">
-              <p className="text-xs text-gray-400 dark:text-gray-500 mb-2">Add skills:</p>
-              <div className="flex flex-wrap gap-2">
-                {availableSkills.map((skill) => (
-                  <button
-                    key={skill.id}
-                    onClick={() => handleAddSkill(skill)}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-white opacity-70 hover:opacity-100 transition-opacity"
-                    style={{ backgroundColor: skill.color }}
-                  >
-                    + {skill.name}
-                  </button>
-                ))}
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-3">
+                {i18nService.t('workflowAddSkill') || 'Available Skills'}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {availableSkills.slice(0, 12).map((skill) => {
+                  const IconComponent = ICON_MAP[skill.icon] || WrenchScrewdriverIcon;
+                  return (
+                    <button
+                      key={skill.id}
+                      onClick={() => handleAddSkill(skill)}
+                      className="flex items-center gap-2 p-2 rounded-lg border dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors text-left"
+                    >
+                      <div
+                        className="w-6 h-6 rounded-md flex items-center justify-center text-white shrink-0"
+                        style={{ backgroundColor: skill.color }}
+                      >
+                        <IconComponent className="w-3 h-3" />
+                      </div>
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text truncate">
+                        {skill.name}
+                      </span>
+                      <PlusIcon className="w-3 h-3 text-gray-400 ml-auto" />
+                    </button>
+                  );
+                })}
               </div>
+              {availableSkills.length > 12 && (
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 text-center">
+                  +{availableSkills.length - 12} more skills available
+                </p>
+              )}
             </div>
           )}
         </div>

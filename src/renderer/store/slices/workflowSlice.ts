@@ -43,14 +43,15 @@ const workflowSlice = createSlice({
   name: 'workflow',
   initialState,
   reducers: {
-    // Add a new agent with given name
-    addAgent: (state, action: PayloadAction<string>) => {
+    // Add a new agent with given name and optional soul prompt
+    addAgent: (state, action: PayloadAction<{ name: string; soulPrompt?: string; skills?: Skill[] }>) => {
       const newAgent: WorkflowAgent = {
         id: generateId(),
-        name: action.payload,
-        skills: [],
+        name: action.payload.name,
+        skills: action.payload.skills || [],
         status: 'idle',
         position: { x: 100 + state.agents.length * 250, y: 100 },
+        soulPrompt: action.payload.soulPrompt,
       };
       state.agents.push(newAgent);
       saveToStorage(state);
@@ -130,15 +131,33 @@ const workflowSlice = createSlice({
     },
 
     // Add connection between agents
-    addConnection: (state, action: PayloadAction<{ sourceAgentId: string; targetAgentId: string; condition?: string }>) => {
+    addConnection: (state, action: PayloadAction<{
+      sourceAgentId: string;
+      targetAgentId: string;
+      sourceHandle?: string | null;
+      targetHandle?: string | null;
+      condition?: string;
+    }>) => {
       const newConnection: WorkflowConnection = {
         id: generateId(),
         sourceAgentId: action.payload.sourceAgentId,
         targetAgentId: action.payload.targetAgentId,
+        sourceHandle: action.payload.sourceHandle || undefined,
+        targetHandle: action.payload.targetHandle || undefined,
         condition: action.payload.condition || 'Always', // Default to "Always"
       };
-      state.connections.push(newConnection);
-      saveToStorage(state);
+      // Avoid duplicate connections to the same handle
+      const isDuplicate = state.connections.some(c =>
+        c.sourceAgentId === newConnection.sourceAgentId &&
+        c.targetAgentId === newConnection.targetAgentId &&
+        c.sourceHandle === newConnection.sourceHandle &&
+        c.targetHandle === newConnection.targetHandle
+      );
+
+      if (!isDuplicate) {
+        state.connections.push(newConnection);
+        saveToStorage(state);
+      }
     },
 
     // Remove connection by id
@@ -231,6 +250,18 @@ const workflowSlice = createSlice({
       saveToStorage(state);
     },
 
+    // Update a custom or predefined skill's details (e.g. its prompt override)
+    updateCustomSkill: (state, action: PayloadAction<Skill>) => {
+      const index = state.skills.findIndex(s => s.id === action.payload.id);
+      if (index !== -1) {
+        state.skills[index] = { ...state.skills[index], ...action.payload };
+      } else {
+        // If it's a predefined skill being edited for the first time, add it to custom skills as an override
+        state.skills.push(action.payload);
+      }
+      saveToStorage(state);
+    },
+
     // Remove a global skill
     removeSkill: (state, action: PayloadAction<string>) => {
       state.skills = state.skills.filter((s: Skill) => s.id !== action.payload);
@@ -264,6 +295,7 @@ export const {
   resetWorkflow,
   clearWorkflow,
   addSkill,
+  updateCustomSkill,
   removeSkill,
 } = workflowSlice.actions;
 

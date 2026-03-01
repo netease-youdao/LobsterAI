@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -27,18 +27,22 @@ import {
   updateAgentPosition,
   updateAgentSize,
   clearWorkflow,
+  setAgentStatus,
 } from '../../store/slices/workflowSlice';
 import AgentNode from './AgentNode';
 import CustomEdge from './CustomEdge';
 import AgentConfigPanel from './AgentConfigPanel';
+import WorkflowRunLog from './WorkflowRunLog';
 import type { Skill, WorkflowAgent as WorkflowAgentType, WorkflowConnection as WorkflowConnectionType } from './workflowTypes';
 import { i18nService } from '../../services/i18n';
+import { workflowEngine, type WorkflowLogEntry } from '../../services/workflowEngine';
 import {
   ArrowsPointingOutIcon,
   TrashIcon,
   ExclamationTriangleIcon,
   RocketLaunchIcon,
   CogIcon,
+  StopIcon,
 } from '@heroicons/react/24/outline';
 
 // Custom node types — defined OUTSIDE component to avoid re-creation
@@ -50,15 +54,30 @@ const edgeTypes = {
   custom: CustomEdge,
 };
 
-const WorkflowCanvas: React.FC = () => {
+interface WorkflowCanvasProps {
+  focusAgentId?: string | null;
+  onShowSkills?: (skillId: string) => void;
+}
+
+const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSkills }) => {
   const dispatch = useDispatch();
   const workflow = useSelector((state: RootState) => state.workflow);
-  const { agents, connections } = workflow;
+  const { agents, connections, isRunning } = workflow;
 
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [taskInput, setTaskInput] = useState('');
+  const [workflowLogs, setWorkflowLogs] = useState<WorkflowLogEntry[]>([]);
+  const engineRef = useRef<typeof workflowEngine | null>(null);
+
+  // Initialize engine with callbacks
+  useEffect(() => {
+    engineRef.current = workflowEngine;
+    workflowEngine.setLogCallback((logs) => {
+      setWorkflowLogs([...logs]);
+    });
+  }, []);
 
   const selectedAgent = selectedAgentId
     ? agents.find((a: WorkflowAgentType) => a.id === selectedAgentId) || null
@@ -103,6 +122,8 @@ const WorkflowCanvas: React.FC = () => {
         id: conn.id,
         source: conn.sourceAgentId,
         target: conn.targetAgentId,
+        sourceHandle: conn.sourceHandle,
+        targetHandle: conn.targetHandle,
         type: 'custom',
         animated: true,
         markerEnd: {
@@ -131,6 +152,25 @@ const WorkflowCanvas: React.FC = () => {
     setEdges(initialEdges);
   }, [initialEdges, setEdges]);
 
+  // Sync agent status with real Cowork Session status on mount/update
+  const sessions = useSelector((state: RootState) => state.cowork.sessions);
+  React.useEffect(() => {
+    agents.forEach(agent => {
+      // Find the most recent session created for this agent
+      const linkedSession = sessions.find(s => s.title === `[Workflow] ${agent.name}`);
+      if (linkedSession) {
+        // If the session is running or completed, update the agent UI to match
+        if (linkedSession.status === 'running' && agent.status !== 'running') {
+          dispatch(setAgentStatus({ id: agent.id, status: 'running' }));
+        } else if (linkedSession.status === 'completed' && agent.status !== 'completed' && agent.status === 'running') {
+          dispatch(setAgentStatus({ id: agent.id, status: 'completed' }));
+        } else if (linkedSession.status === 'error' && agent.status !== 'error') {
+          dispatch(setAgentStatus({ id: agent.id, status: 'error' }));
+        }
+      }
+    });
+  }, [sessions, agents, dispatch]);
+
   // Handle node position changes
   const onNodeDragStop = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -143,9 +183,13 @@ const WorkflowCanvas: React.FC = () => {
   const onConnect = useCallback(
     (params: Connection) => {
       if (!params.source || !params.target) return;
+      // Prevent self-connection
+      if (params.source === params.target) return;
       dispatch(addConnection({
         sourceAgentId: params.source,
         targetAgentId: params.target,
+        sourceHandle: params.sourceHandle,
+        targetHandle: params.targetHandle,
         condition: 'Always',
       }));
     },
@@ -184,18 +228,67 @@ const WorkflowCanvas: React.FC = () => {
     setShowClearConfirm(false);
   }, [dispatch]);
 
-  // Handle task assignment (stub - will integrate with actual agent execution later)
-  const handleRunTask = useCallback(() => {
-    if (!taskInput.trim()) return;
-    console.log('Running task:', taskInput);
-    // TODO: Integrate with agent execution engine
-    // For now, just close the modal and log the task
-    setTaskInput('');
+  // Handle task assignment - integrate with actual agent execution engine
+  const handleRunTask = useCallback(async () => {
+    if (!taskInput.trim() || !engineRef.current) return;
+
+    // Clear previous logs
+    setWorkflowLogs([]);
+
+    // Close modal
     setShowTaskModal(false);
-  }, [taskInput]);
+
+    // Start workflow execution
+    try {
+      await engineRef.current.start(
+        agents,
+        connections,
+        taskInput.trim()
+      );
+    } catch (error) {
+      console.error('Workflow execution failed:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: `❌ Workflow failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      }));
+    }
+
+    setTaskInput('');
+  }, [taskInput, agents, connections]);
+
+  // Handle stop workflow
+  const handleStopWorkflow = useCallback(async () => {
+    if (engineRef.current) {
+      await engineRef.current.stop();
+    }
+  }, []);
+
+  // Handle reset workflow
+  const handleResetWorkflow = useCallback(() => {
+    if (engineRef.current) {
+      engineRef.current.reset();
+    }
+    setWorkflowLogs([]);
+  }, []);
 
   // Fit view
-  const { fitView } = useReactFlow();
+  const { fitView, setCenter } = useReactFlow();
+
+  // Auto-focus on agent when created
+  React.useEffect(() => {
+    if (focusAgentId === 'last' && agents.length > 0) {
+      // Focus on the last added agent
+      const lastAgent = agents[agents.length - 1];
+      if (lastAgent) {
+        setCenter(lastAgent.position.x + 100, lastAgent.position.y + 50, { zoom: 1.2, duration: 500 });
+      }
+    } else if (focusAgentId && focusAgentId !== 'last') {
+      // Focus on specific agent
+      const agent = agents.find((a: WorkflowAgentType) => a.id === focusAgentId);
+      if (agent) {
+        setCenter(agent.position.x + 100, agent.position.y + 50, { zoom: 1.2, duration: 500 });
+      }
+    }
+  }, [focusAgentId, agents, setCenter]);
 
   return (
     <div className="h-full w-full relative">
@@ -226,24 +319,34 @@ const WorkflowCanvas: React.FC = () => {
 
         {/* Toolbar */}
         <Panel position="top-right" className="flex gap-2 !m-4">
-          {/* Run Task Button */}
-          <button
-            onClick={() => setShowTaskModal(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-claude-accent hover:bg-claude-accentHover text-white text-sm font-medium transition-colors shadow-sm"
-          >
-            <RocketLaunchIcon className="w-4 h-4" />
-            Run Task
-          </button>
+          {/* Run Task / Stop Button */}
+          {isRunning ? (
+            <button
+              onClick={handleStopWorkflow}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white text-sm font-medium transition-colors shadow-sm"
+            >
+              <StopIcon className="w-4 h-4" />
+              {i18nService.t('workflowStop') || 'Stop'}
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowTaskModal(true)}
+              disabled={agents.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-claude-accent hover:bg-claude-accentHover text-white text-sm font-medium transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RocketLaunchIcon className="w-4 h-4" />
+              Run Task
+            </button>
+          )}
 
           {/* Config Selected Agent Button */}
           <button
             onClick={() => selectedAgentId && setSelectedAgentId(selectedAgentId)}
             disabled={!selectedAgentId}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition-colors shadow-sm ${
-              selectedAgentId
-                ? 'bg-claude-surface dark:bg-claude-darkSurface border-claude-border dark:border-claude-darkBorder hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover dark:text-claude-darkText text-claude-text'
-                : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-400 cursor-not-allowed'
-            }`}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition-colors shadow-sm ${selectedAgentId
+              ? 'bg-claude-surface dark:bg-claude-darkSurface border-claude-border dark:border-claude-darkBorder hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover dark:text-claude-darkText text-claude-text'
+              : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-400 cursor-not-allowed'
+              }`}
           >
             <CogIcon className="w-4 h-4" />
             Configure
@@ -275,6 +378,7 @@ const WorkflowCanvas: React.FC = () => {
         onClose={() => setSelectedAgentId(null)}
         onRemoveSkill={(agentId, skillId) => dispatch(removeSkillFromAgent({ agentId, skillId }))}
         onAddSkill={(agentId, skill) => dispatch(addSkillToAgent({ agentId, skill }))}
+        onShowSkills={onShowSkills}
       />
 
       {/* Clear Confirmation Dialog */}
@@ -344,7 +448,7 @@ const WorkflowCanvas: React.FC = () => {
               </button>
               <button
                 onClick={handleRunTask}
-                disabled={!taskInput.trim()}
+                disabled={!taskInput.trim() || agents.length === 0}
                 className="flex-1 px-4 py-2 rounded-lg bg-claude-accent hover:bg-claude-accentHover text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Run Task
@@ -353,6 +457,14 @@ const WorkflowCanvas: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Workflow Run Log Panel */}
+      <WorkflowRunLog
+        logs={workflowLogs}
+        isRunning={isRunning}
+        onStop={handleStopWorkflow}
+        onReset={handleResetWorkflow}
+      />
     </div>
   );
 };
