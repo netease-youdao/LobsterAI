@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 import extractZip from 'extract-zip';
 import { SqliteStore } from './sqliteStore';
 import { cpRecursiveSync } from './fsCompat';
+import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -75,6 +76,7 @@ function buildSkillEnv(): Record<string, string | undefined> {
   // Expose Electron executable so skill scripts can run JS with ELECTRON_RUN_AS_NODE
   // even when system Node.js is not installed.
   env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+  appendPythonRuntimeToEnv(env);
 
   return env;
 }

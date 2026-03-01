@@ -32,6 +32,7 @@ At its core is **Cowork mode** — it executes tools, manipulates files, and run
 - **All-in-One Productivity Assistant** — Data analysis, PPT creation, video generation, document writing, web search, email — covers the full range of daily work
 - **Local + Sandbox Execution** — Run tasks directly on your machine or in an isolated Alpine Linux sandbox
 - **Built-in Skills** — Office document generation, web search, Playwright automation, Remotion video generation, and more
+- **Windows Built-in Python Runtime** — Windows packages bundle a ready-to-use Python interpreter runtime; Python skill dependencies can be installed on demand
 - **Scheduled Tasks** — Create recurring tasks via conversation or the GUI — daily news digests, inbox cleanup, periodic report generation, and more
 - **Persistent Memory** — Automatically extracts user preferences and personal facts from conversations, remembers your habits across sessions, and gets smarter the more you use it
 - **Mobile via IM** — Control your Agent remotely from your phone through Telegram, Discord, DingTalk, or Feishu
@@ -101,6 +102,16 @@ npm run dist:win
 # Linux (.AppImage)
 npm run dist:linux
 ```
+
+Windows builds bundle a portable Python runtime under `resources/python-win` (included as installer resource `python-win`), so end users do not need to install Python manually.
+The bundled runtime is interpreter-focused and does not preinstall LobsterAI skill Python packages; those can be installed at runtime on demand.
+By default, packaging downloads the official Python embeddable runtime from python.org if no prebuilt archive is provided.
+For offline/non-network builds, provide a prebuilt runtime archive explicitly.
+
+Offline/runtime source options for packaging:
+- `LOBSTERAI_PORTABLE_PYTHON_ARCHIVE`: Local prebuilt runtime archive path (recommended for offline CI/CD)
+- `LOBSTERAI_PORTABLE_PYTHON_URL`: Download URL for the prebuilt runtime archive
+- `LOBSTERAI_WINDOWS_EMBED_PYTHON_VERSION` / `LOBSTERAI_WINDOWS_EMBED_PYTHON_URL` / `LOBSTERAI_WINDOWS_GET_PIP_URL`: Optional overrides for Windows-host bootstrap sources
 
 ## Architecture
 

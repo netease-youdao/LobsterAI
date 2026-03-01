@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
 import { cpRecursiveSync } from './fsCompat';
+import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -65,6 +66,7 @@ function buildSkillServiceEnv(): Record<string, string | undefined> {
   // Expose Electron executable so skill scripts can run JS with ELECTRON_RUN_AS_NODE
   // even when system Node.js is not installed.
   env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+  appendPythonRuntimeToEnv(env);
 
   return env;
 }
