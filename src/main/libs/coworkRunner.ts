@@ -12,6 +12,7 @@ import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
+import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { cpRecursiveSync } from '../fsCompat';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
 import { z } from 'zod';
@@ -87,6 +88,8 @@ const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
 const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item)\b/i;
 const FIND_DELETE_COMMAND_RE = /\bfind\b[\s\S]*\s-delete\b/i;
 const GIT_CLEAN_COMMAND_RE = /\bgit\s+clean\b/i;
+const PYTHON_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:python(?:3)?|py(?:\.exe)?|pip(?:3)?)(?:\s+-3)?(?:\s|$)|\.py(?:\s|$)/i;
+const PYTHON_PIP_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|py(?:\.exe)?\s+-m\s+pip)(?:\s|$)/i;
 const MEMORY_REQUEST_TAIL_SPLIT_RE = /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
 const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
@@ -1997,6 +2000,50 @@ export class CoworkRunner extends EventEmitter {
     return null;
   }
 
+  private isPythonRelatedBashCommand(command: string): boolean {
+    const trimmed = command.trim();
+    if (!trimmed) return false;
+    return PYTHON_BASH_COMMAND_RE.test(trimmed);
+  }
+
+  private isPythonPipBashCommand(command: string): boolean {
+    const trimmed = command.trim();
+    if (!trimmed) return false;
+    return PYTHON_PIP_BASH_COMMAND_RE.test(trimmed);
+  }
+
+  private async ensureWindowsPythonRuntimeForCommand(
+    sessionId: string,
+    command: string
+  ): Promise<{ ok: boolean; reason?: string }> {
+    if (process.platform !== 'win32' || !this.isPythonRelatedBashCommand(command)) {
+      return { ok: true };
+    }
+
+    const isPipCommand = this.isPythonPipBashCommand(command);
+    const runtimeResult = isPipCommand
+      ? await ensurePythonPipReady()
+      : await ensurePythonRuntimeReady();
+    if (runtimeResult.success) {
+      return { ok: true };
+    }
+
+    const reason = runtimeResult.error
+      || (isPipCommand ? 'Bundled Python pip environment is unavailable.' : 'Bundled Python runtime is unavailable.');
+    const summary = this.truncateCommandPreview(command, 140);
+    coworkLog('ERROR', 'python-runtime', 'Windows python command blocked: runtime unavailable', {
+      sessionId,
+      command: summary,
+      reason,
+    });
+    return {
+      ok: false,
+      reason: isPipCommand
+        ? `[python-runtime] Windows 内置 Python pip 环境不可用，已阻止执行该 pip 命令。\n原因: ${reason}\n请重装应用或联系管理员修复内置运行时。`
+        : `[python-runtime] Windows 内置 Python 运行时不可用，已阻止执行该 Python 命令。\n原因: ${reason}\n请重装应用或联系管理员修复内置运行时。`,
+    };
+  }
+
   async startSession(
     sessionId: string,
     prompt: string,
@@ -2407,6 +2454,19 @@ export class CoworkRunner extends EventEmitter {
         const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'local', resolvedName);
         if (blockedToolResult) {
           return blockedToolResult;
+        }
+
+        if (resolvedName === 'Bash') {
+          const command = this.extractToolCommand(resolvedInput);
+          const pythonRuntimeCheck = await this.ensureWindowsPythonRuntimeForCommand(sessionId, command);
+          if (!pythonRuntimeCheck.ok) {
+            const reason = pythonRuntimeCheck.reason || 'Python runtime unavailable.';
+            this.addSystemMessage(sessionId, reason);
+            return {
+              behavior: 'deny',
+              message: reason,
+            };
+          }
         }
 
         // Auto-approve mode (kept for compatibility with legacy callers).

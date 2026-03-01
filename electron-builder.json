@@ -30,13 +30,6 @@
       "filter": [
         "**/*"
       ]
-    },
-    {
-      "from": "resources/mingit",
-      "to": "mingit",
-      "filter": [
-        "**/*"
-      ]
     }
   ],
   "mac": {
@@ -64,7 +57,23 @@
     "target": [
       "nsis"
     ],
-    "icon": "build/icons/win/icon.ico"
+    "icon": "build/icons/win/icon.ico",
+    "extraResources": [
+      {
+        "from": "resources/mingit",
+        "to": "mingit",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/python-win",
+        "to": "python-win",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   },
   "linux": {
     "target": [
