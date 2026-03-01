@@ -133,6 +133,19 @@ class SkillService {
     }
   }
 
+  async setSkillPrompt(skillId: string, prompt: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const result = await window.electron.skills.setPrompt(skillId, prompt);
+      if (result.success && result.skills) {
+        this.skills = result.skills;
+      }
+      return result;
+    } catch (error) {
+      console.error('Failed to set skill prompt:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
   async testEmailConnectivity(
     skillId: string,
     config: Record<string, string>

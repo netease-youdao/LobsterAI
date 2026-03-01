@@ -1,8 +1,17 @@
 import React, { memo } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
 import { useDrop } from 'react-dnd';
-import { XMarkIcon } from '@heroicons/react/24/outline';
+import {
+  CodeBracketIcon,
+  EyeIcon,
+  ShieldCheckIcon,
+  BeakerIcon,
+  DocumentTextIcon,
+  RocketLaunchIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import type { WorkflowAgent, Skill } from './workflowTypes';
+import { i18nService } from '../../services/i18n';
 
 interface AgentNodeData {
   agent: WorkflowAgent;
@@ -88,6 +97,9 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
     return name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
   };
 
+  // Unified handle class for consistent styling
+  const handleTwClass = "!w-3 !h-3 !bg-claude-accent !border-2 !border-white dark:!border-claude-darkBg transition-transform hover:scale-150";
+
   return (
     <>
       <NodeResizer
@@ -114,12 +126,21 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
           }
       `}
       >
-        {/* Target Handle (top) - incoming connections */}
-        <Handle
-          type="target"
-          position={Position.Top}
-          className="!w-2.5 !h-2.5 !bg-claude-accent !border-2 !border-white dark:!border-claude-darkBg"
-        />
+        {/* Top Handles - both input and output */}
+        <Handle type="target" position={Position.Top} id="top-target" className={handleTwClass} />
+        <Handle type="source" position={Position.Top} id="top-source" className={handleTwClass} />
+
+        {/* Bottom Handles - both input and output */}
+        <Handle type="target" position={Position.Bottom} id="bottom-target" className={handleTwClass} />
+        <Handle type="source" position={Position.Bottom} id="bottom-source" className={handleTwClass} />
+
+        {/* Left Handles - both input and output */}
+        <Handle type="target" position={Position.Left} id="left-target" className={handleTwClass} />
+        <Handle type="source" position={Position.Left} id="left-source" className={handleTwClass} />
+
+        {/* Right Handles - both input and output */}
+        <Handle type="target" position={Position.Right} id="right-target" className={handleTwClass} />
+        <Handle type="source" position={Position.Right} id="right-source" className={handleTwClass} />
 
         {/* Header - Avatar + Name + Remove button */}
         <div className="flex items-center justify-between p-3 pb-2 group">
@@ -187,35 +208,43 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
           <span className="text-xs text-gray-500 dark:text-gray-400">{getStatusText()}</span>
         </div>
 
-        {/* Source Handle (bottom) - outgoing connections */}
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          className="!w-2.5 !h-2.5 !bg-claude-accent !border-2 !border-white dark:!border-claude-darkBg"
-        />
       </div>
     </>
   );
 });
 
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  CodeBracketIcon,
+  EyeIcon,
+  ShieldCheckIcon,
+  BeakerIcon,
+  DocumentTextIcon,
+  RocketLaunchIcon,
+};
+
 // Skill Badge Component
-const SkillBadge: React.FC<{ skill: Skill; onRemove: () => void }> = ({ skill, onRemove }) => (
-  <div
-    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-white"
-    style={{ backgroundColor: skill.color }}
-  >
-    <span className="truncate max-w-[80px]">{skill.name}</span>
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        onRemove();
-      }}
-      className="nodrag hover:bg-white/20 rounded-full p-0.5"
+const SkillBadge: React.FC<{ skill: Skill; onRemove: () => void }> = ({ skill, onRemove }) => {
+  const IconComponent = ICON_MAP[skill.icon] || CodeBracketIcon;
+
+  return (
+    <div
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium text-white"
+      style={{ backgroundColor: skill.color }}
     >
-      <XMarkIcon className="w-3 h-3" />
-    </button>
-  </div>
-);
+      <IconComponent className="w-3.5 h-3.5" />
+      <span className="truncate max-w-[80px]">{i18nService.t(`skill.${skill.id}`) || skill.name}</span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="nodrag hover:bg-white/20 rounded-full p-0.5 ml-0.5"
+      >
+        <XMarkIcon className="w-3 h-3" />
+      </button>
+    </div>
+  );
+};
 
 AgentNode.displayName = 'AgentNode';
 

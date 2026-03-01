@@ -165,17 +165,17 @@ interface EmailConnectivityTestResult {
 
 type CoworkPermissionResult =
   | {
-      behavior: 'allow';
-      updatedInput?: Record<string, unknown>;
-      updatedPermissions?: Record<string, unknown>[];
-      toolUseID?: string;
-    }
+    behavior: 'allow';
+    updatedInput?: Record<string, unknown>;
+    updatedPermissions?: Record<string, unknown>[];
+    toolUseID?: string;
+  }
   | {
-      behavior: 'deny';
-      message: string;
-      interrupt?: boolean;
-      toolUseID?: string;
-    };
+    behavior: 'deny';
+    message: string;
+    interrupt?: boolean;
+    toolUseID?: string;
+  };
 
 interface IElectronAPI {
   platform: string;
@@ -194,6 +194,7 @@ interface IElectronAPI {
     autoRoutingPrompt: () => Promise<{ success: boolean; prompt?: string | null; error?: string }>;
     getConfig: (skillId: string) => Promise<{ success: boolean; config?: Record<string, string>; error?: string }>;
     setConfig: (skillId: string, config: Record<string, string>) => Promise<{ success: boolean; error?: string }>;
+    setPrompt: (skillId: string, prompt: string) => Promise<{ success: boolean; error?: string; skills?: Skill[] }>;
     testEmailConnectivity: (
       skillId: string,
       config: Record<string, string>
@@ -511,4 +512,4 @@ declare global {
   }
 }
 
-export {}; 
+export { }; 

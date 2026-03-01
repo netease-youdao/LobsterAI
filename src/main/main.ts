@@ -337,8 +337,8 @@ const checkCalendarPermission = async (): Promise<string> => {
     } catch (error: any) {
       // Check if it's a permission error
       if (error.stderr?.includes('不能获取对象') ||
-          error.stderr?.includes('not authorized') ||
-          error.stderr?.includes('Permission denied')) {
+        error.stderr?.includes('not authorized') ||
+        error.stderr?.includes('Permission denied')) {
         console.log('[Permissions] macOS Calendar access: not-determined (needs permission)');
         return 'not-determined';
       }
@@ -692,7 +692,7 @@ const getScheduler = () => {
 };
 
 // 获取正确的预加载脚本路径
-const PRELOAD_PATH = app.isPackaged 
+const PRELOAD_PATH = app.isPackaged
   ? path.join(__dirname, 'preload.js')
   : path.join(__dirname, '../dist-electron/preload.js');
 
@@ -1003,6 +1003,10 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:setConfig', (_event, skillId: string, config: Record<string, string>) => {
     return getSkillManager().setSkillConfig(skillId, config);
+  });
+
+  ipcMain.handle('skills:setPrompt', (_event, skillId: string, prompt: string) => {
+    return getSkillManager().setSkillPrompt(skillId, prompt);
   });
 
   ipcMain.handle('skills:testEmailConnectivity', async (
@@ -1430,7 +1434,7 @@ if (!gotTheLock) {
             MIN_MEMORY_USER_MEMORIES_MAX_ITEMS,
             Math.min(MAX_MEMORY_USER_MEMORIES_MAX_ITEMS, Math.floor(config.memoryUserMemoriesMaxItems))
           )
-        : undefined;
+          : undefined;
       const normalizedConfig = {
         ...config,
         executionMode: normalizedExecutionMode,
@@ -1587,7 +1591,7 @@ if (!gotTheLock) {
   ipcMain.handle('permissions:checkCalendar', async () => {
     try {
       const status = await checkCalendarPermission();
-      
+
       // Development mode: Auto-request permission if not determined
       // This provides a better dev experience without affecting production
       if (isDev && status === 'not-determined' && process.platform === 'darwin') {
@@ -1601,7 +1605,7 @@ if (!gotTheLock) {
           console.warn('[Permissions] Development mode: Auto-request failed:', requestError);
         }
       }
-      
+
       return { success: true, status };
     } catch (error) {
       console.error('[Main] Error checking calendar permission:', error);
@@ -2065,14 +2069,14 @@ if (!gotTheLock) {
       icon: getAppIconPath(),
       ...(isMac
         ? {
-            titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: { x: 12, y: 20 },
-          }
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 12, y: 20 },
+        }
         : isWindows
           ? {
-              frame: false,
-              titleBarStyle: 'hidden' as const,
-            }
+            frame: false,
+            titleBarStyle: 'hidden' as const,
+          }
           : {
             titleBarStyle: 'hidden' as const,
             titleBarOverlay: getTitleBarOverlayOptions(),
@@ -2152,7 +2156,7 @@ if (!gotTheLock) {
         mainWindow?.loadURL(DEV_SERVER_URL).catch((err) => {
           console.error('Failed to load URL:', err);
           retryCount++;
-          
+
           if (retryCount < maxRetries) {
             console.log(`Retrying to load URL (${retryCount}/${maxRetries})...`);
             setTimeout(tryLoadURL, 3000);
@@ -2166,7 +2170,7 @@ if (!gotTheLock) {
       };
 
       tryLoadURL();
-      
+
       // 打开开发者工具
       mainWindow.webContents.openDevTools();
     } else {

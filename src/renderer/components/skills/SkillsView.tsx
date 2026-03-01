@@ -1,25 +1,19 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { i18nService } from '../../services/i18n';
 import SkillsManager from './SkillsManager';
-import AgentsPanel from '../cowork/AgentsPanel';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
-import { UserGroupIcon, SparklesIcon } from '@heroicons/react/24/outline';
-
+import { SparklesIcon } from '@heroicons/react/24/outline';
 interface SkillsViewProps {
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
-  onNavigateHome?: () => void;
 }
 
-type TabType = 'skills' | 'agents';
-
-const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge, onNavigateHome }) => {
+const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
   const isMac = window.electron.platform === 'darwin';
-  const [activeTab, setActiveTab] = useState<TabType>('skills');
 
   return (
     <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
@@ -44,47 +38,21 @@ const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSid
               {updateBadge}
             </div>
           )}
-          {/* Tabs */}
+          {/* Header Title */}
           <div className="flex items-center h-8">
-            <button
-              type="button"
-              onClick={() => setActiveTab('skills')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-                activeTab === 'skills'
-                  ? 'bg-claude-accent/10 text-claude-accent'
-                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
-              }`}
-            >
+            <div className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg text-claude-text dark:text-claude-darkText border-0">
               <SparklesIcon className="h-4 w-4" />
               {i18nService.t('skills')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('agents')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-                activeTab === 'agents'
-                  ? 'bg-claude-accent/10 text-claude-accent'
-                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
-              }`}
-            >
-              <UserGroupIcon className="h-4 w-4" />
-              {i18nService.t('agentsTab')}
-            </button>
+            </div>
           </div>
         </div>
         <WindowTitleBar inline />
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
-        {activeTab === 'agents' ? (
-          <div className="p-4">
-            <AgentsPanel onNavigateHome={onNavigateHome} />
-          </div>
-        ) : (
-          <div className="max-w-3xl mx-auto px-4 py-6">
-            <SkillsManager />
-          </div>
-        )}
+        <div className="max-w-3xl mx-auto px-4 py-6 h-full flex flex-col">
+          <SkillsManager />
+        </div>
       </div>
     </div>
   );
