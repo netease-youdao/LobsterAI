@@ -1,8 +1,8 @@
 ---
 name: films-search
-description: "搜索影视资源（电影、电视剧、动漫），从夸克网盘、百度网盘、阿里云盘、UC网盘获取资源链接。触发词：找电影、找剧、影视资源、下载链接、网盘资源、找片、电影下载、夸克资源。"
+description: Search cloud drives for downloadable film and TV resources (movies, TV series, anime). Use this skill when the user wants to download a specific movie or TV show. Do NOT use for general movie information, schedules, reviews, or recommendations.
 official: false
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Films Search Skill

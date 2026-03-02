@@ -1,8 +1,8 @@
 ---
 name: technology-news-search
-description: Real-time technology news search and aggregation from 75 international and Chinese media sources across 9 core technical domains. Intelligent keyword-based routing with domain aliases searches only relevant sources. Automatically adapts to network environment - seamlessly switches between global sources (75) and China-only sources (18) based on network accessibility. Use when user requests to search for tech news by keyword. Trigger phrases include "search for [keyword] tech news", "find news about [topic]", "latest news on [subject]", or Chinese equivalents like "搜索 [关键词] 科技新闻". Provides multi-source heat analysis, automatic EN↔CN translation, and clean Markdown presentation.
+description: Search and aggregate technology industry news from multiple sources with heat ranking and EN↔CN translation. Use this skill when the user wants to find or browse news specifically about software, hardware, AI, or other tech domains. Do NOT use for non-tech news (e.g. finance, real estate, entertainment).
 official: true
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Technology News Search
