@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { existsSync, readdirSync, statSync } = require('fs');
+const { existsSync, mkdirSync, readdirSync, statSync } = require('fs');
 const { spawnSync } = require('child_process');
 const { ensurePortableGit } = require('./setup-mingit.js');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
@@ -27,6 +27,40 @@ function findPackagedBash(appOutDir) {
   }
 
   return null;
+}
+
+function verifyPackagedPortableGitRuntimeDirs(appOutDir) {
+  const requiredDirs = [
+    path.join(appOutDir, 'resources', 'mingit', 'dev', 'shm'),
+    path.join(appOutDir, 'resources', 'mingit', 'dev', 'mqueue'),
+  ];
+  const createdDirs = [];
+
+  for (const dir of requiredDirs) {
+    if (existsSync(dir)) continue;
+    mkdirSync(dir, { recursive: true });
+    createdDirs.push(dir);
+  }
+
+  const missingDirs = requiredDirs.filter((dir) => !existsSync(dir));
+  if (missingDirs.length > 0) {
+    throw new Error(
+      'Windows package is missing required PortableGit runtime directories. '
+      + `Missing: ${missingDirs.join(', ')}`
+    );
+  }
+
+  if (createdDirs.length > 0) {
+    console.log(
+      '[electron-builder-hooks] Created missing PortableGit runtime directories: '
+      + createdDirs.join(', ')
+    );
+  }
+
+  console.log(
+    '[electron-builder-hooks] Verified PortableGit runtime directories: '
+    + requiredDirs.join(', ')
+  );
 }
 
 function findPackagedPythonExecutable(appOutDir) {
@@ -380,6 +414,7 @@ async function afterPack(context) {
     }
 
     console.log(`[electron-builder-hooks] Verified bundled PortableGit: ${bashPath}`);
+    verifyPackagedPortableGitRuntimeDirs(context.appOutDir);
 
     const pythonExe = findPackagedPythonExecutable(context.appOutDir);
     if (!pythonExe) {
