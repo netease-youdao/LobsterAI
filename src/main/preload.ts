@@ -111,9 +111,9 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('get-recent-cwds', limit),
   cowork: {
     // Session management
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[] }) =>
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:start', options),
-    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[] }) =>
+    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:continue', options),
     stopSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:stop', sessionId),
@@ -219,6 +219,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('dialog:selectFile', options),
     saveInlineFile: (options: { dataBase64: string; fileName?: string; mimeType?: string; cwd?: string }) =>
       ipcRenderer.invoke('dialog:saveInlineFile', options),
+    readFileAsDataUrl: (filePath: string) =>
+      ipcRenderer.invoke('dialog:readFileAsDataUrl', filePath),
   },
   shell: {
     openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
