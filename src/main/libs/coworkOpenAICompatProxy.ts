@@ -68,7 +68,7 @@ type ResponsesStreamContext = {
   hasAnyDelta: boolean;
 };
 
-const PROXY_BIND_HOST = '0.0.0.0';
+const PROXY_BIND_HOST = '127.0.0.1';
 const LOCAL_HOST = '127.0.0.1';
 const SANDBOX_HOST = '10.0.2.2';
 const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
