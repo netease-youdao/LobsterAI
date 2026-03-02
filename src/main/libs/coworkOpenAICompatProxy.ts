@@ -299,6 +299,52 @@ function extractErrorMessage(raw: string): string {
   return raw;
 }
 
+function estimateTokenCountForText(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) {
+    return 0;
+  }
+  // Heuristic fallback for non-Anthropic backends that do not implement count_tokens.
+  return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+function estimateTokenCountFromUnknown(value: unknown): number {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+
+  if (typeof value === 'string') {
+    return estimateTokenCountForText(value);
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return estimateTokenCountForText(String(value));
+  }
+
+  if (Array.isArray(value)) {
+    return value.reduce((sum, item) => sum + estimateTokenCountFromUnknown(item), 0);
+  }
+
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    let total = 0;
+    for (const [key, nested] of Object.entries(obj)) {
+      // Prefer semantically meaningful text fields; avoid double-counting structural keys.
+      if (key === 'text' || key === 'content' || key === 'system' || key === 'name' || key === 'description') {
+        total += estimateTokenCountFromUnknown(nested);
+      }
+    }
+    return total;
+  }
+
+  return 0;
+}
+
+function estimateAnthropicCountTokensRequestInputTokens(requestBody: unknown): number {
+  const estimated = estimateTokenCountFromUnknown(requestBody);
+  return Math.max(1, estimated);
+}
+
 function resolveUpstreamAPIType(provider?: string): UpstreamAPIType {
   return provider?.toLowerCase() === 'openai' ? 'responses' : 'chat_completions';
 }
@@ -2507,6 +2553,35 @@ async function handleRequest(
     if (method === 'DELETE') { await handleDeleteScheduledTask(req, res, id); return; }
   }
   console.log(`[CoworkProxy] ${method} ${url.pathname}`);
+
+  if (method === 'POST' && url.pathname === '/api/event_logging/batch') {
+    writeJSON(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/v1/messages/count_tokens') {
+    let requestBodyRaw = '';
+    try {
+      requestBodyRaw = await readRequestBody(req);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid request body';
+      writeJSON(res, 400, createAnthropicErrorBody(message, 'invalid_request_error'));
+      return;
+    }
+
+    let parsedRequestBody: unknown;
+    try {
+      parsedRequestBody = JSON.parse(requestBodyRaw);
+    } catch {
+      writeJSON(res, 400, createAnthropicErrorBody('Request body must be valid JSON', 'invalid_request_error'));
+      return;
+    }
+
+    writeJSON(res, 200, {
+      input_tokens: estimateAnthropicCountTokensRequestInputTokens(parsedRequestBody),
+    });
+    return;
+  }
 
   if (method !== 'POST' || url.pathname !== '/v1/messages') {
     writeJSON(res, 404, createAnthropicErrorBody('Not found', 'not_found_error'));
