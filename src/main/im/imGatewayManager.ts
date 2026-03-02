@@ -12,6 +12,7 @@ import { FeishuGateway } from './feishuGateway';
 import { TelegramGateway } from './telegramGateway';
 import { DiscordGateway } from './discordGateway';
 import { NimGateway } from './nimGateway';
+import { XiaomifengGateway } from './xiaomifengGateway';
 import { IMChatHandler } from './imChatHandler';
 import { IMCoworkHandler } from './imCoworkHandler';
 import { IMStore } from './imStore';
@@ -56,6 +57,7 @@ export class IMGatewayManager extends EventEmitter {
   private telegramGateway: TelegramGateway;
   private discordGateway: DiscordGateway;
   private nimGateway: NimGateway;
+  private xiaomifengGateway: XiaomifengGateway;
   private imStore: IMStore;
   private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
@@ -78,6 +80,7 @@ export class IMGatewayManager extends EventEmitter {
     this.telegramGateway = new TelegramGateway();
     this.discordGateway = new DiscordGateway();
     this.nimGateway = new NimGateway();
+    this.xiaomifengGateway = new XiaomifengGateway();
 
     // Store Cowork dependencies if provided
     if (options?.coworkRunner && options?.coworkStore) {
@@ -173,6 +176,24 @@ export class IMGatewayManager extends EventEmitter {
     this.nimGateway.on('message', (message: IMMessage) => {
       this.emit('message', message);
     });
+
+    // Xiaomifeng events
+    this.xiaomifengGateway.on('status', () => {
+      this.emit('statusChange', this.getStatus());
+    });
+    this.xiaomifengGateway.on('connected', () => {
+      this.emit('statusChange', this.getStatus());
+    });
+    this.xiaomifengGateway.on('disconnected', () => {
+      this.emit('statusChange', this.getStatus());
+    });
+    this.xiaomifengGateway.on('error', (error) => {
+      this.emit('error', { platform: 'xiaomifeng', error });
+      this.emit('statusChange', this.getStatus());
+    });
+    this.xiaomifengGateway.on('message', (message: IMMessage) => {
+      this.emit('message', message);
+    });
   }
 
   /**
@@ -205,6 +226,11 @@ export class IMGatewayManager extends EventEmitter {
     if (this.nimGateway && !this.nimGateway.isConnected()) {
       console.log('[IMGatewayManager] Reconnecting NIM...');
       this.nimGateway.reconnectIfNeeded();
+    }
+
+    if (this.xiaomifengGateway && !this.xiaomifengGateway.isConnected()) {
+      console.log('[IMGatewayManager] Reconnecting Xiaomifeng...');
+      this.xiaomifengGateway.reconnectIfNeeded();
     }
   }
 
@@ -274,6 +300,7 @@ export class IMGatewayManager extends EventEmitter {
     this.telegramGateway.setMessageCallback(messageHandler);
     this.discordGateway.setMessageCallback(messageHandler);
     this.nimGateway.setMessageCallback(messageHandler);
+    this.xiaomifengGateway.setMessageCallback(messageHandler);
   }
 
   /**
@@ -486,6 +513,7 @@ export class IMGatewayManager extends EventEmitter {
       telegram: this.telegramGateway.getStatus(),
       discord: this.discordGateway.getStatus(),
       nim: this.nimGateway.getStatus(),
+      xiaomifeng: this.xiaomifengGateway.getStatus(),
     };
   }
 
@@ -706,6 +734,8 @@ export class IMGatewayManager extends EventEmitter {
       await this.discordGateway.start(config.discord);
     } else if (platform === 'nim') {
       await this.nimGateway.start(config.nim);
+    } else if (platform === 'xiaomifeng') {
+      await this.xiaomifengGateway.start(config.xiaomifeng);
     }
 
     // Restore persisted notification target
@@ -726,6 +756,8 @@ export class IMGatewayManager extends EventEmitter {
       await this.discordGateway.stop();
     } else if (platform === 'nim') {
       await this.nimGateway.stop();
+    } else if (platform === 'xiaomifeng') {
+      await this.xiaomifengGateway.stop();
     }
   }
 
@@ -774,6 +806,14 @@ export class IMGatewayManager extends EventEmitter {
         console.error(`[IMGatewayManager] Failed to start NIM: ${error.message}`);
       }
     }
+
+    if (config.xiaomifeng?.enabled && config.xiaomifeng?.clientId && config.xiaomifeng?.secret) {
+      try {
+        await this.startGateway('xiaomifeng');
+      } catch (error: any) {
+        console.error(`[IMGatewayManager] Failed to start Xiaomifeng: ${error.message}`);
+      }
+    }
   }
 
   /**
@@ -786,6 +826,7 @@ export class IMGatewayManager extends EventEmitter {
       this.telegramGateway.stop(),
       this.discordGateway.stop(),
       this.nimGateway.stop(),
+      this.xiaomifengGateway.stop(),
     ]);
   }
 
@@ -793,7 +834,7 @@ export class IMGatewayManager extends EventEmitter {
    * Check if any gateway is connected
    */
   isAnyConnected(): boolean {
-    return this.dingtalkGateway.isConnected() || this.feishuGateway.isConnected() || this.telegramGateway.isConnected() || this.discordGateway.isConnected() || this.nimGateway.isConnected();
+    return this.dingtalkGateway.isConnected() || this.feishuGateway.isConnected() || this.telegramGateway.isConnected() || this.discordGateway.isConnected() || this.nimGateway.isConnected() || this.xiaomifengGateway.isConnected();
   }
 
   /**
@@ -811,6 +852,9 @@ export class IMGatewayManager extends EventEmitter {
     }
     if (platform === 'nim') {
       return this.nimGateway.isConnected();
+    }
+    if (platform === 'xiaomifeng') {
+      return this.xiaomifengGateway.isConnected();
     }
     return this.feishuGateway.isConnected();
   }
@@ -883,6 +927,7 @@ export class IMGatewayManager extends EventEmitter {
       telegram: { ...current.telegram, ...(configOverride.telegram || {}) },
       discord: { ...current.discord, ...(configOverride.discord || {}) },
       nim: { ...current.nim, ...(configOverride.nim || {}) },
+      xiaomifeng: { ...current.xiaomifeng, ...(configOverride.xiaomifeng || {}) },
       settings: { ...current.settings, ...(configOverride.settings || {}) },
     };
   }
@@ -908,6 +953,12 @@ export class IMGatewayManager extends EventEmitter {
       if (!config.nim.appKey) fields.push('appKey');
       if (!config.nim.account) fields.push('account');
       if (!config.nim.token) fields.push('token');
+      return fields;
+    }
+    if (platform === 'xiaomifeng') {
+      const fields: string[] = [];
+      if (!config.xiaomifeng?.clientId) fields.push('clientId');
+      if (!config.xiaomifeng?.secret) fields.push('secret');
       return fields;
     }
     return config.discord.botToken ? [] : ['botToken'];
@@ -958,13 +1009,28 @@ export class IMGatewayManager extends EventEmitter {
       await this.testNimConnectivity(config.nim);
       return `云信鉴权通过（Account: ${config.nim.account}，SDK 登录成功）。`;
     }
-    const response = await fetchJsonWithTimeout<DiscordUserResponse>('https://discord.com/api/v10/users/@me', {
-      headers: {
-        Authorization: `Bot ${config.discord.botToken}`,
-      },
-    }, CONNECTIVITY_TIMEOUT_MS);
-    const username = response.username ? `${response.username}#${response.discriminator || '0000'}` : 'unknown';
-    return `Discord 鉴权通过（Bot: ${username}）。`;
+
+    if (platform === 'xiaomifeng') {
+      // 小蜜蜂使用网易云信 NIM SDK，鉴权是通过 SDK 登录验证的
+      // 这里我们只做配置完整性检查，实际登录验证在 start 时进行
+      const { clientId, secret } = config.xiaomifeng;
+      if (!clientId || !secret) {
+        throw new Error('配置不完整');
+      }
+      return `小蜜蜂配置已就绪（Client ID: ${clientId}）。`;
+    }
+
+    if (platform === 'discord') {
+      const response = await fetchJsonWithTimeout<DiscordUserResponse>('https://discord.com/api/v10/users/@me', {
+        headers: {
+          Authorization: `Bot ${config.discord.botToken}`,
+        },
+      }, CONNECTIVITY_TIMEOUT_MS);
+      const username = response.username ? `${response.username}#${response.discriminator || '0000'}` : 'unknown';
+      return `Discord 鉴权通过（Bot: ${username}）。`;
+    }
+
+    return '未知平台。';
   }
 
   /**
@@ -1118,6 +1184,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'dingtalk') return status.dingtalk.startedAt;
     if (platform === 'telegram') return status.telegram.startedAt;
     if (platform === 'nim') return status.nim.startedAt;
+    if (platform === 'xiaomifeng') return status.xiaomifeng.startedAt;
     return status.discord.startedAt;
   }
 
@@ -1126,6 +1193,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'feishu') return status.feishu.lastInboundAt;
     if (platform === 'telegram') return status.telegram.lastInboundAt;
     if (platform === 'nim') return status.nim.lastInboundAt;
+    if (platform === 'xiaomifeng') return status.xiaomifeng.lastInboundAt;
     return status.discord.lastInboundAt;
   }
 
@@ -1134,6 +1202,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'feishu') return status.feishu.lastOutboundAt;
     if (platform === 'telegram') return status.telegram.lastOutboundAt;
     if (platform === 'nim') return status.nim.lastOutboundAt;
+    if (platform === 'xiaomifeng') return status.xiaomifeng.lastOutboundAt;
     return status.discord.lastOutboundAt;
   }
 
@@ -1142,6 +1211,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'feishu') return status.feishu.error;
     if (platform === 'telegram') return status.telegram.lastError;
     if (platform === 'nim') return status.nim.lastError;
+    if (platform === 'xiaomifeng') return status.xiaomifeng.lastError;
     return status.discord.lastError;
   }
 

@@ -8,7 +8,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
 import { imService } from '../../services/im';
-import { setDingTalkConfig, setFeishuConfig, setTelegramConfig, setDiscordConfig, setNimConfig, clearError } from '../../store/slices/imSlice';
+import { setDingTalkConfig, setFeishuConfig, setTelegramConfig, setDiscordConfig, setNimConfig, setXiaomifengConfig, clearError } from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
 import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
@@ -20,6 +20,7 @@ const platformMeta: Record<IMPlatform, { label: string; logo: string }> = {
   telegram: { label: 'Telegram', logo: 'telegram.svg' },
   discord: { label: 'Discord', logo: 'discord.svg' },
   nim: { label: '云信', logo: 'nim.png' },
+  xiaomifeng: { label: '小蜜蜂', logo: 'xiaomifeng.png' },
 };
 
 const verdictColorClass: Record<IMConnectivityTestResult['verdict'], string> = {
@@ -34,6 +35,21 @@ const checkLevelColorClass: Record<IMConnectivityCheck['level'], string> = {
   warn: 'text-yellow-700 dark:text-yellow-300',
   fail: 'text-red-600 dark:text-red-400',
 };
+
+// Map of backend error messages to i18n keys
+const errorMessageI18nMap: Record<string, string> = {
+  '账号已在其它地方登录': 'kickedByOtherClient',
+};
+
+// Helper function to translate IM error messages
+function translateIMError(error: string | null): string {
+  if (!error) return '';
+  const i18nKey = errorMessageI18nMap[error];
+  if (i18nKey) {
+    return i18nService.t(i18nKey);
+  }
+  return error;
+}
 
 const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
@@ -101,6 +117,11 @@ const IMSettings: React.FC = () => {
   // Handle NIM config change
   const handleNimChange = (field: 'appKey' | 'account' | 'token' | 'accountWhitelist', value: string) => {
     dispatch(setNimConfig({ [field]: value }));
+  };
+
+  // Handle Xiaomifeng config change
+  const handleXiaomifengChange = (field: 'clientId' | 'secret', value: string) => {
+    dispatch(setXiaomifengConfig({ [field]: value }));
   };
 
   // Save config on blur — also auto-triggers NIM connectivity test when
@@ -213,6 +234,7 @@ const IMSettings: React.FC = () => {
   const telegramConnected = status.telegram.connected;
   const discordConnected = status.discord.connected;
   const nimConnected = status.nim.connected;
+  const xiaomifengConnected = status.xiaomifeng?.connected ?? false;
 
   // Compute visible platforms based on language
   const platforms = useMemo<IMPlatform[]>(() => {
@@ -241,6 +263,9 @@ const IMSettings: React.FC = () => {
     if (platform === 'nim') {
       return !!(config.nim.appKey && config.nim.account && config.nim.token);
     }
+    if (platform === 'xiaomifeng') {
+      return !!(config.xiaomifeng.clientId && config.xiaomifeng.secret);
+    }
     return !!(config.feishu.appId && config.feishu.appSecret);
   };
 
@@ -255,6 +280,7 @@ const IMSettings: React.FC = () => {
     if (platform === 'telegram') return telegramConnected;
     if (platform === 'discord') return discordConnected;
     if (platform === 'nim') return nimConnected;
+    if (platform === 'xiaomifeng') return xiaomifengConnected;
     return feishuConnected;
   };
 
@@ -318,6 +344,7 @@ const IMSettings: React.FC = () => {
       telegram: setTelegramConfig,
       discord: setDiscordConfig,
       nim: setNimConfig,
+      xiaomifeng: setXiaomifengConfig,
     };
     return actionMap[platform];
   };
@@ -366,8 +393,8 @@ const IMSettings: React.FC = () => {
               onClick={() => setActivePlatform(platform)}
               className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
                 activePlatform === platform
-                  ? 'bg-claude-accent/10 dark:bg-claude-accent/20 border border-claude-accent/30'
-                  : 'bg-claude-surfaceHover/80 dark:bg-claude-darkSurface/55 dark:bg-gradient-to-br dark:from-claude-darkSurface/70 dark:to-claude-darkSurfaceHover/70 hover:bg-claude-surface dark:hover:from-claude-darkSurface/80 dark:hover:to-claude-darkSurfaceHover/80 dark:border-claude-darkBorder/70 border-claude-border/80 border'
+                  ? 'bg-claude-accent/10 dark:bg-claude-accent/20 border border-claude-accent/30 shadow-subtle'
+                  : 'dark:bg-claude-darkSurface/50 bg-claude-surface hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover border border-transparent'
               }`}
             >
               <div className="flex flex-1 items-center">
@@ -785,6 +812,59 @@ const IMSettings: React.FC = () => {
             {status.nim.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
                 {status.nim.lastError}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 小蜜蜂设置*/}
+        {activePlatform === 'xiaomifeng' && (
+          <div className="space-y-3">
+            {/* Client ID */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Client ID
+              </label>
+              <input
+                type="text"
+                value={config.xiaomifeng.clientId}
+                onChange={(e) => handleXiaomifengChange('clientId', e.target.value)}
+                onBlur={handleSaveConfig}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                placeholder={i18nService.t('xiaomifengClientIdPlaceholder') || '您的Client ID'}
+              />
+            </div>
+
+            {/* Client Secret */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Client Secret
+              </label>
+              <input
+                type="password"
+                value={config.xiaomifeng.secret}
+                onChange={(e) => handleXiaomifengChange('secret', e.target.value)}
+                onBlur={handleSaveConfig}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                placeholder="••••••••••••"
+              />
+            </div>
+
+            <div className="pt-1">
+              {renderConnectivityTestButton('xiaomifeng')}
+            </div>
+
+            {/* Bot account display */}
+            {status.xiaomifeng?.botAccount && (
+              <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                Account: {status.xiaomifeng.botAccount}
+              </div>
+            )}
+
+            {/* Error display */}
+            {status.xiaomifeng?.lastError && (
+              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                {translateIMError(status.xiaomifeng.lastError)}
               </div>
             )}
           </div>

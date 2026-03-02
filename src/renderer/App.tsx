@@ -15,7 +15,7 @@ import { apiService } from './services/api';
 import { themeService } from './services/theme';
 import { coworkService } from './services/cowork';
 import { scheduledTaskService } from './services/scheduledTask';
-import { checkForAppUpdate, type AppUpdateInfo, UPDATE_POLL_INTERVAL_MS } from './services/appUpdate';
+import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS } from './services/appUpdate';
 import { defaultConfig } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
@@ -38,6 +38,9 @@ const App: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updateModalState, setUpdateModalState] = useState<'info' | 'downloading' | 'installing' | 'error'>('info');
+  const [downloadProgress, setDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
   const dispatch = useDispatch();
@@ -77,7 +80,7 @@ const App: React.FC = () => {
         apiService.setConfig(apiConfig);
 
         // 从 providers 配置中加载可用模型列表到 Redux
-        const providerModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
+        const providerModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
         if (config.providers) {
           Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
             if (providerConfig.enabled && providerConfig.models) {
@@ -86,6 +89,7 @@ const App: React.FC = () => {
                   id: model.id,
                   name: model.name,
                   provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+                  providerKey: providerName,
                   supportsImage: model.supportsImage ?? false,
                 });
               });
@@ -95,12 +99,16 @@ const App: React.FC = () => {
         const fallbackModels = config.model.availableModels.map(model => ({
           id: model.id,
           name: model.name,
+          providerKey: undefined,
           supportsImage: model.supportsImage ?? false,
         }));
         const resolvedModels = providerModels.length > 0 ? providerModels : fallbackModels;
         if (resolvedModels.length > 0) {
           dispatch(setAvailableModels(resolvedModels));
-          const preferredModel = resolvedModels.find(model => model.id === config.model.defaultModel) ?? resolvedModels[0];
+          const preferredModel = resolvedModels.find(
+            model => model.id === config.model.defaultModel
+              && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
+          ) ?? resolvedModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
         
@@ -151,14 +159,20 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isInitialized || !selectedModel?.id) return;
     const config = configService.getConfig();
-    if (config.model.defaultModel === selectedModel.id) return;
+    if (
+      config.model.defaultModel === selectedModel.id
+      && (config.model.defaultModelProvider ?? '') === (selectedModel.providerKey ?? '')
+    ) {
+      return;
+    }
     void configService.updateConfig({
       model: {
         ...config.model,
         defaultModel: selectedModel.id,
+        defaultModelProvider: selectedModel.providerKey,
       },
     });
-  }, [isInitialized, selectedModel?.id]);
+  }, [isInitialized, selectedModel?.id, selectedModel?.providerKey]);
 
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {
     setSettingsOptions({
@@ -228,22 +242,83 @@ const App: React.FC = () => {
 
   const handleOpenUpdateModal = useCallback(() => {
     if (!updateInfo) return;
+    setUpdateModalState('info');
+    setUpdateError(null);
+    setDownloadProgress(null);
     setShowUpdateModal(true);
   }, [updateInfo]);
 
   const handleConfirmUpdate = useCallback(async () => {
     if (!updateInfo) return;
-    setShowUpdateModal(false);
-    try {
-      const result = await window.electron.shell.openExternal(updateInfo.url);
-      if (!result.success) {
+
+    // If the URL is a fallback page (not a direct file download), open in browser
+    if (updateInfo.url.includes('#') || updateInfo.url.endsWith('/download-list')) {
+      setShowUpdateModal(false);
+      try {
+        const result = await window.electron.shell.openExternal(updateInfo.url);
+        if (!result.success) {
+          showToast(i18nService.t('updateOpenFailed'));
+        }
+      } catch (error) {
+        console.error('Failed to open update url:', error);
         showToast(i18nService.t('updateOpenFailed'));
       }
+      return;
+    }
+
+    setUpdateModalState('downloading');
+    setDownloadProgress(null);
+    setUpdateError(null);
+
+    const unsubscribe = window.electron.appUpdate.onDownloadProgress((progress) => {
+      setDownloadProgress(progress);
+    });
+
+    try {
+      const downloadResult = await window.electron.appUpdate.download(updateInfo.url);
+      unsubscribe();
+
+      if (!downloadResult.success) {
+        // If user cancelled, handleCancelDownload already set the state — don't overwrite
+        if (downloadResult.error === 'Download cancelled') {
+          return;
+        }
+        setUpdateModalState('error');
+        setUpdateError(downloadResult.error || i18nService.t('updateDownloadFailed'));
+        return;
+      }
+
+      setUpdateModalState('installing');
+      const installResult = await window.electron.appUpdate.install(downloadResult.filePath!);
+
+      if (!installResult.success) {
+        setUpdateModalState('error');
+        setUpdateError(installResult.error || i18nService.t('updateInstallFailed'));
+      }
+      // If successful, app will quit and relaunch
     } catch (error) {
-      console.error('Failed to open update url:', error);
-      showToast(i18nService.t('updateOpenFailed'));
+      unsubscribe();
+      const msg = error instanceof Error ? error.message : '';
+      // If user cancelled, handleCancelDownload already set the state — don't overwrite
+      if (msg === 'Download cancelled') {
+        return;
+      }
+      setUpdateModalState('error');
+      setUpdateError(msg || i18nService.t('updateDownloadFailed'));
     }
   }, [updateInfo, showToast]);
+
+  const handleCancelDownload = useCallback(async () => {
+    await window.electron.appUpdate.cancelDownload();
+    setUpdateModalState('info');
+    setDownloadProgress(null);
+  }, []);
+
+  const handleRetryUpdate = useCallback(() => {
+    setUpdateModalState('info');
+    setUpdateError(null);
+    setDownloadProgress(null);
+  }, []);
 
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
     if (!pendingPermission) return;
@@ -259,7 +334,7 @@ const App: React.FC = () => {
     });
 
     if (config.providers) {
-      const allModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
+      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
       Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
         if (providerConfig.enabled && providerConfig.models) {
           providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
@@ -267,6 +342,7 @@ const App: React.FC = () => {
               id: model.id,
               name: model.name,
               provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
           });
@@ -532,9 +608,21 @@ const App: React.FC = () => {
       )}
       {showUpdateModal && updateInfo && (
         <AppUpdateModal
-          latestVersion={updateInfo.latestVersion}
-          onCancel={() => setShowUpdateModal(false)}
+          updateInfo={updateInfo}
+          onCancel={() => {
+            if (updateModalState === 'info' || updateModalState === 'error') {
+              setShowUpdateModal(false);
+              setUpdateModalState('info');
+              setUpdateError(null);
+              setDownloadProgress(null);
+            }
+          }}
           onConfirm={handleConfirmUpdate}
+          modalState={updateModalState}
+          downloadProgress={downloadProgress}
+          errorMessage={updateError}
+          onCancelDownload={handleCancelDownload}
+          onRetry={handleRetryUpdate}
         />
       )}
       {permissionModal}

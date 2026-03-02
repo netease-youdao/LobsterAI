@@ -142,9 +142,27 @@ export interface NimGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+// ==================== Xiaomifeng (小蜜蜂) Types ====================
+
+export interface XiaomifengConfig {
+  enabled: boolean;
+  clientId: string;    // 用于 NIM 登录的账号 (appKey)
+  secret: string;      // 用于 NIM 登录的 token (appSecret)
+  debug?: boolean;
+}
+
+export interface XiaomifengGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  botAccount: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim';
+export type IMPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng';
 
 export interface IMGatewayConfig {
   dingtalk: DingTalkConfig;
@@ -152,6 +170,7 @@ export interface IMGatewayConfig {
   telegram: TelegramConfig;
   discord: DiscordConfig;
   nim: NimConfig;
+  xiaomifeng: XiaomifengConfig;
   settings: IMSettings;
 }
 
@@ -166,6 +185,7 @@ export interface IMGatewayStatus {
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
   nim: NimGatewayStatus;
+  xiaomifeng: XiaomifengGatewayStatus;
 }
 
 // ==================== Media Attachment Types ====================
@@ -316,6 +336,13 @@ export const DEFAULT_NIM_CONFIG: NimConfig = {
   debug: true,
 };
 
+export const DEFAULT_XIAOMIFENG_CONFIG: XiaomifengConfig = {
+  enabled: false,
+  clientId: '',
+  secret: '',
+  debug: true,
+};
+
 export const DEFAULT_IM_SETTINGS: IMSettings = {
   systemPrompt: '',
   skillsEnabled: true,
@@ -327,6 +354,7 @@ export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   telegram: DEFAULT_TELEGRAM_CONFIG,
   discord: DEFAULT_DISCORD_CONFIG,
   nim: DEFAULT_NIM_CONFIG,
+  xiaomifeng: DEFAULT_XIAOMIFENG_CONFIG,
   settings: DEFAULT_IM_SETTINGS,
 };
 
@@ -375,12 +403,22 @@ export const DEFAULT_NIM_STATUS: NimGatewayStatus = {
   lastOutboundAt: null,
 };
 
+export const DEFAULT_XIAOMIFENG_STATUS: XiaomifengGatewayStatus = {
+  connected: false,
+  startedAt: null,
+  lastError: null,
+  botAccount: null,
+  lastInboundAt: null,
+  lastOutboundAt: null,
+};
+
 export const DEFAULT_IM_STATUS: IMGatewayStatus = {
   dingtalk: DEFAULT_DINGTALK_STATUS,
   feishu: DEFAULT_FEISHU_STATUS,
   telegram: DEFAULT_TELEGRAM_STATUS,
   discord: DEFAULT_DISCORD_STATUS,
   nim: DEFAULT_NIM_STATUS,
+  xiaomifeng: DEFAULT_XIAOMIFENG_STATUS,
 };
 
 // ==================== DingTalk Media Types ====================

@@ -4,6 +4,7 @@ const path = require('path');
 const { existsSync, readdirSync, statSync } = require('fs');
 const { spawnSync } = require('child_process');
 const { ensurePortableGit } = require('./setup-mingit.js');
+const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -17,6 +18,21 @@ function findPackagedBash(appOutDir) {
   const candidates = [
     path.join(appOutDir, 'resources', 'mingit', 'bin', 'bash.exe'),
     path.join(appOutDir, 'resources', 'mingit', 'usr', 'bin', 'bash.exe'),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function findPackagedPythonExecutable(appOutDir) {
+  const candidates = [
+    path.join(appOutDir, 'resources', 'python-win', 'python.exe'),
+    path.join(appOutDir, 'resources', 'python-win', 'python3.exe'),
   ];
 
   for (const candidate of candidates) {
@@ -234,11 +250,14 @@ function installSkillDependencies() {
     }
 
     console.log(`[electron-builder-hooks]   ${entry}: installing dependencies...`);
+    // On Windows, use shell: true so cmd.exe resolves npm.cmd correctly
+    const isWin = process.platform === 'win32';
     const result = spawnSync('npm', ['install'], {
       cwd: skillPath,
       encoding: 'utf-8',
       stdio: 'pipe',
       timeout: 5 * 60 * 1000, // 5 minute timeout
+      shell: isWin,
     });
 
     if (result.status === 0) {
@@ -246,6 +265,9 @@ function installSkillDependencies() {
       installedCount++;
     } else {
       console.error(`[electron-builder-hooks]   ${entry}: ✗ failed`);
+      if (result.error) {
+        console.error(`[electron-builder-hooks]     Error: ${result.error.message}`);
+      }
       if (result.stderr) {
         console.error(`[electron-builder-hooks]     ${result.stderr.substring(0, 200)}`);
       }
@@ -266,6 +288,16 @@ async function beforePack(context) {
 
   console.log('[electron-builder-hooks] Windows target detected, ensuring PortableGit is prepared...');
   await ensurePortableGit({ required: true });
+  console.log('[electron-builder-hooks] Windows target detected, ensuring portable Python runtime is prepared...');
+  await ensurePortablePythonRuntime({ required: true });
+  const runtimeRoot = path.join(__dirname, '..', 'resources', 'python-win');
+  const runtimeHealth = checkRuntimeHealth(runtimeRoot, { requirePip: true });
+  if (!runtimeHealth.ok) {
+    throw new Error(
+      'Portable Python runtime health check failed before pack. Missing files: '
+      + runtimeHealth.missing.join(', ')
+    );
+  }
 
   // Re-download node-nim native binaries for Windows
   const targetArch = context.arch === 1 ? 'x64' : context.arch === 3 ? 'arm64' : 'x64';
@@ -348,6 +380,25 @@ async function afterPack(context) {
     }
 
     console.log(`[electron-builder-hooks] Verified bundled PortableGit: ${bashPath}`);
+
+    const pythonExe = findPackagedPythonExecutable(context.appOutDir);
+    if (!pythonExe) {
+      throw new Error(
+        'Windows package is missing bundled python runtime executable. '
+        + 'Expected one of: '
+        + `${path.join(context.appOutDir, 'resources', 'python-win', 'python.exe')} or `
+        + `${path.join(context.appOutDir, 'resources', 'python-win', 'python3.exe')}`
+      );
+    }
+    const packagedRuntimeRoot = path.join(context.appOutDir, 'resources', 'python-win');
+    const packagedRuntimeHealth = checkRuntimeHealth(packagedRuntimeRoot, { requirePip: true });
+    if (!packagedRuntimeHealth.ok) {
+      throw new Error(
+        'Windows package bundled python runtime is unhealthy. Missing files: '
+        + packagedRuntimeHealth.missing.join(', ')
+      );
+    }
+    console.log(`[electron-builder-hooks] Verified bundled Python runtime: ${pythonExe}`);
 
     // Restore node-nim to host platform after packaging is done
     // so that local dev (npm run electron:dev) still works

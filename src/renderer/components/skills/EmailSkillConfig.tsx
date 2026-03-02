@@ -232,6 +232,17 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
         setSmtpSecure(preset.smtpSecure);
         setImapTls('true');
       }
+      return;
+    }
+
+    if (newProvider === 'custom') {
+      const customPreset = PROVIDER_PRESETS.custom;
+      setImapHost(customPreset.imapHost);
+      setImapPort(customPreset.imapPort);
+      setSmtpHost(customPreset.smtpHost);
+      setSmtpPort(customPreset.smtpPort);
+      setSmtpSecure(customPreset.smtpSecure);
+      setImapTls('true');
     }
   };
 

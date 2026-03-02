@@ -32,6 +32,7 @@ LobsterAI 的核心是 **Cowork 模式**，它能在本地或沙箱环境中执�
 - **全场景办公助理** — 数据分析、PPT 制作、视频生成、文档撰写、Web 搜索、邮件收发，覆盖日常办公全流程
 - **本地 + 沙箱执行** — 任务执行支持本地直接运行或隔离的 Alpine Linux 沙箱
 - **内置技能** — 包括 Office 文档生成、Web 搜索、Playwright 自动化、Remotion 视频生成等
+- **Windows 内置 Python 运行时** — Windows 安装包内置可直接使用的 Python 解释器运行时；Python 技能依赖可按需安装
 - **定时任务** — 支持对话式发起或 GUI 界面添加定时任务，如每日新闻收集、邮箱整理、周期性报告生成等
 - **持久记忆** — 自动从对话中提取用户偏好与个人信息，跨会话记住你的习惯，越用越懂你
 - **IM 远程操控** — 通过钉钉、飞书、Telegram、Discord 在手机端随时触发 Agent
@@ -101,6 +102,16 @@ npm run dist:win
 # Linux (.AppImage)
 npm run dist:linux
 ```
+
+Windows 打包会内置便携 Python 运行时到 `resources/python-win`（安装包资源目录为 `python-win`），终端用户无需手动安装 Python。
+该运行时以解释器为主，不预装 LobsterAI 技能所需的 Python 三方包；相关依赖可在运行时按需安装。
+默认情况下，如果未提供预构建压缩包，打包脚本会直接从 python.org 下载官方 embeddable Python 运行时。
+离线或无法联网的构建场景，请显式提供预构建运行时压缩包。
+
+企业离线/私有源打包可通过以下环境变量配置：
+- `LOBSTERAI_PORTABLE_PYTHON_ARCHIVE`：本地预构建运行时压缩包路径（离线 CI/CD 推荐）
+- `LOBSTERAI_PORTABLE_PYTHON_URL`：预构建运行时压缩包下载地址
+- `LOBSTERAI_WINDOWS_EMBED_PYTHON_VERSION` / `LOBSTERAI_WINDOWS_EMBED_PYTHON_URL` / `LOBSTERAI_WINDOWS_GET_PIP_URL`：Windows 主机构建时自动拉取源的可选覆盖项
 
 ## 架构概览
 
@@ -250,6 +261,7 @@ LobsterAI 支持将 Agent 桥接到多种 IM 平台。在手机上通过 IM 发�
 | Telegram | grammY | Bot API 接入 |
 | Discord | discord.js | Discord Bot 接入 |
 | 云信 IM | node-nim V2 SDK | 网易云信 IM P2P 私聊 |
+| 网易小蜜蜂 | node-nim V2 SDK | [网易小蜜蜂个人数字助理](https://wp.m.163.com/163/html/bee/lobsterai_guide/index.html) |
 
 在设置面板中配置对应平台的 Token/密钥即可启用。配置完成后，你可以在手机 IM 中直接对 Agent 下达指令（如「帮我分析这份数据」「做一份本周工作汇报 PPT」），Agent 会在桌面端自动执行并返回结果。
 
@@ -363,6 +375,12 @@ PR 描述中请包含：变更说明、关联 issue、UI 变更附截图，以�
 ## 许可证
 
 [MIT License](LICENSE)
+
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=netease-youdao/LobsterAI&type=date&legend=top-left)](https://www.star-history.com/#netease-youdao/LobsterAI&type=date&legend=top-left)
+
 
 ---
 

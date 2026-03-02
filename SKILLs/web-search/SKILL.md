@@ -2,6 +2,7 @@
 name: web-search
 description: Real-time web search using Playwright-controlled browser. Use this skill when you need current information, latest documentation, recent news, or any data beyond your knowledge cutoff (January 2025).
 official: true
+version: 1.0.1
 ---
 
 # Web Search Skill
@@ -344,13 +345,13 @@ The search output is Markdown. Extract:
 ### Typical Latencies
 
 - Server startup: ~2 seconds (one-time, auto-started)
-- Browser launch: ~3 seconds (one-time per session)
-- First search: ~2-3 seconds (includes browser connection)
-- Subsequent searches: ~1 second (connection cached)
+- Browser launch: ~3 seconds (one-time, persists across searches)
+- First search: ~2-3 seconds (includes browser connection setup)
+- Subsequent searches: ~1 second (browser and connection reused)
 
 ### Optimization Tips
 
-1. **Reuse connections** - The CLI script caches connections automatically
+1. **Browser persistence** - The browser stays alive across searches by default. Connections and pages are reused automatically. Set `WEB_SEARCH_CLEANUP=1` to close the browser after each search if needed.
 2. **Limit results** - Request only what you need (5-10 is usually enough)
 3. **Batch searches** - If multiple searches needed, do them consecutively to reuse connection
 4. **Specific queries** - More specific = faster and better results
