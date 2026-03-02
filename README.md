@@ -99,7 +99,7 @@ npm run dist:mac:universal
 # Windows (.exe NSIS installer)
 npm run dist:win
 
-# Linux (.AppImage)
+# Linux (.AppImage & .deb)
 npm run dist:linux
 ```
 

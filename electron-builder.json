@@ -85,10 +85,16 @@
   },
   "linux": {
     "target": [
-      "AppImage"
+      "AppImage",
+      "deb"
     ],
     "icon": "build/icons/png",
-    "category": "Utility"
+    "category": "Utility",
+    "desktop": {
+      "Name": "LobsterAI",
+      "Comment": "AI-assisted coding and productivity tool",
+      "Terminal": "false"
+    }
   },
   "nsis": {
     "oneClick": false,
