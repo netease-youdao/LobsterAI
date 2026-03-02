@@ -5,7 +5,6 @@ import { themeService } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
-import { imService } from '../services/im';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
 import { XMarkIcon, Cog6ToothIcon, PlusCircleIcon, TrashIcon, PencilIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, ShieldCheckIcon, EnvelopeIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
@@ -413,7 +412,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   }, []);
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
-  const imConfig = useSelector((state: RootState) => state.im.config);
 
   const [coworkExecutionMode, setCoworkExecutionMode] = useState<CoworkExecutionMode>(coworkConfig.executionMode || 'local');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
@@ -1055,9 +1053,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
       }
-
-      // Save IM config
-      await imService.updateConfig(imConfig);
 
       didSaveRef.current = true;
       onClose();
@@ -2749,6 +2744,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             <div
               ref={contentRef}
               className="px-6 py-4 flex-1 overflow-y-auto"
+              style={{ scrollbarGutter: 'stable' }}
             >
               {renderTabContent()}
             </div>

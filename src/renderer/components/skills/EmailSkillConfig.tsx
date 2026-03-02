@@ -100,6 +100,33 @@ const detectProvider = (config: Record<string, string>): string => {
   return '';
 };
 
+const normalizeConfig = (config: Partial<Record<string, string>>): Record<string, string> => ({
+  IMAP_HOST: config.IMAP_HOST ?? '',
+  IMAP_PORT: config.IMAP_PORT ?? '993',
+  IMAP_USER: config.IMAP_USER ?? '',
+  IMAP_PASS: config.IMAP_PASS ?? '',
+  IMAP_TLS: config.IMAP_TLS ?? 'true',
+  IMAP_REJECT_UNAUTHORIZED: config.IMAP_REJECT_UNAUTHORIZED ?? 'true',
+  IMAP_MAILBOX: config.IMAP_MAILBOX ?? 'INBOX',
+  SMTP_HOST: config.SMTP_HOST ?? '',
+  SMTP_PORT: config.SMTP_PORT ?? '587',
+  SMTP_SECURE: config.SMTP_SECURE ?? 'false',
+  SMTP_USER: config.SMTP_USER ?? '',
+  SMTP_PASS: config.SMTP_PASS ?? '',
+  SMTP_FROM: config.SMTP_FROM ?? '',
+  SMTP_REJECT_UNAUTHORIZED: config.SMTP_REJECT_UNAUTHORIZED ?? 'true',
+});
+
+const configsEqual = (a: Record<string, string>, b: Record<string, string>): boolean => {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if ((a[key] ?? '') !== (b[key] ?? '')) {
+      return false;
+    }
+  }
+  return true;
+};
+
 interface EmailSkillConfigProps {
   onClose?: () => void;
 }
@@ -118,6 +145,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
   const [mailbox, setMailbox] = useState('INBOX');
   const [loading, setLoading] = useState(true);
   const [isPersisting, setIsPersisting] = useState(false);
+  const [showPersisting, setShowPersisting] = useState(false);
   const [persistError, setPersistError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [connectivityResult, setConnectivityResult] = useState<EmailConnectivityTestResult | null>(null);
@@ -126,7 +154,9 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
   const isMountedRef = useRef(true);
   const persistInFlightRef = useRef(false);
   const persistQueuedRef = useRef(false);
-  const latestConfigRef = useRef<Record<string, string>>({});
+  const latestConfigRef = useRef<Record<string, string>>(normalizeConfig({}));
+  const lastPersistedConfigRef = useRef<Record<string, string>>(normalizeConfig({}));
+  const persistIndicatorTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -144,6 +174,10 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
       const detected = detectProvider(config);
       if (detected) setProvider(detected);
 
+      const normalized = normalizeConfig(config);
+      latestConfigRef.current = normalized;
+      lastPersistedConfigRef.current = normalized;
+
       setLoading(false);
     };
     loadConfig();
@@ -152,6 +186,9 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+      if (persistIndicatorTimerRef.current != null) {
+        window.clearTimeout(persistIndicatorTimerRef.current);
+      }
     };
   }, []);
 
@@ -193,15 +230,25 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
     persistInFlightRef.current = true;
     if (isMountedRef.current) {
       setIsPersisting(true);
+      if (persistIndicatorTimerRef.current != null) {
+        window.clearTimeout(persistIndicatorTimerRef.current);
+      }
+      persistIndicatorTimerRef.current = window.setTimeout(() => {
+        if (isMountedRef.current && persistInFlightRef.current) {
+          setShowPersisting(true);
+        }
+      }, 160);
     }
 
     while (persistQueuedRef.current) {
       persistQueuedRef.current = false;
-      const success = await skillService.setSkillConfig(SKILL_ID, latestConfigRef.current);
+      const configToPersist = latestConfigRef.current;
+      const success = await skillService.setSkillConfig(SKILL_ID, configToPersist);
       if (!isMountedRef.current) {
         continue;
       }
       if (success) {
+        lastPersistedConfigRef.current = configToPersist;
         setPersistError(null);
       } else {
         setPersistError(i18nService.t('emailConfigError'));
@@ -211,11 +258,20 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
     persistInFlightRef.current = false;
     if (isMountedRef.current) {
       setIsPersisting(false);
+      setShowPersisting(false);
+      if (persistIndicatorTimerRef.current != null) {
+        window.clearTimeout(persistIndicatorTimerRef.current);
+        persistIndicatorTimerRef.current = null;
+      }
     }
   }, []);
 
   const queuePersist = useCallback(() => {
-    latestConfigRef.current = buildConfig();
+    const nextConfig = buildConfig();
+    latestConfigRef.current = nextConfig;
+    if (configsEqual(nextConfig, lastPersistedConfigRef.current)) {
+      return;
+    }
     persistQueuedRef.current = true;
     void flushPersistQueue();
   }, [buildConfig, flushPersistQueue]);
@@ -291,11 +347,13 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
           </button>
         )}
       </div>
-      {(isPersisting || persistError) && (
-        <div className={`text-xs ${persistError ? 'text-red-600 dark:text-red-400' : 'text-claude-textSecondary dark:text-claude-darkTextSecondary'}`}>
-          {persistError || `${i18nService.t('saving')}...`}
-        </div>
-      )}
+      <div className="min-h-[18px]">
+        {(persistError || (isPersisting && showPersisting)) && (
+          <div className={`text-xs ${persistError ? 'text-red-600 dark:text-red-400' : 'text-claude-textSecondary dark:text-claude-darkTextSecondary'}`}>
+            {persistError || `${i18nService.t('saving')}...`}
+          </div>
+        )}
+      </div>
 
       {/* Provider Selection */}
       <div>
