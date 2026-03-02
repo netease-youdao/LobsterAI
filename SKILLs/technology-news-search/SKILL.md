@@ -2,7 +2,7 @@
 name: technology-search
 description: Search tech blogs, developer forums, and IT media (TechCrunch, Hacker News, 36氪, etc.) for software and hardware industry updates with heat ranking and EN↔CN translation. Use this skill only when the topic is clearly about programming, software, hardware, AI, or IT infrastructure.
 official: false
-version: 1.0.1
+version: 1.0.2
 ---
 
 # Technology News Search
