@@ -2020,11 +2020,18 @@ export class CoworkRunner extends EventEmitter {
     this.store.updateSession(sessionId, { status: 'running' });
 
     if (!options.skipInitialUserMessage) {
-      // Add user message with skill info
+      // Add user message with skill info and imageAttachments
+      const messageMetadata: Record<string, unknown> = {};
+      if (options.skillIds?.length) {
+        messageMetadata.skillIds = options.skillIds;
+      }
+      if (options.imageAttachments?.length) {
+        messageMetadata.imageAttachments = options.imageAttachments;
+      }
       const userMessage = this.store.addMessage(sessionId, {
         type: 'user',
         content: prompt,
-        metadata: options.skillIds?.length ? { skillIds: options.skillIds } : undefined,
+        metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
       this.emit('message', sessionId, userMessage);
     }
@@ -2107,10 +2114,24 @@ export class CoworkRunner extends EventEmitter {
     if (options.imageAttachments?.length) {
       messageMetadata.imageAttachments = options.imageAttachments;
     }
+    console.log('[CoworkRunner] continueSession: building user message', {
+      sessionId,
+      hasImageAttachments: !!options.imageAttachments,
+      imageAttachmentsCount: options.imageAttachments?.length ?? 0,
+      metadataKeys: Object.keys(messageMetadata),
+      metadataHasImageAttachments: !!messageMetadata.imageAttachments,
+    });
     const userMessage = this.store.addMessage(sessionId, {
       type: 'user',
       content: prompt,
       metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
+    });
+    console.log('[CoworkRunner] continueSession: emitting message', {
+      sessionId,
+      messageId: userMessage.id,
+      hasMetadata: !!userMessage.metadata,
+      metadataKeys: userMessage.metadata ? Object.keys(userMessage.metadata) : [],
+      hasImageAttachments: !!(userMessage.metadata as Record<string, unknown>)?.imageAttachments,
     });
     this.emit('message', sessionId, userMessage);
 
