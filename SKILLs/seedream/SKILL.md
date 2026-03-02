@@ -1,8 +1,8 @@
 ---
 name: seedream
-description: 使用火山引擎 Seedream 模型生成 AI 图片。支持文本生成图片(T2I)、图片编辑(I2I)、多图融合创作、组图生成、联网搜索等多种创作模式。触发场景:用户请求生成图片、制作图像、图像创作、图片编辑、图片融合等任务。
+description: Generate AI images using Volcengine Seedream model. Supports text-to-image (T2I), image editing (I2I), multi-image fusion, and web-search-based generation. Use this skill when the user wants to create, generate, or edit images.
 official: true
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Seedream 图片生成

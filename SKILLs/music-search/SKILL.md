@@ -1,8 +1,8 @@
 ---
 name: music-search
-description: "搜索音乐资源（歌曲、专辑、无损音乐），从夸克网盘、百度网盘、阿里云盘、UC网盘获取资源链接。触发词：找音乐、找歌、无损音乐、FLAC下载、音乐网盘、歌曲下载、专辑资源、音乐资源、APE下载、DSD音乐、Hi-Res。"
+description: Search cloud drives for downloadable music resources (songs, albums, lossless audio). Use this skill when the user wants to download a specific song or album. Do NOT use for general music information, lyrics, or recommendations.
 official: false
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Music Search Skill

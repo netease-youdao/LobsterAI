@@ -1002,6 +1002,7 @@ export class SkillManager {
       '- If exactly one skill clearly applies: read its SKILL.md at <location> with the Read tool, then follow it.',
       '- If multiple could apply: choose the most specific one, then read/follow it.',
       '- If none clearly apply: do not read any SKILL.md.',
+      '- IMPORTANT: If a description contains "Do NOT use" constraints, strictly respect them. If the user\'s request falls into a "Do NOT" category, treat that skill as non-matching — do NOT read its SKILL.md.',
       '- For the selected skill, treat <location> as the canonical SKILL.md path.',
       '- Resolve relative paths mentioned by that SKILL.md against its directory (dirname(<location>)), not the workspace root.',
       'Constraints: never read more than one skill up front; only read additional skills if the first one explicitly references them.',
