@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "main": "dist-electron/main.js",
   "engines": {
     "node": ">=24 <25"
