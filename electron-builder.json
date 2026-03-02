@@ -8,9 +8,17 @@
   "beforePack": "./scripts/electron-builder-hooks.cjs",
   "afterPack": "./scripts/electron-builder-hooks.cjs",
   "files": [
-    "dist/**/*",
-    "dist-electron/**/*",
-    "sandbox/agent-runner/AGENT_SYSTEM_PROMPT.md"
+    "sandbox/agent-runner/AGENT_SYSTEM_PROMPT.md",
+    {
+      "from": "dist",
+      "to": "dist",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "dist-electron",
+      "to": "dist-electron",
+      "filter": ["**/*"]
+    }
   ],
   "extraResources": [
     {
