@@ -212,6 +212,20 @@ export class SqliteStore {
         ON scheduled_task_runs(task_id, started_at DESC);
     `);
 
+    // Create MCP servers table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS mcp_servers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        transport_type TEXT NOT NULL DEFAULT 'stdio',
+        config_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists

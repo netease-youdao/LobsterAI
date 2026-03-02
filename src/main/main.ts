@@ -18,6 +18,7 @@ import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
+import { McpStore } from './mcpStore';
 import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
@@ -488,6 +489,7 @@ let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let coworkRunner: CoworkRunner | null = null;
 let skillManager: SkillManager | null = null;
+let mcpStore: McpStore | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let scheduledTaskStore: ScheduledTaskStore | null = null;
 let scheduler: Scheduler | null = null;
@@ -530,6 +532,11 @@ const getCoworkStore = () => {
 const getCoworkRunner = () => {
   if (!coworkRunner) {
     coworkRunner = new CoworkRunner(getCoworkStore());
+
+    // Provide MCP server configuration to the runner
+    coworkRunner.setMcpServerProvider(() => {
+      return getMcpStore().getEnabledServers();
+    });
 
     // Set up event listeners to forward to renderer
     coworkRunner.on('message', (sessionId: string, message: any) => {
@@ -627,6 +634,14 @@ const getSkillManager = () => {
     skillManager = new SkillManager(getStore);
   }
   return skillManager;
+};
+
+const getMcpStore = () => {
+  if (!mcpStore) {
+    const sqliteStore = getStore();
+    mcpStore = new McpStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction());
+  }
+  return mcpStore;
 };
 
 const getIMGatewayManager = () => {
@@ -1053,6 +1068,74 @@ if (!gotTheLock) {
     config: Record<string, string>
   ) => {
     return getSkillManager().testEmailConnectivity(skillId, config);
+  });
+
+  // MCP Server IPC handlers
+  ipcMain.handle('mcp:list', () => {
+    try {
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to list MCP servers' };
+    }
+  });
+
+  ipcMain.handle('mcp:create', (_event, data: {
+    name: string;
+    description: string;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }) => {
+    try {
+      getMcpStore().createServer(data as any);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to create MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:update', (_event, id: string, data: {
+    name?: string;
+    description?: string;
+    transportType?: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }) => {
+    try {
+      getMcpStore().updateServer(id, data as any);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to update MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:delete', (_event, id: string) => {
+    try {
+      getMcpStore().deleteServer(id);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:setEnabled', (_event, options: { id: string; enabled: boolean }) => {
+    try {
+      getMcpStore().setEnabled(options.id, options.enabled);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to update MCP server' };
+    }
   });
 
   // Cowork IPC handlers

@@ -384,10 +384,31 @@ export class CoworkRunner extends EventEmitter {
   private turnMemoryQueueKeys: Set<string> = new Set();
   private lastTurnMemoryKeyBySession: Map<string, string> = new Map();
   private drainingTurnMemoryQueue = false;
+  private mcpServerProvider?: () => Array<{
+    name: string;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }>;
 
   constructor(store: CoworkStore) {
     super();
     this.store = store;
+  }
+
+  setMcpServerProvider(provider: () => Array<{
+    name: string;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }>): void {
+    this.mcpServerProvider = provider;
   }
 
   private isSessionStopRequested(sessionId: string, activeSession?: ActiveSession): boolean {
@@ -2706,6 +2727,56 @@ export class CoworkRunner extends EventEmitter {
           tools: memoryTools,
         }),
       };
+
+      // Inject user-configured MCP servers (local mode only)
+      if (this.mcpServerProvider) {
+        try {
+          const enabledMcpServers = this.mcpServerProvider();
+          for (const server of enabledMcpServers) {
+            const serverKey = server.name;
+            // Skip if name conflicts with existing MCP servers (e.g., memory server)
+            if (options.mcpServers && serverKey in (options.mcpServers as Record<string, unknown>)) {
+              coworkLog('WARN', 'runClaudeCodeLocal', `MCP server name conflict: "${serverKey}", skipping user config`);
+              continue;
+            }
+            let serverConfig: Record<string, unknown>;
+            switch (server.transportType) {
+              case 'stdio':
+                serverConfig = {
+                  type: 'stdio',
+                  command: server.command || '',
+                  args: server.args || [],
+                  env: server.env && Object.keys(server.env).length > 0 ? server.env : undefined,
+                };
+                break;
+              case 'sse':
+                serverConfig = {
+                  type: 'sse',
+                  url: server.url || '',
+                  headers: server.headers && Object.keys(server.headers).length > 0 ? server.headers : undefined,
+                };
+                break;
+              case 'http':
+                serverConfig = {
+                  type: 'http',
+                  url: server.url || '',
+                  headers: server.headers && Object.keys(server.headers).length > 0 ? server.headers : undefined,
+                };
+                break;
+              default:
+                coworkLog('WARN', 'runClaudeCodeLocal', `Unknown MCP transport type: "${server.transportType}", skipping`);
+                continue;
+            }
+            options.mcpServers = {
+              ...(options.mcpServers as Record<string, unknown>),
+              [serverKey]: serverConfig,
+            };
+            coworkLog('INFO', 'runClaudeCodeLocal', `Injected user MCP server: "${serverKey}" (${server.transportType})`);
+          }
+        } catch (error) {
+          coworkLog('WARN', 'runClaudeCodeLocal', `Failed to load user MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
 
       // Build prompt: if we have image attachments, use SDKUserMessage with content blocks
       // instead of a plain string prompt, so the model can see the images.
