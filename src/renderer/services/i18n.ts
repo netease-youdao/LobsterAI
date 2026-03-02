@@ -525,6 +525,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimGuideStep4: '为该账号生成 Token（建议长期有效）',
     nimAppKeyHint: '从云信控制台应用信息中获取',
     nimTokenHint: '为该账号生成的访问凭证（建议设置为长期有效）',
+    nimAccountWhitelist: '白名单账号',
+    nimAccountWhitelistHint: '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。',
     xiaomifengClientIdPlaceholder: '小蜜蜂助理Client ID',
 
     // 通用设置
@@ -1180,6 +1182,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimGuideStep4: 'Generate a Token for this account (long-term validity recommended)',
     nimAppKeyHint: 'Obtain from app information in NetEase IM console',
     nimTokenHint: 'Access credential generated for this account (long-term validity recommended)',
+    nimAccountWhitelist: 'Account Whitelist',
+    nimAccountWhitelistHint: 'Enter NIM accounts allowed to chat with the bot, separated by commas. Leave empty to allow all accounts.',
     xiaomifengClientIdPlaceholder: 'Netease Bee IM Client ID',
 
     // General Settings
