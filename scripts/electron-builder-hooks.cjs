@@ -250,11 +250,14 @@ function installSkillDependencies() {
     }
 
     console.log(`[electron-builder-hooks]   ${entry}: installing dependencies...`);
+    // On Windows, use shell: true so cmd.exe resolves npm.cmd correctly
+    const isWin = process.platform === 'win32';
     const result = spawnSync('npm', ['install'], {
       cwd: skillPath,
       encoding: 'utf-8',
       stdio: 'pipe',
       timeout: 5 * 60 * 1000, // 5 minute timeout
+      shell: isWin,
     });
 
     if (result.status === 0) {
@@ -262,6 +265,9 @@ function installSkillDependencies() {
       installedCount++;
     } else {
       console.error(`[electron-builder-hooks]   ${entry}: ✗ failed`);
+      if (result.error) {
+        console.error(`[electron-builder-hooks]     Error: ${result.error.message}`);
+      }
       if (result.stderr) {
         console.error(`[electron-builder-hooks]     ${result.stderr.substring(0, 200)}`);
       }
