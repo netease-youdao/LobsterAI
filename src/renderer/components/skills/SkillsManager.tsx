@@ -344,6 +344,14 @@ const SkillsManager: React.FC = () => {
                     <span>·</span>
                   </>
                 )}
+                {skill.version && (
+                  <>
+                    <span className="px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover font-medium">
+                      v{skill.version}
+                    </span>
+                    <span>·</span>
+                  </>
+                )}
                 <span>{formatSkillDate(skill.updatedAt)}</span>
               </div>
             </div>

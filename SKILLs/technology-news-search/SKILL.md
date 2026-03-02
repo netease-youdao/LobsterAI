@@ -2,6 +2,7 @@
 name: technology-news-search
 description: Real-time technology news search and aggregation from 75 international and Chinese media sources across 9 core technical domains. Intelligent keyword-based routing with domain aliases searches only relevant sources. Automatically adapts to network environment - seamlessly switches between global sources (75) and China-only sources (18) based on network accessibility. Use when user requests to search for tech news by keyword. Trigger phrases include "search for [keyword] tech news", "find news about [topic]", "latest news on [subject]", or Chinese equivalents like "搜索 [关键词] 科技新闻". Provides multi-source heat analysis, automatic EN↔CN translation, and clean Markdown presentation.
 official: true
+version: 1.0.0
 ---
 
 # Technology News Search
@@ -86,7 +87,7 @@ This skill searches multiple technology news sources simultaneously, automatical
 
 To disable smart routing and search all available sources (respects network availability):
 ```bash
-python3 search_news.py "keyword" --all-sources
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "keyword" --all-sources
 ```
 
 ## Supported Technical Domains
@@ -120,13 +121,7 @@ When user asks: **"Search for Electron tech news"** or **"搜索 Electron 技术
 
 Execute:
 ```bash
-# macOS/Linux
-cd scripts
-python3 search_news.py "Electron" --limit 15
-
-# Windows
-cd scripts
-python search_news.py "Electron" --limit 15
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "Electron" --limit 15
 ```
 
 The script will:
@@ -144,23 +139,17 @@ Read the JSON and present results in Markdown format with translations.
 
 2. **Run search script**
    ```bash
-   # macOS/Linux (with smart routing)
-   cd scripts
-   python3 search_news.py "[keyword]" --limit 15 --max-per-source 5
+   bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "[keyword]" --limit 15 --max-per-source 5
 
    # To search all sources (disable smart routing)
-   python3 search_news.py "[keyword]" --limit 15 --all-sources
-
-   # Windows
-   cd scripts
-   python search_news.py "[keyword]" --limit 15 --max-per-source 5
+   bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "[keyword]" --limit 15 --all-sources
    ```
 
    **Parameters:**
    - `--limit 15`: Fetch up to 15 articles from each source
    - `--max-per-source 5`: Display max 5 articles per source (ensures diversity)
    - `--no-balance`: Disable balancing (show all results sorted by heat)
-   - `--all-sources`: Search all 63 sources (disable smart routing)
+   - `--all-sources`: Search all 75 sources (disable smart routing)
 
 3. **Read JSON output**
    - Script outputs to stdout
@@ -192,10 +181,10 @@ Read the JSON and present results in Markdown format with translations.
 **Customization:**
 ```bash
 # Show more articles per source
-python3 search_news.py "AI" --max-per-source 10
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "AI" --max-per-source 10
 
 # Disable balancing (show all by heat score only)
-python3 search_news.py "AI" --no-balance
+bash "$SKILLS_ROOT/technology-news-search/scripts/search-news.sh" "AI" --no-balance
 ```
 
 **How it works:**
@@ -301,14 +290,10 @@ Articles appearing on multiple sources rank higher, indicating broader industry 
 - Verify sources are enabled in [references/sources.json](references/sources.json)
 
 **Script errors:**
-- Ensure Python 3.6+ is installed (`python3 --version` on macOS/Linux, `python --version` on Windows)
+- Ensure Node.js is available or LobsterAI Electron is running
 - Check network connectivity
 - Review stderr output for specific error messages
 - Some sources may be temporarily unavailable
-
-**Windows-specific notes:**
-- Use `python` instead of `python3` in commands
-- Some Chinese sources may have encoding issues if system locale is not UTF-8 (already handled in code)
 
 **Slow performance:**
 - Reduce `--limit` parameter (default is 15)

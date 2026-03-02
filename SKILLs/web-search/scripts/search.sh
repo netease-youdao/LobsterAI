@@ -498,6 +498,22 @@ search() {
   done
 }
 
+# Close browser after search completes
+cleanup_browser() {
+  local CONNECTION_ID="$1"
+
+  # Disconnect the Playwright connection
+  if [ -n "$CONNECTION_ID" ]; then
+    http_post_json "$ACTIVE_SERVER_URL/api/browser/disconnect" "{\"connectionId\":\"$CONNECTION_ID\"}" > /dev/null 2>&1 || true
+  fi
+
+  # Close the browser process (only kills the browser spawned by web-search, not user's browser)
+  http_post_json "$ACTIVE_SERVER_URL/api/browser/close" "{}" > /dev/null 2>&1 || true
+
+  # Clear connection cache
+  rm -f "$CONNECTION_CACHE"
+}
+
 # Main execution
 main() {
   # Parse arguments
@@ -533,9 +549,19 @@ main() {
   fi
 
   # Perform search
+  local SEARCH_EXIT_CODE=0
   if ! search "$QUERY" "$MAX_RESULTS" "$CONNECTION_ID" 1; then
-    exit 1
+    SEARCH_EXIT_CODE=1
   fi
+
+  # Close browser after search unless caller opts out (e.g. batch search callers
+  # like films-search / music-search set WEB_SEARCH_NO_CLEANUP=1 to keep the
+  # browser alive across multiple sequential searches and handle cleanup themselves).
+  if [ "${WEB_SEARCH_NO_CLEANUP:-}" != "1" ]; then
+    cleanup_browser "$CONNECTION_ID"
+  fi
+
+  exit $SEARCH_EXIT_CODE
 }
 
 # Run main function

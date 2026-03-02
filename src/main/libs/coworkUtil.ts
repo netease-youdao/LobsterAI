@@ -8,6 +8,7 @@ import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig } from './cla
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
+import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 
 function appendEnvPath(current: string | undefined, additions: string[]): string | undefined {
@@ -613,6 +614,8 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       env.PATH = appendEnvPath(env.PATH, gitToolDirs);
       coworkLog('INFO', 'resolveGitBash', `Injected Windows Git toolchain PATH entries: ${gitToolDirs.join(', ')}`);
     }
+
+    appendPythonRuntimeToEnv(env);
 
     const shimDir = ensureWindowsElectronNodeShim(process.execPath);
     if (shimDir) {

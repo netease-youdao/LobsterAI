@@ -22,6 +22,7 @@ import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
 import { initLogger, getLogFilePath } from './logger';
+import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -2332,6 +2333,17 @@ if (!gotTheLock) {
       console.log('[Main] initApp: syncBundledSkillsToUserData done');
     } catch (error) {
       console.error('[Main] initApp: syncBundledSkillsToUserData failed:', error);
+    }
+
+    try {
+      const runtimeResult = await ensurePythonRuntimeReady();
+      if (!runtimeResult.success) {
+        console.error('[Main] initApp: ensurePythonRuntimeReady failed:', runtimeResult.error);
+      } else {
+        console.log('[Main] initApp: ensurePythonRuntimeReady done');
+      }
+    } catch (error) {
+      console.error('[Main] initApp: ensurePythonRuntimeReady threw:', error);
     }
 
     try {

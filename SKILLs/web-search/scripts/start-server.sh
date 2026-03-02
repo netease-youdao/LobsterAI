@@ -104,6 +104,23 @@ verify_iconv_runtime() {
   env "${NODE_ENV_PREFIX[@]}" "$NODE_CMD" "${NODE_ARGS[@]}" -e "require('./node_modules/iconv-lite/lib/index.js')" > /dev/null 2>&1
 }
 
+is_server_build_outdated() {
+  if [ ! -f "$SERVER_ENTRY" ]; then
+    return 0
+  fi
+
+  if [ -n "$(find server -type f -name '*.ts' -newer "$SERVER_ENTRY" -print -quit 2>/dev/null)" ]; then
+    return 0
+  fi
+
+  # Legacy dist builds used a score-based encoding heuristic that can corrupt CJK.
+  if grep -q "function scoreDecodedJsonText" "$SERVER_ENTRY" 2>/dev/null; then
+    return 0
+  fi
+
+  return 1
+}
+
 kill_listeners_on_server_port() {
   if ! command -v lsof > /dev/null 2>&1; then
     return 0
@@ -257,12 +274,12 @@ if ! verify_iconv_runtime; then
   exit 1
 fi
 
-# Ensure code is compiled
-if [ ! -f "$SERVER_ENTRY" ]; then
+# Ensure code is compiled and not stale
+if is_server_build_outdated; then
   if ! ensure_npm_available; then
     exit 1
   fi
-  echo "Compiling TypeScript..."
+  echo "Compiling TypeScript (dist missing/outdated)..."
   if ! npm run build > /dev/null 2>&1; then
     echo "✗ Failed to compile TypeScript server"
     exit 1

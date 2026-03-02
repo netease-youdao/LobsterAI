@@ -8,6 +8,9 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 
+// 导入深度提取模块
+const deepExtract = require('./shared/deep-extract');
+
 const execFileAsync = promisify(execFile);
 
 // =============================================
@@ -22,7 +25,7 @@ const DEFAULT_CONFIG = {
   timeout: 15000,
   cacheEnabled: true,
   cacheTTL: 30 * 60 * 1000, // 30 minutes
-  // Deep search (cloudscraper-based page scraping)
+  // Deep search (JavaScript-based page scraping)
   deepEnabled: true,
   deepMaxPages: 8,
   deepConcurrency: 4,
@@ -242,6 +245,24 @@ function getWebSearchScriptPath() {
 }
 
 /**
+ * Close the browser opened by web-search bridge server.
+ * Only closes the browser spawned by the skill, not the user's own browser.
+ */
+async function closeWebSearchBrowser() {
+  const serverUrl = process.env.WEB_SEARCH_SERVER || 'http://127.0.0.1:8923';
+  try {
+    await fetch(`${serverUrl}/api/browser/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // Ignore errors — server may not be running or browser already closed
+  }
+}
+
+/**
  * Call web-search skill script and return raw markdown output.
  * Uses @file syntax to pass Chinese queries via temp file, avoiding
  * encoding issues in the command-line argument chain.
@@ -258,6 +279,10 @@ async function callWebSearch(query, maxResults) {
 
   const isWindows = process.platform === 'win32';
   const queryArg = `@${tmpFile}`;
+
+  // Suppress per-call browser cleanup so consecutive searches reuse the same browser.
+  // The browser is closed after all searches complete via closeWebSearchBrowser().
+  const childEnv = { ...process.env, WEB_SEARCH_NO_CLEANUP: '1' };
 
   try {
     let stdout;
@@ -286,14 +311,14 @@ async function callWebSearch(query, maxResults) {
       const result = await execFileAsync(
         bashPath,
         [scriptPath, queryArg, String(maxResults)],
-        { timeout: config.timeout * 2, maxBuffer: 10 * 1024 * 1024, env: process.env }
+        { timeout: config.timeout * 2, maxBuffer: 10 * 1024 * 1024, env: childEnv }
       );
       stdout = result.stdout;
     } else {
       const result = await execFileAsync(
         'bash',
         [scriptPath, queryArg, String(maxResults)],
-        { timeout: config.timeout * 2, maxBuffer: 10 * 1024 * 1024, env: process.env }
+        { timeout: config.timeout * 2, maxBuffer: 10 * 1024 * 1024, env: childEnv }
       );
       stdout = result.stdout;
     }
@@ -410,13 +435,13 @@ async function searchViaWebSearch(keyword, panTypes, limit) {
 }
 
 // =============================================
-// [6.5] Deep Search Engine (cloudscraper)
+// [6.5] Deep Search Engine (JavaScript)
 // =============================================
 
 /**
  * Build smart search queries for deep extraction.
- * Chinese name queries run first (reliably find aggregator pages on Bing).
- * site: queries are deprioritized — cn.bing.com often ignores the site: operator.
+ * Chinese name queries run first (reliably find aggregator pages on Baidu).
+ * site: queries are deprioritized — Baidu often ignores the site: operator.
  */
 function buildSmartQueries(keyword, panTypes) {
   const panNames = { quark: '夸克网盘', baidu: '百度网盘', aliyun: '阿里云盘', uc: 'UC网盘' };
@@ -434,7 +459,7 @@ function buildSmartQueries(keyword, panTypes) {
   // 2. Generic resource query (catches pages listing multiple pan types)
   queries.push({ query: `${keyword} 网盘资源 下载`, pan: 'all' });
 
-  // 3. site: queries last — cn.bing.com often ignores site: operator
+  // 3. site: queries last — Baidu often ignores site: operator
   for (const pan of panTypes) {
     const domain = panDomains[pan];
     if (domain) {
@@ -517,164 +542,9 @@ function scoreAndSelectPages(pages, maxPages) {
 }
 
 /**
- * Python environment management for deep extraction.
- * Finds Python3 with cloudscraper, or auto-installs into .venv.
- */
-let _pythonPath = null;
-
-async function ensurePythonEnv() {
-  if (_pythonPath) return _pythonPath;
-
-  const skillDir = path.resolve(__dirname, '..');
-  const isWindows = process.platform === 'win32';
-  const venvPython = isWindows
-    ? path.join(skillDir, '.venv', 'Scripts', 'python.exe')
-    : path.join(skillDir, '.venv', 'bin', 'python3');
-
-  // 1. Check existing .venv
-  if (fs.existsSync(venvPython)) {
-    _pythonPath = venvPython;
-    return _pythonPath;
-  }
-
-  // 2. Check FILM_SEARCH_PYTHON_PATH env (set by shell wrapper)
-  const envPython = process.env.FILM_SEARCH_PYTHON_PATH;
-  if (envPython) {
-    try {
-      await execFileAsync(envPython, ['-c', 'import cloudscraper'], { timeout: 5000 });
-      _pythonPath = envPython;
-      return _pythonPath;
-    } catch { /* need install */ }
-  }
-
-  // 3. Check system python3
-  const python3 = isWindows ? 'python' : 'python3';
-  try {
-    await execFileAsync(python3, ['-c', 'import cloudscraper'], { timeout: 5000 });
-    _pythonPath = python3;
-    return _pythonPath;
-  } catch { /* need install */ }
-
-  // 4. Auto-create venv and install cloudscraper
-  try {
-    process.stderr.write('[deep-search] 首次使用，正在安装 cloudscraper...\n');
-    const reqFile = path.join(skillDir, 'requirements.txt');
-    await execFileAsync(python3, ['-m', 'venv', path.join(skillDir, '.venv')], {
-      timeout: 30000,
-    });
-    const pipPython = venvPython;
-    await execFileAsync(pipPython, ['-m', 'pip', 'install', '-q', '-r', reqFile], {
-      timeout: 60000,
-    });
-    _pythonPath = venvPython;
-    process.stderr.write('[deep-search] cloudscraper 安装完成\n');
-    return _pythonPath;
-  } catch (err) {
-    throw new Error(`Python 环境初始化失败: ${err.message}。请确保 python3 已安装。`);
-  }
-}
-
-/**
- * Call deep_extract.py search command to search Baidu via cloudscraper.
- * Returns [{url, title}, ...] page list.
- */
-async function callDeepSearch(queries, maxResults) {
-  const pythonPath = await ensurePythonEnv();
-  const scriptPath = path.join(__dirname, 'deep_extract.py');
-
-  if (!fs.existsSync(scriptPath)) {
-    throw new Error('deep_extract.py 脚本未找到');
-  }
-
-  const { stdout } = await execFileAsync(
-    pythonPath,
-    [scriptPath, 'search', JSON.stringify(queries), String(maxResults)],
-    { timeout: 20000, maxBuffer: 5 * 1024 * 1024 }
-  );
-
-  if (!stdout || !stdout.trim()) return [];
-
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Call deep_extract.py extract command to fetch pages and extract pan links.
- * Passes page URLs via stdin, reads NDJSON from stdout.
- */
-async function callDeepExtract(pages) {
-  const pythonPath = await ensurePythonEnv();
-  const scriptPath = path.join(__dirname, 'deep_extract.py');
-
-  if (!fs.existsSync(scriptPath)) {
-    throw new Error('deep_extract.py 脚本未找到');
-  }
-
-  return new Promise((resolve) => {
-    const allResults = [];
-    const child = execFile(
-      pythonPath,
-      [scriptPath, 'extract', String(config.deepConcurrency)],
-      {
-        timeout: config.deepPageTimeout * config.deepMaxPages + 10000,
-        maxBuffer: 10 * 1024 * 1024,
-      },
-    );
-
-    // Pass page URLs via stdin
-    child.stdin.write(JSON.stringify(pages));
-    child.stdin.end();
-
-    // Read NDJSON output (one JSON array per line, per page)
-    let buffer = '';
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // keep incomplete last line in buffer
-      for (const line of lines) {
-        if (line.trim()) {
-          try {
-            const parsed = JSON.parse(line);
-            if (Array.isArray(parsed)) {
-              allResults.push(...parsed);
-            }
-          } catch { /* skip malformed lines */ }
-        }
-      }
-    });
-
-    child.stderr.on('data', (chunk) => {
-      // Forward Python stderr for debugging
-      process.stderr.write(chunk);
-    });
-
-    child.on('close', () => {
-      // Process any remaining buffer
-      if (buffer.trim()) {
-        try {
-          const parsed = JSON.parse(buffer);
-          if (Array.isArray(parsed)) {
-            allResults.push(...parsed);
-          }
-        } catch { /* ignore */ }
-      }
-      resolve(allResults);
-    });
-
-    child.on('error', (err) => {
-      process.stderr.write(`[deep-search] 子进程错误: ${err.message}\n`);
-      resolve(allResults); // graceful degradation
-    });
-  });
-}
-
-/**
- * Deep search engine: web-search discovery + cloudscraper deep extraction.
+ * Deep search engine: web-search discovery + JavaScript deep extraction.
  * web-search (real browser) handles search discovery reliably.
- * cloudscraper handles deep page scraping to extract pan links.
+ * JavaScript deep extraction handles page scraping to extract pan links.
  */
 async function searchViaDeepExtract(keyword, panTypes, limit) {
   // Check combined result cache first
@@ -702,7 +572,7 @@ async function searchViaDeepExtract(keyword, panTypes, limit) {
       // If first query fails, web-search service is likely down — skip remaining
       if (allPages.length === 0) break;
     }
-    // Early exit: count only non-blacklisted pages (Bing site: queries return irrelevant results)
+    // Early exit: count only non-blacklisted pages (Baidu often returns irrelevant results)
     const usefulPages = allPages.filter(p => {
       const url = (p.url || '').toLowerCase();
       return !DOMAIN_BLACKLIST.some(d => url.includes(d));
@@ -710,18 +580,18 @@ async function searchViaDeepExtract(keyword, panTypes, limit) {
     if (usefulPages.length >= config.deepMaxPages * 2) break;
   }
 
-  // Phase 1B: Fallback to cloudscraper Baidu if web-search found nothing
+  // Phase 1B: Fallback to Baidu search if web-search found nothing
   if (allPages.length === 0) {
-    process.stderr.write('[deep-search] web-search 未发现页面，尝试 cloudscraper 百度搜索...\n');
+    process.stderr.write('[deep-search] web-search 未发现页面，尝试百度搜索...\n');
     try {
       const queryStrings = queries.map(q => q.query);
-      const cloudPages = await callDeepSearch(queryStrings, 10);
-      if (cloudPages.length > 0) {
-        allPages.push(...cloudPages);
-        process.stderr.write(`[deep-search] cloudscraper 百度搜索发现 ${cloudPages.length} 个页面\n`);
+      const baiduPages = await deepExtract.searchBaidu(queryStrings, 10);
+      if (baiduPages.length > 0) {
+        allPages.push(...baiduPages);
+        process.stderr.write(`[deep-search] 百度搜索发现 ${baiduPages.length} 个页面\n`);
       }
     } catch (err) {
-      process.stderr.write(`[deep-search] cloudscraper 搜索也失败: ${err.message}\n`);
+      process.stderr.write(`[deep-search] 百度搜索也失败: ${err.message}\n`);
     }
   }
 
@@ -734,11 +604,11 @@ async function searchViaDeepExtract(keyword, panTypes, limit) {
     process.stderr.write(`[deep-search] 页面: ${selectedPages.map(p => p.url).join(', ')}\n`);
   }
 
-  // Phase 3: Deep extraction via cloudscraper (visit pages, extract pan links)
+  // Phase 3: Deep extraction via JavaScript (visit pages, extract pan links)
   let deepResults = [];
   if (selectedPages.length > 0 && config.deepEnabled) {
     try {
-      deepResults = await callDeepExtract(selectedPages);
+      deepResults = await deepExtract.batchFetchAndExtract(selectedPages, config.deepConcurrency);
       process.stderr.write(`[deep-search] 深度提取到 ${deepResults.length} 条链接\n`);
     } catch (err) {
       process.stderr.write(`[deep-search] 深度提取失败: ${err.message}\n`);
@@ -777,7 +647,7 @@ async function searchAll(keyword, options = {}) {
   const enginePromises = [];
 
   if (engine === 'deep') {
-    // Deep engine: cloudscraper search + page scraping
+    // Deep engine: web-search discovery + JavaScript deep extraction
     if (config.deepEnabled) {
       enginePromises.push(searchViaDeepExtract(keyword, panTypes, limit));
     } else {
@@ -991,7 +861,7 @@ function printUsage() {
   --quality <q>       筛选画质: 4k, 1080p, 720p, all (默认: all)
   --limit <n>         每平台结果数 (默认: ${config.defaultLimit})
   --engine <e>        引擎: deep, web (默认: deep)
-                      deep = web-search 搜索 + cloudscraper 深度页面抓取（推荐，最准确）
+                      deep = web-search 搜索 + JavaScript 深度页面抓取（推荐，最准确）
                       web = 仅从搜索摘要中提取链接（不做深度抓取）
 
 示例:
@@ -1034,7 +904,9 @@ async function main() {
     }
   } catch (err) {
     outputError(err.message || String(err));
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    await closeWebSearchBrowser();
   }
 }
 
