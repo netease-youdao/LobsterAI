@@ -46,7 +46,7 @@ function parseArgs() {
 
 // Create IMAP connection config
 function createImapConfig() {
-  return {
+  const config = {
     user: process.env.IMAP_USER,
     password: process.env.IMAP_PASS,
     host: process.env.IMAP_HOST || '127.0.0.1',
@@ -58,6 +58,8 @@ function createImapConfig() {
     connTimeout: 10000,
     authTimeout: 10000,
   };
+  console.error(`[imap-debug] Config: host=${config.host}, port=${config.port}, user=${config.user}, tls=${config.tls}, rejectUnauthorized=${config.tlsOptions.rejectUnauthorized}, hasPassword=${!!config.password}`);
+  return config;
 }
 
 // Connect to IMAP server with ID support
@@ -72,24 +74,30 @@ async function connect() {
     const imap = new Imap(config);
 
     imap.once('ready', () => {
+      console.error('[imap-debug] Connection ready, sending ID command...');
       // Send IMAP ID command for 163.com compatibility
       if (typeof imap.id === 'function') {
         imap.id(IMAP_ID, (err) => {
           if (err) {
-            console.warn('Warning: IMAP ID command failed:', err.message);
+            console.warn('[imap-debug] Warning: IMAP ID command failed:', err.message);
+          } else {
+            console.error('[imap-debug] IMAP ID command succeeded');
           }
           resolve(imap);
         });
       } else {
         // ID not supported, continue without it
+        console.error('[imap-debug] IMAP ID not supported, continuing without it');
         resolve(imap);
       }
     });
 
     imap.once('error', (err) => {
+      console.error('[imap-debug] Connection error:', err.message, 'code:', err.code, 'source:', err.source);
       reject(new Error(`IMAP connection failed: ${err.message}`));
     });
 
+    console.error('[imap-debug] Connecting...');
     imap.connect();
   });
 }

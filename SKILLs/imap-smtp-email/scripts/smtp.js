@@ -47,6 +47,8 @@ function createTransporter() {
     },
   };
 
+  console.error(`[smtp-debug] Config: host=${config.host}, port=${config.port}, user=${config.auth.user}, secure=${config.secure}, rejectUnauthorized=${config.tls.rejectUnauthorized}, hasPassword=${!!config.auth.pass}`);
+
   if (!config.host || !config.auth.user || !config.auth.pass) {
     throw new Error('Missing SMTP configuration. Please set SMTP_HOST, SMTP_USER, and SMTP_PASS in .env');
   }
@@ -144,12 +146,15 @@ async function verifyConnection() {
   const transporter = createTransporter();
 
   try {
+    console.error('[smtp-debug] Verifying SMTP connection...');
     await transporter.verify();
+    console.error('[smtp-debug] SMTP verification succeeded');
     return {
       success: true,
       message: 'SMTP verification successful',
     };
   } catch (err) {
+    console.error('[smtp-debug] SMTP verify failed:', err.message, 'code:', err.code, 'responseCode:', err.responseCode);
     throw new Error(`SMTP verify failed: ${err.message}`);
   }
 }
