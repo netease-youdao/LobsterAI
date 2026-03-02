@@ -2441,16 +2441,26 @@ export class CoworkRunner extends EventEmitter {
     // On Windows, check that git-bash is available before attempting to start.
     // Claude Code CLI requires git-bash for shell tool execution.
     if (process.platform === 'win32' && !envVars.CLAUDE_CODE_GIT_BASH_PATH) {
-      const errorMsg = 'Windows local execution requires a bundled Git Bash runtime, but this installation is missing it. '
-        + 'This is a packaging issue in this app build (PortableGit was not bundled). '
+      const bashResolutionDiagnostic = typeof envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR === 'string'
+        ? envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR.trim()
+        : '';
+      const errorMsg = 'Windows local execution requires a healthy Git Bash runtime, but no valid bash was resolved. '
+        + 'This may be caused by missing bundled PortableGit or a conflicting system bash that cannot run cygpath. '
         + 'Please reinstall or upgrade to a correctly built version that includes resources/mingit. '
         + 'Advanced fallback: set CLAUDE_CODE_GIT_BASH_PATH to your bash.exe path '
-        + '(e.g. C:\\Program Files\\Git\\bin\\bash.exe).';
+        + '(e.g. C:\\Program Files\\Git\\bin\\bash.exe).'
+        + (bashResolutionDiagnostic ? ` Resolver diagnostic: ${bashResolutionDiagnostic}` : '');
       coworkLog('ERROR', 'runClaudeCodeLocal', errorMsg);
       this.handleError(sessionId, errorMsg);
       this.clearPendingPermissions(sessionId);
       this.activeSessions.delete(sessionId);
       return;
+    }
+
+    if (process.platform === 'win32') {
+      coworkLog('INFO', 'runClaudeCodeLocal', 'Resolved Windows git-bash path', {
+        gitBashPath: envVars.CLAUDE_CODE_GIT_BASH_PATH,
+      });
     }
 
     const options: Record<string, unknown> = {

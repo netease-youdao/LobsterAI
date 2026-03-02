@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -178,6 +178,7 @@ function ensureWindowsRegistryPathEntries(env: Record<string, string | undefined
  * Cached git-bash path on Windows. Resolved once and reused.
  */
 let cachedGitBashPath: string | null | undefined;
+let cachedGitBashResolutionError: string | null | undefined;
 
 function normalizeWindowsPath(input: string | undefined): string | null {
   if (!input) return null;
@@ -228,6 +229,69 @@ function listGitInstallPathsFromRegistry(): string[] {
   }
 
   return Array.from(new Set(installRoots));
+}
+
+function getBundledGitBashCandidates(): string[] {
+  const bundledRoots = app.isPackaged
+    ? [join(process.resourcesPath, 'mingit')]
+    : [
+      join(__dirname, '..', '..', 'resources', 'mingit'),
+      join(process.cwd(), 'resources', 'mingit'),
+    ];
+
+  const candidates: string[] = [];
+  for (const root of bundledRoots) {
+    // Prefer bin/bash.exe on Windows; invoking usr/bin/bash.exe directly may miss Git toolchain PATH.
+    candidates.push(join(root, 'bin', 'bash.exe'));
+    candidates.push(join(root, 'usr', 'bin', 'bash.exe'));
+  }
+
+  return candidates;
+}
+
+function checkWindowsGitBashHealth(bashPath: string): { ok: boolean; reason?: string } {
+  try {
+    if (!existsSync(bashPath)) {
+      return { ok: false, reason: 'path does not exist' };
+    }
+
+    const result = spawnSync(
+      bashPath,
+      ['-lc', 'cygpath -u "C:\\\\Windows"'],
+      {
+        encoding: 'utf-8',
+        timeout: 5000,
+        windowsHide: true,
+      }
+    );
+
+    if (result.error) {
+      return { ok: false, reason: result.error.message };
+    }
+
+    if (typeof result.status === 'number' && result.status !== 0) {
+      const stderr = (result.stderr || '').trim();
+      const stdout = (result.stdout || '').trim();
+      return {
+        ok: false,
+        reason: `exit ${result.status}${stderr ? `, stderr: ${stderr}` : ''}${stdout ? `, stdout: ${stdout}` : ''}`,
+      };
+    }
+
+    const output = (result.stdout || '').trim();
+    if (!output.startsWith('/')) {
+      return { ok: false, reason: `unexpected cygpath output: ${output || '(empty)'}` };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function truncateDiagnostic(message: string, maxLength = 500): string {
+  if (message.length <= maxLength) return message;
+  return `${message.slice(0, maxLength - 3)}...`;
 }
 
 function getWindowsGitToolDirs(bashPath: string): string[] {
@@ -307,31 +371,47 @@ function ensureWindowsElectronNodeShim(electronPath: string): string | null {
 /**
  * Resolve git-bash path on Windows.
  * Claude Code CLI requires git-bash for shell tool execution.
- * Checks: env var > common install paths > PATH lookup > bundled PortableGit fallback.
+ * Priority: env var override > bundled PortableGit > installed Git > PATH lookup.
+ * Every candidate must pass a health check (`cygpath -u`) before use.
  */
 function resolveWindowsGitBashPath(): string | null {
   if (cachedGitBashPath !== undefined) return cachedGitBashPath;
 
   if (process.platform !== 'win32') {
     cachedGitBashPath = null;
+    cachedGitBashResolutionError = null;
     return null;
   }
 
+  const candidates: Array<{ path: string; source: string }> = [];
+  const seen = new Set<string>();
+  const failedCandidates: string[] = [];
+
+  const pushCandidate = (candidatePath: string | null, source: string): void => {
+    if (!candidatePath) return;
+    const normalized = normalizeWindowsPath(candidatePath);
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ path: normalized, source });
+  };
+
   // 1. Explicit env var (user override)
-  const envPath = normalizeWindowsPath(process.env.CLAUDE_CODE_GIT_BASH_PATH);
-  if (envPath && existsSync(envPath)) {
-    coworkLog('INFO', 'resolveGitBash', `Using CLAUDE_CODE_GIT_BASH_PATH: ${envPath}`);
-    cachedGitBashPath = envPath;
-    return envPath;
+  pushCandidate(process.env.CLAUDE_CODE_GIT_BASH_PATH ?? null, 'env:CLAUDE_CODE_GIT_BASH_PATH');
+
+  // 2. Bundled PortableGit (preferred default in LobsterAI package)
+  for (const bundledCandidate of getBundledGitBashCandidates()) {
+    pushCandidate(bundledCandidate, 'bundled:resources/mingit');
   }
 
-  // 2. Common Git for Windows installation paths (prefer user/system install first)
+  // 3. Common Git for Windows installation paths
   const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
   const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
   const localAppData = process.env.LOCALAPPDATA || '';
   const userProfile = process.env.USERPROFILE || '';
 
-  const candidates = [
+  const installCandidates = [
     join(programFiles, 'Git', 'bin', 'bash.exe'),
     join(programFiles, 'Git', 'usr', 'bin', 'bash.exe'),
     join(programFilesX86, 'Git', 'bin', 'bash.exe'),
@@ -344,41 +424,31 @@ function resolveWindowsGitBashPath(): string | null {
     'C:\\Git\\usr\\bin\\bash.exe',
   ];
 
-  for (const candidate of candidates) {
-    if (candidate && existsSync(candidate)) {
-      coworkLog('INFO', 'resolveGitBash', `Found git-bash at: ${candidate}`);
-      cachedGitBashPath = candidate;
-      return candidate;
-    }
+  for (const installCandidate of installCandidates) {
+    pushCandidate(installCandidate, 'installed:common-paths');
   }
 
-  // 3. Query Git for Windows install root from registry
+  // 4. Query Git for Windows install root from registry
   const registryInstallRoots = listGitInstallPathsFromRegistry();
   for (const installRoot of registryInstallRoots) {
     const registryCandidates = [
       join(installRoot, 'bin', 'bash.exe'),
       join(installRoot, 'usr', 'bin', 'bash.exe'),
     ];
-    for (const candidate of registryCandidates) {
-      if (existsSync(candidate)) {
-        coworkLog('INFO', 'resolveGitBash', `Found git-bash via registry: ${candidate}`);
-        cachedGitBashPath = candidate;
-        return candidate;
-      }
+    for (const registryCandidate of registryCandidates) {
+      pushCandidate(registryCandidate, `registry:${installRoot}`);
     }
   }
 
-  // 4. Try `where bash`
+  // 5. Try `where bash`
   const bashPaths = listWindowsCommandPaths('where bash');
   for (const bashPath of bashPaths) {
     if (bashPath.toLowerCase().endsWith('\\bash.exe')) {
-      coworkLog('INFO', 'resolveGitBash', `Found bash via PATH: ${bashPath}`);
-      cachedGitBashPath = bashPath;
-      return bashPath;
+      pushCandidate(bashPath, 'path:where bash');
     }
   }
 
-  // 5. Try `where git` and derive bash from git location
+  // 6. Try `where git` and derive bash from git location
   const gitPaths = listWindowsCommandPaths('where git');
   for (const gitPath of gitPaths) {
     const gitRoot = dirname(dirname(gitPath));
@@ -386,41 +456,35 @@ function resolveWindowsGitBashPath(): string | null {
       join(gitRoot, 'bin', 'bash.exe'),
       join(gitRoot, 'usr', 'bin', 'bash.exe'),
     ];
-    for (const candidate of bashCandidates) {
-      if (existsSync(candidate)) {
-        coworkLog('INFO', 'resolveGitBash', `Found bash via PATH git: ${candidate}`);
-        cachedGitBashPath = candidate;
-        return candidate;
-      }
+    for (const bashCandidate of bashCandidates) {
+      pushCandidate(bashCandidate, `path:where git (${gitPath})`);
     }
   }
 
-  // 6. Bundled PortableGit fallback.
-  // - Packaged app: resources/mingit
-  // - Development mode: project resources/mingit (for local Windows dev without system Git install)
-  const bundledRoots = app.isPackaged
-    ? [join(process.resourcesPath, 'mingit')]
-    : [
-      join(__dirname, '..', '..', 'resources', 'mingit'),
-      join(process.cwd(), 'resources', 'mingit'),
-    ];
-  for (const root of bundledRoots) {
-    // Prefer bin/bash.exe on Windows; invoking usr/bin/bash.exe directly may miss Git toolchain PATH.
-    const bundledPaths = [
-      join(root, 'bin', 'bash.exe'),
-      join(root, 'usr', 'bin', 'bash.exe'),
-    ];
-    for (const p of bundledPaths) {
-      if (existsSync(p)) {
-        coworkLog('INFO', 'resolveGitBash', `Using bundled PortableGit: ${p}`);
-        cachedGitBashPath = p;
-        return p;
-      }
+  for (const candidate of candidates) {
+    if (!existsSync(candidate.path)) {
+      continue;
     }
+
+    const health = checkWindowsGitBashHealth(candidate.path);
+    if (health.ok) {
+      coworkLog('INFO', 'resolveGitBash', `Selected git-bash (${candidate.source}): ${candidate.path}`);
+      cachedGitBashPath = candidate.path;
+      cachedGitBashResolutionError = null;
+      return candidate.path;
+    }
+
+    const failure = `${candidate.path} [${candidate.source}] failed health check (${health.reason || 'unknown reason'})`;
+    failedCandidates.push(failure);
+    coworkLog('WARN', 'resolveGitBash', failure);
   }
 
-  coworkLog('WARN', 'resolveGitBash', 'git-bash not found on this system');
+  const diagnostic = failedCandidates.length > 0
+    ? `No healthy git-bash found. Failures: ${failedCandidates.join('; ')}`
+    : 'No git-bash candidates found on this system';
+  coworkLog('WARN', 'resolveGitBash', diagnostic);
   cachedGitBashPath = null;
+  cachedGitBashResolutionError = truncateDiagnostic(diagnostic);
   return null;
 }
 
@@ -517,6 +581,32 @@ function ensureWindowsSystemPathEntries(env: Record<string, string | undefined>)
 }
 
 /**
+ * Ensure non-login git-bash invocations can resolve core MSYS commands.
+ *
+ * Claude Agent SDK invokes `cygpath` during Windows path normalization via
+ * `execSync(..., { shell: bash.exe })`, which does NOT always run a login shell.
+ * In that code path, bash may inherit Windows-format PATH directly, and command
+ * lookup for `cygpath` can fail because PATH is semicolon-delimited.
+ *
+ * Prefixing PATH with `/usr/bin:/bin` keeps Windows PATH semantics (semicolon
+ * delimiter) while giving bash a valid colon-delimited segment at the beginning.
+ * This prevents errors like: `/bin/bash: line 1: cygpath: command not found`.
+ */
+function ensureWindowsBashBootstrapPath(env: Record<string, string | undefined>): void {
+  const currentPath = env.PATH || '';
+  if (!currentPath) return;
+
+  const bootstrapToken = '/usr/bin:/bin';
+  const entries = currentPath.split(delimiter).map((entry) => entry.trim()).filter(Boolean);
+  if (entries.some((entry) => entry === bootstrapToken)) {
+    return;
+  }
+
+  env.PATH = `${bootstrapToken}${delimiter}${currentPath}`;
+  coworkLog('INFO', 'ensureWindowsBashBootstrapPath', `Prepended bash bootstrap PATH token: ${bootstrapToken}`);
+}
+
+/**
  * Convert a Windows-format PATH string to MSYS2/POSIX format for git-bash.
  *
  * Windows PATH uses semicolons (;) as delimiters and backslash paths (C:\...),
@@ -604,15 +694,43 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
     ensureWindowsRegistryPathEntries(env);
 
     const configuredBashPath = normalizeWindowsPath(env.CLAUDE_CODE_GIT_BASH_PATH);
-    const bashPath = configuredBashPath && existsSync(configuredBashPath)
+    let bashPath = configuredBashPath && existsSync(configuredBashPath)
       ? configuredBashPath
       : resolveWindowsGitBashPath();
 
+    if (configuredBashPath && bashPath === configuredBashPath) {
+      const configuredHealth = checkWindowsGitBashHealth(configuredBashPath);
+      if (!configuredHealth.ok) {
+        const fallbackPath = resolveWindowsGitBashPath();
+        if (fallbackPath && fallbackPath !== configuredBashPath) {
+          coworkLog(
+            'WARN',
+            'resolveGitBash',
+            `Configured bash is unhealthy (${configuredBashPath}): ${configuredHealth.reason || 'unknown reason'}. Falling back to: ${fallbackPath}`
+          );
+          bashPath = fallbackPath;
+        } else {
+          const diagnostic = truncateDiagnostic(
+            `Configured bash is unhealthy (${configuredBashPath}): ${configuredHealth.reason || 'unknown reason'}`
+          );
+          env.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR = diagnostic;
+          coworkLog('WARN', 'resolveGitBash', diagnostic);
+          bashPath = null;
+        }
+      }
+    }
+
     if (bashPath) {
       env.CLAUDE_CODE_GIT_BASH_PATH = bashPath;
+      delete env.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR;
+      coworkLog('INFO', 'resolveGitBash', `Using Windows git-bash: ${bashPath}`);
       const gitToolDirs = getWindowsGitToolDirs(bashPath);
       env.PATH = appendEnvPath(env.PATH, gitToolDirs);
       coworkLog('INFO', 'resolveGitBash', `Injected Windows Git toolchain PATH entries: ${gitToolDirs.join(', ')}`);
+      ensureWindowsBashBootstrapPath(env);
+    } else {
+      const diagnostic = cachedGitBashResolutionError || 'git-bash not found or failed health checks';
+      env.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR = truncateDiagnostic(diagnostic);
     }
 
     appendPythonRuntimeToEnv(env);
