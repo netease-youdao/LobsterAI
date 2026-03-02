@@ -14,7 +14,7 @@
     "test:memory": "npm run compile:electron && node --test tests/coworkMemoryExtractor.test.mjs",
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
-    "build:skill:web-search": "npx tsc -p SKILLs/web-search/tsconfig.json",
+    "build:skill:web-search": "cd SKILLs/web-search && npm install && npx tsc",
     "build:skill:tech-news": "node scripts/build-skill-tech-news.js",
     "build:skills": "npm run build:skill:web-search && npm run build:skill:tech-news",
     "start:electron": "cross-env NODE_ENV=development ELECTRON_START_URL=http://localhost:5175 electron .",
