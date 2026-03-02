@@ -260,6 +260,7 @@ LobsterAI can bridge the Agent to multiple IM platforms. Send a message from you
 | Telegram | grammY | Bot API integration |
 | Discord | discord.js | Discord bot integration |
 | NetEase IM | node-nim V2 SDK | NetEase IM P2P messaging |
+| NetEase Bee | node-nim V2 SDK | NetEase Bee Personal Digital Assistant |
 
 Configure the corresponding platform Token/Secret in the Settings panel to enable. Once set up, you can send instructions directly to the Agent from your phone IM (e.g., "analyze this dataset", "make a weekly summary PPT"), and the Agent will execute on the desktop and return results.
 
