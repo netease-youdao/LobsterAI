@@ -159,8 +159,8 @@ export class XiaomifengGateway extends EventEmitter {
   private static readonly FIXED_HTTP_FROM = 'youdaoClaw';
   
   // HTTP API URLs
-  private static readonly BEE_TOKEN_API_URL = 'http://api.mifengs.com/worklife-go/api/v1/claw/im/oauth2/accessToken';
-  private static readonly BEE_HTTP_API_URL = 'http://api.mifengs.com/worklife-go/api/v1/claw/im/send';
+  private static readonly BEE_TOKEN_API_URL = 'https://api.mifengs.com/worklife-go/api/v1/claw/im/oauth2/accessToken';
+  private static readonly BEE_HTTP_API_URL = 'https://api.mifengs.com/worklife-go/api/v1/claw/im/send';
 
   // Access Token 缓存（类似钉钉，2小时过期）
   private accessToken: string | null = null;
