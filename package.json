@@ -1,6 +1,10 @@
 {
   "name": "lobsterai",
   "private": true,
+  "author": {
+    "name": "LobsterAI",
+    "email": "lobsterai.project@rd.netease.com"
+  },
   "license": "MIT",
   "version": "0.1.23",
   "main": "dist-electron/main.js",
