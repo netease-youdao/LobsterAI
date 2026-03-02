@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('skills:changed', handler);
     },
   },
+  mcp: {
+    list: () => ipcRenderer.invoke('mcp:list'),
+    create: (data: any) => ipcRenderer.invoke('mcp:create', data),
+    update: (id: string, data: any) => ipcRenderer.invoke('mcp:update', id, data),
+    delete: (id: string) => ipcRenderer.invoke('mcp:delete', id),
+    setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('mcp:setEnabled', options),
+  },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),
     requestCalendar: () => ipcRenderer.invoke('permissions:requestCalendar'),
