@@ -1,7 +1,7 @@
 ---
-name: technology-news-search
-description: Search and aggregate technology industry news from multiple sources with heat ranking and EN↔CN translation. Use this skill when the user wants to find or browse news specifically about software, hardware, AI, or other tech domains. Do NOT use for non-tech news (e.g. finance, real estate, entertainment).
-official: true
+name: technology-search
+description: Search tech blogs, developer forums, and IT media (TechCrunch, Hacker News, 36氪, etc.) for software and hardware industry updates with heat ranking and EN↔CN translation. Use this skill only when the topic is clearly about programming, software, hardware, AI, or IT infrastructure.
+official: false
 version: 1.0.1
 ---
 
