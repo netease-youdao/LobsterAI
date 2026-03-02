@@ -1757,6 +1757,20 @@ export class CoworkRunner extends EventEmitter {
     ].join('\n');
   }
 
+  private buildWindowsEncodingPrompt(): string {
+    if (process.platform !== 'win32') {
+      return '';
+    }
+
+    return [
+      '## Windows Encoding Policy',
+      '- This session runs on Windows. The environment is pre-configured with UTF-8 encoding (LANG=C.UTF-8, chcp 65001).',
+      '- If a Bash command returns garbled/mojibake text (e.g. Chinese characters appear as "ÖÐ¹ú" or "ÂÒÂë"), it means the console code page was reset. Fix it by prepending `chcp.com 65001 > /dev/null 2>&1 &&` to the command.',
+      '- For PowerShell commands, use `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` if output is garbled.',
+      '- Always prefer UTF-8 when reading or writing files on Windows (e.g. `Get-Content -Encoding UTF8`, `iconv`, `python -X utf8`).',
+    ].join('\n');
+  }
+
   private buildWorkspaceSafetyPrompt(
     workspaceRoot: string,
     cwd: string,
@@ -1798,6 +1812,7 @@ export class CoworkRunner extends EventEmitter {
   ): string {
     const safetyPrompt = this.buildWorkspaceSafetyPrompt(workspaceRoot, cwd, confirmationMode);
     const localTimePrompt = this.buildLocalTimeContextPrompt();
+    const windowsEncodingPrompt = this.buildWindowsEncodingPrompt();
     const memoryRecallPrompt = [
       '## Memory Strategy',
       '- Historical retrieval is tool-first: when the user references previous chats, earlier outputs, prior decisions, or says "还记得/之前/上次/刚才", call `conversation_search` or `recent_chats` before answering.',
@@ -1813,7 +1828,7 @@ export class CoworkRunner extends EventEmitter {
       );
     }
     const trimmedBasePrompt = baseSystemPrompt?.trim();
-    return [safetyPrompt, localTimePrompt, userMemoriesXml, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
+    return [safetyPrompt, localTimePrompt, windowsEncodingPrompt, userMemoriesXml, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
       .filter((section): section is string => Boolean(section?.trim()))
       .join('\n\n');
   }
