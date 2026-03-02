@@ -278,9 +278,21 @@ function checkWindowsGitBashHealth(bashPath: string): { ok: boolean; reason?: st
       };
     }
 
-    const output = (result.stdout || '').trim();
-    if (!output.startsWith('/')) {
-      return { ok: false, reason: `unexpected cygpath output: ${output || '(empty)'}` };
+    const stdout = (result.stdout || '').trim();
+    const stderr = (result.stderr || '').trim();
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const lastNonEmptyLine = lines.length > 0 ? lines[lines.length - 1] : '';
+
+    // Some Git Bash builds may print runtime warnings before the actual cygpath
+    // output (for example, missing /dev/shm or /dev/mqueue directories).
+    // Accept the check when the final non-empty line is a valid POSIX path.
+    if (!/^\/[a-zA-Z]\//.test(lastNonEmptyLine)) {
+      const diagnosticStdout = truncateDiagnostic(stdout || '(empty)');
+      const diagnosticStderr = stderr ? `, stderr: ${truncateDiagnostic(stderr)}` : '';
+      return { ok: false, reason: `unexpected cygpath output: ${diagnosticStdout}${diagnosticStderr}` };
     }
 
     return { ok: true };
