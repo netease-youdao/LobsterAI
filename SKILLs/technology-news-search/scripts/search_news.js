@@ -113,20 +113,6 @@ function getWebSearchScriptPath() {
   return fs.existsSync(p) ? p : null;
 }
 
-async function closeWebSearchBrowser() {
-  const serverUrl = process.env.WEB_SEARCH_SERVER || 'http://127.0.0.1:8923';
-  try {
-    await fetch(`${serverUrl}/api/browser/close`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch {
-    // Ignore — server may not be running
-  }
-}
-
 async function callWebSearch(query, maxResults) {
   const scriptPath = getWebSearchScriptPath();
   if (!scriptPath) return null;
@@ -134,7 +120,7 @@ async function callWebSearch(query, maxResults) {
   const tmpFile = path.join(os.tmpdir(), `news-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
   fs.writeFileSync(tmpFile, query, 'utf-8');
 
-  const childEnv = { ...process.env, WEB_SEARCH_NO_CLEANUP: '1' };
+  const childEnv = { ...process.env };
 
   try {
     // Resolve bash path (Windows needs Git Bash)
@@ -352,7 +338,6 @@ async function searchNews(keyword, limit = 15, maxPerSource = 5, balance = true,
         fallbackUsed = 'web_search';
         console.error(`    Web search found ${webArticles.length} results`);
       }
-      await closeWebSearchBrowser();
       const fetchTimeWs = ((Date.now() - startTimeWs) / 1000).toFixed(1);
       console.error(`⏱️  Web search completed in ${fetchTimeWs}s`);
     }

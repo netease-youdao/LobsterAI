@@ -245,24 +245,6 @@ function getWebSearchScriptPath() {
 }
 
 /**
- * Close the browser opened by web-search bridge server.
- * Only closes the browser spawned by the skill, not the user's own browser.
- */
-async function closeWebSearchBrowser() {
-  const serverUrl = process.env.WEB_SEARCH_SERVER || 'http://127.0.0.1:8923';
-  try {
-    await fetch(`${serverUrl}/api/browser/close`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch {
-    // Ignore errors — server may not be running or browser already closed
-  }
-}
-
-/**
  * Call web-search skill script and return raw markdown output.
  */
 async function callWebSearch(query, maxResults) {
@@ -277,9 +259,7 @@ async function callWebSearch(query, maxResults) {
   const isWindows = process.platform === 'win32';
   const queryArg = `@${tmpFile}`;
 
-  // Suppress per-call browser cleanup so consecutive searches reuse the same browser.
-  // The browser is closed after all searches complete via closeWebSearchBrowser().
-  const childEnv = { ...process.env, WEB_SEARCH_NO_CLEANUP: '1' };
+  const childEnv = { ...process.env };
 
   try {
     let stdout;
@@ -867,8 +847,6 @@ async function main() {
   } catch (err) {
     outputError(err.message || String(err));
     process.exitCode = 1;
-  } finally {
-    await closeWebSearchBrowser();
   }
 }
 
