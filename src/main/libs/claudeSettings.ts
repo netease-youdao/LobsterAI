@@ -17,6 +17,9 @@ const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.c
 // Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
 const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
 const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
+// Moonshot/Kimi Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const MOONSHOT_CODING_PLAN_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1';
+const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
 
 type ProviderModel = {
   id: string;
@@ -34,6 +37,7 @@ type ProviderConfig = {
 type AppConfig = {
   model?: {
     defaultModel?: string;
+    defaultModelProvider?: string;
   };
   providers?: Record<string, ProviderConfig>;
 };
@@ -117,12 +121,26 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: 'No available model configured in enabled providers.' };
   }
 
-  const providerEntry = Object.entries(providers).find(([, provider]) => {
-    if (!provider?.enabled || !provider.models) {
-      return false;
+  let providerEntry: [string, ProviderConfig] | undefined;
+  const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
+  if (preferredProviderName) {
+    const preferredProvider = providers[preferredProviderName];
+    if (
+      preferredProvider?.enabled
+      && preferredProvider.models?.some((model) => model.id === modelId)
+    ) {
+      providerEntry = [preferredProviderName, preferredProvider];
     }
-    return provider.models.some((model) => model.id === modelId);
-  });
+  }
+
+  if (!providerEntry) {
+    providerEntry = Object.entries(providers).find(([, provider]) => {
+      if (!provider?.enabled || !provider.models) {
+        return false;
+      }
+      return provider.models.some((model) => model.id === modelId);
+    });
+  }
 
   if (!providerEntry) {
     return { matched: null, error: `No enabled provider found for model: ${modelId}` };
@@ -156,6 +174,17 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       baseURL = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
     } else {
       baseURL = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
+      apiFormat = 'openai';
+    }
+  }
+
+  // Handle Moonshot/Kimi Coding Plan endpoint switch
+  // Coding Plan supports both OpenAI and Anthropic compatible formats
+  if (providerName === 'moonshot' && providerConfig.codingPlanEnabled) {
+    if (apiFormat === 'anthropic') {
+      baseURL = MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL;
+    } else {
+      baseURL = MOONSHOT_CODING_PLAN_OPENAI_BASE_URL;
       apiFormat = 'openai';
     }
   }

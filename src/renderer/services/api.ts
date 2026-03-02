@@ -271,7 +271,7 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -376,7 +376,10 @@ class ApiService {
     }
 
     const selectedModel = store.getState().model.selectedModel;
-    const provider = this.detectProvider(selectedModel.id, selectedModel.provider);
+    const provider = this.detectProvider(
+      selectedModel.id,
+      selectedModel.providerKey ?? selectedModel.provider
+    );
     const supportsImages = !!selectedModel.supportsImage;
     const userMessage: ChatUserMessageInput = typeof message === 'string'
       ? { content: message }

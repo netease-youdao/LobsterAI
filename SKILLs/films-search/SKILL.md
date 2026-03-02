@@ -2,6 +2,7 @@
 name: films-search
 description: "搜索影视资源（电影、电视剧、动漫），从夸克网盘、百度网盘、阿里云盘、UC网盘获取资源链接。触发词：找电影、找剧、影视资源、下载链接、网盘资源、找片、电影下载、夸克资源。"
 official: false
+version: 1.0.0
 ---
 
 # Films Search Skill
@@ -11,7 +12,6 @@ official: false
 ## 前置条件
 
 - **web-search** skill（必需，用于搜索发现资源页面）
-- **Python 3**（必需，用于 cloudscraper 深度页面抓取。依赖首次运行时自动安装到 `.venv`）
 
 ## 命令
 
@@ -32,7 +32,7 @@ bash "$SKILLS_ROOT/films-search/scripts/film-search.sh" search "关键词" [选�
 
 **引擎说明：**
 
-- `deep`（默认，推荐）— web-search 搜索发现资源页面 + cloudscraper 深度抓取提取网盘链接和提取码，结果最准确
+- `deep`（默认，推荐）— web-search 搜索发现资源页面 + JavaScript 深度抓取提取网盘链接和提取码，结果最准确
 - `web` — 仅从 web-search 搜索引擎摘要中提取链接（速度快，但准确率较低，不做深度抓取）
 
 **示例：**
@@ -144,7 +144,6 @@ FILM_SEARCH_DEEP_CONCURRENCY=4
 
 - 搜索建议使用**中文片名**，效果最好
 - 深度搜索（`--engine deep`）比浅层搜索多 2-3 秒，但结果准确得多
-- 首次使用时会自动安装 Python cloudscraper 到 `.venv`（需要 Python 3）
 - 深度搜索需要 web-search skill 启用，首次搜索可能需要等待浏览器启动
 - 网盘分享链接可能随时失效，建议尽快使用
 

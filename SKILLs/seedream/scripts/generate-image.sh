@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Films Search - 影视资源搜索 CLI 入口
+# Seedream - AI 图片生成 CLI 入口
 # 支持 macOS / Linux / Windows (Git Bash / WSL)
 
 set -euo pipefail
@@ -45,7 +45,7 @@ fi
 
 # ---- Execute core script ----
 if [ ${#NODE_ENV_PREFIX[@]} -gt 0 ]; then
-  exec env "${NODE_ENV_PREFIX[@]}" "$NODE_BIN" "$SCRIPT_DIR/film-search.js" "${args[@]+"${args[@]}"}"
+  exec env "${NODE_ENV_PREFIX[@]}" "$NODE_BIN" "$SCRIPT_DIR/generate_image.js" "${args[@]+"${args[@]}"}"
 else
-  exec "$NODE_BIN" "$SCRIPT_DIR/film-search.js" "${args[@]+"${args[@]}"}"
+  exec "$NODE_BIN" "$SCRIPT_DIR/generate_image.js" "${args[@]+"${args[@]}"}"
 fi

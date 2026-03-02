@@ -16,47 +16,6 @@ import { SearchResponse } from './search/types';
 type SearchEngine = 'google' | 'bing';
 type SearchEnginePreference = SearchEngine | 'auto';
 
-function collectStringValues(input: unknown, out: string[]): void {
-  if (typeof input === 'string') {
-    out.push(input);
-    return;
-  }
-
-  if (Array.isArray(input)) {
-    for (const item of input) {
-      collectStringValues(item, out);
-    }
-    return;
-  }
-
-  if (input && typeof input === 'object') {
-    for (const value of Object.values(input as Record<string, unknown>)) {
-      collectStringValues(value, out);
-    }
-  }
-}
-
-function scoreDecodedJsonText(text: string): number {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return -10000;
-  }
-
-  const values: string[] = [];
-  collectStringValues(parsed, values);
-  const joined = values.join('\n');
-  if (!joined) return 0;
-
-  const cjkCount = (joined.match(/[\u3400-\u9FFF]/g) || []).length;
-  const replacementCount = (joined.match(/\uFFFD/g) || []).length;
-  const mojibakeCount = (joined.match(/[ÃÂÐÑØÙÞæçèéêëìíîïðñòóôõöøùúûüýþÿ]/g) || []).length;
-  const nonAsciiCount = (joined.match(/[^\x00-\x7F]/g) || []).length;
-
-  return cjkCount * 4 + nonAsciiCount - replacementCount * 8 - mojibakeCount * 3;
-}
-
 function decodeJsonRequestBody(raw: Buffer): string {
   if (raw.length === 0) {
     return '';
@@ -180,6 +139,7 @@ export class BridgeServer {
     this.app.post('/api/browser/launch', this.handleBrowserLaunch.bind(this));
     this.app.post('/api/browser/connect', this.handleBrowserConnect.bind(this));
     this.app.post('/api/browser/disconnect', this.handleBrowserDisconnect.bind(this));
+    this.app.post('/api/browser/close', this.handleBrowserClose.bind(this));
     this.app.get('/api/browser/status', this.handleBrowserStatus.bind(this));
 
     // Search operations
@@ -346,6 +306,23 @@ export class BridgeServer {
       res.json({
         success: true,
         data: { message: 'Disconnected successfully' }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  // Close browser and disconnect all connections
+  private async handleBrowserClose(req: Request, res: Response): Promise<void> {
+    try {
+      await this.resetBrowserState();
+
+      res.json({
+        success: true,
+        data: { message: 'Browser closed successfully' }
       });
     } catch (error) {
       res.status(500).json({
