@@ -1,6 +1,10 @@
 {
   "name": "lobsterai",
   "private": true,
+  "author": {
+    "name": "LobsterAI",
+    "email": "lobsterai.project@rd.netease.com"
+  },
   "license": "MIT",
   "version": "0.1.23",
   "main": "dist-electron/main.js",
@@ -14,7 +18,7 @@
     "test:memory": "npm run compile:electron && node --test tests/coworkMemoryExtractor.test.mjs",
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
-    "build:skill:web-search": "npx tsc -p SKILLs/web-search/tsconfig.json",
+    "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json",
     "build:skill:tech-news": "node scripts/build-skill-tech-news.js",
     "build:skill:email": "cd SKILLs/imap-smtp-email && npm install --production",
     "build:skills": "npm run build:skill:web-search && npm run build:skill:tech-news && npm run build:skill:email",
