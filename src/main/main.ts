@@ -1058,14 +1058,19 @@ if (!gotTheLock) {
 
           // Determine agent type from filename
           let agentType = 'unknown';
-          if (entry.name === 'requirements.md') {
+          const lowerName = entry.name.toLowerCase();
+
+          if (lowerName.includes('requirement')) {
             agentType = 'technical-writer';
-          } else if (entry.name === 'implementation.md') {
+          } else if (lowerName.includes('implementation') || lowerName.includes('design')) {
             agentType = 'developer';
-          } else if (entry.name === 'test_report.md') {
+          } else if (lowerName.includes('test') || lowerName.includes('review') || lowerName.includes('report') || lowerName.includes('audit')) {
             agentType = 'qa';
           } else if (entry.name.match(/\.(py|js|ts|jsx|tsx|go|java|rs|c|cpp|h)$/)) {
-            agentType = entry.name.startsWith('test') ? 'qa' : 'developer';
+            agentType = lowerName.includes('test') ? 'qa' : 'developer';
+          } else if (entry.name.endsWith('.md')) {
+            // Fallback for markdown files if they don't match the above
+            agentType = 'technical-writer';
           }
 
           files.push({

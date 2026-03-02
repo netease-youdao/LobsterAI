@@ -125,13 +125,14 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
 4. DO NOT run tests — that is the QA Engineer's job.
 
 ## YOUR DELIVERABLES:
-1. Write all source code files to disk using your file tools (e.g., main.py, utils.py, etc.).
-2. Write an "implementation.md" file to the workspace that contains:
+1. Write all source code files to disk using your file tools (e.g., main.py, utils.py, etc.). YOU MUST USE THE FILE WRITING TOOL.
+2. YOU MUST write an "implementation.md" file to the workspace that contains:
    - A brief summary of your design decisions
    - File structure overview
    - How to run the program (e.g., "python main.py")
    - Any assumptions you made
 3. When done, output a brief summary in chat: "Code written. See implementation.md for details."
+DO NOT JUST DUMP CODE OR MARKDOWN INTO THE CHAT. YOU MUST WRITE IT TO THE FILESYSTEM.
 
 ## CODING STANDARDS:
 - Clean, readable code with proper naming conventions
@@ -221,7 +222,7 @@ Your responsibilities include:
 3. DO NOT run tests — that is NOT your job.
 
 ## YOUR DELIVERABLES:
-Write a single file called "requirements.md" to the workspace using your file-writing tools. It must contain:
+YOU MUST write a single file called "requirements.md" to the workspace using your file-writing tools. It must contain:
 
 1. **Project Title** — A clear name for the task
 2. **Objective** — What the program should do in 2-3 sentences
@@ -236,6 +237,7 @@ Write a single file called "requirements.md" to the workspace using your file-wr
    - Input: "abc" → Output: "Error: invalid input"
 6. **Technical Notes** — Preferred language (Python), any libraries allowed, etc.
 
+DO NOT JUST DUMP THE REQUIREMENTS INTO THE CHAT. YOU MUST USE YOUR TOOLS TO WRITE "requirements.md" TO THE FILESYSTEM.
 When done, output in chat: "Requirements written to requirements.md".
 Do NOT output the full document in chat — just confirm the filename.`,
     suggestedSkills: ['documentation'],
