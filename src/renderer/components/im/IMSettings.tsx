@@ -45,6 +45,8 @@ const IMSettings: React.FC = () => {
   const [language, setLanguage] = useState<'zh' | 'en'>(i18nService.getLanguage());
   const [allowedUserIdInput, setAllowedUserIdInput] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
+  // Re-entrancy guard for gateway toggle to prevent rapid ON→OFF→ON
+  const [togglingPlatform, setTogglingPlatform] = useState<IMPlatform | null>(null);
 
   // Track the last-persisted NIM credentials so we can detect real changes on save
   const savedNimConfigRef = useRef<{ appKey: string; account: string; token: string }>({
@@ -168,32 +170,41 @@ const IMSettings: React.FC = () => {
 
   // Toggle gateway on/off and persist enabled state
   const toggleGateway = async (platform: IMPlatform) => {
-    const isEnabled = config[platform].enabled;
-    const newEnabled = !isEnabled;
+    // Re-entrancy guard: if a toggle is already in progress for this platform, bail out.
+    // This prevents rapid ON→OFF→ON clicks from causing concurrent native SDK init/uninit.
+    if (togglingPlatform === platform) return;
+    setTogglingPlatform(platform);
 
-    // Map platform to its Redux action
-    const setConfigAction = getSetConfigAction(platform);
+    try {
+      const isEnabled = config[platform].enabled;
+      const newEnabled = !isEnabled;
 
-    // Update Redux state
-    dispatch(setConfigAction({ enabled: newEnabled }));
+      // Map platform to its Redux action
+      const setConfigAction = getSetConfigAction(platform);
 
-    // Persist the updated config (construct manually since Redux state hasn't re-rendered yet)
-    await imService.updateConfig({ [platform]: { ...config[platform], enabled: newEnabled } });
+      // Update Redux state
+      dispatch(setConfigAction({ enabled: newEnabled }));
 
-    if (newEnabled) {
-      dispatch(clearError());
-      const success = await imService.startGateway(platform);
-      if (!success) {
-        // Rollback enabled state on failure
-        dispatch(setConfigAction({ enabled: false }));
-        await imService.updateConfig({ [platform]: { ...config[platform], enabled: false } });
+      // Persist the updated config (construct manually since Redux state hasn't re-rendered yet)
+      await imService.updateConfig({ [platform]: { ...config[platform], enabled: newEnabled } });
+
+      if (newEnabled) {
+        dispatch(clearError());
+        const success = await imService.startGateway(platform);
+        if (!success) {
+          // Rollback enabled state on failure
+          dispatch(setConfigAction({ enabled: false }));
+          await imService.updateConfig({ [platform]: { ...config[platform], enabled: false } });
+        } else {
+          await runConnectivityTest(platform, {
+            [platform]: { ...config[platform], enabled: true },
+          } as Partial<IMGatewayConfig>);
+        }
       } else {
-        await runConnectivityTest(platform, {
-          [platform]: { ...config[platform], enabled: true },
-        } as Partial<IMGatewayConfig>);
+        await imService.stopGateway(platform);
       }
-    } else {
-      await imService.stopGateway(platform);
+    } finally {
+      setTogglingPlatform(null);
     }
   };
 
@@ -254,13 +265,20 @@ const IMSettings: React.FC = () => {
   };
 
   const handleConnectivityTest = async (platform: IMPlatform) => {
+    // Re-entrancy guard: if a test is already running, do nothing.
+    if (testingPlatform) return;
+
     setConnectivityModalPlatform(platform);
     // 1. Persist latest config to backend (without changing enabled state)
     await imService.updateConfig(config);
 
     const isEnabled = isPlatformEnabled(platform);
 
-    if (isEnabled) {
+    // For NIM, skip the frontend stop/start cycle entirely.
+    // The backend's testNimConnectivity already manages the SDK lifecycle
+    // (stop main → probe with temp instance → restart main) under a mutex,
+    // so doing stop/start here would cause a race condition and potential crash.
+    if (isEnabled && platform !== 'nim') {
       // Gateway is ON: restart it to pick up the latest credentials, then run the
       // gateway_running check (which also calls runAuthProbe internally via testGateway).
       await imService.stopGateway(platform);
@@ -281,6 +299,8 @@ const IMSettings: React.FC = () => {
 
   // Handle platform toggle
   const handlePlatformToggle = (platform: IMPlatform) => {
+    // Block toggle if a toggle is already in progress for any platform
+    if (togglingPlatform) return;
     const isEnabled = isPlatformEnabled(platform);
     // Can toggle ON if credentials are present, can always toggle OFF
     const canToggle = isEnabled || canStart(platform);
@@ -372,7 +392,7 @@ const IMSettings: React.FC = () => {
                     isEnabled
                       ? (isConnected ? 'bg-green-500' : 'bg-yellow-500')
                       : 'dark:bg-claude-darkBorder bg-claude-border'
-                  } ${!canToggle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  } ${(!canToggle || togglingPlatform === platform) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     handlePlatformToggle(platform);

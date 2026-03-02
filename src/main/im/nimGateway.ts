@@ -151,6 +151,29 @@ export class NimGateway extends EventEmitter {
   private readonly MAX_RECONNECT_DELAY_MS = 30_000;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  /**
+   * Bound callback references so we can properly remove them from SDK services.
+   * Without these, each start/stop cycle leaks native event listeners, and
+   * callbacks may fire on freed C++ objects → segfault.
+   */
+  private boundOnReceiveMessages: ((messages: any[]) => void) | null = null;
+  private boundOnLoginStatus: ((status: number) => void) | null = null;
+  private boundOnKickedOffline: ((detail: any) => void) | null = null;
+  private boundOnLoginFailed: ((error: any) => void) | null = null;
+  private boundOnDisconnected: ((error: any) => void) | null = null;
+
+  /**
+   * Lifecycle mutex: serializes start() and stop() calls so that rapid
+   * toggle (ON → OFF → ON) never causes concurrent native SDK init/uninit.
+   */
+  private lifecyclePromise: Promise<void> = Promise.resolve();
+
+  /**
+   * Flag to indicate that a stop() has been requested (or is in-flight).
+   * Used to suppress reconnect timers that were scheduled before stop() was called.
+   */
+  private stopRequested: boolean = false;
+
   constructor() {
     super();
   }
@@ -184,6 +207,7 @@ export class NimGateway extends EventEmitter {
    * Public method for external reconnection triggers
    */
   reconnectIfNeeded(): void {
+    if (this.stopRequested) return;
     if (this.config && (!this.v2Client || !this.status.connected)) {
       this.log('[NIM Gateway] External reconnection trigger');
       this.scheduleReconnect(0);
@@ -191,38 +215,46 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
-   * Schedule a reconnection attempt with exponential backoff
+   * Schedule a reconnection attempt with exponential backoff.
+   *
+   * IMPORTANT: The reconnect callback goes through the public stop()/start()
+   * methods which serialize via lifecyclePromise. It never calls uninit()
+   * directly, preventing native SDK races.
    */
   private scheduleReconnect(delayMs: number): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (!this.config) {
+    if (!this.config || this.stopRequested) {
       return;
     }
     const savedConfig = this.config;
     this.log(`[NIM Gateway] Scheduling reconnect in ${delayMs}ms (attempt ${this.reconnectAttempts + 1})`);
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
-      if (!savedConfig) return;
+      // Bail out if stop() was called while we were waiting
+      if (!savedConfig || this.stopRequested) return;
       try {
-        // Reset v2Client if still hanging
-        if (this.v2Client) {
-          try {
-            this.v2Client.uninit();
-          } catch (_) { /* ignore */ }
-          this.v2Client = null;
-          this.loginService = null;
-          this.messageService = null;
-          this.messageCreator = null;
-          this.conversationIdUtil = null;
-        }
         this.reconnectAttempts++;
+        // Tear down the old session. We call stopInternal() directly here
+        // (instead of the public stop()) because stop() sets stopRequested
+        // which would prevent the subsequent start(). The lifecycle mutex
+        // is already implicitly serialized by being inside a setTimeout.
+        // However, we still need the mutex for safety against user-initiated
+        // stop()/start() calls, so we use the public methods but temporarily
+        // save and restore stopRequested.
+        await this.stop();
+        // stop() sets stopRequested=true to suppress further reconnects.
+        // Since this IS the reconnect, we clear it to allow start().
+        // But first, check if a user-initiated stop() raced with us:
+        // if config was cleared, a user stop was intended → bail out.
+        if (!this.config) return;
+        this.stopRequested = false;
         await this.start(savedConfig);
-        // start() sets this.config = savedConfig internally, so we're fine
       } catch (error: any) {
         console.error('[NIM Gateway] Reconnection attempt failed:', error.message);
+        if (this.stopRequested) return;
         // Schedule next retry with exponential backoff
         const nextDelay = Math.min(
           (this.reconnectAttempts <= 1 ? 2000 : delayMs * 2),
@@ -244,8 +276,32 @@ export class NimGateway extends EventEmitter {
 
   /**
    * Start NIM gateway
+   * @param config NIM configuration
+   * @param options Additional start options
+   * @param options.appDataPathOverride Override the SDK data path (useful for isolated probe instances)
    */
-  async start(config: NimConfig): Promise<void> {
+  async start(config: NimConfig, options?: { appDataPathOverride?: string }): Promise<void> {
+    // Serialize with any in-flight start/stop operation so that rapid toggle
+    // (ON → OFF → ON) never causes concurrent native SDK init/uninit.
+    const previous = this.lifecyclePromise;
+    let resolve!: () => void;
+    this.lifecyclePromise = new Promise<void>(r => { resolve = r; });
+    try {
+      // Wait for previous operation to finish (ignore its errors)
+      await previous.catch(() => {});
+      // Clear stopRequested AFTER acquiring the mutex, so a concurrent
+      // stop() that was still in-flight won't have its flag cleared early.
+      this.stopRequested = false;
+      await this.startInternal(config, options);
+    } finally {
+      resolve();
+    }
+  }
+
+  /**
+   * Internal start implementation (called under lifecycle mutex).
+   */
+  private async startInternal(config: NimConfig, options?: { appDataPathOverride?: string }): Promise<void> {
     if (this.v2Client) {
       throw new Error('NIM gateway already running');
     }
@@ -273,7 +329,7 @@ export class NimGateway extends EventEmitter {
       // Create V2 client
       this.v2Client = new nodenim.V2NIMClient();
 
-      const dataPath = getSdkDataPath(config.account);
+      const dataPath = options?.appDataPathOverride || getSdkDataPath(config.account);
 
       // Initialize SDK
       const initError = this.v2Client.init({
@@ -297,16 +353,20 @@ export class NimGateway extends EventEmitter {
         throw new Error('NIM SDK V2 services not available');
       }
 
-      // Register message receive callback
-      this.messageService.on('receiveMessages', (messages: any[]) => {
+      // Create bound callbacks so we can remove them in stopInternal().
+      // Each callback checks this.v2Client as a staleness guard: if uninit()
+      // was called and cleanup() nulled the reference, the callback becomes
+      // a harmless no-op instead of touching freed native memory.
+      this.boundOnReceiveMessages = (messages: any[]) => {
+        if (!this.v2Client) return; // stale callback guard
         this.log('[NIM Gateway] Received messages:', messages.length);
         for (const msg of messages) {
           this.handleIncomingMessage(msg);
         }
-      });
+      };
 
-      // Register login status callback
-      this.loginService.on('loginStatus', (loginStatus: number) => {
+      this.boundOnLoginStatus = (loginStatus: number) => {
+        if (!this.v2Client) return; // stale callback guard
         this.log('[NIM Gateway] Login status changed:', loginStatus);
         // V2NIMLoginStatus: 0=LOGOUT, 1=LOGINED, 2=LOGINING
         if (loginStatus === 1) {
@@ -334,9 +394,10 @@ export class NimGateway extends EventEmitter {
         } else if (loginStatus === 2) {
           this.log('[NIM Gateway] Logging in...');
         }
-      });
+      };
 
-      this.loginService.on('kickedOffline', (detail: any) => {
+      this.boundOnKickedOffline = (detail: any) => {
+        if (!this.v2Client) return; // stale callback guard
         this.log('[NIM Gateway] Kicked offline:', detail);
         this.status.connected = false;
         this.status.lastError = 'Kicked offline';
@@ -344,9 +405,10 @@ export class NimGateway extends EventEmitter {
         this.emit('status');
         // Schedule reconnect after kicked offline
         this.scheduleReconnect(5000);
-      });
+      };
 
-      this.loginService.on('loginFailed', (error: any) => {
+      this.boundOnLoginFailed = (error: any) => {
+        if (!this.v2Client) return; // stale callback guard
         this.log('[NIM Gateway] Login failed:', error);
         this.status.connected = false;
         this.status.lastError = `Login failed: ${error?.desc || JSON.stringify(error)}`;
@@ -358,9 +420,10 @@ export class NimGateway extends EventEmitter {
           this.MAX_RECONNECT_DELAY_MS
         );
         this.scheduleReconnect(delay);
-      });
+      };
 
-      this.loginService.on('disconnected', (error: any) => {
+      this.boundOnDisconnected = (error: any) => {
+        if (!this.v2Client) return; // stale callback guard
         this.log('[NIM Gateway] Disconnected:', error);
         this.status.connected = false;
         this.status.lastError = 'Disconnected';
@@ -368,17 +431,29 @@ export class NimGateway extends EventEmitter {
         this.emit('status');
         // Schedule reconnect after unexpected disconnect
         this.scheduleReconnect(3000);
-      });
+      };
+
+      // Register callbacks using bound references
+      this.messageService.on('receiveMessages', this.boundOnReceiveMessages);
+      this.loginService.on('loginStatus', this.boundOnLoginStatus);
+      this.loginService.on('kickedOffline', this.boundOnKickedOffline);
+      this.loginService.on('loginFailed', this.boundOnLoginFailed);
+      this.loginService.on('disconnected', this.boundOnDisconnected);
 
       // Login (don't await - status will be updated via events)
       // But we need to catch potential rejections
       this.log('[NIM Gateway] Initiating login...', config.account);
       this.loginService.login(config.account, config.token, {})
         .catch((error: any) => {
-          // Login errors will be handled by 'loginFailed' event listener
-          // This catch is just to prevent Unhandled Rejection
           // Error code 191002 (operation cancelled) can be safely ignored as login will retry
-          this.log('[NIM Gateway] Login promise rejected (will retry via events):', error?.code, error?.desc);
+          this.log('[NIM Gateway] Login promise rejected:', error?.code, error?.desc);
+          // For non-cancellation errors, emit 'error' so that connectivity tests
+          // (and any other listener) are notified even if the 'loginFailed' SDK
+          // event does not fire for this particular rejection reason.
+          if (error?.code !== 191002) {
+            const desc = error?.desc || error?.message || `code ${error?.code}`;
+            this.emit('error', new Error(`Login rejected: ${desc}`));
+          }
         });
 
       // Initialize status (will be updated by loginStatus callback)
@@ -414,6 +489,26 @@ export class NimGateway extends EventEmitter {
    * Stop NIM gateway
    */
   async stop(): Promise<void> {
+    // Mark stop as requested so any pending/future reconnect timers are
+    // suppressed. This flag is cleared when start() is called again.
+    this.stopRequested = true;
+
+    // Serialize with any in-flight start/stop operation.
+    const previous = this.lifecyclePromise;
+    let resolve!: () => void;
+    this.lifecyclePromise = new Promise<void>(r => { resolve = r; });
+    try {
+      await previous.catch(() => {});
+      await this.stopInternal();
+    } finally {
+      resolve();
+    }
+  }
+
+  /**
+   * Internal stop implementation (called under lifecycle mutex).
+   */
+  private async stopInternal(): Promise<void> {
     // Cancel any pending reconnect timer
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -428,23 +523,54 @@ export class NimGateway extends EventEmitter {
 
     this.log('[NIM Gateway] Stopping NIM gateway...');
 
-    // CRITICAL: Directly uninit without any delay or listener removal
-    // This is the safest approach to avoid race conditions with native callbacks
+    // STEP 1: Remove event listeners BEFORE uninit() so that native threads
+    // that fire callbacks during teardown find no JS listeners to invoke.
+    // This is the key fix for the "more stop/start cycles → higher crash
+    // probability" issue: without removal, stale callbacks accumulate and
+    // may be invoked on freed native objects.
     try {
-      if (this.v2Client) {
-        this.log('[NIM Gateway] Calling uninit immediately...');
-        const error = this.v2Client.uninit();
-        if (error) {
-          this.log('[NIM Gateway] Uninit error:', error.code, error.desc);
-        } else {
-          this.log('[NIM Gateway] Uninit completed');
-        }
+      if (this.messageService && this.boundOnReceiveMessages) {
+        this.messageService.off('receiveMessages', this.boundOnReceiveMessages);
       }
-    } catch (error: any) {
-      this.log('[NIM Gateway] Uninit exception:', error?.message || error);
+      if (this.loginService) {
+        if (this.boundOnLoginStatus) this.loginService.off('loginStatus', this.boundOnLoginStatus);
+        if (this.boundOnKickedOffline) this.loginService.off('kickedOffline', this.boundOnKickedOffline);
+        if (this.boundOnLoginFailed) this.loginService.off('loginFailed', this.boundOnLoginFailed);
+        if (this.boundOnDisconnected) this.loginService.off('disconnected', this.boundOnDisconnected);
+      }
+    } catch (listenerErr: any) {
+      console.warn('[NIM Gateway] Error removing listeners (ignored):', listenerErr?.message || listenerErr);
     }
 
-    // Clean up JavaScript references immediately
+    // Null out bound references so even if a late native callback somehow
+    // still fires, the staleness guard (if (!this.v2Client) return) in
+    // each callback will make it a no-op.
+    this.boundOnReceiveMessages = null;
+    this.boundOnLoginStatus = null;
+    this.boundOnKickedOffline = null;
+    this.boundOnLoginFailed = null;
+    this.boundOnDisconnected = null;
+
+    // STEP 2: Call uninit() to tear down the native SDK.
+    try {
+      if (this.v2Client) {
+        this.log('[NIM Gateway] Calling uninit...');
+        try {
+          const error = this.v2Client.uninit();
+          if (error) {
+            this.log('[NIM Gateway] Uninit error:', error.code, error.desc);
+          } else {
+            this.log('[NIM Gateway] Uninit completed');
+          }
+        } catch (innerErr: any) {
+          console.warn('[NIM Gateway] Uninit native exception (ignored):', innerErr?.message || innerErr);
+        }
+      }
+    } catch (outerErr: any) {
+      console.warn('[NIM Gateway] Uninit outer exception (ignored):', outerErr?.message || outerErr);
+    }
+
+    // STEP 3: Clean up JavaScript references immediately
     this.cleanup();
     
     // Update status
@@ -460,9 +586,11 @@ export class NimGateway extends EventEmitter {
     this.log('[NIM Gateway] NIM gateway stopped');
     this.emit('disconnected');
     
-    // Wait a bit for native cleanup before allowing restart
-    // This delay is AFTER cleanup to prevent blocking the UI
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // Wait for native SDK resources to be fully released before allowing
+    // the next init(). 1000ms gives the C++ destructor and OS enough time
+    // to tear down sockets, threads and memory-mapped files.
+    // Increased from 500ms to 1000ms for extra safety on repeated cycles.
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
 
   /**
