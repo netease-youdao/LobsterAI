@@ -42,6 +42,7 @@ Examples:
 Environment:
   WEB_SEARCH_SERVER   Bridge Server URL (default: http://127.0.0.1:8923)
   WEB_SEARCH_ENGINE   Preferred engine: auto|google|bing (default: auto)
+  WEB_SEARCH_CLEANUP  Set to 1 to close browser after each search (default: keep alive)
 
 EOF
   exit 1
@@ -554,10 +555,12 @@ main() {
     SEARCH_EXIT_CODE=1
   fi
 
-  # Close browser after search unless caller opts out (e.g. batch search callers
-  # like films-search / music-search set WEB_SEARCH_NO_CLEANUP=1 to keep the
-  # browser alive across multiple sequential searches and handle cleanup themselves).
-  if [ "${WEB_SEARCH_NO_CLEANUP:-}" != "1" ]; then
+  # By default, keep the browser alive so subsequent searches can reuse the
+  # existing Chrome process and Playwright connection (avoids re-launching
+  # Chrome which steals window focus).  Set WEB_SEARCH_CLEANUP=1 to force
+  # cleanup after each search.
+  # Legacy: WEB_SEARCH_NO_CLEANUP=1 is now a no-op (kept for compatibility).
+  if [ "${WEB_SEARCH_CLEANUP:-}" = "1" ]; then
     cleanup_browser "$CONNECTION_ID"
   fi
 
