@@ -350,6 +350,32 @@ interface IElectronAPI {
   networkStatus: {
     send: (status: 'online' | 'offline') => void;
   };
+  workflow: {
+    createRunDirectory: (runId: string) => Promise<{
+      success: boolean;
+      directory?: string;
+      error?: string;
+    }>;
+    listDocuments: (workingDirectory: string) => Promise<{
+      success: boolean;
+      files?: DocumentInfo[];
+      error?: string;
+    }>;
+    readDocument: (filePath: string, workingDirectory: string) => Promise<{
+      success: boolean;
+      content?: string;
+      error?: string;
+    }>;
+  };
+}
+
+// Workflow Document types
+interface DocumentInfo {
+  name: string;
+  path: string;
+  size: number;
+  modifiedTime: number;
+  agentType: 'technical-writer' | 'developer' | 'qa' | 'unknown';
 }
 
 // IM Gateway types

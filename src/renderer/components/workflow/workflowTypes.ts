@@ -37,6 +37,8 @@ export interface WorkflowState {
   skills: Skill[];
   isRunning: boolean;
   currentRunningAgentId: string | null;
+  currentRunId: string | null;
+  currentRunDirectory: string | null;
 }
 
 // Predefined skills

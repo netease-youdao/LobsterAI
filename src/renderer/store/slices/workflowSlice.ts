@@ -36,6 +36,8 @@ const initialState: WorkflowState = {
   skills: [],
   isRunning: false,
   currentRunningAgentId: null,
+  currentRunId: null,
+  currentRunDirectory: null,
   ...loadFromStorage(),
 };
 
@@ -230,6 +232,8 @@ const workflowSlice = createSlice({
     resetWorkflow: (state) => {
       state.isRunning = false;
       state.currentRunningAgentId = null;
+      state.currentRunId = null;
+      state.currentRunDirectory = null;
       state.agents.forEach((agent: WorkflowAgent) => {
         agent.status = 'idle';
       });
@@ -241,7 +245,15 @@ const workflowSlice = createSlice({
       state.connections = [];
       state.isRunning = false;
       state.currentRunningAgentId = null;
+      state.currentRunId = null;
+      state.currentRunDirectory = null;
       saveToStorage(state);
+    },
+
+    // Set workflow run directory for workspace isolation
+    setWorkflowRunDirectory: (state, action: PayloadAction<{ runId: string; directory: string }>) => {
+      state.currentRunId = action.payload.runId;
+      state.currentRunDirectory = action.payload.directory;
     },
 
     // Add a global skill (for SkillPalette)
@@ -294,6 +306,7 @@ export const {
   stopWorkflow,
   resetWorkflow,
   clearWorkflow,
+  setWorkflowRunDirectory,
   addSkill,
   updateCustomSkill,
   removeSkill,

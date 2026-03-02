@@ -308,6 +308,17 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('scheduledTask:runUpdate', handler);
     },
   },
+
+  // Workflow Documents API
+  workflow: {
+    createRunDirectory: (runId: string) =>
+      ipcRenderer.invoke('workflow:createRunDirectory', runId),
+    listDocuments: (workingDirectory: string) =>
+      ipcRenderer.invoke('workflow:listDocuments', workingDirectory),
+    readDocument: (filePath: string, workingDirectory: string) =>
+      ipcRenderer.invoke('workflow:readDocument', filePath, workingDirectory),
+  },
+
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },

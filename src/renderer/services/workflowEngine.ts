@@ -8,6 +8,7 @@ import {
   resetWorkflow,
   setAgentStatus,
   setRunningState,
+  setWorkflowRunDirectory,
 } from '../store/slices/workflowSlice';
 
 export interface WorkflowEngineOptions {
@@ -120,7 +121,24 @@ class WorkflowEngine {
     this.iterationCount.clear();
     this.agentOutputs.clear();
     this.agentSessionIds.clear();
-    this.workingDirectory = workingDirectory || this.getWorkingDirectory();
+
+    // Create isolated run directory
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const shortId = Math.random().toString(36).substr(2, 8);
+    const runId = `run-${dateStr}-${shortId}`;
+
+    try {
+      const result = await window.electron.workflow.createRunDirectory(runId);
+      if (result.success && result.directory) {
+        this.workingDirectory = result.directory;
+        store.dispatch(setWorkflowRunDirectory({ runId, directory: result.directory }));
+      } else {
+        this.workingDirectory = workingDirectory || this.getWorkingDirectory();
+      }
+    } catch {
+      this.workingDirectory = workingDirectory || this.getWorkingDirectory();
+    }
 
     // Dispatch start workflow action
     store.dispatch(startWorkflow());
@@ -293,6 +311,118 @@ class WorkflowEngine {
     this.agentSessionIds.clear();
     store.dispatch(resetWorkflow());
     this.emitState();
+  }
+
+  // ============================================
+  // MOCK EXECUTION ENGINE (Lightweight Testing)
+  // ============================================
+
+  // Mock execution with visual delays only (no real LLM calls)
+  async runMockExecution(
+    agents: WorkflowAgent[],
+    connections: WorkflowConnection[]
+  ): Promise<void> {
+    if (agents.length === 0) {
+      console.warn('[WorkflowEngine] No agents to execute');
+      return;
+    }
+
+    // Clear previous state
+    this.isRunning = true;
+    this.logs = [];
+    this.iterationCount.clear();
+    this.agentOutputs.clear();
+    this.agentSessionIds.clear();
+
+    // Dispatch start workflow
+    store.dispatch(startWorkflow());
+
+    // Find entry agents (no incoming connections)
+    const entryAgents = this.findEntryAgents(agents, connections);
+
+    if (entryAgents.length === 0) {
+      // No entry point - use first agent as fallback
+      entryAgents.push(agents[0]);
+    }
+
+    // Execute each entry agent
+    for (const agent of entryAgents) {
+      if (!this.isRunning) break;
+      await this.mockExecuteAgentChain(agent, agents, connections, 0);
+    }
+
+    // Workflow completed
+    this.isRunning = false;
+    store.dispatch(stopWorkflow());
+    this.emitState();
+
+    console.log('[WorkflowEngine] Mock execution completed');
+  }
+
+  // Execute an agent and route to downstream nodes
+  private async mockExecuteAgentChain(
+    currentAgent: WorkflowAgent,
+    allAgents: WorkflowAgent[],
+    connections: WorkflowConnection[],
+    iteration: number
+  ): Promise<void> {
+    if (!this.isRunning) return;
+
+    const startTime = Date.now();
+
+    // 1. Set status to running
+    store.dispatch(setAgentStatus({ id: currentAgent.id, status: 'running' }));
+    store.dispatch(setRunningState({ isRunning: true, currentAgentId: currentAgent.id }));
+
+    // 2. Add log entry
+    const logEntry: WorkflowLogEntry = {
+      id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      agentId: currentAgent.id,
+      agentName: currentAgent.name,
+      status: 'running',
+      startTime,
+      iteration: iteration > 0 ? iteration : undefined,
+    };
+    this.logs.push(logEntry);
+    this.emitState();
+
+    console.log(`[Mock] Starting: ${currentAgent.name}`);
+
+    // 3. Simulate work with setTimeout (2-3 seconds)
+    const mockDelay = 2000 + Math.random() * 1000;
+    await new Promise(resolve => setTimeout(resolve, mockDelay));
+
+    if (!this.isRunning) return;
+
+    // 4. Set status to completed
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+
+    store.dispatch(setAgentStatus({ id: currentAgent.id, status: 'completed' }));
+
+    // Update log entry
+    const completedLog = this.logs.find(l => l.id === logEntry.id);
+    if (completedLog) {
+      completedLog.status = 'completed';
+      completedLog.endTime = endTime;
+      completedLog.duration = duration;
+    }
+
+    this.emitState();
+    console.log(`[Mock] Completed: ${currentAgent.name} (${duration}ms)`);
+
+    // 5. Find and execute downstream nodes
+    const outgoingConnections = connections.filter(c => c.sourceAgentId === currentAgent.id);
+
+    for (const conn of outgoingConnections) {
+      if (!this.isRunning) break;
+
+      const nextAgent = allAgents.find(a => a.id === conn.targetAgentId);
+      if (nextAgent) {
+        console.log(`[Mock] Routing to: ${nextAgent.name} (condition: ${conn.condition})`);
+        await this.mockExecuteAgentChain(nextAgent, allAgents, connections, iteration + 1);
+      }
+    }
   }
 
   // Execute a single agent

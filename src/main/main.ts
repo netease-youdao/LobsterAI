@@ -1017,6 +1017,114 @@ if (!gotTheLock) {
     return getSkillManager().testEmailConnectivity(skillId, config);
   });
 
+  // Workflow Documents IPC handlers
+  ipcMain.handle('workflow:createRunDirectory', async (_event, runId: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const { app } = await import('electron');
+
+      const basePath = path.join(app.getPath('userData'), 'workflow-runs');
+      const runPath = path.join(basePath, runId);
+      await fs.mkdir(runPath, { recursive: true });
+      return { success: true, directory: runPath };
+    } catch (error) {
+      console.error('[workflow:createRunDirectory] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workflow:listDocuments', async (_event, workingDirectory: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      if (!workingDirectory) {
+        return { success: false, error: 'Working directory is required' };
+      }
+
+      const stats = await fs.stat(workingDirectory);
+      if (!stats.isDirectory()) {
+        return { success: false, error: 'Invalid working directory' };
+      }
+
+      const entries = await fs.readdir(workingDirectory, { withFileTypes: true });
+      const files = [];
+
+      for (const entry of entries) {
+        if (entry.isFile()) {
+          const filePath = path.join(workingDirectory, entry.name);
+          const fileStat = await fs.stat(filePath);
+
+          // Determine agent type from filename
+          let agentType = 'unknown';
+          if (entry.name === 'requirements.md') {
+            agentType = 'technical-writer';
+          } else if (entry.name === 'implementation.md') {
+            agentType = 'developer';
+          } else if (entry.name === 'test_report.md') {
+            agentType = 'qa';
+          } else if (entry.name.match(/\.(py|js|ts|jsx|tsx|go|java|rs|c|cpp|h)$/)) {
+            agentType = entry.name.startsWith('test') ? 'qa' : 'developer';
+          }
+
+          files.push({
+            name: entry.name,
+            path: filePath,
+            size: fileStat.size,
+            modifiedTime: fileStat.mtimeMs,
+            agentType,
+          });
+        }
+      }
+
+      // Sort by modified time (newest first)
+      files.sort((a: { modifiedTime: number }, b: { modifiedTime: number }) => b.modifiedTime - a.modifiedTime);
+
+      return { success: true, files };
+    } catch (error) {
+      console.error('[workflow:listDocuments] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workflow:readDocument', async (_event, filePath: string, workingDirectory: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const pathModule = await import('path');
+
+      if (!filePath) {
+        return { success: false, error: 'File path is required' };
+      }
+
+      // Security: Validate path traversal attempts
+      const normalizedPath = pathModule.normalize(filePath);
+      if (normalizedPath.includes('..')) {
+        return { success: false, error: 'Invalid file path' };
+      }
+
+      // Security: Ensure the file is within the working directory (if provided)
+      if (workingDirectory) {
+        const resolvedPath = pathModule.resolve(filePath);
+        const resolvedDir = pathModule.resolve(workingDirectory);
+        if (!resolvedPath.startsWith(resolvedDir + pathModule.sep) && resolvedPath !== resolvedDir) {
+          return { success: false, error: 'Access denied: file outside working directory' };
+        }
+      }
+
+      // Security: Only allow .md files
+      if (!normalizedPath.endsWith('.md')) {
+        return { success: false, error: 'Only .md files are allowed' };
+      }
+
+      const content = await fs.readFile(filePath, 'utf-8');
+      return { success: true, content };
+    } catch (error) {
+      console.error('[workflow:readDocument] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
   // Cowork IPC handlers
   ipcMain.handle('cowork:session:start', async (_event, options: {
     prompt: string;
