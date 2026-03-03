@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import type { WorkflowState, WorkflowAgent, WorkflowConnection, Skill } from '../../components/workflow/workflowTypes';
+import type { WorkflowState, WorkflowAgent, WorkflowConnection, Skill, WorkflowRun, WorkflowRunAgentEntry, OutputRoute, RouteCondition } from '../../components/workflow/workflowTypes';
 
 const STORAGE_KEY = 'lobsterai-workflow';
 
@@ -24,6 +24,7 @@ const saveToStorage = (state: WorkflowState) => {
       agents: state.agents,
       connections: state.connections,
       skills: state.skills,
+      workflowRuns: state.workflowRuns,
     }));
   } catch (e) {
     console.error('Failed to save workflow to storage:', e);
@@ -38,6 +39,7 @@ const initialState: WorkflowState = {
   currentRunningAgentId: null,
   currentRunId: null,
   currentRunDirectory: null,
+  workflowRuns: [],
   ...loadFromStorage(),
 };
 
@@ -54,6 +56,7 @@ const workflowSlice = createSlice({
         status: 'idle',
         position: { x: 100 + state.agents.length * 250, y: 100 },
         soulPrompt: action.payload.soulPrompt,
+        outputRoutes: [],
       };
       state.agents.push(newAgent);
       saveToStorage(state);
@@ -61,10 +64,18 @@ const workflowSlice = createSlice({
 
     // Remove agent by id
     removeAgent: (state, action: PayloadAction<string>) => {
-      state.agents = state.agents.filter((a: WorkflowAgent) => a.id !== action.payload);
+      const removedId = action.payload;
+      state.agents = state.agents.filter((a: WorkflowAgent) => a.id !== removedId);
       state.connections = state.connections.filter(
-        (c: WorkflowConnection) => c.sourceAgentId !== action.payload && c.targetAgentId !== action.payload
+        (c: WorkflowConnection) => c.sourceAgentId !== removedId && c.targetAgentId !== removedId
       );
+      // Clean up outputRoutes and inputFrom in remaining agents
+      state.agents.forEach((a: WorkflowAgent) => {
+        if (a.inputFrom === removedId) a.inputFrom = null;
+        if (a.outputRoutes) {
+          a.outputRoutes = a.outputRoutes.filter((r: OutputRoute) => r.targetAgentId !== removedId);
+        }
+      });
       saveToStorage(state);
     },
 
@@ -136,30 +147,192 @@ const workflowSlice = createSlice({
     addConnection: (state, action: PayloadAction<{
       sourceAgentId: string;
       targetAgentId: string;
-      sourceHandle?: string | null;
-      targetHandle?: string | null;
       condition?: string;
     }>) => {
       const newConnection: WorkflowConnection = {
         id: generateId(),
         sourceAgentId: action.payload.sourceAgentId,
         targetAgentId: action.payload.targetAgentId,
-        sourceHandle: action.payload.sourceHandle || undefined,
-        targetHandle: action.payload.targetHandle || undefined,
         condition: action.payload.condition || 'Always', // Default to "Always"
       };
-      // Avoid duplicate connections to the same handle
+      // Avoid duplicate connections
       const isDuplicate = state.connections.some(c =>
         c.sourceAgentId === newConnection.sourceAgentId &&
-        c.targetAgentId === newConnection.targetAgentId &&
-        c.sourceHandle === newConnection.sourceHandle &&
-        c.targetHandle === newConnection.targetHandle
+        c.targetAgentId === newConnection.targetAgentId
       );
 
       if (!isDuplicate) {
         state.connections.push(newConnection);
         saveToStorage(state);
       }
+    },
+
+    // Set agent's inputFrom (upstream node)
+    setAgentInputFrom: (state, action: PayloadAction<{ agentId: string; fromAgentId: string | null }>) => {
+      const agent = state.agents.find((a: WorkflowAgent) => a.id === action.payload.agentId);
+      if (!agent) return;
+
+      const oldFromId = agent.inputFrom;
+      agent.inputFrom = action.payload.fromAgentId;
+
+      // Remove old connection if exists
+      if (oldFromId) {
+        state.connections = state.connections.filter(
+          (c: WorkflowConnection) => !(c.sourceAgentId === oldFromId && c.targetAgentId === agent.id)
+        );
+        // Also remove old upstream node's outputRoute pointing to this agent
+        const oldUpstream = state.agents.find((a: WorkflowAgent) => a.id === oldFromId);
+        if (oldUpstream) {
+          oldUpstream.outputRoutes = (oldUpstream.outputRoutes || []).filter(
+            (r: OutputRoute) => r.targetAgentId !== agent.id
+          );
+        }
+      }
+
+      // Add new connection if not null
+      if (action.payload.fromAgentId) {
+        const exists = state.connections.some(
+          (c: WorkflowConnection) => c.sourceAgentId === action.payload.fromAgentId && c.targetAgentId === agent.id
+        );
+        if (!exists) {
+          state.connections.push({
+            id: generateId(),
+            sourceAgentId: action.payload.fromAgentId,
+            targetAgentId: agent.id,
+            condition: 'On Complete',
+          });
+        }
+        // Also add a default onComplete outputRoute on the upstream node
+        const newUpstream = state.agents.find((a: WorkflowAgent) => a.id === action.payload.fromAgentId);
+        if (newUpstream) {
+          if (!newUpstream.outputRoutes) newUpstream.outputRoutes = [];
+          const alreadyRouted = newUpstream.outputRoutes.some(
+            (r: OutputRoute) => r.targetAgentId === agent.id
+          );
+          if (!alreadyRouted) {
+            newUpstream.outputRoutes.push({
+              id: generateId(),
+              condition: 'onComplete',
+              targetAgentId: agent.id,
+            });
+          }
+        }
+      }
+
+      saveToStorage(state);
+    },
+
+    // Add an output route to an agent
+    addOutputRoute: (state, action: PayloadAction<{ agentId: string; route: { condition: RouteCondition; keyword?: string; targetAgentId: string } }>) => {
+      const agent = state.agents.find((a: WorkflowAgent) => a.id === action.payload.agentId);
+      if (!agent) return;
+      if (!agent.outputRoutes) agent.outputRoutes = [];
+
+      const { condition, keyword, targetAgentId } = action.payload.route;
+      const newRoute: OutputRoute = {
+        id: generateId(),
+        condition,
+        keyword,
+        targetAgentId,
+      };
+      agent.outputRoutes.push(newRoute);
+
+      // Sync connections array for edge rendering
+      const conditionLabel = condition === 'onComplete' ? 'On Complete'
+        : condition === 'onError' ? 'On Error'
+          : condition === 'outputContains' ? `Contains: ${keyword || ''}`
+            : 'Always';
+      state.connections.push({
+        id: newRoute.id,
+        sourceAgentId: agent.id,
+        targetAgentId,
+        condition: conditionLabel,
+      });
+
+      // Also set downstream node's inputFrom
+      const downstream = state.agents.find((a: WorkflowAgent) => a.id === targetAgentId);
+      if (downstream && !downstream.inputFrom) {
+        downstream.inputFrom = agent.id;
+      }
+
+      saveToStorage(state);
+    },
+
+    // Remove an output route from an agent
+    removeOutputRoute: (state, action: PayloadAction<{ agentId: string; routeId: string }>) => {
+      const agent = state.agents.find((a: WorkflowAgent) => a.id === action.payload.agentId);
+      if (!agent) return;
+
+      const route = (agent.outputRoutes || []).find((r: OutputRoute) => r.id === action.payload.routeId);
+      if (route) {
+        // Remove from outputRoutes
+        agent.outputRoutes = (agent.outputRoutes || []).filter((r: OutputRoute) => r.id !== action.payload.routeId);
+
+        // Remove from connections
+        state.connections = state.connections.filter(
+          (c: WorkflowConnection) => c.id !== action.payload.routeId
+        );
+
+        // If no more routes point to the downstream agent, clear its inputFrom
+        const stillConnected = (agent.outputRoutes || []).some(
+          (r: OutputRoute) => r.targetAgentId === route.targetAgentId
+        );
+        if (!stillConnected) {
+          const downstream = state.agents.find((a: WorkflowAgent) => a.id === route.targetAgentId);
+          if (downstream && downstream.inputFrom === agent.id) {
+            downstream.inputFrom = null;
+          }
+        }
+      }
+
+      saveToStorage(state);
+    },
+
+    // Update an output route (condition, keyword, or target)
+    updateOutputRoute: (state, action: PayloadAction<{ agentId: string; routeId: string; updates: Partial<Pick<OutputRoute, 'condition' | 'keyword' | 'targetAgentId'>> }>) => {
+      const agent = state.agents.find((a: WorkflowAgent) => a.id === action.payload.agentId);
+      if (!agent) return;
+
+      const route = (agent.outputRoutes || []).find((r: OutputRoute) => r.id === action.payload.routeId);
+      if (!route) return;
+
+      const { condition, keyword, targetAgentId } = action.payload.updates;
+
+      // If target changed, update downstream inputFrom
+      if (targetAgentId && targetAgentId !== route.targetAgentId) {
+        // Clear old downstream
+        const stillConnectedToOld = (agent.outputRoutes || []).some(
+          (r: OutputRoute) => r.id !== route.id && r.targetAgentId === route.targetAgentId
+        );
+        if (!stillConnectedToOld) {
+          const oldDown = state.agents.find((a: WorkflowAgent) => a.id === route.targetAgentId);
+          if (oldDown && oldDown.inputFrom === agent.id) {
+            oldDown.inputFrom = null;
+          }
+        }
+        // Set new downstream
+        const newDown = state.agents.find((a: WorkflowAgent) => a.id === targetAgentId);
+        if (newDown && !newDown.inputFrom) {
+          newDown.inputFrom = agent.id;
+        }
+        route.targetAgentId = targetAgentId;
+      }
+
+      if (condition !== undefined) route.condition = condition;
+      if (keyword !== undefined) route.keyword = keyword;
+
+      // Sync connection label
+      const conn = state.connections.find((c: WorkflowConnection) => c.id === route.id);
+      if (conn) {
+        conn.targetAgentId = route.targetAgentId;
+        const cond = route.condition;
+        conn.condition = cond === 'onComplete' ? 'On Complete'
+          : cond === 'onError' ? 'On Error'
+            : cond === 'outputContains' ? `Contains: ${route.keyword || ''}`
+              : 'Always';
+      }
+
+      saveToStorage(state);
     },
 
     // Remove connection by id
@@ -256,6 +429,49 @@ const workflowSlice = createSlice({
       state.currentRunDirectory = action.payload.directory;
     },
 
+    // Add a new workflow run
+    addWorkflowRun: (state, action: PayloadAction<WorkflowRun>) => {
+      state.workflowRuns.unshift(action.payload);
+      // Keep only last 50 runs
+      if (state.workflowRuns.length > 50) {
+        state.workflowRuns = state.workflowRuns.slice(0, 50);
+      }
+      saveToStorage(state);
+    },
+
+    // Update workflow run status
+    updateWorkflowRun: (state, action: PayloadAction<{ id: string; updates: Partial<WorkflowRun> }>) => {
+      const run = state.workflowRuns.find(r => r.id === action.payload.id);
+      if (run) {
+        Object.assign(run, action.payload.updates);
+        saveToStorage(state);
+      }
+    },
+
+    // Update a specific agent entry in a workflow run
+    updateWorkflowRunAgent: (state, action: PayloadAction<{ runId: string; agentId: string; updates: Partial<WorkflowRunAgentEntry> }>) => {
+      const run = state.workflowRuns.find(r => r.id === action.payload.runId);
+      if (run) {
+        const agentEntry = run.agents.find(a => a.agentId === action.payload.agentId);
+        if (agentEntry) {
+          Object.assign(agentEntry, action.payload.updates);
+          saveToStorage(state);
+        }
+      }
+    },
+
+    // Remove a workflow run
+    removeWorkflowRun: (state, action: PayloadAction<string>) => {
+      state.workflowRuns = state.workflowRuns.filter(r => r.id !== action.payload);
+      saveToStorage(state);
+    },
+
+    // Clear all workflow runs
+    clearWorkflowRuns: (state) => {
+      state.workflowRuns = [];
+      saveToStorage(state);
+    },
+
     // Add a global skill (for SkillPalette)
     addSkill: (state, action: PayloadAction<Skill>) => {
       state.skills.push(action.payload);
@@ -300,6 +516,10 @@ export const {
   removeConnection,
   updateConnectionTrigger,
   updateConnectionCondition,
+  setAgentInputFrom,
+  addOutputRoute,
+  removeOutputRoute,
+  updateOutputRoute,
   setAgentStatus,
   setRunningState,
   startWorkflow,
@@ -310,6 +530,11 @@ export const {
   addSkill,
   updateCustomSkill,
   removeSkill,
+  addWorkflowRun,
+  updateWorkflowRun,
+  updateWorkflowRunAgent,
+  removeWorkflowRun,
+  clearWorkflowRuns,
 } = workflowSlice.actions;
 
 export default workflowSlice.reducer;

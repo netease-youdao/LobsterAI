@@ -1117,15 +1117,52 @@ if (!gotTheLock) {
         }
       }
 
-      // Security: Only allow .md files
-      if (!normalizedPath.endsWith('.md')) {
-        return { success: false, error: 'Only .md files are allowed' };
+      // Allow reading any text file type for preview
+      const allowedExtensions = ['.md', '.py', '.js', '.ts', '.tsx', '.jsx', '.go', '.java', '.rs', '.c', '.cpp', '.h', '.json', '.yaml', '.yml', '.toml', '.txt', '.sh', '.bat', '.css', '.html', '.xml', '.sql'];
+      const ext = pathModule.extname(normalizedPath).toLowerCase();
+      if (!allowedExtensions.includes(ext)) {
+        return { success: false, error: `Unsupported file type: ${ext}` };
       }
 
       const content = await fs.readFile(filePath, 'utf-8');
       return { success: true, content };
     } catch (error) {
       console.error('[workflow:readDocument] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  // Copy output files to project working directory
+  ipcMain.handle('workflow:copyToProject', async (_event, sourceDir: string, destDir: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      if (!sourceDir || !destDir) {
+        return { success: false, error: 'Source and destination directories are required' };
+      }
+
+      const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+      const EXCLUDED = new Set(['.cowork-temp', '__pycache__', '.DS_Store', 'node_modules']);
+      let copiedCount = 0;
+
+      await fs.mkdir(destDir, { recursive: true });
+
+      for (const entry of entries) {
+        if (EXCLUDED.has(entry.name)) continue;
+
+        const srcPath = path.join(sourceDir, entry.name);
+        const destPath = path.join(destDir, entry.name);
+
+        if (entry.isFile()) {
+          await fs.copyFile(srcPath, destPath);
+          copiedCount++;
+        }
+      }
+
+      return { success: true, copiedCount };
+    } catch (error) {
+      console.error('[workflow:copyToProject] Error:', error);
       return { success: false, error: String(error) };
     }
   });

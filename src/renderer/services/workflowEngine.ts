@@ -1,7 +1,7 @@
 import { store } from '../store';
 import { coworkService } from './cowork';
 import type { CoworkSession, CoworkMessage } from '../types/cowork';
-import type { WorkflowAgent, WorkflowConnection } from '../components/workflow/workflowTypes';
+import type { WorkflowAgent, WorkflowConnection, OutputRoute } from '../components/workflow/workflowTypes';
 import {
   startWorkflow,
   stopWorkflow,
@@ -9,6 +9,9 @@ import {
   setAgentStatus,
   setRunningState,
   setWorkflowRunDirectory,
+  addWorkflowRun,
+  updateWorkflowRun,
+  updateWorkflowRunAgent,
 } from '../store/slices/workflowSlice';
 
 export interface WorkflowEngineOptions {
@@ -48,6 +51,7 @@ class WorkflowEngine {
   private onLogUpdate?: (logs: WorkflowLogEntry[]) => void;
   private onStateUpdate?: (state: WorkflowRunState) => void;
   private checkInterval: ReturnType<typeof setInterval> | null = null;  // For cleanup
+  private currentRunId: string | null = null;  // Current workflow run ID
 
   constructor(options: WorkflowEngineOptions = {}) {
     this.maxIterations = options.maxIterations ?? 10;
@@ -128,6 +132,24 @@ class WorkflowEngine {
     const shortId = Math.random().toString(36).substr(2, 8);
     const runId = `run-${dateStr}-${shortId}`;
 
+    // Create WorkflowRun record for tracking in sidebar
+    this.currentRunId = runId;
+    const runTitle = userPrompt.substring(0, 50) + (userPrompt.length > 50 ? '...' : '');
+    const agentEntries = agents.map(agent => ({
+      agentId: agent.id,
+      agentName: agent.name,
+      sessionId: `session-${agent.id}-${Date.now()}`,
+      status: 'pending' as const,
+    }));
+    store.dispatch(addWorkflowRun({
+      id: runId,
+      title: runTitle,
+      status: 'running',
+      startTime: Date.now(),
+      agents: agentEntries,
+      workingDirectory: this.workingDirectory,
+    }));
+
     try {
       const result = await window.electron.workflow.createRunDirectory(runId);
       if (result.success && result.directory) {
@@ -172,6 +194,15 @@ class WorkflowEngine {
         store.dispatch(setRunningState({ isRunning: true, currentAgentId: currentAgent.id }));
         store.dispatch(setAgentStatus({ id: currentAgent.id, status: 'running' }));
 
+        // Update workflow run agent status
+        if (this.currentRunId) {
+          store.dispatch(updateWorkflowRunAgent({
+            runId: this.currentRunId,
+            agentId: currentAgent.id,
+            updates: { status: 'running', startTime: Date.now() },
+          }));
+        }
+
         // Add log entry
         const logId = `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         this.addLog({
@@ -189,6 +220,16 @@ class WorkflowEngine {
 
           // Mark as completed
           store.dispatch(setAgentStatus({ id: currentAgent.id, status: 'completed' }));
+
+          // Update workflow run agent status to completed
+          if (this.currentRunId) {
+            store.dispatch(updateWorkflowRunAgent({
+              runId: this.currentRunId,
+              agentId: currentAgent.id,
+              updates: { status: 'completed', endTime: Date.now() },
+            }));
+          }
+
           const logEntry = this.logs.find(l => l.id === logId);
           this.updateLog(logId, {
             status: 'completed',
@@ -214,6 +255,15 @@ class WorkflowEngine {
           if (currentCount >= this.maxIterations) {
             store.dispatch(stopWorkflow());
             this.isRunning = false;
+
+            // Update workflow run status to stopped
+            if (this.currentRunId) {
+              store.dispatch(updateWorkflowRun({
+                id: this.currentRunId,
+                updates: { status: 'stopped', endTime: Date.now() },
+              }));
+            }
+
             window.dispatchEvent(new CustomEvent('app:showToast', {
               detail: `⚠️ Reached maximum iterations (${this.maxIterations}), workflow stopped`,
             }));
@@ -256,6 +306,15 @@ class WorkflowEngine {
       // Workflow complete
       store.dispatch(stopWorkflow());
       this.isRunning = false;
+
+      // Update workflow run status to completed
+      if (this.currentRunId) {
+        store.dispatch(updateWorkflowRun({
+          id: this.currentRunId,
+          updates: { status: 'completed', endTime: Date.now() },
+        }));
+      }
+
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: '✅ Workflow completed successfully!',
       }));
@@ -264,6 +323,14 @@ class WorkflowEngine {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       store.dispatch(stopWorkflow());
       this.isRunning = false;
+
+      // Update workflow run status to error
+      if (this.currentRunId) {
+        store.dispatch(updateWorkflowRun({
+          id: this.currentRunId,
+          updates: { status: 'error', endTime: Date.now() },
+        }));
+      }
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: `❌ Workflow failed: ${errorMessage}`,
       }));
@@ -278,6 +345,17 @@ class WorkflowEngine {
 
     this.isRunning = false;
     store.dispatch(stopWorkflow());
+
+    // Update workflow run status to stopped
+    if (this.currentRunId) {
+      store.dispatch(updateWorkflowRun({
+        id: this.currentRunId,
+        updates: {
+          status: 'stopped',
+          endTime: Date.now(),
+        },
+      }));
+    }
 
     // Clear any pending check intervals
     if (this.checkInterval) {
@@ -320,109 +398,198 @@ class WorkflowEngine {
   // Mock execution with visual delays only (no real LLM calls)
   async runMockExecution(
     agents: WorkflowAgent[],
-    connections: WorkflowConnection[]
+    connections: WorkflowConnection[],
+    userPrompt?: string
   ): Promise<void> {
     if (agents.length === 0) {
       console.warn('[WorkflowEngine] No agents to execute');
       return;
     }
 
+    // Generate run ID and title
+    const runId = `run-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const runTitle = userPrompt
+      ? userPrompt.substring(0, 50) + (userPrompt.length > 50 ? '...' : '')
+      : 'Workflow Execution';
+
+    this.currentRunId = runId;
+
+    // Create agent entries for the workflow run
+    const agentEntries = agents.map(agent => ({
+      agentId: agent.id,
+      agentName: agent.name,
+      sessionId: `session-${agent.id}-${Date.now()}`,
+      status: 'pending' as const,
+    }));
+
+    // Create and dispatch workflow run record
+    store.dispatch(addWorkflowRun({
+      id: runId,
+      title: runTitle,
+      status: 'running' as const,
+      startTime: Date.now(),
+      agents: agentEntries,
+      workingDirectory: this.workingDirectory,
+    }));
+
     // Clear previous state
     this.isRunning = true;
     this.logs = [];
+    this.totalSteps = 0;
     this.iterationCount.clear();
     this.agentOutputs.clear();
     this.agentSessionIds.clear();
+
+    // Create isolated run directory
+    try {
+      const result = await window.electron.workflow.createRunDirectory(runId);
+      if (result.success && result.directory) {
+        this.workingDirectory = result.directory;
+        store.dispatch(setWorkflowRunDirectory({ runId, directory: result.directory }));
+      }
+    } catch {
+      console.warn('[WorkflowEngine] Failed to create run directory for mock execution');
+    }
 
     // Dispatch start workflow
     store.dispatch(startWorkflow());
 
     // Find entry agents (no incoming connections)
     const entryAgents = this.findEntryAgents(agents, connections);
-
     if (entryAgents.length === 0) {
-      // No entry point - use first agent as fallback
       entryAgents.push(agents[0]);
     }
 
-    // Execute each entry agent
-    for (const agent of entryAgents) {
-      if (!this.isRunning) break;
-      await this.mockExecuteAgentChain(agent, agents, connections, 0);
+    let finalStatus: 'completed' | 'stopped' | 'error' = 'completed';
+
+    // Iterative execution with loop protection
+    try {
+      let currentAgent: WorkflowAgent | null = entryAgents[0];
+
+      while (currentAgent && this.isRunning) {
+        // Global step limit
+        this.totalSteps++;
+        if (this.totalSteps > this.maxTotalSteps) {
+          finalStatus = 'stopped';
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: `⚠️ 达到最大步数限制 (${this.maxTotalSteps})，工作流已停止`,
+          }));
+          break;
+        }
+
+        // Execute current agent (mock delay)
+        await this.mockExecuteSingleAgent(currentAgent);
+        if (!this.isRunning) break;
+
+        // Find next agent via outputRoutes (mock always uses first route / onComplete)
+        const routes: OutputRoute[] = currentAgent!.outputRoutes || [];
+        const nextRoute: OutputRoute | undefined = routes.find((r: OutputRoute) => r.condition === 'onComplete' || r.condition === 'always');
+        if (!nextRoute) break; // End of chain (no matching route)
+
+        const nextAgent: WorkflowAgent | null = agents.find(a => a.id === nextRoute.targetAgentId) || null;
+        if (!nextAgent) break; // Target agent was removed
+
+        // Per-edge loop protection
+        const edgeKey = `${currentAgent!.id}->${nextRoute.targetAgentId}`;
+        const edgeCount = this.iterationCount.get(edgeKey) || 0;
+        if (edgeCount >= this.maxIterations) {
+          console.log(`[Mock] Edge ${edgeKey} reached limit (${this.maxIterations}), stopping`);
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: `⚠️ 循环边 ${edgeKey} 达到迭代限制 (${this.maxIterations})，工作流已停止`,
+          }));
+          break;
+        }
+        this.iterationCount.set(edgeKey, edgeCount + 1);
+
+        currentAgent = nextAgent;
+      }
+    } catch (error) {
+      finalStatus = 'error';
+      console.error('[WorkflowEngine] Mock execution error:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: `❌ 工作流执行失败: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      }));
     }
 
-    // Workflow completed
+    // Workflow finished
     this.isRunning = false;
+    store.dispatch(updateWorkflowRun({
+      id: runId,
+      updates: { status: finalStatus, endTime: Date.now() },
+    }));
     store.dispatch(stopWorkflow());
     this.emitState();
 
-    console.log('[WorkflowEngine] Mock execution completed');
+    if (finalStatus === 'completed') {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: '✅ 工作流执行完成！',
+      }));
+    }
+    console.log(`[WorkflowEngine] Mock execution finished: ${finalStatus}`);
   }
 
-  // Execute an agent and route to downstream nodes
-  private async mockExecuteAgentChain(
-    currentAgent: WorkflowAgent,
-    allAgents: WorkflowAgent[],
-    connections: WorkflowConnection[],
-    iteration: number
-  ): Promise<void> {
+  // Execute a single agent (mock — visual delay only)
+  private async mockExecuteSingleAgent(agent: WorkflowAgent): Promise<void> {
     if (!this.isRunning) return;
 
     const startTime = Date.now();
 
-    // 1. Set status to running
-    store.dispatch(setAgentStatus({ id: currentAgent.id, status: 'running' }));
-    store.dispatch(setRunningState({ isRunning: true, currentAgentId: currentAgent.id }));
+    store.dispatch(setAgentStatus({ id: agent.id, status: 'running' }));
+    store.dispatch(setRunningState({ isRunning: true, currentAgentId: agent.id }));
 
-    // 2. Add log entry
-    const logEntry: WorkflowLogEntry = {
-      id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      agentId: currentAgent.id,
-      agentName: currentAgent.name,
+    if (this.currentRunId) {
+      store.dispatch(updateWorkflowRunAgent({
+        runId: this.currentRunId,
+        agentId: agent.id,
+        updates: { status: 'running', startTime },
+      }));
+    }
+
+    const logId = `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    this.addLog({
+      id: logId,
+      agentId: agent.id,
+      agentName: agent.name,
       status: 'running',
       startTime,
-      iteration: iteration > 0 ? iteration : undefined,
-    };
-    this.logs.push(logEntry);
-    this.emitState();
+    });
 
-    console.log(`[Mock] Starting: ${currentAgent.name}`);
+    console.log(`[Mock] Starting: ${agent.name}`);
 
-    // 3. Simulate work with setTimeout (2-3 seconds)
+    // Simulate 2-3 seconds of work
     const mockDelay = 2000 + Math.random() * 1000;
     await new Promise(resolve => setTimeout(resolve, mockDelay));
-
     if (!this.isRunning) return;
 
-    // 4. Set status to completed
     const endTime = Date.now();
     const duration = endTime - startTime;
 
-    store.dispatch(setAgentStatus({ id: currentAgent.id, status: 'completed' }));
+    store.dispatch(setAgentStatus({ id: agent.id, status: 'completed' }));
 
-    // Update log entry
-    const completedLog = this.logs.find(l => l.id === logEntry.id);
-    if (completedLog) {
-      completedLog.status = 'completed';
-      completedLog.endTime = endTime;
-      completedLog.duration = duration;
+    if (this.currentRunId) {
+      store.dispatch(updateWorkflowRunAgent({
+        runId: this.currentRunId,
+        agentId: agent.id,
+        updates: { status: 'completed', endTime },
+      }));
     }
 
-    this.emitState();
-    console.log(`[Mock] Completed: ${currentAgent.name} (${duration}ms)`);
-
-    // 5. Find and execute downstream nodes
-    const outgoingConnections = connections.filter(c => c.sourceAgentId === currentAgent.id);
-
-    for (const conn of outgoingConnections) {
-      if (!this.isRunning) break;
-
-      const nextAgent = allAgents.find(a => a.id === conn.targetAgentId);
-      if (nextAgent) {
-        console.log(`[Mock] Routing to: ${nextAgent.name} (condition: ${conn.condition})`);
-        await this.mockExecuteAgentChain(nextAgent, allAgents, connections, iteration + 1);
+    // Simulate creating an output file
+    try {
+      if (this.workingDirectory) {
+        const win = window as any;
+        const filename = `${agent.name.toLowerCase().replace(/\s+/g, '-')}-output.md`;
+        const filepath = await win.app.path.join(this.workingDirectory, filename);
+        const content = `# Output from ${agent.name}\n\nThis is a mock output file generated at ${new Date(endTime).toISOString()}.\n\n- Task completed successfully.\n- Execution time: ${duration}ms.`;
+        await win.app.fs.writeFile(filepath, content, { encoding: 'utf-8' });
+        console.log(`[Mock] Created output file: ${filename}`);
       }
+    } catch (e) {
+      console.error(`[Mock] Failed to create output file for ${agent.name}:`, e);
     }
+
+    this.updateLog(logId, { status: 'completed', endTime, duration });
+    console.log(`[Mock] Completed: ${agent.name} (${duration}ms)`);
   }
 
   // Execute a single agent
@@ -496,77 +663,47 @@ class WorkflowEngine {
     });
   }
 
-  // Evaluate which agent to go to next
+  // Evaluate which agent to go to next (using outputRoutes)
   private async evaluateNextAgent(
     currentAgent: WorkflowAgent,
     output: string,
-    connections: WorkflowConnection[],
+    _connections: WorkflowConnection[],
     agents: WorkflowAgent[],
+    agentStatus: 'completed' | 'error' = 'completed',
   ): Promise<WorkflowAgent | null> {
-    // Find outgoing edges from current agent
-    const outEdges = connections.filter(c => c.sourceAgentId === currentAgent.id);
+    const routes = currentAgent.outputRoutes || [];
 
-    if (outEdges.length === 0) {
-      return null; // End of workflow
-    }
+    // Iterate routes in priority order (top to bottom)
+    for (const route of routes) {
+      let matched = false;
 
-    if (outEdges.length === 1) {
-      // Single edge - check if condition is "always" or similar
-      const edge = outEdges[0];
-      const condition = edge.condition.toLowerCase();
-
-      if (condition.includes('always') || condition.includes('success') || condition.includes('complete')) {
-        return agents.find(a => a.id === edge.targetAgentId) || null;
+      switch (route.condition) {
+        case 'onComplete':
+          matched = agentStatus === 'completed';
+          break;
+        case 'onError':
+          matched = agentStatus === 'error';
+          break;
+        case 'outputContains':
+          matched = !!(route.keyword && output.toLowerCase().includes(route.keyword.toLowerCase()));
+          break;
+        case 'always':
+          matched = true;
+          break;
       }
 
-      // For non-always conditions, still proceed but with context
-      return agents.find(a => a.id === edge.targetAgentId) || null;
-    }
-
-    // Multiple edges - need to evaluate which path to take
-    // SECURITY: Per Phase 5 requirements, we should use LLM with JSON output format
-    // to prevent hallucinations. The response must be: {"route_index": <number>}
-    //
-    // For now, we use keyword matching as fallback. When LLM service is available,
-    // this should be replaced with a call to the LLM routing system.
-    //
-    // TODO: Integrate LLM routing with JSON output:
-    // const routingPrompt = `...`;
-    // const responseJson = await this.callRoutingLLM(routingPrompt);
-    // const chosenIndex = responseJson.route_index;
-
-    const lowerOutput = output.toLowerCase();
-
-    for (const edge of outEdges) {
-      const condition = edge.condition.toLowerCase();
-
-      // Simple keyword matching as fallback
-      if (condition.includes('fail') && (lowerOutput.includes('fail') || lowerOutput.includes('error') || lowerOutput.includes('incorrect'))) {
-        return agents.find(a => a.id === edge.targetAgentId) || null;
-      }
-
-      if (condition.includes('pass') && (lowerOutput.includes('pass') || lowerOutput.includes('success') || lowerOutput.includes('✓'))) {
-        return agents.find(a => a.id === edge.targetAgentId) || null;
-      }
-
-      // Additional keyword patterns for common conditions
-      if (condition.includes('error') && (lowerOutput.includes('error') || lowerOutput.includes('exception'))) {
-        return agents.find(a => a.id === edge.targetAgentId) || null;
-      }
-
-      if (condition.includes('retry') || condition.includes('again')) {
-        return agents.find(a => a.id === edge.targetAgentId) || null;
+      if (matched) {
+        return agents.find(a => a.id === route.targetAgentId) || null;
       }
     }
 
-    // Default to first edge if no conditions match
-    return agents.find(a => a.id === outEdges[0].targetAgentId) || null;
+    return null; // No matching route → workflow ends
   }
 
-  // Find entry agents (nodes with no incoming edges)
-  private findEntryAgents(agents: WorkflowAgent[], connections: WorkflowConnection[]): WorkflowAgent[] {
-    const agentIdsWithIncoming = new Set(connections.map(c => c.targetAgentId));
-    return agents.filter(a => !agentIdsWithIncoming.has(a.id));
+  // Find entry agents (nodes with inputFrom === null or undefined)
+  private findEntryAgents(agents: WorkflowAgent[], _connections: WorkflowConnection[]): WorkflowAgent[] {
+    // Entry agents are those with no inputFrom (or inputFrom is null)
+    return agents.filter(a => !a.inputFrom);
   }
 
   // Construct prompt for the next agent

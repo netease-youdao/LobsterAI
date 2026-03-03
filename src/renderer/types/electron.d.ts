@@ -366,6 +366,11 @@ interface IElectronAPI {
       content?: string;
       error?: string;
     }>;
+    copyToProject: (sourceDir: string, destDir: string) => Promise<{
+      success: boolean;
+      copiedCount?: number;
+      error?: string;
+    }>;
   };
 }
 

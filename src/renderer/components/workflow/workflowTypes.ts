@@ -8,6 +8,17 @@ export interface Skill {
   prompt?: string;
 }
 
+// Condition type for output routing
+export type RouteCondition = 'onComplete' | 'onError' | 'outputContains' | 'always';
+
+// Single output route with condition
+export interface OutputRoute {
+  id: string;
+  condition: RouteCondition;
+  keyword?: string;        // Only used when condition is 'outputContains'
+  targetAgentId: string;   // Target Agent ID
+}
+
 export interface WorkflowAgent {
   id: string;
   name: string;
@@ -17,15 +28,15 @@ export interface WorkflowAgent {
   width?: number;
   height?: number;
   soulPrompt?: string; // Agent's system prompt / personality
+  inputFrom?: string | null; // Agent ID of upstream node (or null for entry point)
+  outputRoutes: OutputRoute[]; // Ordered list of conditional output routes
 }
 
 export interface WorkflowConnection {
   id: string;
   sourceAgentId: string;
   targetAgentId: string;
-  sourceHandle?: string; // Record which anchor the line is pulled from (e.g., "top-source", "right-source")
-  targetHandle?: string; // Record which anchor the line connects to (e.g., "left-target", "bottom-target")
-  condition: string; // Natural language routing condition (e.g., "If tests fail, go back")
+  condition: string; // Display label for the route condition
 }
 
 // Legacy type for backward compatibility
@@ -39,6 +50,28 @@ export interface WorkflowState {
   currentRunningAgentId: string | null;
   currentRunId: string | null;
   currentRunDirectory: string | null;
+  workflowRuns: WorkflowRun[];
+}
+
+// Workflow Run - represents a single workflow execution
+export interface WorkflowRun {
+  id: string;
+  title: string;
+  status: 'running' | 'completed' | 'error' | 'stopped';
+  startTime: number;
+  endTime?: number;
+  agents: WorkflowRunAgentEntry[];
+  workingDirectory: string;
+}
+
+export interface WorkflowRunAgentEntry {
+  agentId: string;
+  agentName: string;
+  sessionId: string;
+  status: 'pending' | 'running' | 'completed' | 'error' | 'skipped';
+  startTime?: number;
+  endTime?: number;
+  iteration?: number;
 }
 
 // Predefined skills

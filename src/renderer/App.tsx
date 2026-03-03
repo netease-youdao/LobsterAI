@@ -403,6 +403,15 @@ const App: React.FC = () => {
     return () => window.removeEventListener('app:showToast', handler);
   }, [showToast]);
 
+  // Listen for navigation to workflow view
+  useEffect(() => {
+    const handler = () => {
+      setMainView('agentWorkflow');
+    };
+    window.addEventListener('app:showWorkflow', handler);
+    return () => window.removeEventListener('app:showWorkflow', handler);
+  }, []);
+
   // 监听托盘菜单打开设置的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {

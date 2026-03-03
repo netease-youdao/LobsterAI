@@ -5,7 +5,7 @@ import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
 import CoworkSessionList from './cowork/CoworkSessionList';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
-import { MagnifyingGlassIcon, PuzzlePieceIcon, ClockIcon, CircleStackIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, PuzzlePieceIcon, ClockIcon, CircleStackIcon, ArrowPathIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline';
 import ComposeIcon from './icons/ComposeIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 
@@ -37,8 +37,12 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const sessions = useSelector((state: RootState) => state.cowork.sessions);
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
+  const workflowRuns = useSelector((state: RootState) => state.workflow.workflowRuns);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const isMac = window.electron.platform === 'darwin';
+
+  // Filter out workflow-related sessions from regular list
+  const regularSessions = sessions.filter(s => !s.title.startsWith('[Workflow]'));
 
   useEffect(() => {
     const handleSearch = () => {
@@ -73,6 +77,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     await coworkService.renameSession(sessionId, title);
   };
 
+  
   return (
     <aside
       className={`shrink-0 dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted flex flex-col sidebar-transition overflow-hidden ${isCollapsed ? 'w-0' : 'w-60'
@@ -162,7 +167,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           {i18nService.t('coworkHistory')}
         </div>
         <CoworkSessionList
-          sessions={sessions}
+          sessions={regularSessions}
           currentSessionId={currentSessionId}
           onSelectSession={handleSelectSession}
           onDeleteSession={handleDeleteSession}
@@ -180,6 +185,36 @@ const Sidebar: React.FC<SidebarProps> = ({
         onTogglePin={handleTogglePin}
         onRenameSession={handleRenameSession}
       />
+      {/* Workflow Runs Section - Show up to 5 recent runs */}
+      {workflowRuns.length > 0 && (
+        <div className="px-3 pt-2">
+          <div className="pb-2">
+            <span className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              {i18nService.t('workflowRunHistory') || 'Workflow Runs'}
+            </span>
+          </div>
+          <div className="space-y-1">
+            {workflowRuns.slice(0, 5).map((run) => (
+              <div
+                key={run.id}
+                className="group flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover cursor-pointer"
+                onClick={() => onShowWorkflow()}
+              >
+                {run.status === 'running' ? (
+                  <ArrowPathIcon className="h-4 w-4 text-yellow-500 animate-spin shrink-0" />
+                ) : run.status === 'completed' ? (
+                  <CheckCircleIcon className="h-4 w-4 text-green-500 shrink-0" />
+                ) : (
+                  <XCircleIcon className="h-4 w-4 text-red-500 shrink-0" />
+                )}
+                <span className="truncate dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {run.title}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="px-3 pb-3 pt-1">
         <button
           type="button"

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -6,7 +6,6 @@ import {
   Panel,
   useNodesState,
   useEdgesState,
-  Connection,
   Edge,
   Node,
   BackgroundVariant,
@@ -19,23 +18,22 @@ import { RootState } from '../../store';
 import {
   renameAgent,
   removeAgent,
-  addConnection,
-  removeConnection,
-  updateConnectionCondition,
   removeSkillFromAgent,
   addSkillToAgent,
   updateAgentPosition,
   updateAgentSize,
   clearWorkflow,
-  setAgentStatus,
+  setAgentInputFrom,
+  addOutputRoute,
+  removeOutputRoute,
+  updateOutputRoute,
 } from '../../store/slices/workflowSlice';
 import AgentNode from './AgentNode';
 import CustomEdge from './CustomEdge';
 import AgentConfigPanel from './AgentConfigPanel';
-import WorkflowRunLog from './WorkflowRunLog';
 import type { Skill, WorkflowAgent as WorkflowAgentType, WorkflowConnection as WorkflowConnectionType } from './workflowTypes';
 import { i18nService } from '../../services/i18n';
-import { workflowEngine, type WorkflowLogEntry } from '../../services/workflowEngine';
+import { workflowEngine } from '../../services/workflowEngine';
 import {
   ArrowsPointingOutIcon,
   TrashIcon,
@@ -43,6 +41,7 @@ import {
   RocketLaunchIcon,
   CogIcon,
   StopIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline';
 
 // Custom node types — defined OUTSIDE component to avoid re-creation
@@ -68,16 +67,6 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [taskInput, setTaskInput] = useState('');
-  const [workflowLogs, setWorkflowLogs] = useState<WorkflowLogEntry[]>([]);
-  const engineRef = useRef<typeof workflowEngine | null>(null);
-
-  // Initialize engine with callbacks
-  useEffect(() => {
-    engineRef.current = workflowEngine;
-    workflowEngine.setLogCallback((logs) => {
-      setWorkflowLogs([...logs]);
-    });
-  }, []);
 
   const selectedAgent = selectedAgentId
     ? agents.find((a: WorkflowAgentType) => a.id === selectedAgentId) || null
@@ -95,6 +84,7 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
       },
       data: {
         agent,
+        allAgents: agents,
         onRemove: (id: string) => dispatch(removeAgent(id)),
         onRemoveSkill: (agentId: string, skillId: string) =>
           dispatch(removeSkillFromAgent({ agentId, skillId })),
@@ -105,40 +95,122 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
         onUpdateSize: (id: string, width: number, height: number) =>
           dispatch(updateAgentSize({ id, width, height })),
         onSelect: (id: string) => setSelectedAgentId(id),
+        onSetInputFrom: (agentId: string, fromId: string | null) =>
+          dispatch(setAgentInputFrom({ agentId, fromAgentId: fromId })),
+        onAddRoute: (agentId: string, condition: any, targetAgentId: string, keyword?: string) =>
+          dispatch(addOutputRoute({ agentId, route: { condition, targetAgentId, keyword } })),
+        onRemoveRoute: (agentId: string, routeId: string) =>
+          dispatch(removeOutputRoute({ agentId, routeId })),
+        onUpdateRoute: (agentId: string, routeId: string, updates: any) =>
+          dispatch(updateOutputRoute({ agentId, routeId, updates })),
       },
       selected: agent.id === selectedAgentId,
     }));
   }, [agents, dispatch, selectedAgentId]);
 
   const initialEdges: Edge[] = useMemo(() => {
-    return connections.map((conn: WorkflowConnectionType) => {
-      const getLineColor = () => {
-        const lower = (conn.condition || '').toLowerCase();
-        if (lower.includes('error') || lower.includes('fail')) return '#EF4444';
-        if (lower.includes('complete') || lower.includes('success')) return '#8B5CF6';
-        return '#3B82F6';
-      };
-      return {
-        id: conn.id,
-        source: conn.sourceAgentId,
-        target: conn.targetAgentId,
-        sourceHandle: conn.sourceHandle,
-        targetHandle: conn.targetHandle,
-        type: 'custom',
-        animated: true,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: getLineColor(),
-        },
-        style: { stroke: getLineColor(), strokeWidth: 2 },
-        data: {
-          condition: conn.condition,
-          onChangeCondition: (condition: string) =>
-            dispatch(updateConnectionCondition({ id: conn.id, condition })),
-        },
-      };
-    });
-  }, [connections, dispatch]);
+    // Track handle usage to avoid overlapping connections
+    const usedSourceHandles = new Map<string, Set<string>>();
+    const usedTargetHandles = new Map<string, Set<string>>();
+
+    return connections
+      .map((conn: WorkflowConnectionType) => {
+        const getLineColor = () => {
+          const lower = (conn.condition || '').toLowerCase();
+          if (lower.includes('error') || lower.includes('fail')) return '#EF4444';
+          if (lower.includes('complete') || lower.includes('success')) return '#8B5CF6';
+          return '#3B82F6';
+        };
+
+        // Find source and target agents to compute positions
+        const sourceAgent = agents.find((a: WorkflowAgentType) => a.id === conn.sourceAgentId);
+        const targetAgent = agents.find((a: WorkflowAgentType) => a.id === conn.targetAgentId);
+
+        let sourceHandle = 'source-bottom';
+        let targetHandle = 'target-top';
+
+        if (sourceAgent && targetAgent) {
+          const sourceW = sourceAgent.width ?? 200;
+          const targetW = targetAgent.width ?? 200;
+          const sourceCX = sourceAgent.position.x + sourceW / 2;
+          const sourceCY = sourceAgent.position.y + 100; // approximate height center
+          const targetCX = targetAgent.position.x + targetW / 2;
+          const targetCY = targetAgent.position.y + 100;
+
+          const dx = targetCX - sourceCX;
+          const dy = targetCY - sourceCY;
+
+          // Pick the side with the largest delta
+          if (Math.abs(dx) > Math.abs(dy)) {
+            // Horizontal: left/right
+            if (dx > 0) {
+              sourceHandle = 'source-right';
+              targetHandle = 'target-left';
+            } else {
+              sourceHandle = 'source-left';
+              targetHandle = 'target-right';
+            }
+          } else {
+            // Vertical: top/bottom
+            if (dy > 0) {
+              sourceHandle = 'source-bottom';
+              targetHandle = 'target-top';
+            } else {
+              sourceHandle = 'source-top';
+              targetHandle = 'target-bottom';
+            }
+          }
+
+          // If the preferred source handle is already used on this node, try an alternate
+          const usedSrc = usedSourceHandles.get(conn.sourceAgentId) || new Set();
+          const usedTgt = usedTargetHandles.get(conn.targetAgentId) || new Set();
+          const allSides = ['top', 'bottom', 'left', 'right'];
+
+          if (usedSrc.has(sourceHandle)) {
+            // Find an unused source handle, prefer the opposite side
+            for (const side of allSides) {
+              const alt = `source-${side}`;
+              if (!usedSrc.has(alt)) {
+                sourceHandle = alt;
+                break;
+              }
+            }
+          }
+          if (usedTgt.has(targetHandle)) {
+            for (const side of allSides) {
+              const alt = `target-${side}`;
+              if (!usedTgt.has(alt)) {
+                targetHandle = alt;
+                break;
+              }
+            }
+          }
+
+          usedSrc.add(sourceHandle);
+          usedTgt.add(targetHandle);
+          usedSourceHandles.set(conn.sourceAgentId, usedSrc);
+          usedTargetHandles.set(conn.targetAgentId, usedTgt);
+        }
+
+        return {
+          id: conn.id,
+          source: conn.sourceAgentId,
+          target: conn.targetAgentId,
+          sourceHandle,
+          targetHandle,
+          type: 'custom',
+          animated: true,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: getLineColor(),
+          },
+          style: { stroke: getLineColor(), strokeWidth: 2 },
+          data: {
+            condition: conn.condition,
+          },
+        };
+      });
+  }, [connections, agents]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -152,24 +224,8 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
     setEdges(initialEdges);
   }, [initialEdges, setEdges]);
 
-  // Sync agent status with real Cowork Session status on mount/update
-  const sessions = useSelector((state: RootState) => state.cowork.sessions);
-  React.useEffect(() => {
-    agents.forEach(agent => {
-      // Find the most recent session created for this agent
-      const linkedSession = sessions.find(s => s.title === `[Workflow] ${agent.name}`);
-      if (linkedSession) {
-        // If the session is running or completed, update the agent UI to match
-        if (linkedSession.status === 'running' && agent.status !== 'running') {
-          dispatch(setAgentStatus({ id: agent.id, status: 'running' }));
-        } else if (linkedSession.status === 'completed' && agent.status !== 'completed' && agent.status === 'running') {
-          dispatch(setAgentStatus({ id: agent.id, status: 'completed' }));
-        } else if (linkedSession.status === 'error' && agent.status !== 'error') {
-          dispatch(setAgentStatus({ id: agent.id, status: 'error' }));
-        }
-      }
-    });
-  }, [sessions, agents, dispatch]);
+  // Agent status is driven directly by the workflow engine via Redux dispatch
+  // (setAgentStatus action) — no need for session-title-based sync here.
 
   // Handle node position changes
   const onNodeDragStop = useCallback(
@@ -179,32 +235,7 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
     [dispatch]
   );
 
-  // Handle connections
-  const onConnect = useCallback(
-    (params: Connection) => {
-      if (!params.source || !params.target) return;
-      // Prevent self-connection
-      if (params.source === params.target) return;
-      dispatch(addConnection({
-        sourceAgentId: params.source,
-        targetAgentId: params.target,
-        sourceHandle: params.sourceHandle,
-        targetHandle: params.targetHandle,
-        condition: 'Always',
-      }));
-    },
-    [dispatch]
-  );
 
-  // Handle edge deletion
-  const onEdgesDelete = useCallback(
-    (deletedEdges: Edge[]) => {
-      deletedEdges.forEach(edge => {
-        dispatch(removeConnection(edge.id));
-      });
-    },
-    [dispatch]
-  );
 
   // Handle node selection
   const onNodeClick = useCallback(
@@ -230,17 +261,14 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
 
   // Handle task assignment - integrate with actual agent execution engine
   const handleRunTask = useCallback(async () => {
-    if (!taskInput.trim() || !engineRef.current) return;
-
-    // Clear previous logs
-    setWorkflowLogs([]);
+    if (!taskInput.trim()) return;
 
     // Close modal
     setShowTaskModal(false);
 
-    // Start workflow execution
+    // Start real workflow execution
     try {
-      await engineRef.current.start(
+      await workflowEngine.start(
         agents,
         connections,
         taskInput.trim()
@@ -257,17 +285,7 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
 
   // Handle stop workflow
   const handleStopWorkflow = useCallback(async () => {
-    if (engineRef.current) {
-      await engineRef.current.stop();
-    }
-  }, []);
-
-  // Handle reset workflow
-  const handleResetWorkflow = useCallback(() => {
-    if (engineRef.current) {
-      engineRef.current.reset();
-    }
-    setWorkflowLogs([]);
+    await workflowEngine.stop();
   }, []);
 
   // Fit view
@@ -297,18 +315,19 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
         onNodeDragStop={onNodeDragStop}
-        onEdgesDelete={onEdgesDelete}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
+        nodesConnectable={false}
         zoomOnDoubleClick={false}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.4}
         maxZoom={2}
+        deleteKeyCode={null}
+        multiSelectionKeyCode={null}
         defaultEdgeOptions={{
           type: 'custom',
           animated: true,
@@ -319,6 +338,15 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
 
         {/* Toolbar */}
         <Panel position="top-right" className="flex gap-2 !m-4">
+          {/* Agent Count */}
+          {agents.length > 0 && (
+            <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-claude-surface dark:bg-claude-darkSurface border border-claude-border dark:border-claude-darkBorder text-sm font-medium dark:text-claude-darkText text-claude-text shadow-sm">
+              <UserGroupIcon className="w-4 h-4" />
+              <span>{agents.length}</span>
+              <span className="text-gray-500 dark:text-gray-400">{i18nService.t('agentsTab')}</span>
+            </div>
+          )}
+
           {/* Run Task / Stop Button */}
           {isRunning ? (
             <button
@@ -457,14 +485,6 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
           </div>
         </div>
       )}
-
-      {/* Workflow Run Log Panel */}
-      <WorkflowRunLog
-        logs={workflowLogs}
-        isRunning={isRunning}
-        onStop={handleStopWorkflow}
-        onReset={handleResetWorkflow}
-      />
     </div>
   );
 };

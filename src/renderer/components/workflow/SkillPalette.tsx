@@ -95,7 +95,8 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
   const dispatch = useDispatch();
   const customSkills = useSelector((state: RootState) => state.workflow.skills);
   const workflowAgents = useSelector((state: RootState) => state.workflow.agents);
-  const sessions = useSelector((state: RootState) => state.cowork.sessions);
+  const sessionsRaw = useSelector((state: RootState) => state.cowork.sessions || []);
+  const sessions = React.useMemo(() => sessionsRaw.filter(s => s && s.title && !s.title.startsWith('[Workflow]')), [sessionsRaw]);
   const [newSkillName, setNewSkillName] = useState('');
   const [showAgents, setShowAgents] = useState(false);
   const [skillsExpanded, setSkillsExpanded] = useState(true);

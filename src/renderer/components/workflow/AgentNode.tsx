@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
+import { NodeResizer, Handle, Position, type NodeProps } from '@xyflow/react';
 import { useDrop } from 'react-dnd';
 import {
   CodeBracketIcon,
@@ -10,16 +10,21 @@ import {
   RocketLaunchIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import type { WorkflowAgent, Skill } from './workflowTypes';
+import type { WorkflowAgent, Skill, RouteCondition } from './workflowTypes';
 import { i18nService } from '../../services/i18n';
 
 interface AgentNodeData {
   agent: WorkflowAgent;
+  allAgents: WorkflowAgent[];
   onRemove: (id: string) => void;
   onRemoveSkill: (agentId: string, skillId: string) => void;
   onAddSkill: (agentId: string, skill: Skill) => void;
   onUpdateName: (id: string, name: string) => void;
   onUpdateSize?: (id: string, width: number, height: number) => void;
+  onSetInputFrom: (agentId: string, fromId: string | null) => void;
+  onAddRoute: (agentId: string, condition: RouteCondition, targetAgentId: string, keyword?: string) => void;
+  onRemoveRoute: (agentId: string, routeId: string) => void;
+  onUpdateRoute: (agentId: string, routeId: string, updates: { condition?: RouteCondition; keyword?: string; targetAgentId?: string }) => void;
 }
 
 // Agent colors for avatar
@@ -28,11 +33,22 @@ const AGENT_COLORS = [
   '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1',
 ];
 
+// Condition icons and labels
+const CONDITION_OPTIONS: { value: RouteCondition; icon: string; labelKey: string; fallback: string }[] = [
+  { value: 'onComplete', icon: '✅', labelKey: 'workflow.onComplete', fallback: '完成时' },
+  { value: 'onError', icon: '❌', labelKey: 'workflow.onError', fallback: '失败时' },
+  { value: 'outputContains', icon: '🔍', labelKey: 'workflow.outputContains', fallback: '含关键词' },
+  { value: 'always', icon: '🔄', labelKey: 'workflow.always', fallback: '始终' },
+];
+
 const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, selected }) => {
-  const { agent, onRemove, onRemoveSkill, onAddSkill, onUpdateName, onUpdateSize } = data;
+  const { agent, allAgents, onRemove, onRemoveSkill, onAddSkill, onUpdateName, onUpdateSize, onSetInputFrom, onAddRoute, onRemoveRoute, onUpdateRoute } = data;
   const [isEditing, setIsEditing] = React.useState(false);
   const [editName, setEditName] = React.useState(agent.name);
   const inputRef = React.useRef<HTMLInputElement>(null);
+
+  // Get other agents for dropdown options (exclude self)
+  const otherAgents = allAgents.filter(a => a.id !== agent.id);
 
   const [{ isOver }, dropRef] = useDrop(() => ({
     accept: 'SKILL',
@@ -97,9 +113,6 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
     return name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
   };
 
-  // Unified handle class for consistent styling
-  const handleTwClass = "!w-3 !h-3 !bg-claude-accent !border-2 !border-white dark:!border-claude-darkBg transition-transform hover:scale-150";
-
   return (
     <>
       <NodeResizer
@@ -126,22 +139,6 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
           }
       `}
       >
-        {/* Top Handles - both input and output */}
-        <Handle type="target" position={Position.Top} id="top-target" className={handleTwClass} />
-        <Handle type="source" position={Position.Top} id="top-source" className={handleTwClass} />
-
-        {/* Bottom Handles - both input and output */}
-        <Handle type="target" position={Position.Bottom} id="bottom-target" className={handleTwClass} />
-        <Handle type="source" position={Position.Bottom} id="bottom-source" className={handleTwClass} />
-
-        {/* Left Handles - both input and output */}
-        <Handle type="target" position={Position.Left} id="left-target" className={handleTwClass} />
-        <Handle type="source" position={Position.Left} id="left-source" className={handleTwClass} />
-
-        {/* Right Handles - both input and output */}
-        <Handle type="target" position={Position.Right} id="right-target" className={handleTwClass} />
-        <Handle type="source" position={Position.Right} id="right-source" className={handleTwClass} />
-
         {/* Header - Avatar + Name + Remove button */}
         <div className="flex items-center justify-between p-3 pb-2 group">
           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -160,6 +157,7 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
                 type="text"
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
                 onBlur={handleNameSubmit}
                 onKeyDown={handleKeyDown}
                 className="nodrag flex-1 min-w-0 px-1 py-0.5 text-sm font-medium bg-transparent border rounded dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border focus:outline-none focus:border-claude-accent"
@@ -189,7 +187,7 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
 
         {/* Skills - colored chips with remove button */}
         {agent.skills.length > 0 && (
-          <div className="px-3 pb-3 pt-1">
+          <div className="px-3 pb-2 pt-1">
             <div className="flex flex-wrap gap-1.5">
               {agent.skills.map((skill) => (
                 <SkillBadge
@@ -202,6 +200,96 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
           </div>
         )}
 
+        {/* Input From / Output Routes */}
+        <div className="px-3 pb-2 space-y-1.5">
+          {/* Input From - Select upstream node */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 dark:text-gray-400 w-8">↓{i18nService.t('workflow.inputFrom') || '入口'}</span>
+            <select
+              value={agent.inputFrom || ''}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => onSetInputFrom(agent.id, e.target.value || null)}
+              className="nodrag flex-1 min-w-0 px-2 py-1 text-xs bg-transparent border rounded dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border focus:outline-none focus:border-claude-accent"
+            >
+              <option value="">{i18nService.t('workflow.none') || '无 (起点)'}</option>
+              {otherAgents.map((otherAgent) => (
+                <option key={otherAgent.id} value={otherAgent.id}>
+                  {otherAgent.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Output Routes - Conditional route list */}
+          <div className="space-y-1">
+            <span className="text-xs text-gray-500 dark:text-gray-400">↑ {i18nService.t('workflow.outputRoutes') || '出口路由'}</span>
+            {(agent.outputRoutes || []).map((route) => (
+              <div key={route.id} className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                {/* Condition selector */}
+                <select
+                  value={route.condition}
+                  onChange={(e) => onUpdateRoute(agent.id, route.id, { condition: e.target.value as RouteCondition })}
+                  className="nodrag min-w-0 px-1 py-0.5 text-xs bg-transparent border rounded dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border focus:outline-none focus:border-claude-accent"
+                >
+                  {CONDITION_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.icon} {i18nService.t(opt.labelKey) || opt.fallback}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Keyword input (only for outputContains) */}
+                {route.condition === 'outputContains' && (
+                  <input
+                    type="text"
+                    value={route.keyword || ''}
+                    placeholder={i18nService.t('workflow.keyword') || '关键词'}
+                    onChange={(e) => onUpdateRoute(agent.id, route.id, { keyword: e.target.value })}
+                    className="nodrag w-16 px-1 py-0.5 text-xs bg-transparent border rounded dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border focus:outline-none focus:border-claude-accent"
+                  />
+                )}
+
+                {/* Arrow */}
+                <span className="text-xs text-gray-400">→</span>
+
+                {/* Target agent selector */}
+                <select
+                  value={route.targetAgentId}
+                  onChange={(e) => onUpdateRoute(agent.id, route.id, { targetAgentId: e.target.value })}
+                  className="nodrag flex-1 min-w-0 px-1 py-0.5 text-xs bg-transparent border rounded dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border focus:outline-none focus:border-claude-accent"
+                >
+                  {otherAgents.map((otherAgent) => (
+                    <option key={otherAgent.id} value={otherAgent.id}>
+                      {otherAgent.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Delete button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemoveRoute(agent.id, route.id); }}
+                  className="nodrag p-0.5 rounded hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-all"
+                >
+                  <XMarkIcon className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+
+            {/* Add route button */}
+            {otherAgents.length > 0 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddRoute(agent.id, 'onComplete', otherAgents[0].id);
+                }}
+                className="nodrag w-full px-2 py-0.5 text-xs text-gray-400 hover:text-claude-accent border border-dashed rounded dark:border-claude-darkBorder border-claude-border hover:border-claude-accent transition-all"
+              >
+                + {i18nService.t('workflow.addRoute') || '添加路由'}
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Footer - Status indicator dot + status text */}
         <div className="px-3 pb-3 flex items-center gap-1.5">
           <div className={`w-2 h-2 rounded-full ${getStatusColor()} shrink-0`} />
@@ -209,6 +297,20 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
         </div>
 
       </div>
+
+      {/* Handles for React Flow Edge rendering — 4 sides, source+target each */}
+      {/* Top */}
+      <Handle type="target" position={Position.Top} id="target-top" className="opacity-0 pointer-events-none" />
+      <Handle type="source" position={Position.Top} id="source-top" className="opacity-0 pointer-events-none" />
+      {/* Bottom */}
+      <Handle type="target" position={Position.Bottom} id="target-bottom" className="opacity-0 pointer-events-none" />
+      <Handle type="source" position={Position.Bottom} id="source-bottom" className="opacity-0 pointer-events-none" />
+      {/* Left */}
+      <Handle type="target" position={Position.Left} id="target-left" className="opacity-0 pointer-events-none" />
+      <Handle type="source" position={Position.Left} id="source-left" className="opacity-0 pointer-events-none" />
+      {/* Right */}
+      <Handle type="target" position={Position.Right} id="target-right" className="opacity-0 pointer-events-none" />
+      <Handle type="source" position={Position.Right} id="source-right" className="opacity-0 pointer-events-none" />
     </>
   );
 });
