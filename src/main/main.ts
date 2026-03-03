@@ -22,6 +22,8 @@ import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
 import { initLogger, getLogFilePath } from './logger';
+import { getCoworkLogPath } from './libs/coworkLogger';
+import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
@@ -96,6 +98,19 @@ const resolveInlineAttachmentDir = (cwd?: string): string => {
 
 const ensurePngFileName = (value: string): string => {
   return value.toLowerCase().endsWith('.png') ? value : `${value}.png`;
+};
+
+const ensureZipFileName = (value: string): string => {
+  return value.toLowerCase().endsWith('.zip') ? value : `${value}.zip`;
+};
+
+const padTwoDigits = (value: number): string => value.toString().padStart(2, '0');
+
+const buildLogExportFileName = (): string => {
+  const now = new Date();
+  const datePart = `${now.getFullYear()}${padTwoDigits(now.getMonth() + 1)}${padTwoDigits(now.getDate())}`;
+  const timePart = `${padTwoDigits(now.getHours())}${padTwoDigits(now.getMinutes())}${padTwoDigits(now.getSeconds())}`;
+  return `lobsterai-logs-${datePart}-${timePart}.zip`;
 };
 
 const truncateIpcString = (value: string, maxChars: number): string => {
@@ -931,6 +946,46 @@ if (!gotTheLock) {
     const logPath = getLogFilePath();
     if (logPath) {
       shell.showItemInFolder(logPath);
+    }
+  });
+
+  ipcMain.handle('log:exportZip', async (event) => {
+    try {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const saveOptions = {
+        title: 'Export Logs',
+        defaultPath: path.join(app.getPath('downloads'), buildLogExportFileName()),
+        filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
+      };
+
+      const saveResult = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+        : await dialog.showSaveDialog(saveOptions);
+
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: true, canceled: true };
+      }
+
+      const outputPath = ensureZipFileName(saveResult.filePath);
+      const archiveResult = await exportLogsZip({
+        outputPath,
+        entries: [
+          { archiveName: 'main.log', filePath: getLogFilePath() },
+          { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
+        ],
+      });
+
+      return {
+        success: true,
+        canceled: false,
+        path: outputPath,
+        missingEntries: archiveResult.missingEntries,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export logs',
+      };
     }
   });
 

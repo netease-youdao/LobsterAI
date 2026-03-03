@@ -248,6 +248,7 @@ contextBridge.exposeInMainWorld('electron', {
   log: {
     getPath: () => ipcRenderer.invoke('log:getPath'),
     openFolder: () => ipcRenderer.invoke('log:openFolder'),
+    exportZip: () => ipcRenderer.invoke('log:exportZip'),
   },
   im: {
     // Configuration

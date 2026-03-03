@@ -315,6 +315,17 @@ interface IElectronAPI {
     install: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     onDownloadProgress: (callback: (data: AppUpdateDownloadProgress) => void) => () => void;
   };
+  log: {
+    getPath: () => Promise<string>;
+    openFolder: () => Promise<void>;
+    exportZip: () => Promise<{
+      success: boolean;
+      canceled?: boolean;
+      path?: string;
+      missingEntries?: string[];
+      error?: string;
+    }>;
+  };
   im: {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
     setConfig: (config: Partial<IMGatewayConfig>) => Promise<{ success: boolean; error?: string }>;

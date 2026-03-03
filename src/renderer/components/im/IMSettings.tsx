@@ -296,7 +296,9 @@ const IMSettings: React.FC = () => {
 
     setConnectivityModalPlatform(platform);
     // 1. Persist latest config to backend (without changing enabled state)
-    await imService.updateConfig(config);
+    await imService.updateConfig({
+      [platform]: config[platform],
+    } as Partial<IMGatewayConfig>);
 
     const isEnabled = isPlatformEnabled(platform);
 
@@ -597,7 +599,7 @@ const IMSettings: React.FC = () => {
                         const newIds = [...(config.telegram.allowedUserIds || []), id];
                         handleTelegramChange('allowedUserIds', newIds);
                         setAllowedUserIdInput('');
-                        void imService.updateConfig({ ...config, telegram: { ...config.telegram, allowedUserIds: newIds } });
+                        void imService.updateConfig({ telegram: { ...config.telegram, allowedUserIds: newIds } });
                       }
                     }
                   }}
@@ -612,7 +614,7 @@ const IMSettings: React.FC = () => {
                       const newIds = [...(config.telegram.allowedUserIds || []), id];
                       handleTelegramChange('allowedUserIds', newIds);
                       setAllowedUserIdInput('');
-                      void imService.updateConfig({ ...config, telegram: { ...config.telegram, allowedUserIds: newIds } });
+                      void imService.updateConfig({ telegram: { ...config.telegram, allowedUserIds: newIds } });
                     }
                   }}
                   className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -633,7 +635,7 @@ const IMSettings: React.FC = () => {
                         onClick={() => {
                           const newIds = (config.telegram.allowedUserIds || []).filter((uid) => uid !== id);
                           handleTelegramChange('allowedUserIds', newIds);
-                          void imService.updateConfig({ ...config, telegram: { ...config.telegram, allowedUserIds: newIds } });
+                          void imService.updateConfig({ telegram: { ...config.telegram, allowedUserIds: newIds } });
                         }}
                         className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                       >
