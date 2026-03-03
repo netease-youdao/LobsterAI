@@ -294,10 +294,33 @@ class WorkflowEngine {
             error: errorMessage,
           });
 
+          // If there's an "On Error" route, follow it instead of crashing
+          const nextAgent = await this.evaluateNextAgent(currentAgent, errorMessage, connections, agents, 'error');
+          if (nextAgent) {
+            const edgeKey = `${currentAgent.id}->${nextAgent.id}`;
+            const currentCount = this.iterationCount.get(edgeKey) || 0;
+            if (currentCount >= this.maxIterations) {
+              // Limit reached even for error routing
+              store.dispatch(stopWorkflow());
+              this.isRunning = false;
+              if (this.currentRunId) {
+                store.dispatch(updateWorkflowRun({ id: this.currentRunId, updates: { status: 'stopped', endTime: Date.now() } }));
+              }
+              return;
+            }
+            this.iterationCount.set(edgeKey, currentCount + 1);
+
+            // Route the error message as input to the next agent
+            currentInput = `[System Error from ${currentAgent.name}]:\n${errorMessage}\n\nPlease handle this error.`;
+            currentAgent = nextAgent;
+            continue; // Loop continues to error handler agent
+          }
+
+          // No error route found, stop the workflow
           store.dispatch(stopWorkflow());
           this.isRunning = false;
           window.dispatchEvent(new CustomEvent('app:showToast', {
-            detail: `❌ Agent "${currentAgent.name}" failed: ${errorMessage}`,
+            detail: `❌ 系统错误: Agent "${currentAgent.name}" failed: ${errorMessage}`,
           }));
           return;
         }
