@@ -15,8 +15,6 @@ import {
 } from '@heroicons/react/24/outline';
 import { workflowEngine, type WorkflowLogEntry } from '../../services/workflowEngine';
 import { i18nService } from '../../services/i18n';
-import { useSelector } from 'react-redux';
-import { RootState } from '../../store';
 
 interface WorkflowOutputPanelProps {
   workingDirectory: string;
@@ -46,8 +44,6 @@ const WorkflowOutputPanel: React.FC<WorkflowOutputPanelProps> = ({
   const [loadingContent, setLoadingContent] = useState(false);
   const [panelHeight, setPanelHeight] = useState(240);
   const [isDragging, setIsDragging] = useState(false);
-  const [isCopying, setIsCopying] = useState(false);
-  const projectWorkingDirectory = useSelector((state: RootState) => state.cowork.config.workingDirectory);
 
   // Subscribe to workflow engine logs & sync existing logs on mount
   useEffect(() => {
@@ -290,33 +286,13 @@ const WorkflowOutputPanel: React.FC<WorkflowOutputPanelProps> = ({
               {i18nService.t('workflowStop') || 'Stop'}
             </button>
           )}
-          {activeTab === 'files' && files.length > 0 && projectWorkingDirectory && (
+          {activeTab === 'files' && files.length > 0 && workingDirectory && (
             <button
-              onClick={async () => {
-                if (!workingDirectory || !projectWorkingDirectory) return;
-                setIsCopying(true);
-                try {
-                  const result = await window.electron.workflow.copyToProject(workingDirectory, projectWorkingDirectory);
-                  if (result.success) {
-                    window.dispatchEvent(new CustomEvent('app:showToast', {
-                      detail: `✅ ${result.copiedCount} files copied to project`,
-                    }));
-                  } else {
-                    window.dispatchEvent(new CustomEvent('app:showToast', {
-                      detail: `❌ Copy failed: ${result.error}`,
-                    }));
-                  }
-                } catch (err) {
-                  console.error('[WorkflowOutputPanel] Copy to project error:', err);
-                } finally {
-                  setIsCopying(false);
-                }
-              }}
-              disabled={isCopying}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium bg-green-600 hover:bg-green-700 text-white transition-colors disabled:opacity-50"
+              onClick={() => window.electron.shell.openPath(workingDirectory)}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium bg-green-600 hover:bg-green-700 text-white transition-colors"
             >
-              <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" />
-              {isCopying ? 'Copying...' : (i18nService.t('workflowCopyToProject') || 'Copy to Project')}
+              <FolderIcon className="w-3.5 h-3.5" />
+              {i18nService.t('workflowOpenFolder') || 'Open Folder'}
             </button>
           )}
           <button

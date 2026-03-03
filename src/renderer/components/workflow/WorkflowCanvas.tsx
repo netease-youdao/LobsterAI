@@ -109,7 +109,14 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
   }, [agents, dispatch, selectedAgentId]);
 
   const initialEdges: Edge[] = useMemo(() => {
-    // Track handle usage to avoid overlapping connections
+    // Track which node-pairs already have a forward edge to detect bidirectional connections
+    const edgePairs = new Set<string>();
+    // First pass: collect all directed pairs
+    connections.forEach((conn: WorkflowConnectionType) => {
+      edgePairs.add(`${conn.sourceAgentId}->${conn.targetAgentId}`);
+    });
+
+    // Track handle usage per node
     const usedSourceHandles = new Map<string, Set<string>>();
     const usedTargetHandles = new Map<string, Set<string>>();
 
@@ -122,7 +129,6 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
           return '#3B82F6';
         };
 
-        // Find source and target agents to compute positions
         const sourceAgent = agents.find((a: WorkflowAgentType) => a.id === conn.sourceAgentId);
         const targetAgent = agents.find((a: WorkflowAgentType) => a.id === conn.targetAgentId);
 
@@ -133,56 +139,82 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
           const sourceW = sourceAgent.width ?? 200;
           const targetW = targetAgent.width ?? 200;
           const sourceCX = sourceAgent.position.x + sourceW / 2;
-          const sourceCY = sourceAgent.position.y + 100; // approximate height center
+          const sourceCY = sourceAgent.position.y + 100;
           const targetCX = targetAgent.position.x + targetW / 2;
           const targetCY = targetAgent.position.y + 100;
 
           const dx = targetCX - sourceCX;
           const dy = targetCY - sourceCY;
 
-          // Pick the side with the largest delta
-          if (Math.abs(dx) > Math.abs(dy)) {
-            // Horizontal: left/right
-            if (dx > 0) {
-              sourceHandle = 'source-right';
-              targetHandle = 'target-left';
+          // Check if there's a reverse edge (B→A exists while we're processing A→B)
+          const reverseKey = `${conn.targetAgentId}->${conn.sourceAgentId}`;
+          const isBidirectional = edgePairs.has(reverseKey);
+
+          // Determine primary and secondary axes
+          const primaryIsHorizontal = Math.abs(dx) > Math.abs(dy);
+
+          // For bidirectional edges, use the "secondary" (smaller delta) axis so edges don't overlap
+          // The first edge processed gets the primary axis, the second gets secondary
+          const usedSrc = usedSourceHandles.get(conn.sourceAgentId) || new Set();
+
+          if (primaryIsHorizontal) {
+            // Primary axis is horizontal (left/right)
+            if (!isBidirectional || !usedSrc.has(sourceHandle)) {
+              // Use horizontal (primary)
+              if (dx > 0) {
+                sourceHandle = 'source-right';
+                targetHandle = 'target-left';
+              } else {
+                sourceHandle = 'source-left';
+                targetHandle = 'target-right';
+              }
             } else {
-              sourceHandle = 'source-left';
-              targetHandle = 'target-right';
+              // Reverse edge: use vertical (secondary) to avoid overlap
+              if (dy >= 0) {
+                sourceHandle = 'source-bottom';
+                targetHandle = 'target-top';
+              } else {
+                sourceHandle = 'source-top';
+                targetHandle = 'target-bottom';
+              }
             }
           } else {
-            // Vertical: top/bottom
-            if (dy > 0) {
-              sourceHandle = 'source-bottom';
-              targetHandle = 'target-top';
+            // Primary axis is vertical (top/bottom)
+            if (!isBidirectional || !usedSrc.has(sourceHandle)) {
+              // Use vertical (primary)
+              if (dy > 0) {
+                sourceHandle = 'source-bottom';
+                targetHandle = 'target-top';
+              } else {
+                sourceHandle = 'source-top';
+                targetHandle = 'target-bottom';
+              }
             } else {
-              sourceHandle = 'source-top';
-              targetHandle = 'target-bottom';
+              // Reverse edge: use horizontal (secondary) to avoid overlap
+              if (dx >= 0) {
+                sourceHandle = 'source-right';
+                targetHandle = 'target-left';
+              } else {
+                sourceHandle = 'source-left';
+                targetHandle = 'target-right';
+              }
             }
           }
 
-          // If the preferred source handle is already used on this node, try an alternate
-          const usedSrc = usedSourceHandles.get(conn.sourceAgentId) || new Set();
+          // If the chosen handle is already taken, find an alternative
           const usedTgt = usedTargetHandles.get(conn.targetAgentId) || new Set();
           const allSides = ['top', 'bottom', 'left', 'right'];
 
           if (usedSrc.has(sourceHandle)) {
-            // Find an unused source handle, prefer the opposite side
             for (const side of allSides) {
               const alt = `source-${side}`;
-              if (!usedSrc.has(alt)) {
-                sourceHandle = alt;
-                break;
-              }
+              if (!usedSrc.has(alt)) { sourceHandle = alt; break; }
             }
           }
           if (usedTgt.has(targetHandle)) {
             for (const side of allSides) {
               const alt = `target-${side}`;
-              if (!usedTgt.has(alt)) {
-                targetHandle = alt;
-                break;
-              }
+              if (!usedTgt.has(alt)) { targetHandle = alt; break; }
             }
           }
 

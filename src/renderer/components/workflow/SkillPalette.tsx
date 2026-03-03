@@ -38,9 +38,10 @@ import {
   MagnifyingGlassIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  StopCircleIcon,
+  ClockIcon,
+  FolderOpenIcon,
 } from '@heroicons/react/24/outline';
-import { addSkill, removeSkill, addAgent } from '../../store/slices/workflowSlice';
+import { addSkill, removeSkill, addAgent, removeWorkflowRun } from '../../store/slices/workflowSlice';
 import { coworkService } from '../../services/cowork';
 import type { Skill } from './workflowTypes';
 import { PREDEFINED_SKILLS, AGENT_TEMPLATES, PREDEFINED_SKILLS as ALL_SKILLS } from './workflowTypes';
@@ -79,12 +80,6 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   CubeIcon,
 };
 
-// Avatar colors
-const AGENT_COLORS = [
-  '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#3B82F6',
-  '#EC4899', '#06B6D4', '#84CC16', '#F97316', '#6366F1',
-];
-
 interface SkillPaletteProps {
   onAgentCreated?: (agentId: string) => void;
   onViewSession?: (sessionId: string) => void;
@@ -95,8 +90,7 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
   const dispatch = useDispatch();
   const customSkills = useSelector((state: RootState) => state.workflow.skills);
   const workflowAgents = useSelector((state: RootState) => state.workflow.agents);
-  const sessionsRaw = useSelector((state: RootState) => state.cowork.sessions || []);
-  const sessions = React.useMemo(() => sessionsRaw.filter(s => s && s.title && !s.title.startsWith('[Workflow]')), [sessionsRaw]);
+  const workflowRuns = useSelector((state: RootState) => state.workflow.workflowRuns || []);
   const [newSkillName, setNewSkillName] = useState('');
   const [showAgents, setShowAgents] = useState(false);
   const [skillsExpanded, setSkillsExpanded] = useState(true);
@@ -120,57 +114,12 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
     return i18nService.t('coworkDaysAgo')?.replace('{n}', String(days)) || `${days}d ago`;
   };
 
-  // Get status color
-  const getSessionStatusColor = (status: string): string => {
-    switch (status) {
-      case 'running': return 'bg-green-500';
-      case 'completed': return 'bg-blue-500';
-      case 'error': return 'bg-red-500';
-      default: return 'bg-gray-400';
-    }
-  };
-
-  // Get status i18n key
-  const getSessionStatusText = (status: string): string => {
-    switch (status) {
-      case 'running': return i18nService.t('coworkStatusRunning');
-      case 'completed': return i18nService.t('coworkStatusCompleted');
-      case 'error': return i18nService.t('coworkStatusError');
-      default: return i18nService.t('coworkStatusIdle');
-    }
-  };
-
   // Handle view session
   const handleViewSession = useCallback((sessionId: string) => {
     if (onViewSession) {
       onViewSession(sessionId);
     }
   }, [onViewSession]);
-
-  // Handle stop session
-  const handleStopSession = useCallback(async (sessionId: string) => {
-    await coworkService.stopSession(sessionId);
-    showToast(i18nService.t('coworkSessionStopped') || '⏹ Session stopped');
-  }, []);
-
-  // Handle delete session
-  const handleDeleteSession = useCallback(async (sessionId: string) => {
-    await coworkService.deleteSession(sessionId);
-    showToast(i18nService.t('coworkSessionDeleted') || '🗑️ Session deleted');
-  }, []);
-
-  // Handle add session to canvas as agent
-  const handleAddSessionToCanvas = useCallback((_sessionId: string, sessionTitle: string) => {
-    const agentCount = workflowAgents.length + 1;
-    dispatch(addAgent({
-      name: sessionTitle || `Agent ${agentCount}`,
-      soulPrompt: `This agent represents the Cowork session: ${sessionTitle}`,
-    }));
-    showToast(`✅ ${sessionTitle || 'Agent'} added to canvas`);
-    if (onAgentCreated) {
-      setTimeout(() => onAgentCreated('last'), 100);
-    }
-  }, [workflowAgents, dispatch, onAgentCreated]);
 
   const handleAddCustomSkill = useCallback(() => {
     if (!newSkillName.trim()) return;
@@ -266,10 +215,10 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
               }`}
           >
             <CubeIcon className="w-3.5 h-3.5" />
-            Active
-            {sessions.length > 0 && (
+            {i18nService.t('workflowHistory') || 'History'}
+            {workflowRuns.length > 0 && (
               <span className="ml-1 px-1.5 py-0.5 text-xs bg-claude-accent text-white rounded-full">
-                {sessions.length}
+                {workflowRuns.length}
               </span>
             )}
           </button>
@@ -372,90 +321,86 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
           </div>
         )}
 
-        {/* Active Agents View - Now showing Cowork Sessions */}
+        {/* Workflow Run History View */}
         {showAgents && (
           <div className="p-3 pt-0">
-            {sessions.length === 0 ? (
+            {workflowRuns.length === 0 ? (
               <div className="text-center py-6">
-                <ChatBubbleBottomCenterTextIcon className="w-10 h-10 mx-auto text-gray-300 dark:text-gray-600 mb-2" />
+                <ClockIcon className="w-10 h-10 mx-auto text-gray-300 dark:text-gray-600 mb-2" />
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {i18nService.t('coworkNoTasks') || 'No tasks yet'}
+                  {i18nService.t('workflowNoRuns') || 'No workflow runs yet'}
                 </p>
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                  {i18nService.t('coworkNoTasksHint') || 'Create a new task from the home page'}
+                  {i18nService.t('workflowNoRunsHint') || 'Run a workflow to see history here'}
                 </p>
               </div>
             ) : (
-              <div className="space-y-1.5">
-                {sessions.map((session) => (
+              <div className="space-y-2">
+                {workflowRuns.map((run) => (
                   <div
-                    key={session.id}
-                    className="flex items-center gap-2 p-2 rounded-lg border dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50 transition-colors"
+                    key={run.id}
+                    className="rounded-lg border dark:border-claude-darkBorder border-claude-border overflow-hidden"
                   >
-                    {/* Avatar - smaller */}
-                    <div
-                      className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-semibold shrink-0"
-                      style={{ backgroundColor: AGENT_COLORS[Math.abs(session.id.charCodeAt(0)) % AGENT_COLORS.length] }}
-                    >
-                      {session.title.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase()}
-                    </div>
-
-                    {/* Info - more compact */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium dark:text-claude-darkText text-claude-text truncate">
-                        {session.title}
-                      </p>
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <div className={`w-1.5 h-1.5 rounded-full ${getSessionStatusColor(session.status)}`} />
-                        <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                          {getSessionStatusText(session.status)}
-                        </span>
-                        <span className="text-[10px] text-gray-400 dark:text-gray-500">·</span>
-                        <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                          {formatRelativeTime(session.updatedAt)}
-                        </span>
+                    {/* Run Header */}
+                    <div className="flex items-center gap-2 p-2 bg-claude-bg dark:bg-claude-darkBg">
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${run.status === 'running' ? 'bg-green-500 animate-pulse' :
+                        run.status === 'completed' ? 'bg-blue-500' :
+                          run.status === 'error' ? 'bg-red-500' : 'bg-gray-400'
+                        }`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium dark:text-claude-darkText text-claude-text truncate">
+                          {run.title || run.id}
+                        </p>
+                        <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                          {formatRelativeTime(run.startTime)}
+                        </p>
+                      </div>
+                      {/* Run Actions */}
+                      <div className="flex items-center gap-0.5">
+                        {run.workingDirectory && (
+                          <button
+                            onClick={() => window.electron.shell.openPath(run.workingDirectory)}
+                            className="p-1 rounded-lg hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover text-gray-400 hover:text-green-500 transition-colors"
+                            title={i18nService.t('workflowOpenFolder') || 'Open Folder'}
+                          >
+                            <FolderOpenIcon className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => dispatch(removeWorkflowRun(run.id))}
+                          className="p-1 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors"
+                          title={i18nService.t('coworkDeleteTask') || 'Delete'}
+                        >
+                          <TrashIcon className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
-
-                    {/* Action Buttons - compact */}
-                    <div className="flex items-center gap-0.5">
-                      {/* Add to Canvas Button */}
-                      <button
-                        onClick={() => handleAddSessionToCanvas(session.id, session.title)}
-                        className="p-1 rounded-lg hover:bg-green-500/10 text-gray-400 hover:text-green-500 transition-colors"
-                        title={i18nService.t('workflowAddToCanvas') || 'Add to canvas'}
-                      >
-                        <PlusIcon className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* View Button */}
-                      <button
-                        onClick={() => handleViewSession(session.id)}
-                        className="p-1 rounded-lg hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover text-gray-400 hover:text-claude-accent transition-colors"
-                        title={i18nService.t('coworkViewTask') || 'View task'}
-                      >
-                        <EyeIcon className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* Stop Button - only show when running */}
-                      {session.status === 'running' && (
-                        <button
-                          onClick={() => handleStopSession(session.id)}
-                          className="p-1 rounded-lg hover:bg-orange-500/10 text-gray-400 hover:text-orange-500 transition-colors"
-                          title={i18nService.t('coworkStopTask') || 'Stop task'}
+                    {/* Agent Entries */}
+                    <div className="divide-y dark:divide-claude-darkBorder divide-claude-border">
+                      {run.agents.map((agentEntry) => (
+                        <div
+                          key={agentEntry.agentId}
+                          className="flex items-center gap-2 px-2 py-1.5 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
                         >
-                          <StopCircleIcon className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-
-                      {/* Delete Button */}
-                      <button
-                        onClick={() => handleDeleteSession(session.id)}
-                        className="p-1 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors"
-                        title={i18nService.t('coworkDeleteTask') || 'Delete task'}
-                      >
-                        <TrashIcon className="w-3.5 h-3.5" />
-                      </button>
+                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${agentEntry.status === 'running' ? 'bg-yellow-500 animate-pulse' :
+                            agentEntry.status === 'completed' ? 'bg-green-500' :
+                              agentEntry.status === 'error' ? 'bg-red-500' :
+                                agentEntry.status === 'skipped' ? 'bg-gray-400' : 'bg-gray-300'
+                            }`} />
+                          <span className="flex-1 text-[11px] dark:text-claude-darkText text-claude-text truncate">
+                            {agentEntry.agentName}
+                          </span>
+                          {agentEntry.sessionId && (
+                            <button
+                              onClick={() => handleViewSession(agentEntry.sessionId)}
+                              className="p-0.5 rounded hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover text-gray-400 hover:text-claude-accent transition-colors"
+                              title={i18nService.t('coworkViewTask') || 'View session'}
+                            >
+                              <EyeIcon className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
