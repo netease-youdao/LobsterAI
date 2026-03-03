@@ -147,6 +147,17 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    stepfun: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     ollama: {
       enabled: boolean;
       apiKey: string;
@@ -312,6 +323,15 @@ export const defaultConfig: AppConfig = {
         { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false }
       ]
     },
+    stepfun: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://api.stepfun.com/v1',
+      apiFormat: 'openai',
+      models: [
+        { id: 'step-3.5-flash', name: 'Step 3.5 Flash', supportsImage: false }
+      ]
+    },
     volcengine: {
       enabled: false,
       apiKey: '',
@@ -379,7 +399,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'xiaomi', 'volcengine', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 

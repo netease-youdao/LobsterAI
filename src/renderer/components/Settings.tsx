@@ -60,6 +60,7 @@ const providerKeys = [
   'minimax',
   'qwen',
   'xiaomi',
+  'stepfun',
   'volcengine',
   'openrouter',
   'ollama',
@@ -129,6 +130,7 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
   qwen: { label: 'Qwen', icon: <QwenIcon /> },
   xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
+  stepfun: { label: 'Stepfun', icon: <CustomProviderIcon /> },
   volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
   openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
   ollama: { label: 'Ollama', icon: <OllamaIcon /> },
@@ -222,7 +224,7 @@ const copyTextToClipboard = async (text: string): Promise<boolean> => {
 };
 
 const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
-  if (provider === 'openai' || provider === 'gemini') {
+  if (provider === 'openai' || provider === 'gemini' || provider === 'stepfun') {
     return 'openai';
   }
   if (provider === 'anthropic') {
@@ -599,6 +601,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             ...prev,
             qwen: {
               ...prev.qwen,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
+        } else if (normalizedApiBaseUrl.includes('stepfun')) {
+          setActiveProvider('stepfun');
+          setProviders(prev => ({
+            ...prev,
+            stepfun: {
+              ...prev.stepfun,
               enabled: true,
               apiKey: config.api.key,
               baseUrl: config.api.baseUrl
