@@ -1377,7 +1377,39 @@ async function handleRequest(requestId, request, requestPath) {
       options.systemPrompt = request.systemPrompt;
     }
 
-    const result = await query({ prompt: request.prompt || '', options });
+    // Build prompt: if we have image attachments, use SDKUserMessage with content blocks
+    // instead of a plain string prompt, so the model can see the images.
+    let queryPrompt;
+    const imageAttachments = request.imageAttachments;
+    if (Array.isArray(imageAttachments) && imageAttachments.length > 0) {
+      const contentBlocks = [];
+      const promptText = request.prompt || '';
+      if (promptText.trim()) {
+        contentBlocks.push({ type: 'text', text: promptText });
+      }
+      for (const img of imageAttachments) {
+        contentBlocks.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: img.mimeType,
+            data: img.base64Data,
+          },
+        });
+      }
+      const userMessage = {
+        type: 'user',
+        message: { role: 'user', content: contentBlocks },
+        parent_tool_use_id: null,
+        session_id: '',
+      };
+      queryPrompt = (async function* () { yield userMessage; })();
+      appendLog(`Request ${requestId}: sending prompt with ${imageAttachments.length} image attachment(s)`);
+    } else {
+      queryPrompt = request.prompt || '';
+    }
+
+    const result = await query({ prompt: queryPrompt, options });
     for await (const event of result) {
       emit({ type: 'sdk_event', event });
     }
