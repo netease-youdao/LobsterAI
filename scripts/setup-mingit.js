@@ -26,6 +26,10 @@ const DEFAULT_PORTABLE_GIT_URL =
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'resources', 'mingit');
 const DEFAULT_ARCHIVE_PATH = path.join(PROJECT_ROOT, 'resources', PORTABLE_GIT_FILE);
+const RUNTIME_DIRS = [
+  path.join('dev', 'shm'),
+  path.join('dev', 'mqueue'),
+];
 
 const DIRS_TO_PRUNE = [
   'doc',
@@ -176,6 +180,27 @@ function extractArchive(archivePath) {
   }
 }
 
+function ensurePortableGitRuntimeDirs(required) {
+  const ensured = [];
+  for (const relPath of RUNTIME_DIRS) {
+    const fullPath = path.join(OUTPUT_DIR, relPath);
+    try {
+      fs.mkdirSync(fullPath, { recursive: true });
+      ensured.push(relPath);
+    } catch (error) {
+      const message = `Could not create runtime directory ${relPath}: ${error instanceof Error ? error.message : String(error)}`;
+      if (required) {
+        throw new Error(message);
+      }
+      console.warn(`[setup-mingit] Warning: ${message}`);
+    }
+  }
+
+  if (ensured.length > 0) {
+    console.log(`[setup-mingit] Ensured runtime directories: ${ensured.join(', ')}`);
+  }
+}
+
 async function resolveArchive(required) {
   const envArchive = resolveInputPath(process.env.LOBSTERAI_PORTABLE_GIT_ARCHIVE);
   if (envArchive) {
@@ -233,6 +258,7 @@ async function ensurePortableGit(options = {}) {
 
   const existingBash = findPortableGitBash();
   if (existingBash) {
+    ensurePortableGitRuntimeDirs(required);
     console.log(`[setup-mingit] PortableGit already prepared: ${existingBash}`);
     return { ok: true, skipped: false, bashPath: existingBash };
   }
@@ -251,6 +277,7 @@ async function ensurePortableGit(options = {}) {
     );
   }
 
+  ensurePortableGitRuntimeDirs(required);
   pruneUnneededFiles();
 
   const finalSize = getDirSize(OUTPUT_DIR);

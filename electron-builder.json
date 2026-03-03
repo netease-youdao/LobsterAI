@@ -8,9 +8,17 @@
   "beforePack": "./scripts/electron-builder-hooks.cjs",
   "afterPack": "./scripts/electron-builder-hooks.cjs",
   "files": [
-    "dist/**/*",
-    "dist-electron/**/*",
-    "sandbox/agent-runner/AGENT_SYSTEM_PROMPT.md"
+    "sandbox/agent-runner/AGENT_SYSTEM_PROMPT.md",
+    {
+      "from": "dist",
+      "to": "dist",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "dist-electron",
+      "to": "dist-electron",
+      "filter": ["**/*"]
+    }
   ],
   "extraResources": [
     {
@@ -27,13 +35,6 @@
     {
       "from": "resources/tray",
       "to": "tray",
-      "filter": [
-        "**/*"
-      ]
-    },
-    {
-      "from": "resources/mingit",
-      "to": "mingit",
       "filter": [
         "**/*"
       ]
@@ -64,14 +65,36 @@
     "target": [
       "nsis"
     ],
-    "icon": "build/icons/win/icon.ico"
+    "icon": "build/icons/win/icon.ico",
+    "extraResources": [
+      {
+        "from": "resources/mingit",
+        "to": "mingit",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/python-win",
+        "to": "python-win",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   },
   "linux": {
     "target": [
-      "AppImage"
+      "AppImage",
+      "deb"
     ],
     "icon": "build/icons/png",
-    "category": "Utility"
+    "category": "Utility",
+    "desktop": {
+      "Name": "LobsterAI",
+      "Comment": "AI-assisted coding and productivity tool",
+      "Terminal": "false"
+    }
   },
   "nsis": {
     "oneClick": false,

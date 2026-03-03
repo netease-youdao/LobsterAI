@@ -12,6 +12,7 @@ import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
+import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { cpRecursiveSync } from '../fsCompat';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
 import { z } from 'zod';
@@ -87,6 +88,8 @@ const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
 const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item)\b/i;
 const FIND_DELETE_COMMAND_RE = /\bfind\b[\s\S]*\s-delete\b/i;
 const GIT_CLEAN_COMMAND_RE = /\bgit\s+clean\b/i;
+const PYTHON_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:python(?:3)?|py(?:\.exe)?|pip(?:3)?)(?:\s+-3)?(?:\s|$)|\.py(?:\s|$)/i;
+const PYTHON_PIP_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|py(?:\.exe)?\s+-m\s+pip)(?:\s|$)/i;
 const MEMORY_REQUEST_TAIL_SPLIT_RE = /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
 const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
@@ -381,10 +384,31 @@ export class CoworkRunner extends EventEmitter {
   private turnMemoryQueueKeys: Set<string> = new Set();
   private lastTurnMemoryKeyBySession: Map<string, string> = new Map();
   private drainingTurnMemoryQueue = false;
+  private mcpServerProvider?: () => Array<{
+    name: string;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }>;
 
   constructor(store: CoworkStore) {
     super();
     this.store = store;
+  }
+
+  setMcpServerProvider(provider: () => Array<{
+    name: string;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }>): void {
+    this.mcpServerProvider = provider;
   }
 
   private isSessionStopRequested(sessionId: string, activeSession?: ActiveSession): boolean {
@@ -1754,6 +1778,20 @@ export class CoworkRunner extends EventEmitter {
     ].join('\n');
   }
 
+  private buildWindowsEncodingPrompt(): string {
+    if (process.platform !== 'win32') {
+      return '';
+    }
+
+    return [
+      '## Windows Encoding Policy',
+      '- This session runs on Windows. The environment is pre-configured with UTF-8 encoding (LANG=C.UTF-8, chcp 65001).',
+      '- If a Bash command returns garbled/mojibake text (e.g. Chinese characters appear as "ÖÐ¹ú" or "ÂÒÂë"), it means the console code page was reset. Fix it by prepending `chcp.com 65001 > /dev/null 2>&1 &&` to the command.',
+      '- For PowerShell commands, use `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` if output is garbled.',
+      '- Always prefer UTF-8 when reading or writing files on Windows (e.g. `Get-Content -Encoding UTF8`, `iconv`, `python -X utf8`).',
+    ].join('\n');
+  }
+
   private buildWorkspaceSafetyPrompt(
     workspaceRoot: string,
     cwd: string,
@@ -1795,6 +1833,7 @@ export class CoworkRunner extends EventEmitter {
   ): string {
     const safetyPrompt = this.buildWorkspaceSafetyPrompt(workspaceRoot, cwd, confirmationMode);
     const localTimePrompt = this.buildLocalTimeContextPrompt();
+    const windowsEncodingPrompt = this.buildWindowsEncodingPrompt();
     const memoryRecallPrompt = [
       '## Memory Strategy',
       '- Historical retrieval is tool-first: when the user references previous chats, earlier outputs, prior decisions, or says "还记得/之前/上次/刚才", call `conversation_search` or `recent_chats` before answering.',
@@ -1810,7 +1849,7 @@ export class CoworkRunner extends EventEmitter {
       );
     }
     const trimmedBasePrompt = baseSystemPrompt?.trim();
-    return [safetyPrompt, localTimePrompt, userMemoriesXml, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
+    return [safetyPrompt, localTimePrompt, windowsEncodingPrompt, userMemoriesXml, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
       .filter((section): section is string => Boolean(section?.trim()))
       .join('\n\n');
   }
@@ -1997,6 +2036,50 @@ export class CoworkRunner extends EventEmitter {
     return null;
   }
 
+  private isPythonRelatedBashCommand(command: string): boolean {
+    const trimmed = command.trim();
+    if (!trimmed) return false;
+    return PYTHON_BASH_COMMAND_RE.test(trimmed);
+  }
+
+  private isPythonPipBashCommand(command: string): boolean {
+    const trimmed = command.trim();
+    if (!trimmed) return false;
+    return PYTHON_PIP_BASH_COMMAND_RE.test(trimmed);
+  }
+
+  private async ensureWindowsPythonRuntimeForCommand(
+    sessionId: string,
+    command: string
+  ): Promise<{ ok: boolean; reason?: string }> {
+    if (process.platform !== 'win32' || !this.isPythonRelatedBashCommand(command)) {
+      return { ok: true };
+    }
+
+    const isPipCommand = this.isPythonPipBashCommand(command);
+    const runtimeResult = isPipCommand
+      ? await ensurePythonPipReady()
+      : await ensurePythonRuntimeReady();
+    if (runtimeResult.success) {
+      return { ok: true };
+    }
+
+    const reason = runtimeResult.error
+      || (isPipCommand ? 'Bundled Python pip environment is unavailable.' : 'Bundled Python runtime is unavailable.');
+    const summary = this.truncateCommandPreview(command, 140);
+    coworkLog('ERROR', 'python-runtime', 'Windows python command blocked: runtime unavailable', {
+      sessionId,
+      command: summary,
+      reason,
+    });
+    return {
+      ok: false,
+      reason: isPipCommand
+        ? `[python-runtime] Windows 内置 Python pip 环境不可用，已阻止执行该 pip 命令。\n原因: ${reason}\n请重装应用或联系管理员修复内置运行时。`
+        : `[python-runtime] Windows 内置 Python 运行时不可用，已阻止执行该 Python 命令。\n原因: ${reason}\n请重装应用或联系管理员修复内置运行时。`,
+    };
+  }
+
   async startSession(
     sessionId: string,
     prompt: string,
@@ -2007,6 +2090,7 @@ export class CoworkRunner extends EventEmitter {
       autoApprove?: boolean;
       workspaceRoot?: string;
       confirmationMode?: 'modal' | 'text';
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
     } = {}
   ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
@@ -2019,11 +2103,18 @@ export class CoworkRunner extends EventEmitter {
     this.store.updateSession(sessionId, { status: 'running' });
 
     if (!options.skipInitialUserMessage) {
-      // Add user message with skill info
+      // Add user message with skill info and imageAttachments
+      const messageMetadata: Record<string, unknown> = {};
+      if (options.skillIds?.length) {
+        messageMetadata.skillIds = options.skillIds;
+      }
+      if (options.imageAttachments?.length) {
+        messageMetadata.imageAttachments = options.imageAttachments;
+      }
       const userMessage = this.store.addMessage(sessionId, {
         type: 'user',
         content: prompt,
-        metadata: options.skillIds?.length ? { skillIds: options.skillIds } : undefined,
+        metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
       this.emit('message', sessionId, userMessage);
     }
@@ -2076,13 +2167,13 @@ export class CoworkRunner extends EventEmitter {
 
     // Run claude-code using the SDK
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt);
+      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork session error:', error);
     }
   }
 
-  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[] } = {}): Promise<void> {
+  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
@@ -2090,6 +2181,7 @@ export class CoworkRunner extends EventEmitter {
       await this.startSession(sessionId, prompt, {
         skillIds: options.skillIds,
         systemPrompt: options.systemPrompt,
+        imageAttachments: options.imageAttachments,
       });
       return;
     }
@@ -2097,11 +2189,32 @@ export class CoworkRunner extends EventEmitter {
     // Ensure status returns to running for resumed turns on active sessions.
     this.store.updateSession(sessionId, { status: 'running' });
 
-    // Add user message with skill info
+    // Add user message with skill info and imageAttachments
+    const messageMetadata: Record<string, unknown> = {};
+    if (options.skillIds?.length) {
+      messageMetadata.skillIds = options.skillIds;
+    }
+    if (options.imageAttachments?.length) {
+      messageMetadata.imageAttachments = options.imageAttachments;
+    }
+    console.log('[CoworkRunner] continueSession: building user message', {
+      sessionId,
+      hasImageAttachments: !!options.imageAttachments,
+      imageAttachmentsCount: options.imageAttachments?.length ?? 0,
+      metadataKeys: Object.keys(messageMetadata),
+      metadataHasImageAttachments: !!messageMetadata.imageAttachments,
+    });
     const userMessage = this.store.addMessage(sessionId, {
       type: 'user',
       content: prompt,
-      metadata: options.skillIds?.length ? { skillIds: options.skillIds } : undefined,
+      metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
+    });
+    console.log('[CoworkRunner] continueSession: emitting message', {
+      sessionId,
+      messageId: userMessage.id,
+      hasMetadata: !!userMessage.metadata,
+      metadataKeys: userMessage.metadata ? Object.keys(userMessage.metadata) : [],
+      hasImageAttachments: !!(userMessage.metadata as Record<string, unknown>)?.imageAttachments,
     });
     this.emit('message', sessionId, userMessage);
 
@@ -2128,7 +2241,7 @@ export class CoworkRunner extends EventEmitter {
     );
 
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt);
+      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork continue error:', error);
     }
@@ -2314,7 +2427,8 @@ export class CoworkRunner extends EventEmitter {
     activeSession: ActiveSession,
     prompt: string,
     cwd: string,
-    systemPrompt: string
+    systemPrompt: string,
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
   ): Promise<void> {
     const { sessionId, abortController } = activeSession;
     const config = this.store.getConfig();
@@ -2363,16 +2477,26 @@ export class CoworkRunner extends EventEmitter {
     // On Windows, check that git-bash is available before attempting to start.
     // Claude Code CLI requires git-bash for shell tool execution.
     if (process.platform === 'win32' && !envVars.CLAUDE_CODE_GIT_BASH_PATH) {
-      const errorMsg = 'Windows local execution requires a bundled Git Bash runtime, but this installation is missing it. '
-        + 'This is a packaging issue in this app build (PortableGit was not bundled). '
+      const bashResolutionDiagnostic = typeof envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR === 'string'
+        ? envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR.trim()
+        : '';
+      const errorMsg = 'Windows local execution requires a healthy Git Bash runtime, but no valid bash was resolved. '
+        + 'This may be caused by missing bundled PortableGit or a conflicting system bash that cannot run cygpath. '
         + 'Please reinstall or upgrade to a correctly built version that includes resources/mingit. '
         + 'Advanced fallback: set CLAUDE_CODE_GIT_BASH_PATH to your bash.exe path '
-        + '(e.g. C:\\Program Files\\Git\\bin\\bash.exe).';
+        + '(e.g. C:\\Program Files\\Git\\bin\\bash.exe).'
+        + (bashResolutionDiagnostic ? ` Resolver diagnostic: ${bashResolutionDiagnostic}` : '');
       coworkLog('ERROR', 'runClaudeCodeLocal', errorMsg);
       this.handleError(sessionId, errorMsg);
       this.clearPendingPermissions(sessionId);
       this.activeSessions.delete(sessionId);
       return;
+    }
+
+    if (process.platform === 'win32') {
+      coworkLog('INFO', 'runClaudeCodeLocal', 'Resolved Windows git-bash path', {
+        gitBashPath: envVars.CLAUDE_CODE_GIT_BASH_PATH,
+      });
     }
 
     const options: Record<string, unknown> = {
@@ -2407,6 +2531,19 @@ export class CoworkRunner extends EventEmitter {
         const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'local', resolvedName);
         if (blockedToolResult) {
           return blockedToolResult;
+        }
+
+        if (resolvedName === 'Bash') {
+          const command = this.extractToolCommand(resolvedInput);
+          const pythonRuntimeCheck = await this.ensureWindowsPythonRuntimeForCommand(sessionId, command);
+          if (!pythonRuntimeCheck.ok) {
+            const reason = pythonRuntimeCheck.reason || 'Python runtime unavailable.';
+            this.addSystemMessage(sessionId, reason);
+            return {
+              behavior: 'deny',
+              message: reason,
+            };
+          }
         }
 
         // Auto-approve mode (kept for compatibility with legacy callers).
@@ -2601,7 +2738,99 @@ export class CoworkRunner extends EventEmitter {
         }),
       };
 
-      const result = await query({ prompt, options } as any);
+      // Inject user-configured MCP servers (local mode only)
+      if (this.mcpServerProvider) {
+        try {
+          const enabledMcpServers = this.mcpServerProvider();
+          for (const server of enabledMcpServers) {
+            const serverKey = server.name;
+            // Skip if name conflicts with existing MCP servers (e.g., memory server)
+            if (options.mcpServers && serverKey in (options.mcpServers as Record<string, unknown>)) {
+              coworkLog('WARN', 'runClaudeCodeLocal', `MCP server name conflict: "${serverKey}", skipping user config`);
+              continue;
+            }
+            let serverConfig: Record<string, unknown>;
+            switch (server.transportType) {
+              case 'stdio':
+                serverConfig = {
+                  type: 'stdio',
+                  command: server.command || '',
+                  args: server.args || [],
+                  env: server.env && Object.keys(server.env).length > 0 ? server.env : undefined,
+                };
+                break;
+              case 'sse':
+                serverConfig = {
+                  type: 'sse',
+                  url: server.url || '',
+                  headers: server.headers && Object.keys(server.headers).length > 0 ? server.headers : undefined,
+                };
+                break;
+              case 'http':
+                serverConfig = {
+                  type: 'http',
+                  url: server.url || '',
+                  headers: server.headers && Object.keys(server.headers).length > 0 ? server.headers : undefined,
+                };
+                break;
+              default:
+                coworkLog('WARN', 'runClaudeCodeLocal', `Unknown MCP transport type: "${server.transportType}", skipping`);
+                continue;
+            }
+            options.mcpServers = {
+              ...(options.mcpServers as Record<string, unknown>),
+              [serverKey]: serverConfig,
+            };
+            coworkLog('INFO', 'runClaudeCodeLocal', `Injected user MCP server: "${serverKey}" (${server.transportType})`);
+          }
+        } catch (error) {
+          coworkLog('WARN', 'runClaudeCodeLocal', `Failed to load user MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      // Build prompt: if we have image attachments, use SDKUserMessage with content blocks
+      // instead of a plain string prompt, so the model can see the images.
+      let queryPrompt: string | AsyncIterable<unknown>;
+      if (imageAttachments && imageAttachments.length > 0) {
+        const contentBlocks: Array<Record<string, unknown>> = [];
+        // Add text block
+        if (prompt.trim()) {
+          contentBlocks.push({ type: 'text', text: prompt });
+        }
+        // Add image blocks
+        for (const img of imageAttachments) {
+          contentBlocks.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: img.mimeType,
+              data: img.base64Data,
+            },
+          });
+        }
+        const userMessage: {
+          type: 'user';
+          message: { role: 'user'; content: Array<Record<string, unknown>> };
+          parent_tool_use_id: string | null;
+          session_id: string;
+        } = {
+          type: 'user' as const,
+          message: {
+            role: 'user' as const,
+            content: contentBlocks,
+          },
+          parent_tool_use_id: null,
+          session_id: '',
+        };
+        // Create a one-shot async iterable that yields the single message
+        queryPrompt = (async function* () {
+          yield userMessage;
+        })();
+      } else {
+        queryPrompt = prompt;
+      }
+
+      const result = await query({ prompt: queryPrompt, options } as any);
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');
       let eventCount = 0;
       for await (const event of result as AsyncIterable<unknown>) {
@@ -2661,7 +2890,8 @@ export class CoworkRunner extends EventEmitter {
     activeSession: ActiveSession,
     prompt: string,
     cwd: string,
-    systemPrompt: string
+    systemPrompt: string,
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
   ): Promise<void> {
     const { sessionId } = activeSession;
     if (this.isSessionStopRequested(sessionId, activeSession)) {
@@ -2718,7 +2948,7 @@ export class CoworkRunner extends EventEmitter {
       );
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
       return;
     }
 
@@ -2732,7 +2962,7 @@ export class CoworkRunner extends EventEmitter {
     if (executionMode === 'local') {
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
       return;
     }
 
@@ -2757,7 +2987,7 @@ export class CoworkRunner extends EventEmitter {
       }
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
       return;
     }
 
@@ -2793,7 +3023,7 @@ export class CoworkRunner extends EventEmitter {
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
       this.activeSessions.set(sessionId, activeSession);
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
     }
   }
 

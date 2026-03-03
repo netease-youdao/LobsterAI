@@ -3,6 +3,12 @@ import ReactMarkdown from 'react-markdown';
 // @ts-ignore
 import remarkGfm from 'remark-gfm';
 // @ts-ignore
+import remarkMath from 'remark-math';
+// @ts-ignore
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import 'katex/contrib/mhchem';
+// @ts-ignore
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 // @ts-ignore
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -95,6 +101,22 @@ const encodeFileUrlsInMarkdown = (content: string): string => {
     cursor = destEnd + 1;
   }
   return result;
+};
+
+/**
+ * Normalize multi-line display math blocks for remark-math compatibility.
+ * remark-math treats $$ like code fences: opening $$ must be on its own line,
+ * and closing $$ must also be on its own line.
+ * LLMs often output $$content\n...\ncontent$$ which breaks parsing and corrupts
+ * all subsequent markdown. This function normalizes such blocks.
+ */
+const normalizeDisplayMath = (content: string): string => {
+  return content.replace(/\$\$([\s\S]+?)\$\$/g, (match, inner) => {
+    if (!inner.includes('\n')) {
+      return match;
+    }
+    return `$$\n${inner.trim()}\n$$`;
+  });
 };
 
 const safeUrlTransform = (url: string): string => {
@@ -579,11 +601,12 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   resolveLocalFilePath,
 }) => {
   const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath]);
-  const normalizedContent = useMemo(() => encodeFileUrlsInMarkdown(content), [content]);
+  const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
   return (
     <div className={`markdown-content text-[15px] leading-6 ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
         components={components}
       >

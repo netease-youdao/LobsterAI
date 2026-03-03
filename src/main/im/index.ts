@@ -15,3 +15,4 @@ export { IMCoworkHandler, type IMCoworkHandlerOptions } from './imCoworkHandler'
 export { IMGatewayManager, type IMGatewayManagerOptions } from './imGatewayManager';
 export * from './dingtalkMedia';
 export { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
+export { buildIMMediaInstruction } from './imMediaInstruction';

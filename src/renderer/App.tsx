@@ -9,6 +9,7 @@ import { CoworkView } from './components/cowork';
 import { SkillsView } from './components/skills';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import { WorkflowView } from './components/workflow';
+import { McpView } from './components/mcp';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import { configService } from './services/config';
@@ -31,7 +32,7 @@ import AppUpdateModal from './components/update/AppUpdateModal';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'agentWorkflow'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'agentWorkflow' | 'mcp'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -81,7 +82,7 @@ const App: React.FC = () => {
         apiService.setConfig(apiConfig);
 
         // 从 providers 配置中加载可用模型列表到 Redux
-        const providerModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
+        const providerModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
         if (config.providers) {
           Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
             if (providerConfig.enabled && providerConfig.models) {
@@ -90,6 +91,7 @@ const App: React.FC = () => {
                   id: model.id,
                   name: model.name,
                   provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+                  providerKey: providerName,
                   supportsImage: model.supportsImage ?? false,
                 });
               });
@@ -99,12 +101,16 @@ const App: React.FC = () => {
         const fallbackModels = config.model.availableModels.map(model => ({
           id: model.id,
           name: model.name,
+          providerKey: undefined,
           supportsImage: model.supportsImage ?? false,
         }));
         const resolvedModels = providerModels.length > 0 ? providerModels : fallbackModels;
         if (resolvedModels.length > 0) {
           dispatch(setAvailableModels(resolvedModels));
-          const preferredModel = resolvedModels.find(model => model.id === config.model.defaultModel) ?? resolvedModels[0];
+          const preferredModel = resolvedModels.find(
+            model => model.id === config.model.defaultModel
+              && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
+          ) ?? resolvedModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
 
@@ -155,14 +161,20 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isInitialized || !selectedModel?.id) return;
     const config = configService.getConfig();
-    if (config.model.defaultModel === selectedModel.id) return;
+    if (
+      config.model.defaultModel === selectedModel.id
+      && (config.model.defaultModelProvider ?? '') === (selectedModel.providerKey ?? '')
+    ) {
+      return;
+    }
     void configService.updateConfig({
       model: {
         ...config.model,
         defaultModel: selectedModel.id,
+        defaultModelProvider: selectedModel.providerKey,
       },
     });
-  }, [isInitialized, selectedModel?.id]);
+  }, [isInitialized, selectedModel?.id, selectedModel?.providerKey]);
 
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {
     setSettingsOptions({
@@ -186,6 +198,10 @@ const App: React.FC = () => {
 
   const handleShowWorkflow = useCallback(() => {
     setMainView('agentWorkflow');
+  }, []);
+
+  const handleShowMcp = useCallback(() => {
+    setMainView('mcp');
   }, []);
 
   const handleToggleSidebar = useCallback(() => {
@@ -328,7 +344,7 @@ const App: React.FC = () => {
     });
 
     if (config.providers) {
-      const allModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
+      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
       Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
         if (providerConfig.enabled && providerConfig.models) {
           providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
@@ -336,6 +352,7 @@ const App: React.FC = () => {
               id: model.id,
               name: model.name,
               provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
           });
@@ -566,6 +583,7 @@ const App: React.FC = () => {
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowWorkflow={handleShowWorkflow}
+          onShowMcp={handleShowMcp}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -597,6 +615,13 @@ const App: React.FC = () => {
                   await coworkService.loadSession(sessionId);
                   setMainView('cowork');
                 }}
+              />
+            ) : mainView === 'mcp' ? (
+              <McpView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
               />
             ) : (
               <CoworkView

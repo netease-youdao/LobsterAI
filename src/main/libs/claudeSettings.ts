@@ -37,6 +37,7 @@ type ProviderConfig = {
 type AppConfig = {
   model?: {
     defaultModel?: string;
+    defaultModelProvider?: string;
   };
   providers?: Record<string, ProviderConfig>;
 };
@@ -120,12 +121,26 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: 'No available model configured in enabled providers.' };
   }
 
-  const providerEntry = Object.entries(providers).find(([, provider]) => {
-    if (!provider?.enabled || !provider.models) {
-      return false;
+  let providerEntry: [string, ProviderConfig] | undefined;
+  const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
+  if (preferredProviderName) {
+    const preferredProvider = providers[preferredProviderName];
+    if (
+      preferredProvider?.enabled
+      && preferredProvider.models?.some((model) => model.id === modelId)
+    ) {
+      providerEntry = [preferredProviderName, preferredProvider];
     }
-    return provider.models.some((model) => model.id === modelId);
-  });
+  }
+
+  if (!providerEntry) {
+    providerEntry = Object.entries(providers).find(([, provider]) => {
+      if (!provider?.enabled || !provider.models) {
+        return false;
+      }
+      return provider.models.some((model) => model.id === modelId);
+    });
+  }
 
   if (!providerEntry) {
     return { matched: null, error: `No enabled provider found for model: ${modelId}` };

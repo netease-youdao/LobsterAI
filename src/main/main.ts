@@ -18,10 +18,14 @@ import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
+import { McpStore } from './mcpStore';
 import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
 import { initLogger, getLogFilePath } from './logger';
+import { getCoworkLogPath } from './libs/coworkLogger';
+import { exportLogsZip } from './libs/logExport';
+import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -97,6 +101,19 @@ const ensurePngFileName = (value: string): string => {
   return value.toLowerCase().endsWith('.png') ? value : `${value}.png`;
 };
 
+const ensureZipFileName = (value: string): string => {
+  return value.toLowerCase().endsWith('.zip') ? value : `${value}.zip`;
+};
+
+const padTwoDigits = (value: number): string => value.toString().padStart(2, '0');
+
+const buildLogExportFileName = (): string => {
+  const now = new Date();
+  const datePart = `${now.getFullYear()}${padTwoDigits(now.getMonth() + 1)}${padTwoDigits(now.getDate())}`;
+  const timePart = `${padTwoDigits(now.getHours())}${padTwoDigits(now.getMinutes())}${padTwoDigits(now.getSeconds())}`;
+  return `lobsterai-logs-${datePart}-${timePart}.zip`;
+};
+
 const truncateIpcString = (value: string, maxChars: number): string => {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, maxChars)}\n...[truncated in main IPC forwarding]`;
@@ -153,12 +170,29 @@ const sanitizeCoworkMessageForIpc = (message: any): any => {
   if (!message || typeof message !== 'object') {
     return message;
   }
+
+  // Preserve imageAttachments in metadata as-is (base64 data can be very large
+  // and must not be truncated by the generic sanitizer).
+  let sanitizedMetadata: unknown;
+  if (message.metadata && typeof message.metadata === 'object') {
+    const { imageAttachments, ...rest } = message.metadata as Record<string, unknown>;
+    const sanitizedRest = sanitizeIpcPayload(rest) as Record<string, unknown> | undefined;
+    sanitizedMetadata = {
+      ...(sanitizedRest && typeof sanitizedRest === 'object' ? sanitizedRest : {}),
+      ...(Array.isArray(imageAttachments) && imageAttachments.length > 0
+        ? { imageAttachments }
+        : {}),
+    };
+  } else {
+    sanitizedMetadata = undefined;
+  }
+
   return {
     ...message,
     content: typeof message.content === 'string'
       ? truncateIpcString(message.content, IPC_MESSAGE_CONTENT_MAX_CHARS)
       : '',
-    metadata: message.metadata ? sanitizeIpcPayload(message.metadata) : undefined,
+    metadata: sanitizedMetadata,
   };
 };
 
@@ -470,6 +504,7 @@ let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let coworkRunner: CoworkRunner | null = null;
 let skillManager: SkillManager | null = null;
+let mcpStore: McpStore | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let scheduledTaskStore: ScheduledTaskStore | null = null;
 let scheduler: Scheduler | null = null;
@@ -513,9 +548,38 @@ const getCoworkRunner = () => {
   if (!coworkRunner) {
     coworkRunner = new CoworkRunner(getCoworkStore());
 
+    // Provide MCP server configuration to the runner
+    coworkRunner.setMcpServerProvider(() => {
+      return getMcpStore().getEnabledServers();
+    });
+
     // Set up event listeners to forward to renderer
     coworkRunner.on('message', (sessionId: string, message: any) => {
+      // Debug: log user messages with metadata to trace imageAttachments
+      if (message?.type === 'user') {
+        const meta = message.metadata;
+        console.log('[main] coworkRunner message event (user)', {
+          sessionId,
+          messageId: message.id,
+          hasMetadata: !!meta,
+          metadataKeys: meta ? Object.keys(meta) : [],
+          hasImageAttachments: !!(meta?.imageAttachments),
+          imageAttachmentsCount: Array.isArray(meta?.imageAttachments) ? meta.imageAttachments.length : 0,
+          imageAttachmentsBase64Lengths: Array.isArray(meta?.imageAttachments) ? meta.imageAttachments.map((a: any) => a?.base64Data?.length ?? 0) : [],
+        });
+      }
       const safeMessage = sanitizeCoworkMessageForIpc(message);
+      // Debug: check sanitized result
+      if (message?.type === 'user') {
+        const safeMeta = safeMessage?.metadata;
+        console.log('[main] sanitized user message', {
+          hasMetadata: !!safeMeta,
+          metadataKeys: safeMeta ? Object.keys(safeMeta) : [],
+          hasImageAttachments: !!(safeMeta?.imageAttachments),
+          imageAttachmentsCount: Array.isArray(safeMeta?.imageAttachments) ? safeMeta.imageAttachments.length : 0,
+          imageAttachmentsBase64Lengths: Array.isArray(safeMeta?.imageAttachments) ? safeMeta.imageAttachments.map((a: any) => a?.base64Data?.length ?? 0) : [],
+        });
+      }
       const windows = BrowserWindow.getAllWindows();
       windows.forEach(win => {
         if (!win.isDestroyed()) {
@@ -585,6 +649,14 @@ const getSkillManager = () => {
     skillManager = new SkillManager(getStore);
   }
   return skillManager;
+};
+
+const getMcpStore = () => {
+  if (!mcpStore) {
+    const sqliteStore = getStore();
+    mcpStore = new McpStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction());
+  }
+  return mcpStore;
 };
 
 const getIMGatewayManager = () => {
@@ -892,6 +964,46 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('log:exportZip', async (event) => {
+    try {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const saveOptions = {
+        title: 'Export Logs',
+        defaultPath: path.join(app.getPath('downloads'), buildLogExportFileName()),
+        filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
+      };
+
+      const saveResult = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+        : await dialog.showSaveDialog(saveOptions);
+
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: true, canceled: true };
+      }
+
+      const outputPath = ensureZipFileName(saveResult.filePath);
+      const archiveResult = await exportLogsZip({
+        outputPath,
+        entries: [
+          { archiveName: 'main.log', filePath: getLogFilePath() },
+          { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
+        ],
+      });
+
+      return {
+        success: true,
+        canceled: false,
+        path: outputPath,
+        missingEntries: archiveResult.missingEntries,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export logs',
+      };
+    }
+  });
+
   // Auto-launch IPC handlers
   // Use SQLite store as the source of truth for UI state, because
   // app.getLoginItemSettings() returns unreliable values on macOS and
@@ -1164,6 +1276,71 @@ if (!gotTheLock) {
     } catch (error) {
       console.error('[workflow:copyToProject] Error:', error);
       return { success: false, error: String(error) };
+  // MCP Server IPC handlers
+  ipcMain.handle('mcp:list', () => {
+    try {
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to list MCP servers' };
+    }
+  });
+
+  ipcMain.handle('mcp:create', (_event, data: {
+    name: string;
+    description: string;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }) => {
+    try {
+      getMcpStore().createServer(data as any);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to create MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:update', (_event, id: string, data: {
+    name?: string;
+    description?: string;
+    transportType?: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }) => {
+    try {
+      getMcpStore().updateServer(id, data as any);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to update MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:delete', (_event, id: string) => {
+    try {
+      getMcpStore().deleteServer(id);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:setEnabled', (_event, options: { id: string; enabled: boolean }) => {
+    try {
+      getMcpStore().setEnabled(options.id, options.enabled);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to update MCP server' };
     }
   });
 
@@ -1174,6 +1351,7 @@ if (!gotTheLock) {
     systemPrompt?: string;
     title?: string;
     activeSkillIds?: string[];
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
   }) => {
     try {
       const coworkStoreInstance = getCoworkStore();
@@ -1205,10 +1383,19 @@ if (!gotTheLock) {
       // Update session status to 'running' before starting async task
       // This ensures the frontend receives the correct status immediately
       coworkStoreInstance.updateSession(session.id, { status: 'running' });
+
+      // Build metadata, include imageAttachments if present
+      const messageMetadata: Record<string, unknown> = {};
+      if (options.activeSkillIds?.length) {
+        messageMetadata.skillIds = options.activeSkillIds;
+      }
+      if (options.imageAttachments?.length) {
+        messageMetadata.imageAttachments = options.imageAttachments;
+      }
       coworkStoreInstance.addMessage(session.id, {
         type: 'user',
         content: options.prompt,
-        metadata: options.activeSkillIds?.length ? { skillIds: options.activeSkillIds } : undefined,
+        metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
 
       // Start the session asynchronously (skip initial user message since we already added it)
@@ -1217,6 +1404,7 @@ if (!gotTheLock) {
         skillIds: options.activeSkillIds,
         workspaceRoot: selectedWorkspaceRoot,
         confirmationMode: 'modal',
+        imageAttachments: options.imageAttachments,
       }).catch(error => {
         console.error('Cowork session error:', error);
       });
@@ -1239,10 +1427,21 @@ if (!gotTheLock) {
     prompt: string;
     systemPrompt?: string;
     activeSkillIds?: string[];
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
   }) => {
     try {
+      console.log('[main] cowork:session:continue handler', {
+        sessionId: options.sessionId,
+        hasImageAttachments: !!options.imageAttachments,
+        imageAttachmentsCount: options.imageAttachments?.length ?? 0,
+        imageAttachmentsNames: options.imageAttachments?.map(a => a.name),
+      });
       const runner = getCoworkRunner();
-      runner.continueSession(options.sessionId, options.prompt, { systemPrompt: options.systemPrompt, skillIds: options.activeSkillIds }).catch(error => {
+      runner.continueSession(options.sessionId, options.prompt, {
+        systemPrompt: options.systemPrompt,
+        skillIds: options.activeSkillIds,
+        imageAttachments: options.imageAttachments,
+      }).catch(error => {
         console.error('Cowork continue error:', error);
       });
 
@@ -1971,6 +2170,49 @@ if (!gotTheLock) {
     }
   );
 
+  // Read a local file as a data URL (data:<mime>;base64,...)
+  const MAX_READ_AS_DATA_URL_BYTES = 20 * 1024 * 1024;
+  const MIME_BY_EXT: Record<string, string> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.svg': 'image/svg+xml',
+  };
+  ipcMain.handle(
+    'dialog:readFileAsDataUrl',
+    async (_event, filePath?: string): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
+      try {
+        if (typeof filePath !== 'string' || !filePath.trim()) {
+          return { success: false, error: 'Missing file path' };
+        }
+        const resolvedPath = path.resolve(filePath.trim());
+        const stat = await fs.promises.stat(resolvedPath);
+        if (!stat.isFile()) {
+          return { success: false, error: 'Not a file' };
+        }
+        if (stat.size > MAX_READ_AS_DATA_URL_BYTES) {
+          return {
+            success: false,
+            error: `File too large (max ${Math.floor(MAX_READ_AS_DATA_URL_BYTES / (1024 * 1024))}MB)`,
+          };
+        }
+        const buffer = await fs.promises.readFile(resolvedPath);
+        const ext = path.extname(resolvedPath).toLowerCase();
+        const mimeType = MIME_BY_EXT[ext] || 'application/octet-stream';
+        const base64 = buffer.toString('base64');
+        return { success: true, dataUrl: `data:${mimeType};base64,${base64}` };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to read file',
+        };
+      }
+    }
+  );
+
   // Shell handlers - 打开文件/文件夹
   ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
     try {
@@ -2486,6 +2728,17 @@ if (!gotTheLock) {
       console.log('[Main] initApp: syncBundledSkillsToUserData done');
     } catch (error) {
       console.error('[Main] initApp: syncBundledSkillsToUserData failed:', error);
+    }
+
+    try {
+      const runtimeResult = await ensurePythonRuntimeReady();
+      if (!runtimeResult.success) {
+        console.error('[Main] initApp: ensurePythonRuntimeReady failed:', runtimeResult.error);
+      } else {
+        console.log('[Main] initApp: ensurePythonRuntimeReady done');
+      }
+    } catch (error) {
+      console.error('[Main] initApp: ensurePythonRuntimeReady threw:', error);
     }
 
     try {
