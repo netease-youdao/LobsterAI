@@ -109,16 +109,8 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
   }, [agents, dispatch, selectedAgentId]);
 
   const initialEdges: Edge[] = useMemo(() => {
-    // Track which node-pairs already have a forward edge to detect bidirectional connections
-    const edgePairs = new Set<string>();
-    // First pass: collect all directed pairs
-    connections.forEach((conn: WorkflowConnectionType) => {
-      edgePairs.add(`${conn.sourceAgentId}->${conn.targetAgentId}`);
-    });
-
-    // Track handle usage per node
-    const usedSourceHandles = new Map<string, Set<string>>();
-    const usedTargetHandles = new Map<string, Set<string>>();
+    // Track processed directed pairs to detect reverse/bidirectional edges
+    const processedPairs = new Set<string>();
 
     return connections
       .map((conn: WorkflowConnectionType) => {
@@ -145,22 +137,16 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
 
           const dx = targetCX - sourceCX;
           const dy = targetCY - sourceCY;
-
-          // Check if there's a reverse edge (B→A exists while we're processing A→B)
-          const reverseKey = `${conn.targetAgentId}->${conn.sourceAgentId}`;
-          const isBidirectional = edgePairs.has(reverseKey);
-
-          // Determine primary and secondary axes
           const primaryIsHorizontal = Math.abs(dx) > Math.abs(dy);
 
-          // For bidirectional edges, use the "secondary" (smaller delta) axis so edges don't overlap
-          // The first edge processed gets the primary axis, the second gets secondary
-          const usedSrc = usedSourceHandles.get(conn.sourceAgentId) || new Set();
+          // Check if the reverse pair was already processed (i.e., this is the second edge between these two nodes)
+          const pairKey = `${conn.sourceAgentId}<->${conn.targetAgentId}`;
+          const reversePairKey = `${conn.targetAgentId}<->${conn.sourceAgentId}`;
+          const isReverseEdge = processedPairs.has(reversePairKey);
 
-          if (primaryIsHorizontal) {
-            // Primary axis is horizontal (left/right)
-            if (!isBidirectional || !usedSrc.has(sourceHandle)) {
-              // Use horizontal (primary)
+          if (!isReverseEdge) {
+            // FORWARD EDGE: use the natural axis based on node positions
+            if (primaryIsHorizontal) {
               if (dx > 0) {
                 sourceHandle = 'source-right';
                 targetHandle = 'target-left';
@@ -169,8 +155,7 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
                 targetHandle = 'target-right';
               }
             } else {
-              // Reverse edge: use vertical (secondary) to avoid overlap
-              if (dy >= 0) {
+              if (dy > 0) {
                 sourceHandle = 'source-bottom';
                 targetHandle = 'target-top';
               } else {
@@ -179,49 +164,31 @@ const WorkflowCanvas: React.FC<WorkflowCanvasProps> = ({ focusAgentId, onShowSki
               }
             }
           } else {
-            // Primary axis is vertical (top/bottom)
-            if (!isBidirectional || !usedSrc.has(sourceHandle)) {
-              // Use vertical (primary)
-              if (dy > 0) {
-                sourceHandle = 'source-bottom';
+            // REVERSE EDGE: use the SAME side on both source and target
+            // This creates a separate arc that doesn't overlap with the forward edge
+            if (primaryIsHorizontal) {
+              // Forward went left/right, so reverse goes via top or bottom
+              // Pick top if source is above target, bottom otherwise
+              if (sourceCY <= targetCY) {
+                sourceHandle = 'source-top';
                 targetHandle = 'target-top';
               } else {
-                sourceHandle = 'source-top';
+                sourceHandle = 'source-bottom';
                 targetHandle = 'target-bottom';
               }
             } else {
-              // Reverse edge: use horizontal (secondary) to avoid overlap
-              if (dx >= 0) {
-                sourceHandle = 'source-right';
+              // Forward went top/bottom, so reverse goes via left or right
+              if (sourceCX <= targetCX) {
+                sourceHandle = 'source-left';
                 targetHandle = 'target-left';
               } else {
-                sourceHandle = 'source-left';
+                sourceHandle = 'source-right';
                 targetHandle = 'target-right';
               }
             }
           }
 
-          // If the chosen handle is already taken, find an alternative
-          const usedTgt = usedTargetHandles.get(conn.targetAgentId) || new Set();
-          const allSides = ['top', 'bottom', 'left', 'right'];
-
-          if (usedSrc.has(sourceHandle)) {
-            for (const side of allSides) {
-              const alt = `source-${side}`;
-              if (!usedSrc.has(alt)) { sourceHandle = alt; break; }
-            }
-          }
-          if (usedTgt.has(targetHandle)) {
-            for (const side of allSides) {
-              const alt = `target-${side}`;
-              if (!usedTgt.has(alt)) { targetHandle = alt; break; }
-            }
-          }
-
-          usedSrc.add(sourceHandle);
-          usedTgt.add(targetHandle);
-          usedSourceHandles.set(conn.sourceAgentId, usedSrc);
-          usedTargetHandles.set(conn.targetAgentId, usedTgt);
+          processedPairs.add(pairKey);
         }
 
         return {
