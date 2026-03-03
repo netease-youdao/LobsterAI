@@ -50,13 +50,9 @@ export interface McpRegistryEntry {
 }
 
 export type McpCategory =
-  | 'filesystem'
   | 'search'
   | 'browser'
-  | 'database'
   | 'developer'
   | 'productivity'
-  | 'data-api'
-  | 'memory'
-  | 'reasoning'
-  | 'cloud';
+  | 'design'
+  | 'data-api';
