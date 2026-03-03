@@ -14,6 +14,7 @@ __pycache__/
 sandbox/image/out/
 sandbox/image/publish/
 sandbox/image/.work/
+.work/
 sandbox/runtime/out/
 sandbox/runtime-darwin-*/
 

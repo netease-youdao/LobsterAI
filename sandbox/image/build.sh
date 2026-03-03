@@ -191,6 +191,7 @@ EOF_REPO
     util-linux \
     e2fsprogs \
     kmod \
+    mdev-conf \
     nodejs \
     npm \
     bash \
@@ -243,15 +244,38 @@ EOF_REPO
     fi
   fi
 
+  # Ensure essential boot services are in the correct runlevels.
+  # Keep the list minimal for fast boot — agentd needs to start quickly.
+  ${SUDO} mkdir -p "${rootfs}/etc/runlevels/sysinit" "${rootfs}/etc/runlevels/boot" "${rootfs}/etc/runlevels/default"
+
+  # sysinit: device management (provides /dev and the 'dev' virtual service)
+  for svc in devfs dmesg mdev; do
+    if [ -f "${rootfs}/etc/init.d/${svc}" ]; then
+      ${SUDO} ln -sf "/etc/init.d/${svc}" "${rootfs}/etc/runlevels/sysinit/${svc}"
+    fi
+  done
+
+  # boot: kernel modules (needed for virtio drivers)
+  for svc in modules; do
+    if [ -f "${rootfs}/etc/init.d/${svc}" ]; then
+      ${SUDO} ln -sf "/etc/init.d/${svc}" "${rootfs}/etc/runlevels/boot/${svc}"
+    fi
+  done
+
+  # default: networking (for API calls) and agentd
+  for svc in networking; do
+    if [ -f "${rootfs}/etc/init.d/${svc}" ]; then
+      ${SUDO} ln -sf "/etc/init.d/${svc}" "${rootfs}/etc/runlevels/default/${svc}"
+    fi
+  done
+
   # Ensure agentd starts on boot.
   if [ -f "${rootfs}/etc/init.d/agentd" ]; then
     ${SUDO} chroot "${rootfs}" /bin/sh -c "rc-update add agentd default" || true
   fi
   # Ensure agentd is linked into runlevels even if rc-update isn't available.
   if [ -f "${rootfs}/etc/init.d/agentd" ]; then
-    ${SUDO} mkdir -p "${rootfs}/etc/runlevels/default" "${rootfs}/etc/runlevels/boot"
     ${SUDO} ln -sf /etc/init.d/agentd "${rootfs}/etc/runlevels/default/agentd"
-    ${SUDO} ln -sf /etc/init.d/agentd "${rootfs}/etc/runlevels/boot/agentd"
   fi
 
   cleanup_mounts "${rootfs}"
