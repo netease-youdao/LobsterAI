@@ -328,7 +328,7 @@ interface ActiveSession {
   sandboxSkillsGuestPath?: string;
   sandboxSkillMounts?: Record<string, { tag: string; guestPath: string }>;
   /** Resolve callback for the current sandbox turn; called by the result event handler. */
-  sandboxTurnResolve?: (result: { status: 'ok' } | { status: 'error'; message: string; hvfDenied: boolean }) => void;
+  sandboxTurnResolve?: (result: { status: 'ok' } | { status: 'error'; message: string; hvfDenied: boolean; memoryFailed: boolean }) => void;
   /** When true, auto-approve all tool permissions (for scheduled tasks) */
   autoApprove?: boolean;
 }
@@ -2884,7 +2884,7 @@ export class CoworkRunner extends EventEmitter {
     // If there's already a running sandbox VM with IPC bridge, send a
     // continuation request to the same VM instead of spawning a new one.
     if (hasActiveSandboxVm) {
-      await this.continueSandboxTurn(activeSession, effectivePrompt, resolvedCwd, systemPrompt);
+      await this.continueSandboxTurn(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
       return;
     }
 
@@ -2931,7 +2931,7 @@ export class CoworkRunner extends EventEmitter {
         platform: sandboxReady.runtimeInfo.platform,
         arch: sandboxReady.runtimeInfo.arch,
       });
-      await this.runClaudeCodeInSandbox(activeSession, sandboxPrompt, resolvedCwd, systemPrompt, sandboxReady.runtimeInfo);
+      await this.runClaudeCodeInSandbox(activeSession, sandboxPrompt, resolvedCwd, systemPrompt, sandboxReady.runtimeInfo, imageAttachments);
       // If the sandbox VM is still alive, keep the activeSession for multi-turn continuation.
       // Otherwise (VM exited), clean up.
       if (!activeSession.sandboxProcess || activeSession.sandboxProcess.killed) {
@@ -2961,7 +2961,8 @@ export class CoworkRunner extends EventEmitter {
     prompt: string,
     cwd: string,
     systemPrompt: string,
-    runtimeInfo: SandboxRuntimeInfo
+    runtimeInfo: SandboxRuntimeInfo,
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
   ): Promise<void> {
     const { sessionId, abortController } = activeSession;
 
@@ -3028,6 +3029,10 @@ export class CoworkRunner extends EventEmitter {
       mounts,
     };
 
+    if (imageAttachments && imageAttachments.length > 0) {
+      input.imageAttachments = imageAttachments;
+    }
+
     // NOTE: Do NOT pass activeSession.claudeSessionId here.  This method always
     // starts a fresh VM, so any previous SDK session ID (e.g. from a prior app
     // run stored in the DB) is unreachable by the new VM process.  Continuation
@@ -3044,18 +3049,36 @@ export class CoworkRunner extends EventEmitter {
     const isHvfDenied = (message: string) => message.includes('HV_DENIED');
     const isWhpxFailed = (message: string) =>
       /WHPX|whpx/.test(message) && /fail|error|not.*support|unavailable/i.test(message);
+    const isMemoryAllocationFailed = (message: string) =>
+      message.includes('cannot set up guest memory');
 
     const runOnce = async (
       accelOverride?: string | null,
-      launcherOverride?: 'direct' | 'launchctl'
-    ): Promise<{ status: 'ok' } | { status: 'error'; message: string; hvfDenied: boolean }> => {
+      launcherOverride?: 'direct' | 'launchctl',
+      memoryMb?: number,
+    ): Promise<{ status: 'ok' } | { status: 'error'; message: string; hvfDenied: boolean; memoryFailed: boolean }> => {
       if (this.isSessionStopRequested(sessionId, activeSession)) {
         this.store.updateSession(sessionId, { status: 'idle' });
         return { status: 'ok' };
       }
       const startTime = Date.now();
       const accelMode = accelOverride ?? (process.platform === 'darwin' ? 'hvf' : process.platform === 'win32' ? 'whpx' : 'default');
-      console.log(`Starting sandbox VM with acceleration: ${accelMode}, launcher: ${launcherOverride ?? 'direct'}`);
+      console.log(`Starting sandbox VM with acceleration: ${accelMode}, launcher: ${launcherOverride ?? 'direct'}, memory: ${memoryMb ?? 4096}MB`);
+
+      // Remove stale serial.log from previous attempt to avoid Windows file-lock conflicts
+      const serialLogPath = path.join(paths.ipcDir, 'serial.log');
+      try {
+        fs.unlinkSync(serialLogPath);
+        coworkLog('INFO', 'runSandbox', 'Removed stale serial.log');
+      } catch (e) {
+        // File may not exist (first attempt) or still locked (process not yet exited)
+        const code = e && typeof e === 'object' && 'code' in e ? (e as { code: string }).code : '';
+        if (code && code !== 'ENOENT') {
+          coworkLog('WARN', 'runSandbox', `Failed to remove serial.log: ${code}`, {
+            serialLogPath,
+          });
+        }
+      }
 
       // On Windows, allocate a TCP port for virtio-serial IPC bridge
       let ipcPort: number | undefined;
@@ -3065,7 +3088,7 @@ export class CoworkRunner extends EventEmitter {
           console.log(`Allocated IPC port ${ipcPort} for virtio-serial bridge`);
         } catch (error) {
           const message = `Failed to allocate IPC port: ${error instanceof Error ? error.message : String(error)}`;
-          return { status: 'error', message, hvfDenied: false };
+          return { status: 'error', message, hvfDenied: false, memoryFailed: false };
         }
       }
 
@@ -3079,10 +3102,11 @@ export class CoworkRunner extends EventEmitter {
           accelOverride,
           launcher: launcherOverride,
           ipcPort,
+          memoryMb,
         });
       } catch (error) {
         const message = formatSandboxSpawnError(error, runtimeInfo);
-        return { status: 'error', message, hvfDenied: isHvfDenied(message) };
+        return { status: 'error', message, hvfDenied: isHvfDenied(message), memoryFailed: false };
       }
 
       console.log(`Sandbox VM spawned in ${Date.now() - startTime}ms`);
@@ -3208,9 +3232,12 @@ export class CoworkRunner extends EventEmitter {
             console.log(`IPC bridge connected on port ${ipcPort}`);
           } catch (error) {
             bridge.close();
-            // Check if QEMU stderr reveals acceleration failure (WHPX/Hyper-V not available)
+            // Kill the QEMU process to release serial.log file lock before retry
+            try { child.kill('SIGKILL'); } catch { /* ignore */ }
+            // Check if QEMU stderr reveals acceleration or memory failure
             const stderrSnippet = stderrBuffer.trim();
             const accelFailed = isHvfDenied(stderrSnippet) || isWhpxFailed(stderrSnippet);
+            const memFailed = isMemoryAllocationFailed(stderrSnippet);
             let message = `Failed to connect IPC bridge: ${error instanceof Error ? error.message : String(error)}`;
             if (stderrSnippet) {
               message += `\nQEMU stderr: ${stderrSnippet.slice(-1000)}`;
@@ -3220,14 +3247,16 @@ export class CoworkRunner extends EventEmitter {
               errorMessage: error instanceof Error ? error.message : String(error),
               qemuStderr: stderrSnippet.slice(-2000) || '(empty)',
               accelFailed,
+              memoryFailed: memFailed,
               processExited: child.killed || !child.pid,
             });
-            return { status: 'error', message, hvfDenied: accelFailed };
+            return { status: 'error', message, hvfDenied: accelFailed, memoryFailed: memFailed };
           }
         }
 
         // Wait for the VM to be ready before sending requests
-        const vmReady = await this.waitForVmReady(paths.ipcDir, child, 60000);
+        // Use longer timeout (180s) to allow for slower boot in TCG/software emulation mode
+        const vmReady = await this.waitForVmReady(paths.ipcDir, child, 180000);
         if (!vmReady) {
           const stderrSnippet = stderrBuffer.trim();
           let message = 'VM failed to become ready';
@@ -3238,16 +3267,24 @@ export class CoworkRunner extends EventEmitter {
           try {
             const serialLog = fs.readFileSync(path.join(paths.ipcDir, 'serial.log'), 'utf8').trim();
             if (serialLog) {
-              message += `\nSerial log (last 500 chars): ${serialLog.slice(-500)}`;
+              message += `\nSerial log (last 1500 chars): ${serialLog.slice(-1500)}`;
             }
           } catch { /* serial log may not exist */ }
           const accelFailed = isHvfDenied(stderrSnippet) || isWhpxFailed(stderrSnippet);
+          const memFailed = isMemoryAllocationFailed(stderrSnippet);
           coworkLog('ERROR', 'runSandbox', 'VM failed to become ready', {
             elapsed: Date.now() - startTime,
             qemuStderr: stderrSnippet.slice(-2000) || '(empty)',
             accelFailed,
+            memoryFailed: memFailed,
           });
-          return { status: 'error', message, hvfDenied: accelFailed };
+          // Kill the QEMU process and close IPC bridge to release serial.log file lock before retry
+          try { child.kill('SIGKILL'); } catch { /* ignore */ }
+          if (activeSession.ipcBridge) {
+            try { activeSession.ipcBridge.close(); } catch { /* ignore */ }
+            activeSession.ipcBridge = undefined;
+          }
+          return { status: 'error', message, hvfDenied: accelFailed, memoryFailed: memFailed };
         }
 
         if (this.isSessionStopRequested(sessionId, activeSession)) {
@@ -3324,7 +3361,7 @@ export class CoworkRunner extends EventEmitter {
             activeSession.sandboxProcess = undefined;
             activeSession.sandboxIpcDir = undefined;
             const message = formatSandboxSpawnError(error, runtimeInfo);
-            resolve({ status: 'error', message, hvfDenied: isHvfDenied(message) });
+            resolve({ status: 'error', message, hvfDenied: isHvfDenied(message), memoryFailed: isMemoryAllocationFailed(message) });
           });
 
           child.on('close', (code) => {
@@ -3347,7 +3384,7 @@ export class CoworkRunner extends EventEmitter {
 
             if (code !== 0) {
               const message = stderrBuffer.trim() || `Sandbox VM exited with code ${code}`;
-              resolve({ status: 'error', message, hvfDenied: isHvfDenied(message) });
+              resolve({ status: 'error', message, hvfDenied: isHvfDenied(message), memoryFailed: isMemoryAllocationFailed(message) });
               return;
             }
 
@@ -3421,20 +3458,46 @@ export class CoworkRunner extends EventEmitter {
 
     let accelOverride: string | null | undefined;
     let launcherOverride: 'direct' | 'launchctl' | undefined;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      coworkLog('INFO', 'runSandbox', `Sandbox attempt ${attempt + 1}/3`, {
+    let memoryMb: number | undefined;
+    const MEMORY_FALLBACK_STEPS = [2048, 1024];
+    let memoryFallbackIndex = 0;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      // Wait briefly between retries for the previous QEMU process to fully exit
+      // and release file locks (especially serial.log on Windows)
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      coworkLog('INFO', 'runSandbox', `Sandbox attempt ${attempt + 1}/5`, {
         accelOverride: accelOverride ?? 'default',
         launcher: launcherOverride ?? 'direct',
+        memoryMb: memoryMb ?? 4096,
       });
-      const result = await runOnce(accelOverride, launcherOverride);
+      const result = await runOnce(accelOverride, launcherOverride, memoryMb);
       if (result.status === 'ok') {
         return;
       }
 
       coworkLog('WARN', 'runSandbox', `Sandbox attempt ${attempt + 1} failed`, {
         hvfDenied: result.hvfDenied,
+        memoryFailed: result.memoryFailed,
         message: result.message.slice(0, 500),
       });
+
+      // Memory allocation failure — retry with reduced memory
+      if (result.memoryFailed && memoryFallbackIndex < MEMORY_FALLBACK_STEPS.length) {
+        const nextMemory = MEMORY_FALLBACK_STEPS[memoryFallbackIndex++];
+        this.addSystemMessage(
+          sessionId,
+          `Sandbox VM failed to allocate memory (${memoryMb ?? 4096}MB). Retrying with ${nextMemory}MB.`
+        );
+        coworkLog('INFO', 'runSandbox', `Memory allocation failed, reducing to ${nextMemory}MB`, {
+          previousMemory: memoryMb ?? 4096,
+          nextMemory,
+        });
+        memoryMb = nextMemory;
+        continue;
+      }
 
       if (result.hvfDenied && launcherOverride !== 'launchctl' && process.platform === 'darwin') {
         this.addSystemMessage(
@@ -3477,7 +3540,8 @@ export class CoworkRunner extends EventEmitter {
     activeSession: ActiveSession,
     prompt: string,
     cwd: string,
-    systemPrompt: string
+    systemPrompt: string,
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
   ): Promise<void> {
     const { sessionId } = activeSession;
 
@@ -3547,6 +3611,10 @@ export class CoworkRunner extends EventEmitter {
       env: sandboxEnv,
       mounts,
     };
+
+    if (imageAttachments && imageAttachments.length > 0) {
+      input.imageAttachments = imageAttachments;
+    }
 
     if (activeSession.claudeSessionId) {
       input.sessionId = activeSession.claudeSessionId;
@@ -4459,6 +4527,7 @@ export class CoworkRunner extends EventEmitter {
 
     // Use shorter polling interval for faster response
     const pollInterval = 100; // 100ms instead of 500ms
+    let heartbeatSeen = false;
 
     // Detect early VM exit so we fail fast instead of waiting the full timeout
     let processExited = false;
@@ -4483,12 +4552,38 @@ export class CoworkRunner extends EventEmitter {
             console.log(`VM is ready, heartbeat received after ${elapsed}ms`);
             return true;
           }
+          // Log heartbeat validation failure details (once)
+          if (!heartbeatSeen) {
+            heartbeatSeen = true;
+            const clockDelta = data.timestamp ? Date.now() - data.timestamp : null;
+            coworkLog('INFO', 'waitForVmReady', 'Heartbeat found but not yet valid', {
+              timestamp: data.timestamp ?? null,
+              ipcMounted: data.ipcMounted ?? null,
+              clockDelta,
+              elapsed: Date.now() - start,
+            });
+          }
         }
       } catch {
         // Not ready yet
       }
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
+
+    // Log final heartbeat state for diagnostics
+    try {
+      if (fs.existsSync(heartbeatPath)) {
+        const content = fs.readFileSync(heartbeatPath, 'utf8');
+        coworkLog('WARN', 'waitForVmReady', 'Timeout reached with heartbeat file present', {
+          heartbeatContent: content.slice(0, 500),
+          elapsed: Date.now() - start,
+        });
+      } else {
+        coworkLog('WARN', 'waitForVmReady', 'Timeout reached with no heartbeat file', {
+          elapsed: Date.now() - start,
+        });
+      }
+    } catch { /* ignore */ }
 
     console.error('VM failed to become ready within timeout');
     return false;

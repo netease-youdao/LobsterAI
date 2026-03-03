@@ -40,7 +40,7 @@ type SandboxCheckResult = { ok: true; runtimeInfo: SandboxRuntimeInfo } | { ok: 
 
 const SANDBOX_BASE_URL = process.env.COWORK_SANDBOX_BASE_URL || '';
 const SANDBOX_RUNTIME_VERSION = process.env.COWORK_SANDBOX_RUNTIME_VERSION || 'v0.1.3';
-const SANDBOX_IMAGE_VERSION = process.env.COWORK_SANDBOX_IMAGE_VERSION || 'v0.1.3';
+const SANDBOX_IMAGE_VERSION = process.env.COWORK_SANDBOX_IMAGE_VERSION || 'v0.1.4';
 
 const SANDBOX_RUNTIME_URL = process.env.COWORK_SANDBOX_RUNTIME_URL;
 const SANDBOX_IMAGE_URL = process.env.COWORK_SANDBOX_IMAGE_URL;
@@ -71,7 +71,7 @@ const DEFAULT_SANDBOX_RUNTIME_URL_DARWIN_AMD64 = 'https://ydhardwarecommon.nosdn
 const DEFAULT_SANDBOX_RUNTIME_URL_WIN32_AMD64 = 'https://ydhardwarecommon.nosdn.127.net/02a016878c4457bd819e11e55b7b6884.gz';
 
 const DEFAULT_SANDBOX_IMAGE_URL_ARM64 = 'https://ydhardwarecommon.nosdn.127.net/59d9df60ce9c0463c54e3043af60cb10.qcow2';
-const DEFAULT_SANDBOX_IMAGE_URL_AMD64 = 'https://ydhardwarecommon.nosdn.127.net/42bf8972948823142f5f5729872c925b.qcow2';
+const DEFAULT_SANDBOX_IMAGE_URL_AMD64 = 'https://ydhardwarebusiness.nosdn.127.net/e5048549c753baa896c9652e3e34f1d3.qcow2';
 
 const downloadState: {
   runtime: Promise<string> | null;
