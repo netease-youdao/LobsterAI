@@ -215,7 +215,7 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
               }`}
           >
             <CubeIcon className="w-3.5 h-3.5" />
-            {i18nService.t('workflowHistory') || 'History'}
+            {i18nService.t('workflowRunHistory') || 'History'}
             {workflowRuns.length > 0 && (
               <span className="ml-1 px-1.5 py-0.5 text-xs bg-claude-accent text-white rounded-full">
                 {workflowRuns.length}
