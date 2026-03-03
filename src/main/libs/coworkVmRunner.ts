@@ -183,9 +183,13 @@ function buildQemuArgs(options: {
   accelOverride?: string | null;
   ipcPort?: number;
   skillsDir?: string;
+  memoryMb?: number;
 }): string[] {
+  const memoryMb = options.memoryMb
+    ?? (process.env.COWORK_SANDBOX_MEMORY ? parseInt(process.env.COWORK_SANDBOX_MEMORY, 10) : null)
+    ?? 4096;
   const args: string[] = [
-    '-m', '4096',
+    '-m', String(memoryMb),
     '-smp', '2',
     '-nographic',
     '-snapshot',
@@ -306,6 +310,7 @@ export function spawnCoworkSandboxVm(options: {
   launcher?: SandboxLauncherMode;
   ipcPort?: number;
   skillsDir?: string;
+  memoryMb?: number;
 }): ChildProcessByStdio<null, Readable, Readable> {
   const args = buildQemuArgs(options);
 
@@ -316,6 +321,7 @@ export function spawnCoworkSandboxVm(options: {
     ipcPort: options.ipcPort ?? null,
     launcher: options.launcher ?? 'direct',
     accelOverride: options.accelOverride ?? null,
+    memoryMb: options.memoryMb ?? null,
     args: args.join(' '),
   });
 
