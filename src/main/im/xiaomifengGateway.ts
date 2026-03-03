@@ -260,6 +260,13 @@ export class XiaomifengGateway extends EventEmitter {
   }
 
   /**
+   * Check if gateway has a pending reconnection timer
+   */
+  isReconnecting(): boolean {
+    return this.reconnectTimer !== null;
+  }
+
+  /**
    * Set message callback
    */
   setMessageCallback(
@@ -330,6 +337,14 @@ export class XiaomifengGateway extends EventEmitter {
    * Start Xiaomifeng gateway using node-nim SDK
    */
   async start(config: XiaomifengConfig): Promise<void> {
+    // Cancel any pending reconnection timer first
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.reconnectAttempts = 0;
+      console.log('[Xiaomifeng Gateway] Cancelled pending reconnection timer');
+    }
+
     if (this.v2Client) {
       throw new Error('Xiaomifeng gateway already running');
     }
@@ -337,6 +352,9 @@ export class XiaomifengGateway extends EventEmitter {
     
     // 重置被踢下线状态，允许手动重新启动
     this.kickedByOtherClient = false;
+    
+    // 清理之前的令牌（重新建连时需要重新获取）
+    this.clearAccessToken();
 
     if (!config.enabled) {
       console.log('[Xiaomifeng Gateway] Xiaomifeng is disabled in config');
@@ -807,6 +825,17 @@ export class XiaomifengGateway extends EventEmitter {
   }
 
   /**
+   * Clear cached access token (used when reconnecting or token validation fails)
+   */
+  private clearAccessToken(): void {
+    if (this.accessToken) {
+      console.log('[Xiaomifeng Gateway] Clearing cached accessToken');
+    }
+    this.accessToken = null;
+    this.tokenExpiry = 0;
+  }
+
+  /**
    * Get access token for HTTP API
    */
   private async getAccessToken(): Promise<string> {
@@ -870,8 +899,9 @@ export class XiaomifengGateway extends EventEmitter {
   /**
    * Send reply through Bee system via HTTP API
    * Automatically splits long messages into chunks (max 3000 characters each)
+   * If token validation fails (code: 1440000), clears token and retries once
    */
-  private async sendBeeReply(chatId: string, text: string): Promise<void> {
+  private async sendBeeReply(chatId: string, text: string, isRetry: boolean = false): Promise<void> {
     if (!this.config?.clientId || !this.config?.secret) {
       throw new Error('HTTP API config incomplete, need clientId and secret');
     }
@@ -941,6 +971,23 @@ export class XiaomifengGateway extends EventEmitter {
         } catch {
           result = responseText;
         }
+
+        // Check for token validation failure (code: 1440000)
+        if (result && result.code === 1440000) {
+          console.warn(`[Xiaomifeng Gateway] Token validation failed (code: 1440000)${chunkInfo}:`, result.message);
+          
+          // If this is already a retry, don't retry again
+          if (isRetry) {
+            throw new Error(`Token validation failed after retry: ${result.message}`);
+          }
+          
+          // Clear token and retry the entire send
+          console.log('[Xiaomifeng Gateway] Clearing token and retrying...');
+          this.clearAccessToken();
+          await this.sendBeeReply(chatId, text, true);
+          return; // Return after successful retry
+        }
+
         this.log(`[Xiaomifeng Gateway] HTTP reply sent successfully${chunkInfo}:`, result);
       } catch (error: any) {
         console.error(`[Xiaomifeng Gateway] Failed to send HTTP reply${chunkInfo}:`, error.message);

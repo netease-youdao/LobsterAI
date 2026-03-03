@@ -488,6 +488,24 @@ export class IMGatewayManager extends EventEmitter {
         });
       }
     }
+
+    // Hot-update Xiaomifeng config: restart if credential fields changed
+    if (config.xiaomifeng && this.xiaomifengGateway) {
+      const oldXmf = previousConfig.xiaomifeng;
+      const newXmf = { ...oldXmf, ...config.xiaomifeng };
+      const credentialsChanged =
+        newXmf.clientId !== oldXmf.clientId ||
+        newXmf.secret !== oldXmf.secret;
+
+      // Check if gateway is connected OR actively reconnecting (has pending timer)
+      const isActiveOrReconnecting = this.xiaomifengGateway.isConnected() || this.xiaomifengGateway.isReconnecting();
+      if (credentialsChanged && isActiveOrReconnecting) {
+        console.log('[IMGatewayManager] Xiaomifeng credentials changed, restarting gateway...');
+        this.restartGateway('xiaomifeng').catch((err) => {
+          console.error('[IMGatewayManager] Failed to restart Xiaomifeng after config change:', err.message);
+        });
+      }
+    }
   }
 
   /**
