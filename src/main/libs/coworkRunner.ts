@@ -1126,6 +1126,62 @@ export class CoworkRunner extends EventEmitter {
     }
   }
 
+  /**
+   * Push staged attachment files from .cowork-temp/attachments/{sessionId}/ to
+   * the sandbox VM via virtio-serial bridge.  On macOS/Linux, attachments are
+   * accessible via 9p mount, so this is only needed on Windows (serial mode).
+   */
+  private pushStagedAttachmentsToSandbox(
+    bridge: VirtioSerialBridge,
+    cwd: string,
+    sessionId: string
+  ): void {
+    const stageRoot = path.join(cwd, SANDBOX_ATTACHMENT_DIR, sessionId);
+    if (!fs.existsSync(stageRoot)) {
+      return;
+    }
+
+    const files: { relativePath: string; data: Buffer }[] = [];
+    const scan = (dir: string, base: string): void => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const relPath = base ? `${base}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          scan(fullPath, relPath);
+        } else if (entry.isFile()) {
+          try {
+            files.push({ relativePath: relPath, data: fs.readFileSync(fullPath) });
+          } catch { /* skip unreadable files */ }
+        }
+      }
+    };
+    scan(stageRoot, '');
+
+    if (files.length === 0) {
+      return;
+    }
+
+    const guestAttachmentDir = `${SANDBOX_ATTACHMENT_DIR.split(path.sep).join('/')}/${sessionId}`;
+    for (const file of files) {
+      bridge.pushFile(
+        SANDBOX_WORKSPACE_GUEST_ROOT,
+        `${guestAttachmentDir}/${file.relativePath}`,
+        file.data
+      );
+    }
+    coworkLog('INFO', 'runSandbox', 'Pushed staged attachments to sandbox', {
+      sessionId,
+      fileCount: files.length,
+      files: files.map((f) => f.relativePath).join(', '),
+    });
+  }
+
   private preparePromptForSandbox(prompt: string, cwd: string, sessionId: string): {
     prompt: string;
     unresolved: string[];
@@ -3343,6 +3399,11 @@ export class CoworkRunner extends EventEmitter {
           });
         }
 
+        // On Windows (serial mode), push staged attachment files into the sandbox
+        if (activeSession.ipcBridge) {
+          this.pushStagedAttachmentsToSandbox(activeSession.ipcBridge, cwd, sessionId);
+        }
+
         const { requestId, streamPath } = buildSandboxRequest(paths, input);
         streamPromise = this.readSandboxStream(streamPath, handleLine, streamAbort.signal);
 
@@ -3622,6 +3683,11 @@ export class CoworkRunner extends EventEmitter {
 
     if (resolvedSystemPrompt) {
       input.systemPrompt = resolvedSystemPrompt;
+    }
+
+    // On Windows (serial mode), push staged attachment files into the sandbox
+    if (activeSession.ipcBridge) {
+      this.pushStagedAttachmentsToSandbox(activeSession.ipcBridge, cwd, sessionId);
     }
 
     const { requestId, streamPath } = buildSandboxRequest(paths, input);
