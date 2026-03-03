@@ -1,4 +1,5 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
+import { i18nService } from '../../services/i18n';
 
 export default function CustomEdge({
     id,
@@ -22,6 +23,7 @@ export default function CustomEdge({
     });
 
     const condition = (data?.condition as string) || '';
+    const localizedCondition = condition ? (i18nService.t(`workflow.${condition}`) || condition) : '';
 
     // Get color based on condition keywords
     const getConditionColor = () => {
@@ -46,7 +48,7 @@ export default function CustomEdge({
                 id={id}
             />
             {/* Read-only condition label (only show if not default "Always") */}
-            {condition && condition !== 'Always' && (
+            {condition && condition !== 'always' && condition !== 'Always' && (
                 <EdgeLabelRenderer>
                     <div
                         style={{
@@ -63,7 +65,7 @@ export default function CustomEdge({
                                 color: edgeColor,
                             }}
                         >
-                            {condition}
+                            {localizedCondition}
                         </span>
                     </div>
                 </EdgeLabelRenderer>
