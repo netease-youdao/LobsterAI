@@ -787,6 +787,14 @@ export class TelegramGateway extends EventEmitter {
     // Emit message event
     this.emit('message', imMessage);
 
+    // Add processing reaction (fire-and-forget)
+    if (ctx.message?.message_id && ctx.chat?.id) {
+      ctx.react('👀').catch((err: any) => {
+        const log = this.config?.debug ? console.log : () => {};
+        log(`[Telegram Gateway] Failed to add reaction: ${err.message}`);
+      });
+    }
+
     // Call message callback if set
     if (this.onMessageCallback) {
       try {
