@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   ArrowUpTrayIcon,
@@ -18,7 +19,6 @@ import { setSkills } from '../../store/slices/skillSlice';
 import { RootState } from '../../store';
 import { Skill, MarketplaceSkill } from '../../types/skill';
 import ErrorMessage from '../ErrorMessage';
-import Tooltip from '../ui/Tooltip';
 
 type SkillTab = 'installed' | 'marketplace';
 
@@ -36,6 +36,8 @@ const SkillsManager: React.FC = () => {
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(false);
   const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
+  const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(null);
+  const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [skillPendingDelete, setSkillPendingDelete] = useState<Skill | null>(null);
   const [isDeletingSkill, setIsDeletingSkill] = useState(false);
 
@@ -375,7 +377,8 @@ const SkillsManager: React.FC = () => {
           filteredSkills.map((skill) => (
             <div
               key={skill.id}
-              className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50"
+              className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50 cursor-pointer"
+              onClick={() => setSelectedSkill(skill)}
             >
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-2 min-w-0">
@@ -390,7 +393,7 @@ const SkillsManager: React.FC = () => {
                   {!skill.isBuiltIn && (
                     <button
                       type="button"
-                      onClick={() => handleRequestDeleteSkill(skill)}
+                      onClick={(e) => { e.stopPropagation(); handleRequestDeleteSkill(skill); }}
                       className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                       title={i18nService.t('deleteSkill')}
                     >
@@ -401,7 +404,7 @@ const SkillsManager: React.FC = () => {
                     className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
                       skill.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
                     }`}
-                    onClick={() => handleToggleSkill(skill.id)}
+                    onClick={(e) => { e.stopPropagation(); handleToggleSkill(skill.id); }}
                   >
                     <div
                       className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
@@ -412,16 +415,9 @@ const SkillsManager: React.FC = () => {
                 </div>
               </div>
 
-              <Tooltip
-                content={skill.description}
-                position="bottom"
-                maxWidth="360px"
-                className="block w-full"
-              >
-                <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                  {skill.description}
-                </p>
-              </Tooltip>
+              <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
+                {skill.description}
+              </p>
 
               <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
                 {skill.isOfficial && (
@@ -462,7 +458,8 @@ const SkillsManager: React.FC = () => {
             {filteredMarketplaceSkills.map((skill) => (
               <div
                 key={skill.id}
-                className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50"
+                className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50 cursor-pointer"
+                onClick={() => setSelectedMarketplaceSkill(skill)}
               >
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex items-center gap-2 min-w-0">
@@ -482,7 +479,7 @@ const SkillsManager: React.FC = () => {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => handleInstallMarketplaceSkill(skill)}
+                        onClick={(e) => { e.stopPropagation(); handleInstallMarketplaceSkill(skill); }}
                         disabled={installingSkillId !== null}
                         className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
@@ -493,16 +490,9 @@ const SkillsManager: React.FC = () => {
                   </div>
                 </div>
 
-                <Tooltip
-                  content={skill.description}
-                  position="bottom"
-                  maxWidth="360px"
-                  className="block w-full"
-                >
-                  <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                    {skill.description}
-                  </p>
-                </Tooltip>
+                <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
+                  {skill.description}
+                </p>
 
                 <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
                   {skill.source?.from && (
@@ -527,7 +517,206 @@ const SkillsManager: React.FC = () => {
         )
       )}
 
-      {skillPendingDelete && (
+      {selectedMarketplaceSkill && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setSelectedMarketplaceSkill(null)}
+        >
+          <div
+            className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
+                  <PuzzlePieceIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-base font-semibold dark:text-claude-darkText text-claude-text truncate">
+                    {selectedMarketplaceSkill.name}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedMarketplaceSkill(null)}
+                className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors flex-shrink-0"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
+              {selectedMarketplaceSkill.description}
+            </p>
+
+            <div className="space-y-2 mb-5">
+              {selectedMarketplaceSkill.version && (
+                <div className="flex items-center text-xs">
+                  <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillDetailVersion')}</span>
+                  <span className="px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium">
+                    v{selectedMarketplaceSkill.version}
+                  </span>
+                </div>
+              )}
+              {selectedMarketplaceSkill.source?.from && (
+                <div className="flex items-center text-xs">
+                  <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillDetailSource')}</span>
+                  <span className="px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium">
+                    {selectedMarketplaceSkill.source.from}
+                  </span>
+                  {selectedMarketplaceSkill.source.author && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium">
+                      {selectedMarketplaceSkill.source.author}
+                    </span>
+                  )}
+                </div>
+              )}
+              {selectedMarketplaceSkill.source?.url && (
+                <div className="flex items-start text-xs">
+                  <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary pt-0.5">URL</span>
+                  <button
+                    type="button"
+                    className="text-claude-accent hover:underline break-all text-left"
+                    onClick={(e) => { e.stopPropagation(); window.electron.shell.openExternal(selectedMarketplaceSkill.source.url); }}
+                  >
+                    {selectedMarketplaceSkill.source.url}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {isSkillInstalled(selectedMarketplaceSkill.id) ? (
+              <div className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-green-500/10 text-green-600 dark:text-green-400 text-sm font-medium">
+                <CheckCircleIcon className="h-4 w-4" />
+                {i18nService.t('skillAlreadyInstalled')}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleInstallMarketplaceSkill(selectedMarketplaceSkill)}
+                disabled={installingSkillId !== null}
+                className="w-full py-2.5 rounded-xl bg-claude-accent text-white text-sm font-medium hover:bg-claude-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+              >
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                {installingSkillId === selectedMarketplaceSkill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
+              </button>
+            )}
+          </div>
+        </div>
+      , document.body)}
+
+      {selectedSkill && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setSelectedSkill(null)}
+        >
+          <div
+            className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
+                  <PuzzlePieceIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-base font-semibold dark:text-claude-darkText text-claude-text truncate">
+                    {selectedSkill.name}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedSkill(null)}
+                className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors flex-shrink-0"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
+              {selectedSkill.description}
+            </p>
+
+            <div className="space-y-2 mb-5">
+              {selectedSkill.isOfficial && (
+                <div className="flex items-center text-xs">
+                  <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillDetailSource')}</span>
+                  <span className="px-1.5 py-0.5 rounded bg-claude-accent/10 text-claude-accent font-medium">
+                    {i18nService.t('official')}
+                  </span>
+                </div>
+              )}
+              {(() => {
+                const mp = marketplaceSkills.find(m => m.id === selectedSkill.id);
+                if (!mp) return null;
+                return (
+                  <>
+                    {mp.source?.from && (
+                      <div className="flex items-center text-xs">
+                        <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillDetailSource')}</span>
+                        <span className="px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium">
+                          {mp.source.from}
+                        </span>
+                        {mp.source.author && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium">
+                            {mp.source.author}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {mp.source?.url && (
+                      <div className="flex items-start text-xs">
+                        <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary pt-0.5">URL</span>
+                        <button
+                          type="button"
+                          className="text-claude-accent hover:underline break-all text-left"
+                          onClick={(e) => { e.stopPropagation(); window.electron.shell.openExternal(mp.source.url); }}
+                        >
+                          {mp.source.url}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="flex items-center justify-between">
+              {!selectedSkill.isBuiltIn ? (
+                <button
+                  type="button"
+                  onClick={() => { setSelectedSkill(null); handleRequestDeleteSkill(selectedSkill); }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-xl text-red-500 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  <TrashIcon className="h-4 w-4" />
+                  {i18nService.t('deleteSkill')}
+                </button>
+              ) : (
+                <div />
+              )}
+              <div
+                className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
+                  selectedSkill.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
+                }`}
+                onClick={() => {
+                  handleToggleSkill(selectedSkill.id);
+                  setSelectedSkill({ ...selectedSkill, enabled: !selectedSkill.enabled });
+                }}
+              >
+                <div
+                  className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
+                    selectedSkill.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                  }`}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      , document.body)}
+
+      {skillPendingDelete && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
           onClick={handleCancelDeleteSkill}
@@ -567,9 +756,9 @@ const SkillsManager: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
-      {isGithubImportOpen && (
+      {isGithubImportOpen && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
           onClick={() => setIsGithubImportOpen(false)}
@@ -627,7 +816,7 @@ const SkillsManager: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 };

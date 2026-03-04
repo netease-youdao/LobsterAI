@@ -21,5 +21,6 @@ export interface MarketplaceSkill {
   source: {
     from: string;           // e.g. "Github"
     url: string;            // Source repo URL
+    author?: string;        // Author name
   };
 }
