@@ -194,6 +194,7 @@ export interface AppConfig {
   app: {
     port: number;
     isDevelopment: boolean;
+    testMode?: boolean;
   };
   // 快捷键配置
   shortcuts?: {
@@ -361,6 +362,7 @@ export const defaultConfig: AppConfig = {
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',
+    testMode: process.env.NODE_ENV === 'development',
   },
   shortcuts: {
     newChat: 'Ctrl+N',

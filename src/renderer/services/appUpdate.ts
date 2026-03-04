@@ -1,9 +1,4 @@
-const UPDATE_CHECK_URL = import.meta.env.DEV
-  ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/update'
-  : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/update';
-const FALLBACK_DOWNLOAD_URL = import.meta.env.DEV
-  ? 'https://lobsterai.inner.youdao.com/#/download-list'
-  : 'https://lobsterai.youdao.com/#/download-list';
+import { getUpdateCheckUrl, getFallbackDownloadUrl } from './endpoints';
 
 export const UPDATE_POLL_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
@@ -84,19 +79,19 @@ const getPlatformDownloadUrl = (value: UpdateValue | undefined): string => {
 
   if (platform === 'darwin') {
     const download = arch === 'arm64' ? value?.macArm : value?.macIntel;
-    return download?.url?.trim() || FALLBACK_DOWNLOAD_URL;
+    return download?.url?.trim() || getFallbackDownloadUrl();
   }
 
   if (platform === 'win32') {
-    return value?.windowsX64?.url?.trim() || FALLBACK_DOWNLOAD_URL;
+    return value?.windowsX64?.url?.trim() || getFallbackDownloadUrl();
   }
 
-  return FALLBACK_DOWNLOAD_URL;
+  return getFallbackDownloadUrl();
 };
 
 export const checkForAppUpdate = async (currentVersion: string): Promise<AppUpdateInfo | null> => {
   const response = await window.electron.api.fetch({
-    url: UPDATE_CHECK_URL,
+    url: getUpdateCheckUrl(),
     method: 'GET',
     headers: {
       Accept: 'application/json',

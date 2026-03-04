@@ -390,6 +390,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const [appVersion, setAppVersion] = useState('');
   const [emailCopied, setEmailCopied] = useState(false);
   const [isExportingLogs, setIsExportingLogs] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [logoClickCount, setLogoClickCount] = useState(0);
+  const [testModeUnlocked, setTestModeUnlocked] = useState(false);
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -525,6 +528,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       setTheme(config.theme);
       setLanguage(config.language);
       setUseSystemProxy(config.useSystemProxy ?? false);
+      const savedTestMode = config.app?.testMode ?? false;
+      setTestMode(savedTestMode);
+      if (savedTestMode) setTestModeUnlocked(true);
 
       // Load auto-launch setting
       window.electron.autoLaunch.get().then(({ enabled }) => {
@@ -1056,6 +1062,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         language,
         useSystemProxy,
         shortcuts,
+        app: {
+          ...configService.getConfig().app,
+          testMode,
+        },
       });
 
       // 应用主题
@@ -2659,7 +2669,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         return (
           <div className="flex min-h-full flex-col items-center pt-6 pb-3">
             {/* Logo & App Name */}
-            <img src="logo.png" alt="LobsterAI" className="w-16 h-16 mb-3" />
+            <img
+              src="logo.png"
+              alt="LobsterAI"
+              className="w-16 h-16 mb-3 cursor-pointer select-none"
+              onClick={() => {
+                const next = logoClickCount + 1;
+                setLogoClickCount(next);
+                if (next >= 10 && !testModeUnlocked) {
+                  setTestModeUnlocked(true);
+                }
+              }}
+            />
             <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
             <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
 
@@ -2690,7 +2711,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   )}
                 </div>
               </div>
-              <div className="flex items-center justify-between px-4 py-3">
+              <div className={`flex items-center justify-between px-4 py-3${testModeUnlocked ? ' border-b border-claude-border dark:border-claude-darkBorder' : ''}`}>
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutUserManual')}</span>
                 <button
                   type="button"
@@ -2703,6 +2724,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   {ABOUT_USER_MANUAL_URL}
                 </button>
               </div>
+              {testModeUnlocked && (
+                <div className="flex items-center justify-between px-4 py-3">
+                  <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('testMode')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={testMode}
+                    onClick={() => setTestMode((prev) => !prev)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                      testMode ? 'bg-claude-accent' : 'bg-gray-300 dark:bg-gray-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        testMode ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Footer */}

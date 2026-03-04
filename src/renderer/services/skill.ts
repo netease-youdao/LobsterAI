@@ -1,8 +1,5 @@
 import { Skill, MarketplaceSkill } from '../types/skill';
-
-const SKILL_STORE_URL = import.meta.env.DEV
-  ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/skill-store'
-  : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/skill-store';
+import { getSkillStoreUrl } from './endpoints';
 
 type EmailConnectivityCheck = {
   code: 'imap_connection' | 'smtp_connection';
@@ -164,7 +161,7 @@ class SkillService {
   }
   async fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
     try {
-      const response = await fetch(SKILL_STORE_URL);
+      const response = await fetch(getSkillStoreUrl());
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
