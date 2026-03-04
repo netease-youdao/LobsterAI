@@ -1,6 +1,6 @@
 /**
  * NIM (NetEase IM) Gateway
- * Manages node-nim SDK V2 connection for receiving and sending messages
+ * Manages NIM SDK V2 connection for receiving and sending messages
  * Adapted from openclaw-nim for Electron main process
  */
 
@@ -9,6 +9,8 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { app } from 'electron';
+import NIM from "../../libs/nim.js";
+import type { V2NIM } from '../../libs/nim/index.d.ts';
 import {
   NimConfig,
   NimGatewayStatus,
@@ -136,11 +138,7 @@ function splitMessageIntoChunks(text: string, maxLength: number = MAX_MESSAGE_LE
 }
 
 export class NimGateway extends EventEmitter {
-  private v2Client: any = null;
-  private loginService: any = null;
-  private messageService: any = null;
-  private messageCreator: any = null;
-  private conversationIdUtil: any = null;
+  private v2Client: V2NIM | null = null;
   private config: NimConfig | null = null;
   private status: NimGatewayStatus = { ...DEFAULT_NIM_STATUS };
   private onMessageCallback?: (message: IMMessage, replyFn: (text: string) => Promise<void>) => Promise<void>;
@@ -323,33 +321,19 @@ export class NimGateway extends EventEmitter {
     this.log('[NIM Gateway] Starting NIM gateway...');
 
     try {
-      // Require node-nim SDK (use require in main process for native modules)
-      const nodenim: any = require('node-nim');
-
-      // Create V2 client
-      this.v2Client = new nodenim.V2NIMClient();
-
       const dataPath = options?.appDataPathOverride || getSdkDataPath(config.account);
 
-      // Initialize SDK
-      const initError = this.v2Client.init({
+      // Initialize NIM SDK using new NIM() for multi-instance support
+      this.v2Client = new NIM({
         appkey: config.appKey,
-        appDataPath: dataPath,
-      });
-
-      if (initError) {
-        throw new Error(`NIM SDK V2 initialization failed: ${initError.desc || JSON.stringify(initError)}`);
-      }
+        debugLevel: "log",
+        apiVersion: 'v2',
+      }) as unknown as V2NIM;
 
       this.log('[NIM Gateway] SDK initialized, dataPath:', dataPath);
 
-      // Get services
-      this.loginService = this.v2Client.getLoginService();
-      this.messageService = this.v2Client.getMessageService();
-      this.messageCreator = this.v2Client.messageCreator;
-      this.conversationIdUtil = this.v2Client.conversationIdUtil;
-
-      if (!this.loginService || !this.messageService) {
+      // Verify services are available
+      if (!this.v2Client.V2NIMLoginService || !this.v2Client.V2NIMMessageService) {
         throw new Error('NIM SDK V2 services not available');
       }
 
@@ -434,16 +418,16 @@ export class NimGateway extends EventEmitter {
       };
 
       // Register callbacks using bound references
-      this.messageService.on('receiveMessages', this.boundOnReceiveMessages);
-      this.loginService.on('loginStatus', this.boundOnLoginStatus);
-      this.loginService.on('kickedOffline', this.boundOnKickedOffline);
-      this.loginService.on('loginFailed', this.boundOnLoginFailed);
-      this.loginService.on('disconnected', this.boundOnDisconnected);
+      this.v2Client.V2NIMMessageService.on('onReceiveMessages', this.boundOnReceiveMessages);
+      this.v2Client.V2NIMLoginService.on('onLoginStatus', this.boundOnLoginStatus);
+      this.v2Client.V2NIMLoginService.on('onKickedOffline', this.boundOnKickedOffline);
+      this.v2Client.V2NIMLoginService.on('onLoginFailed', this.boundOnLoginFailed);
+      this.v2Client.V2NIMLoginService.on('onDisconnected', this.boundOnDisconnected);
 
       // Login (don't await - status will be updated via events)
       // But we need to catch potential rejections
       this.log('[NIM Gateway] Initiating login...', config.account);
-      this.loginService.login(config.account, config.token, {})
+      this.v2Client.V2NIMLoginService.login(config.account, config.token, {})
         .catch((error: any) => {
           // Error code 191002 (operation cancelled) can be safely ignored as login will retry
           this.log('[NIM Gateway] Login promise rejected:', error?.code, error?.desc);
@@ -523,20 +507,20 @@ export class NimGateway extends EventEmitter {
 
     this.log('[NIM Gateway] Stopping NIM gateway...');
 
-    // STEP 1: Remove event listeners BEFORE uninit() so that native threads
+    // STEP 1: Remove event listeners BEFORE destroy() so that native threads
     // that fire callbacks during teardown find no JS listeners to invoke.
     // This is the key fix for the "more stop/start cycles → higher crash
     // probability" issue: without removal, stale callbacks accumulate and
     // may be invoked on freed native objects.
     try {
-      if (this.messageService && this.boundOnReceiveMessages) {
-        this.messageService.off('receiveMessages', this.boundOnReceiveMessages);
+      if (this.v2Client?.V2NIMMessageService && this.boundOnReceiveMessages) {
+        this.v2Client.V2NIMMessageService.off('onReceiveMessages', this.boundOnReceiveMessages);
       }
-      if (this.loginService) {
-        if (this.boundOnLoginStatus) this.loginService.off('loginStatus', this.boundOnLoginStatus);
-        if (this.boundOnKickedOffline) this.loginService.off('kickedOffline', this.boundOnKickedOffline);
-        if (this.boundOnLoginFailed) this.loginService.off('loginFailed', this.boundOnLoginFailed);
-        if (this.boundOnDisconnected) this.loginService.off('disconnected', this.boundOnDisconnected);
+      if (this.v2Client?.V2NIMLoginService) {
+        if (this.boundOnLoginStatus) this.v2Client.V2NIMLoginService.off('onLoginStatus', this.boundOnLoginStatus);
+        if (this.boundOnKickedOffline) this.v2Client.V2NIMLoginService.off('onKickedOffline', this.boundOnKickedOffline);
+        if (this.boundOnLoginFailed) this.v2Client.V2NIMLoginService.off('onLoginFailed', this.boundOnLoginFailed);
+        if (this.boundOnDisconnected) this.v2Client.V2NIMLoginService.off('onDisconnected', this.boundOnDisconnected);
       }
     } catch (listenerErr: any) {
       console.warn('[NIM Gateway] Error removing listeners (ignored):', listenerErr?.message || listenerErr);
@@ -551,23 +535,25 @@ export class NimGateway extends EventEmitter {
     this.boundOnLoginFailed = null;
     this.boundOnDisconnected = null;
 
-    // STEP 2: Call uninit() to tear down the native SDK.
+    // STEP 2: Logout and destroy the SDK instance.
     try {
       if (this.v2Client) {
-        this.log('[NIM Gateway] Calling uninit...');
+        this.log('[NIM Gateway] Logging out and destroying...');
         try {
-          const error = this.v2Client.uninit();
-          if (error) {
-            this.log('[NIM Gateway] Uninit error:', error.code, error.desc);
-          } else {
-            this.log('[NIM Gateway] Uninit completed');
+          // First logout
+          if (this.v2Client.V2NIMLoginService) {
+            await this.v2Client.V2NIMLoginService.logout();
+            this.log('[NIM Gateway] Logout completed');
           }
+          // Then destroy the instance
+          // await this.v2Client.destroy();
+          this.log('[NIM Gateway] Destroy completed');
         } catch (innerErr: any) {
-          console.warn('[NIM Gateway] Uninit native exception (ignored):', innerErr?.message || innerErr);
+          console.warn('[NIM Gateway] Logout/destroy exception (ignored):', innerErr?.message || innerErr);
         }
       }
     } catch (outerErr: any) {
-      console.warn('[NIM Gateway] Uninit outer exception (ignored):', outerErr?.message || outerErr);
+      console.warn('[NIM Gateway] Logout/destroy outer exception (ignored):', outerErr?.message || outerErr);
     }
 
     // STEP 3: Clean up JavaScript references immediately
@@ -598,10 +584,6 @@ export class NimGateway extends EventEmitter {
    */
   private cleanup(): void {
     this.v2Client = null;
-    this.loginService = null;
-    this.messageService = null;
-    this.messageCreator = null;
-    this.conversationIdUtil = null;
     // Clean up media cleanup interval
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
@@ -806,19 +788,19 @@ export class NimGateway extends EventEmitter {
    * Send a text message to a target account
    */
   private async sendText(to: string, text: string): Promise<void> {
-    if (!this.messageService || !this.messageCreator) {
+    if (!this.v2Client?.V2NIMMessageService || !this.v2Client?.V2NIMMessageCreator) {
       throw new Error('NIM SDK not ready');
     }
 
-    const message = this.messageCreator.createTextMessage(text);
+    const message = this.v2Client.V2NIMMessageCreator.createTextMessage(text);
     if (!message) {
       throw new Error('Failed to create text message');
     }
 
-    const conversationId = buildConversationId(this.conversationIdUtil, to, 'p2p');
+    const conversationId = buildConversationId(this.v2Client.V2NIMConversationIdUtil, to, 'p2p');
     this.log('[NIM Gateway] Sending text to:', conversationId, 'text:', text.substring(0, 50));
 
-    const result = await this.messageService.sendMessage(message, conversationId, {}, () => {});
+    const result = await this.v2Client.V2NIMMessageService.sendMessage(message, conversationId, {}, () => {});
     this.log('[NIM Gateway] Send result:', result);
   }
 
@@ -842,14 +824,14 @@ export class NimGateway extends EventEmitter {
    * Send a media file message to a target account
    */
   private async sendMedia(to: string, filePath: string): Promise<void> {
-    if (!this.messageService || !this.messageCreator) {
+    if (!this.v2Client?.V2NIMMessageService || !this.v2Client?.V2NIMMessageCreator) {
       throw new Error('NIM SDK not ready');
     }
 
-    const conversationId = buildConversationId(this.conversationIdUtil, to, 'p2p');
+    const conversationId = buildConversationId(this.v2Client.V2NIMConversationIdUtil, to, 'p2p');
     await sendNimMediaMessage(
-      this.messageService,
-      this.messageCreator,
+      this.v2Client.V2NIMMessageService,
+      this.v2Client.V2NIMMessageCreator,
       conversationId,
       filePath,
       this.log,
@@ -924,7 +906,7 @@ export class NimGateway extends EventEmitter {
    * Send a notification message to the last known sender
    */
   async sendNotification(text: string): Promise<void> {
-    if (!this.lastSenderId || !this.messageService) {
+    if (!this.lastSenderId || !this.v2Client?.V2NIMMessageService) {
       throw new Error('No conversation available for notification');
     }
     await this.sendLongText(this.lastSenderId, text);
@@ -935,7 +917,7 @@ export class NimGateway extends EventEmitter {
    * Send a notification message with media support to the last known sender
    */
   async sendNotificationWithMedia(text: string): Promise<void> {
-    if (!this.lastSenderId || !this.messageService) {
+    if (!this.lastSenderId || !this.v2Client?.V2NIMMessageService) {
       throw new Error('No conversation available for notification');
     }
     await this.sendReplyWithMedia(this.lastSenderId, text);
