@@ -44,7 +44,7 @@ const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSid
         <WindowTitleBar inline />
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
         <div className="max-w-3xl mx-auto px-4 py-6">
           <SkillsManager />
         </div>
