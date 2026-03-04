@@ -1,4 +1,8 @@
-import { Skill } from '../types/skill';
+import { Skill, MarketplaceSkill } from '../types/skill';
+
+const SKILL_STORE_URL = import.meta.env.DEV
+  ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/skill-store'
+  : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/skill-store';
 
 type EmailConnectivityCheck = {
   code: 'imap_connection' | 'smtp_connection';
@@ -156,6 +160,19 @@ class SkillService {
     } catch (error) {
       console.error('Failed to get auto-routing prompt:', error);
       return null;
+    }
+  }
+  async fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
+    try {
+      const response = await fetch(SKILL_STORE_URL);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const json = await response.json();
+      return Array.isArray(json?.data?.value) ? json.data.value : [];
+    } catch (error) {
+      console.error('Failed to fetch marketplace skills:', error);
+      return [];
     }
   }
 }

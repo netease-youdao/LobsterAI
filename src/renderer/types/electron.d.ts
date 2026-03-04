@@ -177,6 +177,24 @@ type CoworkPermissionResult =
       toolUseID?: string;
     };
 
+interface McpServerConfigIPC {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  transportType: 'stdio' | 'sse' | 'http';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  isBuiltIn: boolean;
+  githubUrl?: string;
+  registryId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface IElectronAPI {
   platform: string;
   arch: string;
@@ -199,6 +217,13 @@ interface IElectronAPI {
       config: Record<string, string>
     ) => Promise<{ success: boolean; result?: EmailConnectivityTestResult; error?: string }>;
     onChanged: (callback: () => void) => () => void;
+  };
+  mcp: {
+    list: () => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    create: (data: any) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    update: (id: string, data: any) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    delete: (id: string) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
   };
   api: {
     fetch: (options: {
@@ -314,6 +339,17 @@ interface IElectronAPI {
     cancelDownload: () => Promise<{ success: boolean }>;
     install: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     onDownloadProgress: (callback: (data: AppUpdateDownloadProgress) => void) => () => void;
+  };
+  log: {
+    getPath: () => Promise<string>;
+    openFolder: () => Promise<void>;
+    exportZip: () => Promise<{
+      success: boolean;
+      canceled?: boolean;
+      path?: string;
+      missingEntries?: string[];
+      error?: string;
+    }>;
   };
   im: {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;

@@ -793,6 +793,50 @@ const downloadGithubArchive = async (
   return extractRoot;
 };
 
+const isRemoteZipUrl = (source: string): boolean => {
+  try {
+    const url = new URL(source);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && url.pathname.toLowerCase().endsWith('.zip');
+  } catch {
+    return false;
+  }
+};
+
+const downloadZipUrl = async (zipUrl: string, tempRoot: string): Promise<string> => {
+  const response = await session.defaultSession.fetch(zipUrl, {
+    method: 'GET',
+    headers: { 'User-Agent': 'LobsterAI Skill Downloader' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Download failed (${response.status} ${response.statusText})`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const zipPath = path.join(tempRoot, 'remote-skill.zip');
+  const extractRoot = path.join(tempRoot, 'remote-skill');
+  fs.writeFileSync(zipPath, buffer);
+  fs.mkdirSync(extractRoot, { recursive: true });
+  await extractZip(zipPath, { dir: extractRoot });
+
+  const extractedDirs = fs.readdirSync(extractRoot)
+    .map(entry => path.join(extractRoot, entry))
+    .filter(entryPath => {
+      try {
+        return fs.statSync(entryPath).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+
+  if (extractedDirs.length === 1) {
+    return extractedDirs[0];
+  }
+
+  return extractRoot;
+};
+
 const normalizeGithubSubpath = (value: string): string | null => {
   const trimmed = value.trim().replace(/^\/+|\/+$/g, '');
   if (!trimmed) return null;
@@ -1186,6 +1230,10 @@ export class SkillManager {
             return { success: false, error: 'Skill source must be a directory, zip file, or SKILL.md file' };
           }
         }
+      } else if (isRemoteZipUrl(trimmed)) {
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
+        cleanupPath = tempRoot;
+        localSource = await downloadZipUrl(trimmed, tempRoot);
       } else {
         const normalized = this.normalizeGitSource(trimmed);
         if (!normalized) {

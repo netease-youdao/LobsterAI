@@ -278,9 +278,21 @@ function checkWindowsGitBashHealth(bashPath: string): { ok: boolean; reason?: st
       };
     }
 
-    const output = (result.stdout || '').trim();
-    if (!output.startsWith('/')) {
-      return { ok: false, reason: `unexpected cygpath output: ${output || '(empty)'}` };
+    const stdout = (result.stdout || '').trim();
+    const stderr = (result.stderr || '').trim();
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const lastNonEmptyLine = lines.length > 0 ? lines[lines.length - 1] : '';
+
+    // Some Git Bash builds may print runtime warnings before the actual cygpath
+    // output (for example, missing /dev/shm or /dev/mqueue directories).
+    // Accept the check when the final non-empty line is a valid POSIX path.
+    if (!/^\/[a-zA-Z]\//.test(lastNonEmptyLine)) {
+      const diagnosticStdout = truncateDiagnostic(stdout || '(empty)');
+      const diagnosticStderr = stderr ? `, stderr: ${truncateDiagnostic(stderr)}` : '';
+      return { ok: false, reason: `unexpected cygpath output: ${diagnosticStdout}${diagnosticStderr}` };
     }
 
     return { ok: true };
@@ -607,6 +619,27 @@ function ensureWindowsBashBootstrapPath(env: Record<string, string | undefined>)
 }
 
 /**
+ * Convert a single Windows path to MSYS2/POSIX format.
+ *
+ * When the Windows path contains non-ASCII characters (e.g. Chinese usernames
+ * like C:\Users\中文用户\...), MSYS2's automatic Windows→POSIX conversion may
+ * corrupt the path if it runs before LANG=C.UTF-8 takes effect. Pre-converting
+ * to POSIX format (/c/Users/中文用户/...) bypasses this problematic conversion
+ * because MSYS2 recognises the value as already POSIX and passes it through
+ * directly to its internal wide-char file APIs.
+ */
+function singleWindowsPathToPosix(windowsPath: string): string {
+  if (!windowsPath) return windowsPath;
+  const driveMatch = windowsPath.match(/^([A-Za-z]):[/\\](.*)/);
+  if (driveMatch) {
+    const driveLetter = driveMatch[1].toLowerCase();
+    const rest = driveMatch[2].replace(/\\/g, '/').replace(/\/+$/, '');
+    return `/${driveLetter}${rest ? '/' + rest : ''}`;
+  }
+  return windowsPath.replace(/\\/g, '/');
+}
+
+/**
  * Convert a Windows-format PATH string to MSYS2/POSIX format for git-bash.
  *
  * Windows PATH uses semicolons (;) as delimiters and backslash paths (C:\...),
@@ -758,8 +791,12 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
     if (!env.BASH_ENV) {
       const initScript = ensureWindowsBashUtf8InitScript();
       if (initScript) {
-        env.BASH_ENV = initScript;
-        coworkLog('INFO', 'applyPackagedEnvOverrides', `Set BASH_ENV for UTF-8 console code page: ${initScript}`);
+        // Convert to MSYS2 POSIX format to avoid encoding issues when the
+        // path contains non-ASCII characters (e.g. Chinese Windows username).
+        // MSYS2's automatic Windows→POSIX conversion can corrupt non-ASCII
+        // chars if it runs before LANG=C.UTF-8 takes effect during DLL init.
+        env.BASH_ENV = singleWindowsPathToPosix(initScript);
+        coworkLog('INFO', 'applyPackagedEnvOverrides', `Set BASH_ENV for UTF-8 console code page: ${env.BASH_ENV}`);
       }
     }
 
@@ -935,11 +972,14 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
 
   applyPackagedEnvOverrides(env);
 
-  // Inject SKILLs directory path for skill scripts
-  const skillsRoot = getSkillsRoot();
+  // Inject SKILLs directory path for skill scripts.
+  // On Windows, normalise backslashes to forward slashes so the value is usable
+  // in both Node.js (which accepts forward slashes) and bash (which treats
+  // backslashes as escape characters).
+  const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
   env.SKILLS_ROOT = skillsRoot;
   env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
-  env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+  env.LOBSTERAI_ELECTRON_PATH = process.execPath.replace(/\\/g, '/');
 
   // Inject internal API base URL for skill scripts (e.g. scheduled-task creation)
   const internalApiBaseURL = getInternalApiBaseURL();

@@ -18,10 +18,13 @@ import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
+import { McpStore } from './mcpStore';
 import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
 import { initLogger, getLogFilePath } from './logger';
+import { getCoworkLogPath } from './libs/coworkLogger';
+import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
@@ -96,6 +99,19 @@ const resolveInlineAttachmentDir = (cwd?: string): string => {
 
 const ensurePngFileName = (value: string): string => {
   return value.toLowerCase().endsWith('.png') ? value : `${value}.png`;
+};
+
+const ensureZipFileName = (value: string): string => {
+  return value.toLowerCase().endsWith('.zip') ? value : `${value}.zip`;
+};
+
+const padTwoDigits = (value: number): string => value.toString().padStart(2, '0');
+
+const buildLogExportFileName = (): string => {
+  const now = new Date();
+  const datePart = `${now.getFullYear()}${padTwoDigits(now.getMonth() + 1)}${padTwoDigits(now.getDate())}`;
+  const timePart = `${padTwoDigits(now.getHours())}${padTwoDigits(now.getMinutes())}${padTwoDigits(now.getSeconds())}`;
+  return `lobsterai-logs-${datePart}-${timePart}.zip`;
 };
 
 const truncateIpcString = (value: string, maxChars: number): string => {
@@ -488,6 +504,7 @@ let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let coworkRunner: CoworkRunner | null = null;
 let skillManager: SkillManager | null = null;
+let mcpStore: McpStore | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let scheduledTaskStore: ScheduledTaskStore | null = null;
 let scheduler: Scheduler | null = null;
@@ -530,6 +547,11 @@ const getCoworkStore = () => {
 const getCoworkRunner = () => {
   if (!coworkRunner) {
     coworkRunner = new CoworkRunner(getCoworkStore());
+
+    // Provide MCP server configuration to the runner
+    coworkRunner.setMcpServerProvider(() => {
+      return getMcpStore().getEnabledServers();
+    });
 
     // Set up event listeners to forward to renderer
     coworkRunner.on('message', (sessionId: string, message: any) => {
@@ -627,6 +649,14 @@ const getSkillManager = () => {
     skillManager = new SkillManager(getStore);
   }
   return skillManager;
+};
+
+const getMcpStore = () => {
+  if (!mcpStore) {
+    const sqliteStore = getStore();
+    mcpStore = new McpStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction());
+  }
+  return mcpStore;
 };
 
 const getIMGatewayManager = () => {
@@ -934,6 +964,46 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('log:exportZip', async (event) => {
+    try {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const saveOptions = {
+        title: 'Export Logs',
+        defaultPath: path.join(app.getPath('downloads'), buildLogExportFileName()),
+        filters: [{ name: 'Zip Archive', extensions: ['zip'] }],
+      };
+
+      const saveResult = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+        : await dialog.showSaveDialog(saveOptions);
+
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: true, canceled: true };
+      }
+
+      const outputPath = ensureZipFileName(saveResult.filePath);
+      const archiveResult = await exportLogsZip({
+        outputPath,
+        entries: [
+          { archiveName: 'main.log', filePath: getLogFilePath() },
+          { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
+        ],
+      });
+
+      return {
+        success: true,
+        canceled: false,
+        path: outputPath,
+        missingEntries: archiveResult.missingEntries,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export logs',
+      };
+    }
+  });
+
   // Auto-launch IPC handlers
   // Use SQLite store as the source of truth for UI state, because
   // app.getLoginItemSettings() returns unreliable values on macOS and
@@ -1053,6 +1123,74 @@ if (!gotTheLock) {
     config: Record<string, string>
   ) => {
     return getSkillManager().testEmailConnectivity(skillId, config);
+  });
+
+  // MCP Server IPC handlers
+  ipcMain.handle('mcp:list', () => {
+    try {
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to list MCP servers' };
+    }
+  });
+
+  ipcMain.handle('mcp:create', (_event, data: {
+    name: string;
+    description: string;
+    transportType: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }) => {
+    try {
+      getMcpStore().createServer(data as any);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to create MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:update', (_event, id: string, data: {
+    name?: string;
+    description?: string;
+    transportType?: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  }) => {
+    try {
+      getMcpStore().updateServer(id, data as any);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to update MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:delete', (_event, id: string) => {
+    try {
+      getMcpStore().deleteServer(id);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete MCP server' };
+    }
+  });
+
+  ipcMain.handle('mcp:setEnabled', (_event, options: { id: string; enabled: boolean }) => {
+    try {
+      getMcpStore().setEnabled(options.id, options.enabled);
+      const servers = getMcpStore().listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to update MCP server' };
+    }
   });
 
   // Cowork IPC handlers

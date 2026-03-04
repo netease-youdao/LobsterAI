@@ -430,6 +430,11 @@ export class DiscordGateway extends EventEmitter {
       // Emit message event
       this.emit('message', imMessage);
 
+      // Add processing reaction (fire-and-forget)
+      message.react('👀').catch((err: any) => {
+        this.log(`[Discord Gateway] Failed to add reaction: ${err.message}`);
+      });
+
       // Call message callback if set
       if (this.onMessageCallback) {
         try {

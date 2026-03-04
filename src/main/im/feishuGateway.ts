@@ -312,6 +312,25 @@ export class FeishuGateway extends EventEmitter {
   }
 
   /**
+   * Add a reaction emoji to a message (best-effort, non-blocking)
+   */
+  private async addReaction(messageId: string, emojiType: string): Promise<void> {
+    if (!this.restClient) return;
+    try {
+      const response: any = await this.restClient.request({
+        method: 'POST',
+        url: `/open-apis/im/v1/messages/${messageId}/reactions`,
+        data: { reaction_type: { emoji_type: emojiType } },
+      });
+      if (response.code !== 0) {
+        this.log(`[Feishu Gateway] Failed to add reaction: ${response.msg || response.code}`);
+      }
+    } catch (err: any) {
+      this.log(`[Feishu Gateway] Failed to add reaction: ${err.message}`);
+    }
+  }
+
+  /**
    * Check if message was already processed (deduplication)
    */
   private isMessageProcessed(messageId: string): boolean {
@@ -862,6 +881,9 @@ export class FeishuGateway extends EventEmitter {
 
     // Emit message event
     this.emit('message', message);
+
+    // Add processing reaction (fire-and-forget)
+    this.addReaction(ctx.messageId, 'OnIt').catch(() => {});
 
     // Call message callback if set
     if (this.onMessageCallback) {
