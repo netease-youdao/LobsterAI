@@ -119,6 +119,23 @@ const SkillsManager: React.FC = () => {
     };
   }, [isGithubImportOpen]);
 
+  useEffect(() => {
+    const hasOpenDialog = selectedSkill || selectedMarketplaceSkill;
+    if (!hasOpenDialog) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (selectedSkill) setSelectedSkill(null);
+        if (selectedMarketplaceSkill) setSelectedMarketplaceSkill(null);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [selectedSkill, selectedMarketplaceSkill]);
+
   const filteredSkills = useMemo(() => {
     const query = skillSearchQuery.toLowerCase();
     return skills.filter(skill => {
@@ -640,20 +657,24 @@ const SkillsManager: React.FC = () => {
             </p>
 
             <div className="space-y-2 mb-5">
-              {selectedSkill.isOfficial && (
-                <div className="flex items-center text-xs">
-                  <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillDetailSource')}</span>
-                  <span className="px-1.5 py-0.5 rounded bg-claude-accent/10 text-claude-accent font-medium">
-                    {i18nService.t('official')}
-                  </span>
-                </div>
-              )}
               {(() => {
                 const mp = marketplaceSkills.find(m => m.id === selectedSkill.id);
-                if (!mp) return null;
                 return (
                   <>
-                    {mp.source?.from && (
+                    {selectedSkill.isOfficial && (
+                      <div className="flex items-center text-xs">
+                        <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillDetailSource')}</span>
+                        <span className="px-1.5 py-0.5 rounded bg-claude-accent/10 text-claude-accent font-medium">
+                          {i18nService.t('official')}
+                        </span>
+                        {mp?.source?.author && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium">
+                            {mp.source.author}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {!selectedSkill.isOfficial && mp?.source?.from && (
                       <div className="flex items-center text-xs">
                         <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillDetailSource')}</span>
                         <span className="px-1.5 py-0.5 rounded dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium">
@@ -666,7 +687,7 @@ const SkillsManager: React.FC = () => {
                         )}
                       </div>
                     )}
-                    {mp.source?.url && (
+                    {mp?.source?.url && (
                       <div className="flex items-start text-xs">
                         <span className="w-16 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary pt-0.5">URL</span>
                         <button
