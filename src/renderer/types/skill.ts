@@ -12,10 +12,19 @@ export interface Skill {
   version?: string;       // Skill version from SKILL.md frontmatter
 }
 
+export type LocalizedText = { en: string; zh: string };
+
+export interface LocalSkillInfo {
+  id: string;
+  name: string;
+  description: string | LocalizedText;
+  version: string;
+}
+
 export interface MarketplaceSkill {
   id: string;
   name: string;
-  description: string;
+  description: string | LocalizedText;
   url: string;              // Download URL (.zip)
   version: string;
   source: {

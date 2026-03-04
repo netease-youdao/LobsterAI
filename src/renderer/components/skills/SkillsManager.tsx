@@ -14,7 +14,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
-import { skillService } from '../../services/skill';
+import { skillService, resolveLocalizedText } from '../../services/skill';
 import { setSkills } from '../../store/slices/skillSlice';
 import { RootState } from '../../store';
 import { Skill, MarketplaceSkill } from '../../types/skill';
@@ -140,7 +140,7 @@ const SkillsManager: React.FC = () => {
     const query = skillSearchQuery.toLowerCase();
     return skills.filter(skill => {
       const matchesSearch = skill.name.toLowerCase().includes(query)
-        || skill.description.toLowerCase().includes(query);
+        || skillService.getLocalizedSkillDescription(skill.name, skill.description).toLowerCase().includes(query);
       return matchesSearch;
     });
   }, [skills, skillSearchQuery]);
@@ -149,7 +149,7 @@ const SkillsManager: React.FC = () => {
     const query = skillSearchQuery.toLowerCase();
     return marketplaceSkills.filter(skill => {
       return skill.name.toLowerCase().includes(query)
-        || skill.description.toLowerCase().includes(query);
+        || resolveLocalizedText(skill.description).toLowerCase().includes(query);
     });
   }, [marketplaceSkills, skillSearchQuery]);
 
@@ -433,7 +433,7 @@ const SkillsManager: React.FC = () => {
               </div>
 
               <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                {skill.description}
+                {skillService.getLocalizedSkillDescription(skill.name, skill.description)}
               </p>
 
               <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -508,7 +508,7 @@ const SkillsManager: React.FC = () => {
                 </div>
 
                 <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                  {skill.description}
+                  {resolveLocalizedText(skill.description)}
                 </p>
 
                 <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -564,7 +564,7 @@ const SkillsManager: React.FC = () => {
             </div>
 
             <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
-              {selectedMarketplaceSkill.description}
+              {resolveLocalizedText(selectedMarketplaceSkill.description)}
             </p>
 
             <div className="space-y-2 mb-5">
@@ -653,7 +653,7 @@ const SkillsManager: React.FC = () => {
             </div>
 
             <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
-              {selectedSkill.description}
+              {skillService.getLocalizedSkillDescription(selectedSkill.name, selectedSkill.description)}
             </p>
 
             <div className="space-y-2 mb-5">

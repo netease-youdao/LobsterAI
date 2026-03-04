@@ -1,5 +1,13 @@
-import { Skill, MarketplaceSkill } from '../types/skill';
+import { Skill, MarketplaceSkill, LocalSkillInfo, LocalizedText } from '../types/skill';
 import { getSkillStoreUrl } from './endpoints';
+import { i18nService } from './i18n';
+
+export function resolveLocalizedText(text: string | LocalizedText): string {
+  if (!text) return '';
+  if (typeof text === 'string') return text;
+  const lang = i18nService.getLanguage();
+  return text[lang] || text.en || '';
+}
 
 type EmailConnectivityCheck = {
   code: 'imap_connection' | 'smtp_connection';
@@ -17,6 +25,7 @@ type EmailConnectivityTestResult = {
 class SkillService {
   private skills: Skill[] = [];
   private initialized = false;
+  private localSkillDescriptions: Map<string, string | LocalizedText> = new Map();
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -166,11 +175,24 @@ class SkillService {
         throw new Error(`HTTP ${response.status}`);
       }
       const json = await response.json();
-      return Array.isArray(json?.data?.value) ? json.data.value : [];
+      const value = json?.data?.value;
+      // Store local skill descriptions for i18n lookup
+      const localSkills: LocalSkillInfo[] = Array.isArray(value?.localSkill) ? value.localSkill : [];
+      this.localSkillDescriptions.clear();
+      for (const ls of localSkills) {
+        this.localSkillDescriptions.set(ls.name, ls.description);
+      }
+      return Array.isArray(value?.marketplace) ? value.marketplace : [];
     } catch (error) {
       console.error('Failed to fetch marketplace skills:', error);
       return [];
     }
+  }
+
+  getLocalizedSkillDescription(skillName: string, fallback: string): string {
+    const desc = this.localSkillDescriptions.get(skillName);
+    if (desc == null) return fallback;
+    return resolveLocalizedText(desc);
   }
 }
 
