@@ -6,6 +6,7 @@ const FALLBACK_DOWNLOAD_URL = import.meta.env.DEV
   : 'https://lobsterai.youdao.com/#/download-list';
 
 export const UPDATE_POLL_INTERVAL_MS = 12 * 60 * 60 * 1000;
+export const UPDATE_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
 
 type ChangeLogLang = {
   title?: string;

@@ -16,7 +16,7 @@ import { apiService } from './services/api';
 import { themeService } from './services/theme';
 import { coworkService } from './services/cowork';
 import { scheduledTaskService } from './services/scheduledTask';
-import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS } from './services/appUpdate';
+import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
 import { defaultConfig } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
@@ -448,20 +448,36 @@ const App: React.FC = () => {
     if (!isInitialized) return;
 
     let cancelled = false;
+    let lastCheckTime = 0;
 
-    const checkUpdate = async () => {
+    const maybeCheck = async () => {
       if (cancelled) return;
+      const now = Date.now();
+      if (lastCheckTime > 0 && now - lastCheckTime < UPDATE_POLL_INTERVAL_MS) return;
+      lastCheckTime = now;
       await runUpdateCheck();
     };
 
-    void checkUpdate();
+    // 启动时立即检查
+    void maybeCheck();
+
+    // 心跳：每 30 分钟检测是否距上次检查已超过 12 小时
     const timer = window.setInterval(() => {
-      void checkUpdate();
-    }, UPDATE_POLL_INTERVAL_MS);
+      void maybeCheck();
+    }, UPDATE_HEARTBEAT_INTERVAL_MS);
+
+    // 窗口恢复可见时检测（覆盖休眠唤醒场景）
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void maybeCheck();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [isInitialized, runUpdateCheck]);
 
