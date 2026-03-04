@@ -233,54 +233,52 @@ const McpManager: React.FC = () => {
         />
       )}
 
-      {/* Tab bar + search */}
+      {/* Search */}
       <div className="flex items-center gap-3">
-        {/* Tabs */}
-        <div className="flex items-center border-b dark:border-claude-darkBorder border-claude-border mr-auto">
-          <button type="button" onClick={() => setActiveTab('installed')} className={tabClass('installed')}>
-            {i18nService.t('mcpInstalled')}
-            {servers.length > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurface bg-claude-surface">
-                {servers.length}
-              </span>
-            )}
-            <div className={tabIndicatorClass('installed')} />
-          </button>
-          <button type="button" onClick={() => setActiveTab('marketplace')} className={tabClass('marketplace')}>
-            {i18nService.t('mcpMarketplace')}
-            {marketplaceCount > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurface bg-claude-surface">
-                {marketplaceCount}
-              </span>
-            )}
-            <div className={tabIndicatorClass('marketplace')} />
-          </button>
-          <button type="button" onClick={() => setActiveTab('custom')} className={tabClass('custom')}>
-            {i18nService.t('mcpCustom')}
-            {customCount > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurface bg-claude-surface">
-                {customCount}
-              </span>
-            )}
-            <div className={tabIndicatorClass('custom')} />
-          </button>
+        <div className="relative flex-1">
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <input
+            type="text"
+            placeholder={i18nService.t('searchMcpServers')}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 text-sm rounded-xl dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-2 focus:ring-claude-accent"
+          />
         </div>
-
-        {/* Search (shown on all tabs except when no servers) */}
-        {(
-          <div className="relative w-48">
-            <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-            <input
-              type="text"
-              placeholder={i18nService.t('searchMcpServers')}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-1 focus:ring-claude-accent"
-            />
-          </div>
-        )}
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center border-b dark:border-claude-darkBorder border-claude-border">
+        <button type="button" onClick={() => setActiveTab('installed')} className={tabClass('installed')}>
+          {i18nService.t('mcpInstalled')}
+          {servers.length > 0 && (
+            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover">
+              {servers.length}
+            </span>
+          )}
+          <div className={tabIndicatorClass('installed')} />
+        </button>
+        <button type="button" onClick={() => setActiveTab('marketplace')} className={tabClass('marketplace')}>
+          {i18nService.t('mcpMarketplace')}
+          {marketplaceCount > 0 && (
+            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover">
+              {marketplaceCount}
+            </span>
+          )}
+          <div className={tabIndicatorClass('marketplace')} />
+        </button>
+        <button type="button" onClick={() => setActiveTab('custom')} className={tabClass('custom')}>
+          {i18nService.t('mcpCustom')}
+          {customCount > 0 && (
+            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover">
+              {customCount}
+            </span>
+          )}
+          <div className={tabIndicatorClass('custom')} />
+        </button>
+      </div>
+
+      <div>
       {/* ── Tab: Installed ──────────────────────────────── */}
       {activeTab === 'installed' && (
         <div className="grid grid-cols-2 gap-3">
@@ -567,6 +565,7 @@ const McpManager: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
 
       {/* Delete confirmation modal */}
       {pendingDelete && (
