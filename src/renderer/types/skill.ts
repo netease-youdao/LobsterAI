@@ -14,6 +14,12 @@ export interface Skill {
 
 export type LocalizedText = { en: string; zh: string };
 
+export interface MarketTag {
+  id: string;
+  en: string;
+  zh: string;
+}
+
 export interface LocalSkillInfo {
   id: string;
   name: string;
@@ -25,6 +31,7 @@ export interface MarketplaceSkill {
   id: string;
   name: string;
   description: string | LocalizedText;
+  tags?: string[];
   url: string;              // Download URL (.zip)
   version: string;
   source: {

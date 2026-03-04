@@ -17,7 +17,7 @@ import { i18nService } from '../../services/i18n';
 import { skillService, resolveLocalizedText } from '../../services/skill';
 import { setSkills } from '../../store/slices/skillSlice';
 import { RootState } from '../../store';
-import { Skill, MarketplaceSkill } from '../../types/skill';
+import { Skill, MarketplaceSkill, MarketTag } from '../../types/skill';
 import ErrorMessage from '../ErrorMessage';
 
 type SkillTab = 'installed' | 'marketplace';
@@ -34,6 +34,8 @@ const SkillsManager: React.FC = () => {
   const [isGithubImportOpen, setIsGithubImportOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<SkillTab>('installed');
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
+  const [marketTags, setMarketTags] = useState<MarketTag[]>([]);
+  const [activeMarketTag, setActiveMarketTag] = useState('all');
   const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(false);
   const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
   const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(null);
@@ -71,7 +73,8 @@ const SkillsManager: React.FC = () => {
     setIsLoadingMarketplace(true);
     skillService.fetchMarketplaceSkills().then((data) => {
       if (!isActive) return;
-      setMarketplaceSkills(data);
+      setMarketplaceSkills(data.skills);
+      setMarketTags(data.tags);
       setIsLoadingMarketplace(false);
     });
     return () => { isActive = false; };
@@ -147,11 +150,18 @@ const SkillsManager: React.FC = () => {
 
   const filteredMarketplaceSkills = useMemo(() => {
     const query = skillSearchQuery.toLowerCase();
-    return marketplaceSkills.filter(skill => {
-      return skill.name.toLowerCase().includes(query)
-        || resolveLocalizedText(skill.description).toLowerCase().includes(query);
-    });
-  }, [marketplaceSkills, skillSearchQuery]);
+    let results = marketplaceSkills;
+    if (query) {
+      results = results.filter(skill => {
+        return skill.name.toLowerCase().includes(query)
+          || resolveLocalizedText(skill.description).toLowerCase().includes(query);
+      });
+    }
+    if (activeMarketTag !== 'all') {
+      results = results.filter(skill => skill.tags?.includes(activeMarketTag));
+    }
+    return results;
+  }, [marketplaceSkills, skillSearchQuery, activeMarketTag]);
 
   const formatSkillDate = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -466,13 +476,44 @@ const SkillsManager: React.FC = () => {
           <div className="text-center py-12 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
             {i18nService.t('downloadingSkill')}
           </div>
-        ) : filteredMarketplaceSkills.length === 0 ? (
-          <div className="text-center py-12 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-            {i18nService.t('skillMarketplaceEmpty')}
-          </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {filteredMarketplaceSkills.map((skill) => (
+          <>
+            {marketTags.length > 0 && (
+              <div className="flex items-center gap-1.5 mb-4 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setActiveMarketTag('all')}
+                  className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                    activeMarketTag === 'all'
+                      ? 'bg-claude-accent text-white'
+                      : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border'
+                  }`}
+                >
+                  {i18nService.t('skillCategoryAll')}
+                </button>
+                {marketTags.map((tag) => (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    onClick={() => setActiveMarketTag(tag.id)}
+                    className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                      activeMarketTag === tag.id
+                        ? 'bg-claude-accent text-white'
+                        : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border'
+                    }`}
+                  >
+                    {resolveLocalizedText(tag)}
+                  </button>
+                ))}
+              </div>
+            )}
+            {filteredMarketplaceSkills.length === 0 ? (
+              <div className="text-center py-12 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('skillMarketplaceEmpty')}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {filteredMarketplaceSkills.map((skill) => (
               <div
                 key={skill.id}
                 className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50 cursor-pointer"
@@ -531,6 +572,8 @@ const SkillsManager: React.FC = () => {
               </div>
             ))}
           </div>
+            )}
+          </>
         )
       )}
 

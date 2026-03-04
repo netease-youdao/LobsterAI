@@ -1,4 +1,4 @@
-import { Skill, MarketplaceSkill, LocalSkillInfo, LocalizedText } from '../types/skill';
+import { Skill, MarketplaceSkill, MarketTag, LocalSkillInfo, LocalizedText } from '../types/skill';
 import { getSkillStoreUrl } from './endpoints';
 import { i18nService } from './i18n';
 
@@ -168,7 +168,7 @@ class SkillService {
       return null;
     }
   }
-  async fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
+  async fetchMarketplaceSkills(): Promise<{ skills: MarketplaceSkill[]; tags: MarketTag[] }> {
     try {
       const response = await fetch(getSkillStoreUrl());
       if (!response.ok) {
@@ -182,10 +182,12 @@ class SkillService {
       for (const ls of localSkills) {
         this.localSkillDescriptions.set(ls.name, ls.description);
       }
-      return Array.isArray(value?.marketplace) ? value.marketplace : [];
+      const skills: MarketplaceSkill[] = Array.isArray(value?.marketplace) ? value.marketplace : [];
+      const tags: MarketTag[] = Array.isArray(value?.marketTags) ? value.marketTags : [];
+      return { skills, tags };
     } catch (error) {
       console.error('Failed to fetch marketplace skills:', error);
-      return [];
+      return { skills: [], tags: [] };
     }
   }
 
