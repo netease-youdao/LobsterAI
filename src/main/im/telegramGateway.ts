@@ -317,6 +317,18 @@ export class TelegramGateway extends EventEmitter {
       // Extract text content (could be text or caption)
       const textContent = message.text || message.caption || '';
 
+      // In group chats, only respond when bot is mentioned or message is a reply to bot
+      if (isGroup) {
+        const botUsername = this.status.botUsername;
+        const isMentioned = botUsername && this.checkBotMentioned(message, botUsername);
+        const isReplyToBot = message.reply_to_message?.from?.id === this.bot?.botInfo?.id;
+        if (!isMentioned && !isReplyToBot) {
+          const log = this.config?.debug ? console.log : () => {};
+          log('[Telegram Gateway] Ignoring group message without bot mention');
+          return;
+        }
+      }
+
       // Extract media attachments
       const attachments = await extractMediaFromMessage(ctx);
 
@@ -327,6 +339,10 @@ export class TelegramGateway extends EventEmitter {
 
       // Build content description for media
       let content = textContent;
+      // Strip @botusername from content in group chats
+      if (isGroup && this.status.botUsername) {
+        content = this.stripBotMention(content, this.status.botUsername);
+      }
       if (!content && attachments.length > 0) {
         // Generate descriptive content for media-only messages
         content = this.generateMediaDescription(attachments);
@@ -837,6 +853,31 @@ export class TelegramGateway extends EventEmitter {
     }
 
     return chunks;
+  }
+
+  /**
+   * Check if the bot is mentioned in the message entities
+   */
+  private checkBotMentioned(message: any, botUsername: string): boolean {
+    const entities = message.entities || message.caption_entities || [];
+    const text = message.text || message.caption || '';
+    for (const entity of entities) {
+      if (entity.type === 'mention') {
+        const mentionText = text.substring(entity.offset, entity.offset + entity.length);
+        if (mentionText.toLowerCase() === `@${botUsername.toLowerCase()}`) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Strip @botusername from message content
+   */
+  private stripBotMention(content: string, botUsername: string): string {
+    const regex = new RegExp(`@${botUsername}\\s?`, 'gi');
+    return content.replace(regex, '').trim();
   }
 
   /**
