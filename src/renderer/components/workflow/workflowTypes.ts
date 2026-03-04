@@ -19,6 +19,12 @@ export interface OutputRoute {
   targetAgentId: string;   // Target Agent ID
 }
 
+export interface WorkflowAgentModel {
+  id: string;
+  providerKey?: string;
+  name?: string;
+}
+
 export interface WorkflowAgent {
   id: string;
   name: string;
@@ -30,6 +36,7 @@ export interface WorkflowAgent {
   soulPrompt?: string; // Agent's system prompt / personality
   inputFrom?: string | null; // Agent ID of upstream node (or null for entry point)
   outputRoutes: OutputRoute[]; // Ordered list of conditional output routes
+  model?: WorkflowAgentModel; // Optional model override for this agent
 }
 
 export interface WorkflowConnection {
@@ -67,7 +74,7 @@ export interface WorkflowRun {
 export interface WorkflowRunAgentEntry {
   agentId: string;
   agentName: string;
-  sessionId: string;
+  sessionId?: string;
   status: 'pending' | 'running' | 'completed' | 'error' | 'skipped';
   startTime?: number;
   endTime?: number;

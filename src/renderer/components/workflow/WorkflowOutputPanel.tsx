@@ -292,7 +292,7 @@ const WorkflowOutputPanel: React.FC<WorkflowOutputPanelProps> = ({
               className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium bg-green-600 hover:bg-green-700 text-white transition-colors"
             >
               <FolderIcon className="w-3.5 h-3.5" />
-              {i18nService.t('workflowOpenFolder') || 'Open Folder'}
+              Open Folder
             </button>
           )}
           <button
@@ -326,33 +326,45 @@ const WorkflowOutputPanel: React.FC<WorkflowOutputPanelProps> = ({
               ) : (
                 <div className="space-y-1">
                   {logs.map((log) => (
-                    <div
-                      key={log.id}
-                      className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm bg-claude-bg dark:bg-claude-darkBg ${log.status === 'running' ? 'ring-1 ring-yellow-500/30' : ''
-                        }`}
-                    >
-                      {getStatusIcon(log.status)}
-                      <span className="flex-1 font-medium text-claude-text dark:text-claude-darkText truncate">
-                        {log.agentName}
-                        {log.iteration !== undefined && (
-                          <span className="ml-1 text-gray-400">#{log.iteration + 1}</span>
-                        )}
-                      </span>
-                      <span className={`text-xs ${getStatusColor(log.status)}`}>
-                        {log.status === 'running'
-                          ? i18nService.t('workflowLogRunning') || 'Running...'
-                          : log.status === 'completed'
-                            ? i18nService.t('workflowLogCompleted') || 'Completed'
-                            : log.status === 'error'
-                              ? i18nService.t('workflowLogError') || 'Error'
-                              : ''
-                        }
-                      </span>
-                      {log.duration && (
-                        <span className="text-xs text-gray-400">
-                          {formatDuration(log.duration)}
+                    <div key={log.id} className="flex flex-col gap-1">
+                      <div
+                        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors
+                          ${log.status === 'running'
+                            ? 'bg-claude-bg dark:bg-claude-darkBg ring-1 ring-yellow-500/30'
+                            : log.status === 'error' && log.error
+                              ? 'bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 cursor-pointer pointer-events-auto'
+                              : 'bg-claude-bg dark:bg-claude-darkBg'
+                          }`}
+                        onClick={log.status === 'error' && log.error ? () => {
+                          window.dispatchEvent(new CustomEvent('app:showToast', {
+                            detail: `❌ Error in ${log.agentName}: ${log.error}`,
+                          }));
+                        } : undefined}
+                        title={log.status === 'error' && log.error ? "Click to view error details" : undefined}
+                      >
+                        {getStatusIcon(log.status)}
+                        <span className="flex-1 font-medium text-claude-text dark:text-claude-darkText truncate">
+                          {log.agentName}
+                          {log.iteration !== undefined && (
+                            <span className="ml-1 text-gray-400">#{log.iteration + 1}</span>
+                          )}
                         </span>
-                      )}
+                        <span className={`text-xs ${getStatusColor(log.status)}`}>
+                          {log.status === 'running'
+                            ? i18nService.t('workflowLogRunning') || 'Running...'
+                            : log.status === 'completed'
+                              ? i18nService.t('workflowLogCompleted') || 'Completed'
+                              : log.status === 'error'
+                                ? i18nService.t('workflowLogError') || 'Error'
+                                : ''
+                          }
+                        </span>
+                        {log.duration !== undefined && (
+                          <span className="text-xs text-gray-400">
+                            {formatDuration(log.duration)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

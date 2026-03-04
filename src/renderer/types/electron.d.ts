@@ -264,8 +264,8 @@ interface IElectronAPI {
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
-    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; apiConfigOverride?: { modelId: string; providerKey?: string; name?: string } }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
+    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; apiConfigOverride?: { modelId: string; providerKey?: string; name?: string } }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) => Promise<{ success: boolean; error?: string }>;
@@ -403,6 +403,7 @@ interface IElectronAPI {
       content?: string;
       error?: string;
     }>;
+    writeDocument: (filePath: string, content: string, workingDirectory?: string) => Promise<{ success: boolean; path?: string; error?: string }>;
     copyToProject: (sourceDir: string, destDir: string) => Promise<{
       success: boolean;
       copiedCount?: number;

@@ -23,7 +23,20 @@ export default function CustomEdge({
     });
 
     const condition = (data?.condition as string) || '';
-    const localizedCondition = condition ? (i18nService.t(`workflow.${condition}`) || condition) : '';
+    let localizedCondition = condition;
+
+    if (condition) {
+        if (condition.startsWith('Contains: ')) {
+            const keyword = condition.substring(10);
+            const containsText = i18nService.t('workflow.outputContains') || 'Contains';
+            localizedCondition = `${containsText}: ${keyword}`;
+        } else {
+            const camelCaseCond = condition === 'On Complete' ? 'onComplete' :
+                condition === 'On Error' ? 'onError' :
+                    condition === 'Always' ? 'always' : condition;
+            localizedCondition = i18nService.t(`workflow.${condition}`) || i18nService.t(`workflow.${camelCaseCond}`) || condition;
+        }
+    }
 
     // Get color based on condition keywords
     const getConditionColor = () => {

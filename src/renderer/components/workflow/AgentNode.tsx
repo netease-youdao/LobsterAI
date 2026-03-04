@@ -1,4 +1,8 @@
 import React, { memo } from 'react';
+import { useDispatch } from 'react-redux';
+import { updateAgentModel } from '../../store/slices/workflowSlice';
+import ModelSelector from '../ModelSelector';
+import { Model } from '../../store/slices/modelSlice';
 import { NodeResizer, Handle, Position, type NodeProps } from '@xyflow/react';
 import { useDrop } from 'react-dnd';
 import {
@@ -43,6 +47,7 @@ const CONDITION_OPTIONS: { value: RouteCondition; icon: string; labelKey: string
 
 const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, selected }) => {
   const { agent, allAgents, onRemove, onRemoveSkill, onAddSkill, onUpdateName, onUpdateSize, onSetInputFrom, onAddRoute, onRemoveRoute, onUpdateRoute } = data;
+  const dispatch = useDispatch();
   const [isEditing, setIsEditing] = React.useState(false);
   const [editName, setEditName] = React.useState(agent.name);
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -305,6 +310,30 @@ const AgentNode: React.FC<NodeProps & { data: AgentNodeData }> = memo(({ data, s
                 + {i18nService.t('workflow.addRoute') || '添加路由'}
               </button>
             )}
+          </div>
+
+          {/* Model Selection */}
+          <div className="pt-2 mt-2 border-t dark:border-claude-darkBorder border-claude-border" onClick={(e) => e.stopPropagation()} onWheelCapture={(e) => e.stopPropagation()}>
+            <span className="text-xs text-gray-500 dark:text-gray-400 block mb-1">
+              🤖 {i18nService.t('workflow.model') || '大模型'}
+            </span>
+            <div className="nodrag">
+              <ModelSelector
+                dropdownDirection="up"
+                showDefaultOption={true}
+                value={agent.model ? { id: agent.model.id, name: agent.model.name || agent.model.id, providerKey: agent.model.providerKey } : null}
+                onChange={(model: Model | null) => {
+                  if (model) {
+                    dispatch(updateAgentModel({
+                      id: agent.id,
+                      model: { id: model.id, providerKey: model.providerKey, name: model.name }
+                    }));
+                  } else {
+                    dispatch(updateAgentModel({ id: agent.id, model: undefined }));
+                  }
+                }}
+              />
+            </div>
           </div>
         </div>
 

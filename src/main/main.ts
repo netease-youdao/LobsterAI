@@ -1244,6 +1244,47 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('workflow:writeDocument', async (_event, filePath: string, content: string, workingDirectory?: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const pathModule = await import('path');
+
+      if (!filePath) {
+        return { success: false, error: 'File path is required' };
+      }
+
+      // Security: Validate path traversal attempts
+      const normalizedPath = pathModule.normalize(filePath);
+      if (normalizedPath.includes('..') && !pathModule.isAbsolute(normalizedPath)) {
+        return { success: false, error: 'Invalid file path' };
+      }
+
+      let targetPath = filePath;
+      // If a working directory is provided and the file path is not absolute, resolve it against the working directory
+      if (workingDirectory && !pathModule.isAbsolute(filePath)) {
+        targetPath = pathModule.join(workingDirectory, filePath);
+        const resolvedPath = pathModule.resolve(targetPath);
+        const resolvedDir = pathModule.resolve(workingDirectory);
+        if (!resolvedPath.startsWith(resolvedDir + pathModule.sep) && resolvedPath !== resolvedDir) {
+          return { success: false, error: 'Access denied: file outside working directory' };
+        }
+      }
+
+      // Allow writing to allowed extensions or specific names
+      const allowedExtensions = ['.md', '.txt', '.json', '.yaml', '.yml', '.csv', '.csv', '.html', '.ts', '.js', '.py', '.java', '.go', '.rs', '.c', '.cpp', '.h'];
+      const ext = pathModule.extname(targetPath).toLowerCase();
+      if (ext && !allowedExtensions.includes(ext)) {
+        return { success: false, error: `Unsupported file type for writing: ${ext}` };
+      }
+
+      await fs.writeFile(targetPath, content, 'utf-8');
+      return { success: true, path: targetPath };
+    } catch (error) {
+      console.error('[workflow:writeDocument] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
   // Copy output files to project working directory
   ipcMain.handle('workflow:copyToProject', async (_event, sourceDir: string, destDir: string) => {
     try {
@@ -1355,6 +1396,11 @@ if (!gotTheLock) {
     title?: string;
     activeSkillIds?: string[];
     imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    };
   }) => {
     try {
       const coworkStoreInstance = getCoworkStore();
@@ -1379,7 +1425,8 @@ if (!gotTheLock) {
         taskWorkingDirectory,
         systemPrompt,
         config.executionMode || 'local',
-        options.activeSkillIds || []
+        options.activeSkillIds || [],
+        options.apiConfigOverride
       );
       const runner = getCoworkRunner();
 
@@ -1431,6 +1478,11 @@ if (!gotTheLock) {
     systemPrompt?: string;
     activeSkillIds?: string[];
     imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    };
   }) => {
     try {
       console.log('[main] cowork:session:continue handler', {
@@ -1444,6 +1496,7 @@ if (!gotTheLock) {
         systemPrompt: options.systemPrompt,
         skillIds: options.activeSkillIds,
         imageAttachments: options.imageAttachments,
+        apiConfigOverride: options.apiConfigOverride,
       }).catch(error => {
         console.error('Cowork continue error:', error);
       });

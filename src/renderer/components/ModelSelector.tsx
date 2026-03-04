@@ -2,18 +2,31 @@ import React from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../store';
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
-import { setSelectedModel, isSameModelIdentity, getModelIdentityKey } from '../store/slices/modelSlice';
+import { setSelectedModel, isSameModelIdentity, getModelIdentityKey, Model } from '../store/slices/modelSlice';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down';
+  // Controlled mode props
+  value?: Model | null;
+  onChange?: (model: Model | null) => void;
+  showDefaultOption?: boolean;
 }
 
-const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down' }) => {
+const ModelSelector: React.FC<ModelSelectorProps> = ({
+  dropdownDirection = 'down',
+  value,
+  onChange,
+  showDefaultOption = false
+}) => {
   const dispatch = useDispatch();
   const [isOpen, setIsOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
+  const globalSelectedModel = useSelector((state: RootState) => state.model.selectedModel);
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
+
+  // Controlled mode: use value prop if provided, otherwise fall back to global state
+  const selectedModel = value !== undefined ? value : globalSelectedModel;
+  const isControlled = value !== undefined && onChange !== undefined;
 
   // 点击外部区域关闭下拉框
   React.useEffect(() => {
@@ -32,8 +45,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
     };
   }, [isOpen]);
 
-  const handleModelSelect = (model: typeof availableModels[0]) => {
-    dispatch(setSelectedModel(model));
+  const handleModelSelect = (model: typeof availableModels[0] | null) => {
+    if (isControlled) {
+      onChange?.(model);
+    } else {
+      dispatch(setSelectedModel(model));
+    }
     setIsOpen(false);
   };
 
@@ -56,13 +73,29 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkText text-claude-text transition-colors cursor-pointer ${isOpen ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover' : ''}`}
       >
-        <span className="font-medium text-sm">{selectedModel.name}</span>
+        <span className="font-medium text-sm">{selectedModel?.name || (showDefaultOption ? '使用全局默认' : '请选择模型')}</span>
         <ChevronDownIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
       </button>
 
       {isOpen && (
         <div className={`absolute ${dropdownPositionClass} w-52 dark:bg-claude-darkSurface bg-claude-surface rounded-xl popover-enter shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden`}>
           <div className="max-h-64 overflow-y-auto">
+          {showDefaultOption && (
+            <button
+              onClick={() => handleModelSelect(null)}
+              className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
+                !selectedModel ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+              }`}
+            >
+              <div className="flex flex-col">
+                <span className="text-sm">使用全局默认</span>
+                <span className="text-xs dark:textSecondary text-claude-claude-darkText-textSecondary">Global Default</span>
+              </div>
+              {!selectedModel && (
+                <CheckIcon className="h-4 w-4 text-claude-accent" />
+              )}
+            </button>
+          )}
           {availableModels.map((model) => (
             <button
               key={getModelIdentityKey(model)}

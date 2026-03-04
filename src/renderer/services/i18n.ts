@@ -793,10 +793,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'workflow.inputFrom': '入口',
     'workflow.outputRoutes': '出口路由',
     'workflow.onComplete': '完成时',
+    'workflow.On Complete': '完成时',
     'workflow.onError': '失败时',
     'workflow.outputContains': '含关键词',
     'workflow.always': '始终',
     'workflow.addRoute': '添加路由',
+    'workflow.model': '模型',
     'workflow.keyword': '关键词',
     workflowNoAgents: '暂无 Agent，请点击上方按钮添加',
     workflowExecutionOrder: '执行顺序',
@@ -854,6 +856,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'skill.code-analysis': '代码分析',
     // Workflow new task
     workflowNewTask: '新建任务',
+    workflowOpenFolder: '打开文件夹',
 
     // Resume Builder
     resumeBuilder: '简历生成器',
@@ -1421,7 +1424,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // File operations
     openFile: 'Open File',
-    openFolder: 'Open Folder',
+    workflowOpenFolder: 'Open Folder',
     showInFolder: 'Show in Folder',
     outputFiles: 'Output Files',
     openFileFailed: 'Failed to open file',
@@ -1665,10 +1668,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     'workflow.inputFrom': 'Input',
     'workflow.outputRoutes': 'Output Routes',
     'workflow.onComplete': 'On Complete',
+    'workflow.On Complete': 'On Complete',
     'workflow.onError': 'On Error',
     'workflow.outputContains': 'Contains',
     'workflow.always': 'Always',
     'workflow.addRoute': 'Add Route',
+    'workflow.model': 'Model',
     'workflow.keyword': 'Keyword',
     workflowNoAgents: 'No agents yet, click the button above to add',
     workflowExecutionOrder: 'Execution Order',

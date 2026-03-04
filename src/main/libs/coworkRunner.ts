@@ -1855,18 +1855,18 @@ export class CoworkRunner extends EventEmitter {
   ): string {
     const confirmationRules = confirmationMode === 'text'
       ? [
-          '- Confirmation channel: plain text only (no modal).',
-          '- Before any delete operation, ask for explicit text confirmation first.',
-          '- Wait for explicit confirmation text before proceeding.',
-          '- Do not use AskUserQuestion in this session.',
-        ]
+        '- Confirmation channel: plain text only (no modal).',
+        '- Before any delete operation, ask for explicit text confirmation first.',
+        '- Wait for explicit confirmation text before proceeding.',
+        '- Do not use AskUserQuestion in this session.',
+      ]
       : [
-          '- Confirmation channel: AskUserQuestion modal.',
-          '- For every delete operation, you must call AskUserQuestion before executing any tool action.',
-          '- A direct user instruction is not enough for safety confirmation; AskUserQuestion approval is still required.',
-          '- Never use normal assistant text as the confirmation channel in modal mode.',
-          '- Continue only when AskUserQuestion returns explicit allow.',
-        ];
+        '- Confirmation channel: AskUserQuestion modal.',
+        '- For every delete operation, you must call AskUserQuestion before executing any tool action.',
+        '- A direct user instruction is not enough for safety confirmation; AskUserQuestion approval is still required.',
+        '- Never use normal assistant text as the confirmation channel in modal mode.',
+        '- Continue only when AskUserQuestion returns explicit allow.',
+      ];
 
     return [
       '## Workspace Safety Policy (Highest Priority)',
@@ -2147,12 +2147,25 @@ export class CoworkRunner extends EventEmitter {
       workspaceRoot?: string;
       confirmationMode?: 'modal' | 'text';
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+      apiConfigOverride?: {
+        modelId: string;
+        providerKey?: string;
+        name?: string;
+      };
     } = {}
   ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const session = this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Get apiConfigOverride from options or from saved session config
+    const apiConfigOverride = options.apiConfigOverride || session.apiConfigOverride;
+
+    // If apiConfigOverride is provided in options, save it to the session
+    if (options.apiConfigOverride) {
+      this.store.updateSession(sessionId, { apiConfigOverride: options.apiConfigOverride });
     }
 
     // Mark session as running
@@ -2223,13 +2236,26 @@ export class CoworkRunner extends EventEmitter {
 
     // Run claude-code using the SDK
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments, apiConfigOverride);
     } catch (error) {
       console.error('Cowork session error:', error);
     }
   }
 
-  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
+  async continueSession(
+    sessionId: string,
+    prompt: string,
+    options: {
+      systemPrompt?: string;
+      skillIds?: string[];
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+      apiConfigOverride?: {
+        modelId: string;
+        providerKey?: string;
+        name?: string;
+      };
+    } = {}
+  ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
@@ -2238,6 +2264,7 @@ export class CoworkRunner extends EventEmitter {
         skillIds: options.skillIds,
         systemPrompt: options.systemPrompt,
         imageAttachments: options.imageAttachments,
+        apiConfigOverride: options.apiConfigOverride,
       });
       return;
     }
@@ -2297,7 +2324,7 @@ export class CoworkRunner extends EventEmitter {
     );
 
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments, options.apiConfigOverride);
     } catch (error) {
       console.error('Cowork continue error:', error);
     }
@@ -2484,7 +2511,12 @@ export class CoworkRunner extends EventEmitter {
     prompt: string,
     cwd: string,
     systemPrompt: string,
-    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>,
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    }
   ): Promise<void> {
     const { sessionId, abortController } = activeSession;
     const config = this.store.getConfig();
@@ -2504,7 +2536,11 @@ export class CoworkRunner extends EventEmitter {
     activeSession.lastStreamingTextUpdateAt = 0;
     activeSession.lastStreamingThinkingUpdateAt = 0;
 
-    const apiConfig = getCurrentApiConfig('local');
+    const apiConfig = getCurrentApiConfig(
+      'local',
+      apiConfigOverride?.modelId,
+      apiConfigOverride?.providerKey
+    );
     if (!apiConfig) {
       this.handleError(sessionId, 'API configuration not found. Please configure model settings.');
       this.clearPendingPermissions(sessionId);
@@ -2947,7 +2983,12 @@ export class CoworkRunner extends EventEmitter {
     prompt: string,
     cwd: string,
     systemPrompt: string,
-    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>,
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    }
   ): Promise<void> {
     const { sessionId } = activeSession;
     if (this.isSessionStopRequested(sessionId, activeSession)) {
@@ -3004,21 +3045,21 @@ export class CoworkRunner extends EventEmitter {
       );
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments, apiConfigOverride);
       return;
     }
 
     // If there's already a running sandbox VM with IPC bridge, send a
     // continuation request to the same VM instead of spawning a new one.
     if (hasActiveSandboxVm) {
-      await this.continueSandboxTurn(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
+      await this.continueSandboxTurn(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments, apiConfigOverride);
       return;
     }
 
     if (executionMode === 'local') {
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments, apiConfigOverride);
       return;
     }
 
@@ -3043,7 +3084,7 @@ export class CoworkRunner extends EventEmitter {
       }
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments, apiConfigOverride);
       return;
     }
 
@@ -3058,7 +3099,7 @@ export class CoworkRunner extends EventEmitter {
         platform: sandboxReady.runtimeInfo.platform,
         arch: sandboxReady.runtimeInfo.arch,
       });
-      await this.runClaudeCodeInSandbox(activeSession, sandboxPrompt, resolvedCwd, systemPrompt, sandboxReady.runtimeInfo, imageAttachments);
+      await this.runClaudeCodeInSandbox(activeSession, sandboxPrompt, resolvedCwd, systemPrompt, sandboxReady.runtimeInfo, imageAttachments, apiConfigOverride);
       // If the sandbox VM is still alive, keep the activeSession for multi-turn continuation.
       // Otherwise (VM exited), clean up.
       if (!activeSession.sandboxProcess || activeSession.sandboxProcess.killed) {
@@ -3079,7 +3120,7 @@ export class CoworkRunner extends EventEmitter {
       activeSession.executionMode = 'local';
       this.store.updateSession(sessionId, { executionMode: 'local' });
       this.activeSessions.set(sessionId, activeSession);
-      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
+      await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments, apiConfigOverride);
     }
   }
 
@@ -3089,7 +3130,12 @@ export class CoworkRunner extends EventEmitter {
     cwd: string,
     systemPrompt: string,
     runtimeInfo: SandboxRuntimeInfo,
-    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>,
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    }
   ): Promise<void> {
     const { sessionId, abortController } = activeSession;
 
@@ -3100,7 +3146,11 @@ export class CoworkRunner extends EventEmitter {
       return;
     }
 
-    const apiConfig = getCurrentApiConfig('sandbox');
+    const apiConfig = getCurrentApiConfig(
+      'sandbox',
+      apiConfigOverride?.modelId,
+      apiConfigOverride?.providerKey
+    );
     if (!apiConfig) {
       this.handleError(sessionId, 'API configuration not found. Please configure model settings.');
       this.clearPendingPermissions(sessionId);
@@ -3341,7 +3391,7 @@ export class CoworkRunner extends EventEmitter {
         coworkLog('WARN', 'QEMUStderr', text.trim());
       });
       // Drain stdout to avoid backpressure blocking the VM process.
-      child.stdout.on('data', () => {});
+      child.stdout.on('data', () => { });
 
       const streamAbort = new AbortController();
       let streamPromise: Promise<void> | null = null;
@@ -3673,7 +3723,12 @@ export class CoworkRunner extends EventEmitter {
     prompt: string,
     cwd: string,
     systemPrompt: string,
-    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>,
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    }
   ): Promise<void> {
     const { sessionId } = activeSession;
 
@@ -3690,7 +3745,11 @@ export class CoworkRunner extends EventEmitter {
     activeSession.lastStreamingTextUpdateAt = 0;
     activeSession.lastStreamingThinkingUpdateAt = 0;
 
-    const apiConfig = getCurrentApiConfig('sandbox');
+    const apiConfig = getCurrentApiConfig(
+      'sandbox',
+      apiConfigOverride?.modelId,
+      apiConfigOverride?.providerKey
+    );
     if (!apiConfig) {
       this.handleError(sessionId, 'API configuration not found. Please configure model settings.');
       return;

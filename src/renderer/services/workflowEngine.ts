@@ -138,7 +138,6 @@ class WorkflowEngine {
     const agentEntries = agents.map(agent => ({
       agentId: agent.id,
       agentName: agent.name,
-      sessionId: `session-${agent.id}-${Date.now()}`,
       status: 'pending' as const,
     }));
     store.dispatch(addWorkflowRun({
@@ -239,6 +238,25 @@ class WorkflowEngine {
 
           // Store output
           this.agentOutputs.set(currentAgent.id, output);
+
+          // Save output to file so it appears in the output panel
+          try {
+            if (this.workingDirectory) {
+              const filename = `${currentAgent.name.toLowerCase().replace(/\s+/g, '-')}-output.md`;
+              let content = output;
+              if (!content.trim().startsWith('# ')) {
+                content = `# Output from ${currentAgent.name}\n\n${content}`;
+              }
+              const result = await window.electron.workflow.writeDocument(filename, content, this.workingDirectory);
+              if (result.success) {
+                console.log(`[WorkflowEngine] Saved output file: ${filename}`);
+              } else {
+                console.error(`[WorkflowEngine] Failed to save output file for ${currentAgent.name}: ${result.error}`);
+              }
+            }
+          } catch (e) {
+            console.error(`[WorkflowEngine] Exception while saving output file for ${currentAgent.name}:`, e);
+          }
 
           // Find next agent based on connections
           const nextAgent = await this.evaluateNextAgent(currentAgent, output, connections, agents);
@@ -617,20 +635,57 @@ class WorkflowEngine {
 
   // Execute a single agent
   private async executeAgent(agent: WorkflowAgent, inputPrompt: string): Promise<string> {
-    // Start a new session
-    const session = await coworkService.startSession({
+    // Build apiConfigOverride from agent's model settings if specified
+    const apiConfigOverride = agent.model ? {
+      modelId: agent.model.id,
+      providerKey: agent.model.providerKey,
+      name: agent.model.name,
+    } : undefined;
+
+    // Get the actual model name that will be used (either agent override or global selected model)
+    const state = store.getState();
+    const globalModel = state.model.selectedModel;
+    const currentModelName = agent.model?.name || agent.model?.id || globalModel?.name || globalModel?.id || 'Unknown Model';
+
+    // Start a new session via IPC directly (not through coworkService)
+    // so we can capture the real error message from the main process
+    const cowork = window.electron?.cowork;
+    if (!cowork) {
+      throw new Error(`Failed to start session for agent "${agent.name}": Cowork API not available`);
+    }
+
+    // Inject model awareness into the system prompt
+    const baseSystemPrompt = agent.soulPrompt || '';
+    const injectedSystemPrompt = `${baseSystemPrompt}\n\n[SYSTEM NOTE: You are currently running as the AI model "${currentModelName}". If the user asks you to output or confirm your model name, you MUST reply with exactly "${currentModelName}".]`.trim();
+
+    const result = await cowork.startSession({
       prompt: inputPrompt,
-      systemPrompt: agent.soulPrompt || '',
+      systemPrompt: injectedSystemPrompt,
       title: `[Workflow] ${agent.name}`,
       cwd: this.workingDirectory,
       activeSkillIds: agent.skills.map(s => s.id),
+      apiConfigOverride,
     });
 
-    if (!session) {
-      throw new Error(`Failed to start session for agent "${agent.name}"`);
+    if (!result.success || !result.session) {
+      const reason = result.error || 'Unknown error';
+      throw new Error(`Failed to start session for agent "${agent.name}": ${reason}`);
     }
 
+    const session = result.session;
+    // Sync session to Redux store
+    store.dispatch({ type: 'cowork/addSession', payload: session });
+
     this.agentSessionIds.set(agent.id, session.id);
+
+    // Save sessionId to the run history so it can be clicked later
+    if (this.currentRunId) {
+      store.dispatch(updateWorkflowRunAgent({
+        runId: this.currentRunId,
+        agentId: agent.id,
+        updates: { sessionId: session.id },
+      }));
+    }
 
     // Wait for session completion
     return this.waitForSessionCompletion(session.id);

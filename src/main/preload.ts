@@ -327,6 +327,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('workflow:listDocuments', workingDirectory),
     readDocument: (filePath: string, workingDirectory: string) =>
       ipcRenderer.invoke('workflow:readDocument', filePath, workingDirectory),
+    writeDocument: (filePath: string, content: string, workingDirectory?: string) =>
+      ipcRenderer.invoke('workflow:writeDocument', filePath, content, workingDirectory),
     copyToProject: (sourceDir: string, destDir: string) =>
       ipcRenderer.invoke('workflow:copyToProject', sourceDir, destDir),
   },

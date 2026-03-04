@@ -116,6 +116,19 @@ const workflowSlice = createSlice({
       }
     },
 
+    // Update agent's model override
+    updateAgentModel: (state, action: PayloadAction<{ id: string; model?: WorkflowAgentModel }>) => {
+      const agent = state.agents.find((a: WorkflowAgent) => a.id === action.payload.id);
+      if (agent) {
+        if (action.payload.model) {
+          agent.model = action.payload.model;
+        } else {
+          delete agent.model;
+        }
+        saveToStorage(state);
+      }
+    },
+
     // Update full agent (for any other updates)
     updateAgent: (state, action: PayloadAction<{ id: string; updates: Partial<WorkflowAgent> }>) => {
       const agent = state.agents.find((a: WorkflowAgent) => a.id === action.payload.id);
@@ -509,6 +522,7 @@ export const {
   updateAgentSize,
   renameAgent,
   updateAgentSoul,
+  updateAgentModel,
   updateAgent,
   addSkillToAgent,
   removeSkillFromAgent,

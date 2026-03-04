@@ -40,6 +40,7 @@ import type { WorkflowAgent, Skill } from './workflowTypes';
 import { PREDEFINED_SKILLS, AGENT_COLORS } from './workflowTypes';
 import { i18nService } from '../../services/i18n';
 
+
 // Icon mapping for skills
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   CodeBracketIcon,
@@ -191,6 +192,8 @@ const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
             </div>
           )}
         </div>
+
+
 
         {/* Soul Prompt */}
         <div>

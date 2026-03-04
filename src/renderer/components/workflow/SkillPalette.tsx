@@ -361,7 +361,7 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
                           <button
                             onClick={() => window.electron.shell.openPath(run.workingDirectory)}
                             className="p-1 rounded-lg hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover text-gray-400 hover:text-green-500 transition-colors"
-                            title={i18nService.t('workflowOpenFolder') || 'Open Folder'}
+                            title="Open Folder"
                           >
                             <FolderOpenIcon className="w-3.5 h-3.5" />
                           </button>
@@ -392,7 +392,7 @@ const SkillPalette: React.FC<SkillPaletteProps> = ({ onAgentCreated, onViewSessi
                           </span>
                           {agentEntry.sessionId && (
                             <button
-                              onClick={() => handleViewSession(agentEntry.sessionId)}
+                              onClick={() => agentEntry.sessionId && handleViewSession(agentEntry.sessionId)}
                               className="p-0.5 rounded hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover text-gray-400 hover:text-claude-accent transition-colors"
                               title={i18nService.t('coworkViewTask') || 'View session'}
                             >
