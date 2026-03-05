@@ -2,9 +2,7 @@ import { app } from 'electron';
 import { execSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import { loadClaudeSdk } from './claudeSdk';
-import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
+import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
@@ -1022,50 +1020,161 @@ export async function getEnhancedEnvWithTmpdir(
   return env;
 }
 
-export async function generateSessionTitle(userIntent: string | null): Promise<string> {
-  if (!userIntent) return 'New Session';
+const SESSION_TITLE_FALLBACK = 'New Session';
+const SESSION_TITLE_MAX_CHARS = 50;
+const SESSION_TITLE_TIMEOUT_MS = 8000;
 
-  const claudeCodePath = getClaudeCodePath();
-  const currentEnv = await getEnhancedEnv();
+function buildAnthropicMessagesUrl(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, '');
+  if (!normalized) {
+    return '/v1/messages';
+  }
+  if (normalized.endsWith('/v1/messages')) {
+    return normalized;
+  }
+  if (normalized.endsWith('/v1')) {
+    return `${normalized}/messages`;
+  }
+  return `${normalized}/v1/messages`;
+}
 
-  // Ensure child_process.fork() runs cli.js as Node, not as another Electron app
-  if (app.isPackaged) {
-    currentEnv.ELECTRON_RUN_AS_NODE = '1';
+function extractTextFromAnthropicResponse(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const record = payload as Record<string, unknown>;
+  const content = record.content;
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (!item || typeof item !== 'object') return '';
+        const block = item as Record<string, unknown>;
+        if (typeof block.text === 'string') {
+          return block.text;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (typeof record.output_text === 'string') {
+    return record.output_text.trim();
+  }
+  return '';
+}
+
+function normalizeTitleToPlainText(value: string, fallback: string): string {
+  if (!value.trim()) return fallback;
+
+  let title = value.trim();
+  const fenced = /```(?:[\w-]+)?\s*([\s\S]*?)```/i.exec(title);
+  if (fenced?.[1]) {
+    title = fenced[1].trim();
   }
 
+  title = title
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/_([^_\n]+)_/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/, '')
+    .replace(/^\s*>\s?/, '')
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/^\s*\d+\.\s+/, '')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const labeledTitle = /^(?:title|标题)\s*[:：]\s*(.+)$/i.exec(title);
+  if (labeledTitle?.[1]) {
+    title = labeledTitle[1].trim();
+  }
+
+  title = title
+    .replace(/^["'`“”‘’]+/, '')
+    .replace(/["'`“”‘’]+$/, '')
+    .trim();
+
+  if (!title) return fallback;
+  if (title.length > SESSION_TITLE_MAX_CHARS) {
+    title = title.slice(0, SESSION_TITLE_MAX_CHARS).trim();
+  }
+  return title || fallback;
+}
+
+function buildFallbackSessionTitle(userIntent: string | null): string {
+  const normalizedInput = typeof userIntent === 'string' ? userIntent.trim() : '';
+  if (!normalizedInput) {
+    return SESSION_TITLE_FALLBACK;
+  }
+  const firstLine = normalizedInput
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || '';
+  return normalizeTitleToPlainText(firstLine, SESSION_TITLE_FALLBACK);
+}
+
+export async function generateSessionTitle(userIntent: string | null): Promise<string> {
+  const normalizedInput = typeof userIntent === 'string' ? userIntent.trim() : '';
+  const fallbackTitle = buildFallbackSessionTitle(normalizedInput);
+  if (!normalizedInput) {
+    return fallbackTitle;
+  }
+
+  const { config, error } = resolveCurrentApiConfig();
+  if (!config) {
+    if (error) {
+      console.warn('[cowork-title] Skip title generation due to missing API config:', error);
+    }
+    return fallbackTitle;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SESSION_TITLE_TIMEOUT_MS);
+
   try {
-    const { unstable_v2_prompt } = await loadClaudeSdk();
-    const promptOptions: Record<string, unknown> = {
-      model: getCurrentApiConfig()?.model || 'claude-sonnet',
-      env: currentEnv,
-      pathToClaudeCodeExecutable: claudeCodePath,
-    };
+    const url = buildAnthropicMessagesUrl(config.baseURL);
+    const prompt = `Generate a short title from this input, keep the same language, return plain text only (no markdown), and keep it within ${SESSION_TITLE_MAX_CHARS} characters: ${normalizedInput}`;
 
-    const result: SDKResultMessage = await unstable_v2_prompt(
-      `Generate a short, clear title (max 50 chars) for this conversation based on the user input below.
-IMPORTANT: The title MUST be in the SAME language as the user input. If user writes in Chinese, output Chinese title. If user writes in English, output English title.
-User input: ${userIntent}
-Output only the title, nothing else.`,
-      promptOptions as any
-    );
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: 80,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
+    });
 
-    if (result.subtype === 'success') {
-      return result.result;
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.warn(
+        '[cowork-title] Failed to generate title:',
+        response.status,
+        errorText.slice(0, 240)
+      );
+      return fallbackTitle;
     }
 
-    console.error('Claude SDK returned non-success result:', result);
-    return 'New Session';
+    const payload = await response.json();
+    const llmTitle = extractTextFromAnthropicResponse(payload);
+    return normalizeTitleToPlainText(llmTitle, fallbackTitle);
   } catch (error) {
     console.error('Failed to generate session title:', error);
-    console.error('Claude Code path:', claudeCodePath);
-    console.error('Is packaged:', app.isPackaged);
-    console.error('Resources path:', process.resourcesPath);
-
-    if (userIntent) {
-      const words = userIntent.trim().split(/\s+/).slice(0, 5);
-      return words.join(' ').toUpperCase() + (userIntent.trim().split(/\s+/).length > 5 ? '...' : '');
-    }
-
-    return 'New Session';
+    return fallbackTitle;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

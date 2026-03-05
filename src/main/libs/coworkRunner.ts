@@ -64,9 +64,9 @@ const LEGACY_SKILLS_ROOT_HINTS = [
   '/workspace/SKILLs',
 ];
 const INFERRED_FILE_SEARCH_IGNORE = new Set(['.git', 'node_modules', '.cowork-temp', '.idea', '.vscode']);
-const SANDBOX_HISTORY_MAX_MESSAGES = 24;
-const SANDBOX_HISTORY_MAX_TOTAL_CHARS = 32000;
-const SANDBOX_HISTORY_MAX_MESSAGE_CHARS = 4000;
+const SANDBOX_HISTORY_MAX_MESSAGES = 12;
+const SANDBOX_HISTORY_MAX_TOTAL_CHARS = 16000;
+const SANDBOX_HISTORY_MAX_MESSAGE_CHARS = 2000;
 const STREAM_UPDATE_THROTTLE_MS = 90;
 const STREAMING_TEXT_MAX_CHARS = 120_000;
 const STREAMING_THINKING_MAX_CHARS = 60_000;
@@ -536,8 +536,19 @@ export class CoworkRunner extends EventEmitter {
       return '<userMemories></userMemories>';
     }
 
-    const lines = memories
-      .map((memory) => `- ${this.escapeXml(memory.text)}`);
+    const MAX_ITEM_CHARS = 200;
+    const MAX_TOTAL_CHARS = 2000;
+    let totalChars = 0;
+    const lines: string[] = [];
+    for (const memory of memories) {
+      const text = memory.text.length > MAX_ITEM_CHARS
+        ? memory.text.slice(0, MAX_ITEM_CHARS) + '...'
+        : memory.text;
+      const line = `- ${this.escapeXml(text)}`;
+      if (totalChars + line.length > MAX_TOTAL_CHARS) break;
+      lines.push(line);
+      totalChars += line.length;
+    }
     return `<userMemories>\n${lines.join('\n')}\n</userMemories>`;
   }
 
@@ -1884,11 +1895,9 @@ export class CoworkRunner extends EventEmitter {
     workspaceRoot: string,
     cwd: string,
     confirmationMode: 'modal' | 'text',
-    userMemoriesXml: string,
     memoryEnabled: boolean
   ): string {
     const safetyPrompt = this.buildWorkspaceSafetyPrompt(workspaceRoot, cwd, confirmationMode);
-    const localTimePrompt = this.buildLocalTimeContextPrompt();
     const windowsEncodingPrompt = this.buildWindowsEncodingPrompt();
     const memoryRecallPrompt = [
       '## Memory Strategy',
@@ -1905,8 +1914,21 @@ export class CoworkRunner extends EventEmitter {
       );
     }
     const trimmedBasePrompt = baseSystemPrompt?.trim();
-    return [safetyPrompt, localTimePrompt, windowsEncodingPrompt, userMemoriesXml, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
+    return [safetyPrompt, windowsEncodingPrompt, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
       .filter((section): section is string => Boolean(section?.trim()))
+      .join('\n\n');
+  }
+
+  /**
+   * Build a dynamic prompt prefix containing time context and user memories.
+   * These are prepended to the user message (not the system prompt) so that
+   * the system prompt stays stable across turns and can benefit from prompt caching.
+   */
+  private buildPromptPrefix(): string {
+    const localTimePrompt = this.buildLocalTimeContextPrompt();
+    const userMemoriesXml = this.buildUserMemoriesXml();
+    return [localTimePrompt, userMemoriesXml]
+      .filter((section) => section?.trim())
       .join('\n\n');
   }
 
@@ -2217,13 +2239,14 @@ export class CoworkRunner extends EventEmitter {
       this.normalizeWorkspaceRoot(activeSession.workspaceRoot, sessionCwd),
       sessionCwd,
       activeSession.confirmationMode,
-      this.buildUserMemoriesXml(),
       this.store.getConfig().memoryEnabled
     );
 
     // Run claude-code using the SDK
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      const promptPrefix = this.buildPromptPrefix();
+      const effectivePrompt = promptPrefix ? `${promptPrefix}\n\n---\n\n${prompt}` : prompt;
+      await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork session error:', error);
     }
@@ -2286,18 +2309,29 @@ export class CoworkRunner extends EventEmitter {
 
     // Use provided systemPrompt (e.g. with updated skill routing) or fall back to session's stored one.
     // Always prepend workspace safety prompt so folder boundary rules are enforced at prompt level.
-    const baseSystemPrompt = options.systemPrompt ?? session.systemPrompt;
+    let baseSystemPrompt = options.systemPrompt ?? session.systemPrompt;
+
+    // On follow-up turns without new skill selection, strip the full available_skills
+    // block to reduce prompt size — the skill was already routed on the first turn.
+    if (!options.skillIds?.length && baseSystemPrompt?.includes('<available_skills>')) {
+      baseSystemPrompt = baseSystemPrompt.replace(
+        /## Skills \(mandatory\)[\s\S]*?<\/available_skills>/,
+        '## Skills\nSkill already loaded for this session. Continue following its instructions.'
+      );
+    }
+
     const effectiveSystemPrompt = this.composeEffectiveSystemPrompt(
       baseSystemPrompt,
       this.normalizeWorkspaceRoot(activeSession.workspaceRoot, sessionCwd),
       sessionCwd,
       activeSession.confirmationMode,
-      this.buildUserMemoriesXml(),
       this.store.getConfig().memoryEnabled
     );
 
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      const promptPrefix = this.buildPromptPrefix();
+      const effectivePrompt = promptPrefix ? `${promptPrefix}\n\n---\n\n${prompt}` : prompt;
+      await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork continue error:', error);
     }
@@ -4130,6 +4164,18 @@ export class CoworkRunner extends EventEmitter {
     }
 
     if (eventType === 'result') {
+      // Log token usage for observability
+      const usage = (payload.usage ?? (payload.result && typeof payload.result === 'object' ? (payload.result as Record<string, unknown>).usage : undefined)) as Record<string, unknown> | undefined;
+      if (usage) {
+        coworkLog('INFO', 'tokenUsage', 'Turn token usage', {
+          sessionId,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          cacheReadInputTokens: usage.cache_read_input_tokens,
+          cacheCreationInputTokens: usage.cache_creation_input_tokens,
+        });
+      }
+
       const subtype = String(payload.subtype ?? 'success');
       if (subtype !== 'success') {
         const errors = Array.isArray(payload.errors)
