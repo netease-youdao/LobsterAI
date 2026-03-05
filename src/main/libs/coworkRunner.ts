@@ -110,6 +110,105 @@ const PYTHON_PIP_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\
 const MEMORY_REQUEST_TAIL_SPLIT_RE = /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
 const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
+const WINDOWS_HIDE_INIT_SCRIPT_NAME = 'windows_hide_init.cjs';
+const WINDOWS_HIDE_INIT_SCRIPT_CONTENT = [
+  '\'use strict\';',
+  '',
+  'if (process.platform === \'win32\') {',
+  '  const childProcess = require(\'child_process\');',
+  '',
+  '  const addWindowsHide = (options) => {',
+  '    if (options == null) return { windowsHide: true };',
+  '    if (typeof options !== \'object\') return options;',
+  '    if (Object.prototype.hasOwnProperty.call(options, \'windowsHide\')) return options;',
+  '    return { ...options, windowsHide: true };',
+  '  };',
+  '',
+  '  const patch = (name, buildWrapper) => {',
+  '    const original = childProcess[name];',
+  '    if (typeof original !== \'function\') return;',
+  '    childProcess[name] = buildWrapper(original);',
+  '  };',
+  '',
+  '  patch(\'spawn\', (original) => function patchedSpawn(command, args, options) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      return original.call(this, command, args, addWindowsHide(options));',
+  '    }',
+  '    return original.call(this, command, addWindowsHide(args));',
+  '  });',
+  '',
+  '  patch(\'spawnSync\', (original) => function patchedSpawnSync(command, args, options) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      return original.call(this, command, args, addWindowsHide(options));',
+  '    }',
+  '    return original.call(this, command, addWindowsHide(args));',
+  '  });',
+  '',
+  '  patch(\'fork\', (original) => function patchedFork(modulePath, args, options) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      return original.call(this, modulePath, args, addWindowsHide(options));',
+  '    }',
+  '    return original.call(this, modulePath, addWindowsHide(args));',
+  '  });',
+  '',
+  '  patch(\'exec\', (original) => function patchedExec(command, options, callback) {',
+  '    if (typeof options === \'function\' || options === undefined) {',
+  '      return original.call(this, command, addWindowsHide(undefined), options);',
+  '    }',
+  '    return original.call(this, command, addWindowsHide(options), callback);',
+  '  });',
+  '',
+  '  patch(\'execFile\', (original) => function patchedExecFile(file, args, options, callback) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      if (typeof options === \'function\' || options === undefined) {',
+  '        return original.call(this, file, args, addWindowsHide(undefined), options);',
+  '      }',
+  '      return original.call(this, file, args, addWindowsHide(options), callback);',
+  '    }',
+  '    if (typeof args === \'function\' || args === undefined) {',
+  '      return original.call(this, file, addWindowsHide(undefined), args);',
+  '    }',
+  '    return original.call(this, file, addWindowsHide(args), options);',
+  '  });',
+  '}',
+  '',
+].join('\n');
+
+function ensureWindowsChildProcessHideInitScript(): string | null {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  try {
+    const initDir = path.join(app.getPath('userData'), 'cowork', 'bin');
+    fs.mkdirSync(initDir, { recursive: true });
+    const initScriptPath = path.join(initDir, WINDOWS_HIDE_INIT_SCRIPT_NAME);
+
+    const existing = fs.existsSync(initScriptPath)
+      ? fs.readFileSync(initScriptPath, 'utf8')
+      : '';
+    if (existing !== WINDOWS_HIDE_INIT_SCRIPT_CONTENT) {
+      fs.writeFileSync(initScriptPath, WINDOWS_HIDE_INIT_SCRIPT_CONTENT, 'utf8');
+    }
+    return initScriptPath;
+  } catch (error) {
+    coworkLog(
+      'WARN',
+      'runClaudeCodeLocal',
+      `Failed to prepare Windows child-process hide init script: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
+  }
+}
+
+function prependNodeRequireArg(args: string[], scriptPath: string): string[] {
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === '--require' && args[i + 1] === scriptPath) {
+      return args;
+    }
+  }
+  return ['--require', scriptPath, ...args];
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -2530,6 +2629,7 @@ export class CoworkRunner extends EventEmitter {
     const claudeCodePath = getClaudeCodePath();
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
     const electronNodeRuntimePath = getElectronNodeRuntimePath();
+    const windowsHideInitScript = ensureWindowsChildProcessHideInitScript();
     let stderrTail = '';
 
     // Log MCP-relevant environment for debugging
@@ -2755,7 +2855,19 @@ export class CoworkRunner extends EventEmitter {
           args: spawnOptions.args,
         });
 
-        const child = spawn(command, spawnOptions.args, {
+        const shouldInjectWindowsHideRequire =
+          process.platform === 'win32'
+          && Boolean(windowsHideInitScript)
+          && spawnOptions.args.length > 0
+          && /\.m?js$/i.test(path.basename(spawnOptions.args[0]));
+        const effectiveSpawnArgs = shouldInjectWindowsHideRequire
+          ? prependNodeRequireArg(spawnOptions.args, windowsHideInitScript as string)
+          : spawnOptions.args;
+        if (shouldInjectWindowsHideRequire) {
+          coworkLog('INFO', 'runClaudeCodeLocal', `Injected Windows hidden-subprocess preload: ${windowsHideInitScript}`);
+        }
+
+        const child = spawn(command, effectiveSpawnArgs, {
           cwd: spawnOptions.cwd,
           env: spawnEnv,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -2934,6 +3046,7 @@ export class CoworkRunner extends EventEmitter {
                   let effectiveStdioCommand = stdioCommand;
                   const stdioArgs = server.args || [];
                   let effectiveStdioArgs = [...stdioArgs];
+                  let shouldInjectWindowsHideRequire = false;
                   let stdioEnv = server.env && Object.keys(server.env).length > 0
                     ? { ...server.env }
                     : undefined;
@@ -2958,6 +3071,7 @@ export class CoworkRunner extends EventEmitter {
                     ) {
                       effectiveStdioCommand = electronNodeRuntimePath;
                       stdioEnv = withElectronNodeEnv(stdioEnv);
+                      shouldInjectWindowsHideRequire = true;
                       coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime`);
                     } else if (
                       (normalizedCommand === 'npx' || normalizedCommand === 'npx.cmd' || normalizedCommand.endsWith('\\npx.cmd') || normalizedCommand.endsWith('/npx.cmd'))
@@ -2967,6 +3081,7 @@ export class CoworkRunner extends EventEmitter {
                       effectiveStdioCommand = electronNodeRuntimePath;
                       effectiveStdioArgs = [npxCliJs, ...stdioArgs];
                       stdioEnv = withElectronNodeEnv(stdioEnv);
+                      shouldInjectWindowsHideRequire = true;
                       coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npx-cli.js`);
                     } else if (
                       (normalizedCommand === 'npm' || normalizedCommand === 'npm.cmd' || normalizedCommand.endsWith('\\npm.cmd') || normalizedCommand.endsWith('/npm.cmd'))
@@ -2976,8 +3091,14 @@ export class CoworkRunner extends EventEmitter {
                       effectiveStdioCommand = electronNodeRuntimePath;
                       effectiveStdioArgs = [npmCliJs, ...stdioArgs];
                       stdioEnv = withElectronNodeEnv(stdioEnv);
+                      shouldInjectWindowsHideRequire = true;
                       coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npm-cli.js`);
                     }
+                  }
+
+                  if (process.platform === 'win32' && shouldInjectWindowsHideRequire && windowsHideInitScript) {
+                    effectiveStdioArgs = prependNodeRequireArg(effectiveStdioArgs, windowsHideInitScript);
+                    coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": injected Windows hidden-subprocess preload`);
                   }
 
                   if (app.isPackaged && process.platform === 'darwin' && stdioCommand && path.isAbsolute(stdioCommand)) {
