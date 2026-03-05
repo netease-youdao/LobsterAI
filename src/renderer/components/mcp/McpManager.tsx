@@ -10,7 +10,7 @@ import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
 import { setMcpServers } from '../../store/slices/mcpSlice';
 import { RootState } from '../../store';
-import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
+import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo } from '../../types/mcp';
 import { mcpRegistry, mcpCategories } from '../../data/mcpRegistry';
 import ErrorMessage from '../ErrorMessage';
 import Tooltip from '../ui/Tooltip';
@@ -37,6 +37,8 @@ const McpManager: React.FC = () => {
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
   const [installingRegistry, setInstallingRegistry] = useState<McpRegistryEntry | null>(null);
   const [activeCategory, setActiveCategory] = useState('all');
+  const [dynamicRegistry, setDynamicRegistry] = useState<McpRegistryEntry[]>(mcpRegistry);
+  const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(mcpCategories);
 
   useEffect(() => {
     let isActive = true;
@@ -48,6 +50,29 @@ const McpManager: React.FC = () => {
     loadServers();
     return () => { isActive = false; };
   }, [dispatch]);
+
+  useEffect(() => {
+    let isActive = true;
+    const fetchMarketplace = async () => {
+      const result = await mcpService.fetchMarketplace();
+      if (!isActive || !result) return;
+      setDynamicRegistry(result.registry);
+      const cats: Array<{ id: string; key: string; name_zh?: string; name_en?: string }> = [
+        { id: 'all', key: 'mcpCategoryAll' },
+        ...result.categories
+          .filter((c: McpMarketplaceCategoryInfo) => c.id !== 'all')
+          .map((c: McpMarketplaceCategoryInfo) => ({
+            id: c.id,
+            key: '',
+            name_zh: c.name_zh,
+            name_en: c.name_en,
+          })),
+      ];
+      setDynamicCategories(cats);
+    };
+    fetchMarketplace();
+    return () => { isActive = false; };
+  }, []);
 
   const installedRegistryIds = useMemo(() => {
     const ids = new Set<string>();
@@ -78,18 +103,18 @@ const McpManager: React.FC = () => {
 
   const filteredMarketplace = useMemo(() => {
     const query = searchQuery.toLowerCase();
-    let entries = [...mcpRegistry];
+    let entries = [...dynamicRegistry];
     if (query) {
       entries = entries.filter(e =>
         e.name.toLowerCase().includes(query)
-        || i18nService.t(e.descriptionKey).toLowerCase().includes(query)
+        || ((i18nService.getLanguage() === 'zh' ? e.description_zh : e.description_en) || i18nService.t(e.descriptionKey)).toLowerCase().includes(query)
       );
     }
     if (activeCategory !== 'all') {
       entries = entries.filter(e => e.category === activeCategory);
     }
     return entries;
-  }, [searchQuery, activeCategory]);
+  }, [searchQuery, activeCategory, dynamicRegistry]);
 
   const handleToggleEnabled = async (serverId: string) => {
     const targetServer = servers.find(s => s.id === serverId);
@@ -193,8 +218,8 @@ const McpManager: React.FC = () => {
   const existingNames = useMemo(() => servers.map(s => s.name), [servers]);
 
   const marketplaceCount = useMemo(
-    () => mcpRegistry.length,
-    []
+    () => dynamicRegistry.length,
+    [dynamicRegistry]
   );
 
   const customCount = useMemo(
@@ -367,7 +392,7 @@ const McpManager: React.FC = () => {
         <div>
           {/* Category filter pills */}
           <div className="flex items-center gap-1.5 mb-4 flex-wrap">
-            {mcpCategories.map((cat) => (
+            {dynamicCategories.map((cat) => (
               <button
                 key={cat.id}
                 type="button"
@@ -378,7 +403,7 @@ const McpManager: React.FC = () => {
                     : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border'
                 }`}
               >
-                {i18nService.t(cat.key)}
+                {(i18nService.getLanguage() === 'zh' ? cat.name_zh : cat.name_en) || i18nService.t(cat.key)}
               </button>
             ))}
           </div>
@@ -421,7 +446,7 @@ const McpManager: React.FC = () => {
                   </div>
 
                   <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                    {i18nService.t(entry.descriptionKey)}
+                    {(i18nService.getLanguage() === 'zh' ? entry.description_zh : entry.description_en) || i18nService.t(entry.descriptionKey)}
                   </p>
 
                   <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
