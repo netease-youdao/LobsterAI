@@ -74,6 +74,7 @@ const TOOL_RESULT_MAX_CHARS = 120_000;
 const FINAL_RESULT_MAX_CHARS = 120_000;
 const STDERR_TAIL_MAX_CHARS = 24_000;
 const SDK_STARTUP_TIMEOUT_MS = 30_000;
+const SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS = 120_000;
 const STDERR_FATAL_PATTERNS = [
   /authentication[_ ]error/i,
   /invalid[_ ]api[_ ]key/i,
@@ -2716,6 +2717,19 @@ export class CoworkRunner extends EventEmitter {
         }
 
         let command = spawnOptions.command || 'node';
+        if (process.platform === 'win32') {
+          const normalizedCommand = command.trim().toLowerCase();
+          const isNodeLikeCommand = normalizedCommand === 'node'
+            || normalizedCommand === 'node.exe'
+            || normalizedCommand.endsWith('\\node.cmd')
+            || normalizedCommand.endsWith('/node.cmd');
+          if (isNodeLikeCommand) {
+            command = electronNodeRuntimePath;
+            spawnEnv.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+            coworkLog('INFO', 'runClaudeCodeLocal', `Rewrote Windows SDK command "${spawnOptions.command || 'node'}" to Electron runtime: ${electronNodeRuntimePath}`);
+          }
+        }
+
         if (app.isPackaged && process.platform === 'darwin' && command && path.isAbsolute(command)) {
           const commandCandidates = new Set<string>([command, path.resolve(command)]);
           const appExecCandidates = new Set<string>([process.execPath, path.resolve(process.execPath)]);
@@ -2745,6 +2759,7 @@ export class CoworkRunner extends EventEmitter {
           cwd: spawnOptions.cwd,
           env: spawnEnv,
           stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: process.platform === 'win32',
           signal: spawnOptions.signal,
         });
 
@@ -2897,6 +2912,7 @@ export class CoworkRunner extends EventEmitter {
           tools: memoryTools,
         }),
       };
+      let userMcpServerCount = 0;
 
       // Inject user-configured MCP servers (local mode only)
       if (this.mcpServerProvider) {
@@ -2917,9 +2933,52 @@ export class CoworkRunner extends EventEmitter {
                   const stdioCommand = server.command || '';
                   let effectiveStdioCommand = stdioCommand;
                   const stdioArgs = server.args || [];
+                  let effectiveStdioArgs = [...stdioArgs];
                   let stdioEnv = server.env && Object.keys(server.env).length > 0
                     ? { ...server.env }
                     : undefined;
+
+                  if (process.platform === 'win32' && app.isPackaged && effectiveStdioCommand) {
+                    const normalizedCommand = effectiveStdioCommand.trim().toLowerCase();
+                    const npmBinDir = envVars.LOBSTERAI_NPM_BIN_DIR;
+                    const npxCliJs = npmBinDir ? path.join(npmBinDir, 'npx-cli.js') : '';
+                    const npmCliJs = npmBinDir ? path.join(npmBinDir, 'npm-cli.js') : '';
+
+                    const withElectronNodeEnv = (base: Record<string, string> | undefined): Record<string, string> => ({
+                      ...(base || {}),
+                      ELECTRON_RUN_AS_NODE: '1',
+                      LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
+                    });
+
+                    if (
+                      normalizedCommand === 'node'
+                      || normalizedCommand === 'node.exe'
+                      || normalizedCommand.endsWith('\\node.cmd')
+                      || normalizedCommand.endsWith('/node.cmd')
+                    ) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      stdioEnv = withElectronNodeEnv(stdioEnv);
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime`);
+                    } else if (
+                      (normalizedCommand === 'npx' || normalizedCommand === 'npx.cmd' || normalizedCommand.endsWith('\\npx.cmd') || normalizedCommand.endsWith('/npx.cmd'))
+                      && npxCliJs
+                      && fs.existsSync(npxCliJs)
+                    ) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      effectiveStdioArgs = [npxCliJs, ...stdioArgs];
+                      stdioEnv = withElectronNodeEnv(stdioEnv);
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npx-cli.js`);
+                    } else if (
+                      (normalizedCommand === 'npm' || normalizedCommand === 'npm.cmd' || normalizedCommand.endsWith('\\npm.cmd') || normalizedCommand.endsWith('/npm.cmd'))
+                      && npmCliJs
+                      && fs.existsSync(npmCliJs)
+                    ) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      effectiveStdioArgs = [npmCliJs, ...stdioArgs];
+                      stdioEnv = withElectronNodeEnv(stdioEnv);
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npm-cli.js`);
+                    }
+                  }
 
                   if (app.isPackaged && process.platform === 'darwin' && stdioCommand && path.isAbsolute(stdioCommand)) {
                     const commandCandidates = new Set<string>([stdioCommand, path.resolve(stdioCommand)]);
@@ -2962,29 +3021,38 @@ export class CoworkRunner extends EventEmitter {
                 serverConfig = {
                   type: 'stdio',
                   command: effectiveStdioCommand,
-                  args: stdioArgs,
+                  args: effectiveStdioArgs,
                   env: stdioEnv && Object.keys(stdioEnv).length > 0 ? stdioEnv : undefined,
                 };
-                coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": stdio command="${server.command}", args=${JSON.stringify(server.args || [])}`);
+                coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": stdio command="${effectiveStdioCommand}", args=${JSON.stringify(effectiveStdioArgs)}`);
                 if (stdioEnv && Object.keys(stdioEnv).length > 0) {
                   coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": custom env vars: ${JSON.stringify(stdioEnv)}`);
                 }
                 // Resolve command path to verify it's findable
                 if (effectiveStdioCommand) {
-                  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-                  try {
-                    const resolveResult = spawnSync(whichCmd, [effectiveStdioCommand], {
-                      env: { ...envVars, ...(stdioEnv || {}) } as NodeJS.ProcessEnv,
-                      encoding: 'utf-8',
-                      timeout: 5000,
-                    });
-                    if (resolveResult.status === 0 && resolveResult.stdout) {
-                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" resolves to: ${resolveResult.stdout.trim()}`);
-                    } else {
-                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
+                  if (path.isAbsolute(effectiveStdioCommand)) {
+                    coworkLog(
+                      fs.existsSync(effectiveStdioCommand) ? 'INFO' : 'WARN',
+                      'runClaudeCodeLocal',
+                      `MCP "${serverKey}": absolute command "${effectiveStdioCommand}" exists=${fs.existsSync(effectiveStdioCommand)}`
+                    );
+                  } else {
+                    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+                    try {
+                      const resolveResult = spawnSync(whichCmd, [effectiveStdioCommand], {
+                        env: { ...envVars, ...(stdioEnv || {}) } as NodeJS.ProcessEnv,
+                        encoding: 'utf-8',
+                        timeout: 5000,
+                        windowsHide: process.platform === 'win32',
+                      });
+                      if (resolveResult.status === 0 && resolveResult.stdout) {
+                        coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" resolves to: ${resolveResult.stdout.trim()}`);
+                      } else {
+                        coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
+                      }
+                    } catch (e) {
+                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${effectiveStdioCommand}": ${e instanceof Error ? e.message : String(e)}`);
                     }
-                  } catch (e) {
-                    coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${effectiveStdioCommand}": ${e instanceof Error ? e.message : String(e)}`);
                   }
                 }
                 break;
@@ -3011,6 +3079,7 @@ export class CoworkRunner extends EventEmitter {
               ...(options.mcpServers as Record<string, unknown>),
               [serverKey]: serverConfig,
             };
+            userMcpServerCount += 1;
             coworkLog('INFO', 'runClaudeCodeLocal', `Injected user MCP server: "${serverKey}" (${server.transportType})`);
           }
         } catch (error) {
@@ -3093,14 +3162,19 @@ export class CoworkRunner extends EventEmitter {
       // Set up a startup timeout BEFORE calling query(): if no events arrive
       // within the timeout, abort. This covers both the query() call itself
       // (which spawns the subprocess) and the initial event wait.
+      const startupTimeoutMs = userMcpServerCount > 0
+        ? SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS
+        : SDK_STARTUP_TIMEOUT_MS;
+      coworkLog('INFO', 'runClaudeCodeLocal', `Using SDK startup timeout: ${startupTimeoutMs}ms (userMcpServers=${userMcpServerCount})`);
       startupTimer = setTimeout(() => {
         coworkLog('ERROR', 'runClaudeCodeLocal', 'SDK startup timeout: no events received within timeout', {
-          timeoutMs: SDK_STARTUP_TIMEOUT_MS,
+          timeoutMs: startupTimeoutMs,
+          userMcpServers: userMcpServerCount,
         });
         if (!abortController.signal.aborted) {
           abortController.abort();
         }
-      }, SDK_STARTUP_TIMEOUT_MS);
+      }, startupTimeoutMs);
 
       const result = await query({ prompt: queryPrompt, options } as any);
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');

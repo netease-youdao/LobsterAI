@@ -36,6 +36,7 @@ function hasCommandInEnv(command: string, env: Record<string, string | undefined
       env: { ...env } as NodeJS.ProcessEnv,
       encoding: 'utf-8',
       timeout: 5000,
+      windowsHide: process.platform === 'win32',
     });
     return result.status === 0;
   } catch {
@@ -149,6 +150,27 @@ function resolveUserShellPath(): string | null {
  */
 let cachedWindowsRegistryPath: string | null | undefined;
 
+function readWindowsRegistryPathValue(registryKey: string): string {
+  try {
+    const output = execSync(`reg query "${registryKey}" /v Path`, {
+      encoding: 'utf-8',
+      timeout: 8000,
+      windowsHide: true,
+    });
+
+    for (const line of output.split(/\r?\n/)) {
+      const match = line.match(/^\s*Path\s+REG_\w+\s+(.+)$/i);
+      if (match?.[1]) {
+        return match[1].trim();
+      }
+    }
+  } catch {
+    // Ignore missing keys or access-denied errors.
+  }
+
+  return '';
+}
+
 /**
  * Resolve the latest PATH from the Windows registry (Machine + User).
  *
@@ -173,30 +195,10 @@ function resolveWindowsRegistryPath(): string | null {
   }
 
   try {
-    // Use PowerShell to read both Machine and User PATH from registry.
-    // [Environment]::GetEnvironmentVariable reads directly from the registry,
-    // not from the current process environment, so it always returns the latest values.
-    //
-    // Use -EncodedCommand with Base64 to avoid quote-escaping issues.
-    // When Node.js calls execSync, outer double quotes for `-Command "..."` can
-    // conflict with inner double quotes needed by PowerShell string arguments.
-    // -EncodedCommand bypasses all quoting problems entirely.
-    const psScript = [
-      '$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")',
-      '$userPath = [Environment]::GetEnvironmentVariable("Path", "User")',
-      '[Console]::Write("$machinePath;$userPath")',
-    ].join('; ');
-    // PowerShell -EncodedCommand expects a Base64-encoded UTF-16LE string
-    const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
-
-    const result = execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encodedCommand}`, {
-      encoding: 'utf-8',
-      timeout: 10000,
-      windowsHide: true,
-    });
-
-    const registryPath = result.trim();
-    if (registryPath) {
+    const machinePath = readWindowsRegistryPathValue('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment');
+    const userPath = readWindowsRegistryPathValue('HKCU\\Environment');
+    const registryPath = [machinePath, userPath].filter(Boolean).join(';');
+    if (registryPath.trim()) {
       // Deduplicate and remove empty entries
       const entries = registryPath
         .split(';')
@@ -1172,20 +1174,36 @@ function verifyNodeEnvironment(env: Record<string, string | undefined>): void {
         env: { ...env } as NodeJS.ProcessEnv,
         encoding: 'utf-8',
         timeout: 5000,
+        windowsHide: process.platform === 'win32',
       });
       if (result.status === 0 && result.stdout) {
         const resolved = result.stdout.trim();
         coworkLog('INFO', tag, `${whichCmd} ${tool} => ${resolved}`);
+        const resolvedCandidates = resolved
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const resolvedForExec = process.platform === 'win32'
+          ? resolvedCandidates.find((candidate) => /\.(cmd|exe|bat)$/i.test(candidate)) || resolvedCandidates[0]
+          : resolvedCandidates[0];
 
         // Try to get version
-        if (tool === 'node') {
+        if (tool === 'node' && resolvedForExec) {
           try {
-            const versionResult = spawnSync(resolved, ['--version'], {
+            let execTarget = resolvedForExec;
+            if (process.platform === 'win32' && /\.cmd$/i.test(resolvedForExec)) {
+              execTarget = env.LOBSTERAI_ELECTRON_PATH || process.execPath;
+            }
+            const versionResult = spawnSync(execTarget, ['--version'], {
               env: { ...env, ELECTRON_RUN_AS_NODE: '1' } as NodeJS.ProcessEnv,
               encoding: 'utf-8',
               timeout: 5000,
+              windowsHide: process.platform === 'win32',
             });
-            coworkLog('INFO', tag, `node --version => ${(versionResult.stdout || '').trim()} (exit: ${versionResult.status})`);
+            coworkLog('INFO', tag, `node --version (${execTarget}) => ${(versionResult.stdout || '').trim()} (exit: ${versionResult.status})`);
+            if (versionResult.error) {
+              coworkLog('WARN', tag, `node --version spawn error: ${versionResult.error.message}`);
+            }
             if (versionResult.stderr) {
               coworkLog('WARN', tag, `node --version stderr: ${versionResult.stderr.trim()}`);
             }
