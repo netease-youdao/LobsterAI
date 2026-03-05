@@ -39,6 +39,7 @@ const McpManager: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState('all');
   const [dynamicRegistry, setDynamicRegistry] = useState<McpRegistryEntry[]>(mcpRegistry);
   const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(mcpCategories);
+  const currentLanguage = i18nService.getLanguage();
 
   useEffect(() => {
     let isActive = true;
@@ -82,14 +83,62 @@ const McpManager: React.FC = () => {
     return ids;
   }, [servers]);
 
+  const getRegistryEntryDescription = (entry: McpRegistryEntry): string => {
+    const remoteDescription = currentLanguage === 'zh' ? entry.description_zh : entry.description_en;
+    if (remoteDescription) return remoteDescription;
+    if (entry.descriptionKey) return i18nService.t(entry.descriptionKey);
+    return '';
+  };
+
+  const getStdioCommandSummary = (command?: string, args?: string[]): string => {
+    if (!command) return '';
+    if (!args || args.length === 0) return command;
+    return `${command} ${args[args.length - 1]}`;
+  };
+
+  const getRegistryEntryForServer = (server: McpServerConfig): McpRegistryEntry | undefined => {
+    if (server.registryId) {
+      return dynamicRegistry.find(entry => entry.id === server.registryId);
+    }
+    if (!server.isBuiltIn) return undefined;
+    return dynamicRegistry.find((entry) => (
+      entry.name.toLowerCase() === server.name.toLowerCase()
+      && entry.transportType === server.transportType
+      && entry.command === server.command
+    ));
+  };
+
+  const getTransportSummary = (server: McpServerConfig): string => {
+    if (server.transportType === 'stdio') {
+      const parts = [server.command || ''];
+      if (server.args && server.args.length > 0) {
+        parts.push(server.args[0]);
+        if (server.args.length > 1) parts.push('...');
+      }
+      return parts.join(' ');
+    }
+    return server.url || '';
+  };
+
+  const getInstalledDescription = (server: McpServerConfig): string => {
+    const persistedDescription = server.description?.trim();
+    if (persistedDescription) return persistedDescription;
+    const registryEntry = getRegistryEntryForServer(server);
+    if (registryEntry) {
+      const registryDescription = getRegistryEntryDescription(registryEntry).trim();
+      if (registryDescription) return registryDescription;
+    }
+    return getTransportSummary(server);
+  };
+
   const filteredInstalled = useMemo(() => {
     const query = searchQuery.toLowerCase();
     if (!query) return servers;
     return servers.filter(server =>
       server.name.toLowerCase().includes(query)
-      || server.description.toLowerCase().includes(query)
+      || getInstalledDescription(server).toLowerCase().includes(query)
     );
-  }, [servers, searchQuery]);
+  }, [servers, searchQuery, dynamicRegistry, currentLanguage]);
 
   const filteredCustom = useMemo(() => {
     const custom = servers.filter(s => !s.isBuiltIn);
@@ -107,14 +156,14 @@ const McpManager: React.FC = () => {
     if (query) {
       entries = entries.filter(e =>
         e.name.toLowerCase().includes(query)
-        || ((i18nService.getLanguage() === 'zh' ? e.description_zh : e.description_en) || i18nService.t(e.descriptionKey)).toLowerCase().includes(query)
+        || getRegistryEntryDescription(e).toLowerCase().includes(query)
       );
     }
     if (activeCategory !== 'all') {
       entries = entries.filter(e => e.category === activeCategory);
     }
     return entries;
-  }, [searchQuery, activeCategory, dynamicRegistry]);
+  }, [searchQuery, activeCategory, dynamicRegistry, currentLanguage]);
 
   const handleToggleEnabled = async (serverId: string) => {
     const targetServer = servers.find(s => s.id === serverId);
@@ -201,18 +250,6 @@ const McpManager: React.FC = () => {
     setEditingServer(null);
     setInstallingRegistry(null);
     setIsFormOpen(true);
-  };
-
-  const getTransportSummary = (server: McpServerConfig): string => {
-    if (server.transportType === 'stdio') {
-      const parts = [server.command || ''];
-      if (server.args && server.args.length > 0) {
-        parts.push(server.args[0]);
-        if (server.args.length > 1) parts.push('...');
-      }
-      return parts.join(' ');
-    }
-    return server.url || '';
   };
 
   const existingNames = useMemo(() => servers.map(s => s.name), [servers]);
@@ -307,82 +344,94 @@ const McpManager: React.FC = () => {
               {i18nService.t('mcpNoInstalledServers')}
             </div>
           ) : (
-            filteredInstalled.map((server) => (
-              <div
-                key={server.id}
-                className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50"
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
-                      <ConnectorIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-                    </div>
-                    <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
-                      {server.name}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditForm(server)}
-                      className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                      title={i18nService.t('editMcpServer')}
-                    >
-                      <PencilIcon className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleRequestDelete(server)}
-                      className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                      title={i18nService.t('deleteMcpServer')}
-                    >
-                      <TrashIcon className="h-3.5 w-3.5" />
-                    </button>
-                    <div
-                      className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
-                        server.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
-                      }`}
-                      onClick={() => handleToggleEnabled(server.id)}
-                    >
-                      <div
-                        className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
-                          server.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                        }`}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <Tooltip
-                  content={server.description || getTransportSummary(server)}
-                  position="bottom"
-                  maxWidth="360px"
-                  className="block w-full"
+            filteredInstalled.map((server) => {
+              const registryEntry = getRegistryEntryForServer(server);
+              const installedDescription = getInstalledDescription(server);
+              return (
+                <div
+                  key={server.id}
+                  className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50"
                 >
-                  <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                    {server.description || getTransportSummary(server)}
-                  </p>
-                </Tooltip>
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
+                        <ConnectorIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                      </div>
+                      <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
+                        {server.name}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditForm(server)}
+                        className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
+                        title={i18nService.t('editMcpServer')}
+                      >
+                        <PencilIcon className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRequestDelete(server)}
+                        className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                        title={i18nService.t('deleteMcpServer')}
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                      </button>
+                      <div
+                        className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
+                          server.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
+                        }`}
+                        onClick={() => handleToggleEnabled(server.id)}
+                      >
+                        <div
+                          className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
+                            server.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
 
-                <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  <span className={`px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
-                    {server.transportType}
-                  </span>
-                  {server.transportType === 'stdio' && server.command && (
-                    <>
-                      <span>·</span>
-                      <span className="truncate">{server.command}</span>
-                    </>
-                  )}
-                  {(server.transportType === 'sse' || server.transportType === 'http') && server.url && (
-                    <>
-                      <span>·</span>
-                      <span className="truncate">{server.url}</span>
-                    </>
-                  )}
+                  <Tooltip
+                    content={installedDescription}
+                    position="bottom"
+                    maxWidth="360px"
+                    className="block w-full"
+                  >
+                    <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
+                      {installedDescription}
+                    </p>
+                  </Tooltip>
+
+                  <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    <span className={`px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
+                      {server.transportType}
+                    </span>
+                    {server.transportType === 'stdio' && server.command && (
+                      <>
+                        <span>·</span>
+                        <span className="truncate">{getStdioCommandSummary(server.command, server.args)}</span>
+                      </>
+                    )}
+                    {(server.transportType === 'sse' || server.transportType === 'http') && server.url && (
+                      <>
+                        <span>·</span>
+                        <span className="truncate">{server.url}</span>
+                      </>
+                    )}
+                    {registryEntry?.requiredEnvKeys && registryEntry.requiredEnvKeys.length > 0 && (
+                      <>
+                        <span>·</span>
+                        <span className="text-amber-500 dark:text-amber-400">
+                          {registryEntry.requiredEnvKeys.length} key{registryEntry.requiredEnvKeys.length > 1 ? 's' : ''}
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -446,7 +495,7 @@ const McpManager: React.FC = () => {
                   </div>
 
                   <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                    {(i18nService.getLanguage() === 'zh' ? entry.description_zh : entry.description_en) || i18nService.t(entry.descriptionKey)}
+                    {getRegistryEntryDescription(entry)}
                   </p>
 
                   <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -454,7 +503,7 @@ const McpManager: React.FC = () => {
                       {entry.transportType}
                     </span>
                     <span>·</span>
-                    <span className="truncate">{entry.command} {entry.defaultArgs[entry.defaultArgs.length - 1]}</span>
+                    <span className="truncate">{getStdioCommandSummary(entry.command, entry.defaultArgs)}</span>
                     {entry.requiredEnvKeys && entry.requiredEnvKeys.length > 0 && (
                       <>
                         <span>·</span>

@@ -55,7 +55,10 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     } else if (registryEntry) {
       // Registry install mode — pre-fill from template
       setName(registryEntry.name);
-      setDescription(i18nService.t(registryEntry.descriptionKey));
+      const registryDescription =
+        (i18nService.getLanguage() === 'zh' ? registryEntry.description_zh : registryEntry.description_en)
+        || (registryEntry.descriptionKey ? i18nService.t(registryEntry.descriptionKey) : '');
+      setDescription(registryDescription);
       setTransportType(registryEntry.transportType);
       setCommand(registryEntry.command);
       // defaultArgs + argPlaceholders
