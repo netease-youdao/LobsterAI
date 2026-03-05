@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { type ChildProcessByStdio } from 'child_process';
+import { type ChildProcessByStdio, spawnSync } from 'child_process';
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -2556,6 +2556,22 @@ export class CoworkRunner extends EventEmitter {
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
     let stderrTail = '';
 
+    // Log MCP-relevant environment for debugging
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: isPackaged=${app.isPackaged}, platform=${process.platform}, arch=${process.arch}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_ELECTRON_PATH=${envVars.LOBSTERAI_ELECTRON_PATH || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: ELECTRON_RUN_AS_NODE=${envVars.ELECTRON_RUN_AS_NODE || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: NODE_PATH=${envVars.NODE_PATH || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: HOME=${envVars.HOME || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: TMPDIR=${envVars.TMPDIR || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_NPM_BIN_DIR=${envVars.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: claudeCodePath=${claudeCodePath}`);
+    // Log full PATH split by delimiter
+    const pathEntries = (envVars.PATH || '').split(path.delimiter);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: PATH has ${pathEntries.length} entries:`);
+    for (let i = 0; i < pathEntries.length; i++) {
+      coworkLog('INFO', 'runClaudeCodeLocal', `  PATH[${i}]: ${pathEntries[i]}`);
+    }
+
     // When packaged, process.execPath is the Electron binary.
     // child_process.fork() uses process.execPath by default, so without
     // ELECTRON_RUN_AS_NODE the SDK would launch another Electron app instance
@@ -2832,6 +2848,7 @@ export class CoworkRunner extends EventEmitter {
       if (this.mcpServerProvider) {
         try {
           const enabledMcpServers = this.mcpServerProvider();
+          coworkLog('INFO', 'runClaudeCodeLocal', `MCP: ${enabledMcpServers.length} user-configured servers found`);
           for (const server of enabledMcpServers) {
             const serverKey = server.name;
             // Skip if name conflicts with existing MCP servers (e.g., memory server)
@@ -2848,6 +2865,28 @@ export class CoworkRunner extends EventEmitter {
                   args: server.args || [],
                   env: server.env && Object.keys(server.env).length > 0 ? server.env : undefined,
                 };
+                coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": stdio command="${server.command}", args=${JSON.stringify(server.args || [])}`);
+                if (server.env && Object.keys(server.env).length > 0) {
+                  coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": custom env vars: ${JSON.stringify(server.env)}`);
+                }
+                // Resolve command path to verify it's findable
+                if (server.command) {
+                  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+                  try {
+                    const resolveResult = spawnSync(whichCmd, [server.command], {
+                      env: { ...envVars, ...(server.env || {}) } as NodeJS.ProcessEnv,
+                      encoding: 'utf-8',
+                      timeout: 5000,
+                    });
+                    if (resolveResult.status === 0 && resolveResult.stdout) {
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${server.command}" resolves to: ${resolveResult.stdout.trim()}`);
+                    } else {
+                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${server.command}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
+                    }
+                  } catch (e) {
+                    coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${server.command}": ${e instanceof Error ? e.message : String(e)}`);
+                  }
+                }
                 break;
               case 'sse':
                 serverConfig = {
@@ -2875,6 +2914,36 @@ export class CoworkRunner extends EventEmitter {
           }
         } catch (error) {
           coworkLog('WARN', 'runClaudeCodeLocal', `Failed to load user MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      // Log final MCP server config summary
+      if (options.mcpServers) {
+        const mcpKeys = Object.keys(options.mcpServers as Record<string, unknown>);
+        coworkLog('INFO', 'runClaudeCodeLocal', `MCP final config: ${mcpKeys.length} servers: [${mcpKeys.join(', ')}]`);
+        for (const key of mcpKeys) {
+          const cfg = (options.mcpServers as Record<string, Record<string, unknown>>)[key];
+          if (cfg && typeof cfg === 'object' && 'type' in cfg) {
+            coworkLog('INFO', 'runClaudeCodeLocal', `MCP server "${key}": type=${cfg.type}, command=${cfg.command || 'N/A'}, args=${JSON.stringify(cfg.args || [])}`);
+          }
+        }
+        // Dump full MCP config as JSON for complete debugging
+        try {
+          const serializable: Record<string, unknown> = {};
+          for (const key of mcpKeys) {
+            const cfg = (options.mcpServers as Record<string, Record<string, unknown>>)[key];
+            if (cfg && typeof cfg === 'object') {
+              // Only serialize plain config objects; skip SDK server instances
+              if ('type' in cfg && typeof cfg.type === 'string') {
+                serializable[key] = cfg;
+              } else {
+                serializable[key] = { type: '(SDK server instance)' };
+              }
+            }
+          }
+          coworkLog('INFO', 'runClaudeCodeLocal', `MCP full config dump: ${JSON.stringify(serializable, null, 2)}`);
+        } catch (e) {
+          coworkLog('WARN', 'runClaudeCodeLocal', `MCP config dump failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
 

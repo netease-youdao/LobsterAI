@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import { execSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
@@ -330,11 +330,13 @@ function getWindowsGitToolDirs(bashPath: string): string[] {
   return candidates.filter((dir) => existsSync(dir));
 }
 
-function ensureElectronNodeShim(electronPath: string): string | null {
+function ensureElectronNodeShim(electronPath: string, npmBinDir?: string): string | null {
   try {
     const shimDir = join(app.getPath('userData'), 'cowork', 'bin');
     mkdirSync(shimDir, { recursive: true });
+    coworkLog('INFO', 'resolveNodeShim', `Shim directory: ${shimDir}, electronPath: ${electronPath}, npmBinDir: ${npmBinDir || '(none)'}`);
 
+    // --- node shim ---
     // Shell script (macOS/Linux/Windows git-bash)
     const nodeSh = join(shimDir, 'node');
     const nodeShContent = [
@@ -353,6 +355,7 @@ function ensureElectronNodeShim(electronPath: string): string | null {
     } catch {
       // Ignore chmod errors on file systems that do not support POSIX modes.
     }
+    coworkLog('INFO', 'resolveNodeShim', `Created node bash shim: ${nodeSh}`);
 
     // Windows .cmd wrapper (only needed on Windows)
     if (process.platform === 'win32') {
@@ -368,6 +371,101 @@ function ensureElectronNodeShim(electronPath: string): string | null {
         '',
       ].join('\r\n');
       writeFileSync(nodeCmd, nodeCmdContent, 'utf8');
+      coworkLog('INFO', 'resolveNodeShim', `Created node.cmd shim: ${nodeCmd}`);
+    }
+
+    // --- npx / npm shims ---
+    // Create shims that invoke npx-cli.js / npm-cli.js from the bundled npm
+    // package via the node shim above. This avoids relying on symlinks in
+    // node_modules/.bin which do not work on Windows cross-platform builds.
+    if (npmBinDir && existsSync(npmBinDir)) {
+      const npxCliJs = join(npmBinDir, 'npx-cli.js');
+      const npmCliJs = join(npmBinDir, 'npm-cli.js');
+
+      // Convert to POSIX path for bash scripts on Windows (git-bash)
+      const npxCliJsPosix = npxCliJs.replace(/\\/g, '/');
+      const npmCliJsPosix = npmCliJs.replace(/\\/g, '/');
+
+      coworkLog('INFO', 'resolveNodeShim', `npmBinDir exists: true, npx-cli.js exists: ${existsSync(npxCliJs)}, npm-cli.js exists: ${existsSync(npmCliJs)}`);
+
+      if (existsSync(npxCliJs)) {
+        // npx bash shim
+        const npxSh = join(shimDir, 'npx');
+        const npxShContent = [
+          '#!/usr/bin/env bash',
+          'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"',
+          `exec "$SCRIPT_DIR/node" "${npxCliJsPosix}" "$@"`,
+          '',
+        ].join('\n');
+        writeFileSync(npxSh, npxShContent, 'utf8');
+        try { chmodSync(npxSh, 0o755); } catch { /* ignore */ }
+        coworkLog('INFO', 'resolveNodeShim', `Created npx bash shim: ${npxSh} -> ${npxCliJsPosix}`);
+
+        // npx.cmd for Windows — uses %LOBSTERAI_NPM_BIN_DIR% env var to avoid
+        // hardcoding paths that may contain non-ASCII chars (breaks GBK cmd.exe).
+        if (process.platform === 'win32') {
+          const npxCmd = join(shimDir, 'npx.cmd');
+          const npxCmdContent = [
+            '@echo off',
+            '"%~dp0node.cmd" "%LOBSTERAI_NPM_BIN_DIR%\\npx-cli.js" %*',
+            '',
+          ].join('\r\n');
+          writeFileSync(npxCmd, npxCmdContent, 'utf8');
+          coworkLog('INFO', 'resolveNodeShim', `Created npx.cmd shim: ${npxCmd} (using env var LOBSTERAI_NPM_BIN_DIR)`);
+        }
+      } else {
+        coworkLog('WARN', 'resolveNodeShim', `npx-cli.js not found at: ${npxCliJs}`);
+      }
+
+      if (existsSync(npmCliJs)) {
+        // npm bash shim
+        const npmSh = join(shimDir, 'npm');
+        const npmShContent = [
+          '#!/usr/bin/env bash',
+          'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"',
+          `exec "$SCRIPT_DIR/node" "${npmCliJsPosix}" "$@"`,
+          '',
+        ].join('\n');
+        writeFileSync(npmSh, npmShContent, 'utf8');
+        try { chmodSync(npmSh, 0o755); } catch { /* ignore */ }
+        coworkLog('INFO', 'resolveNodeShim', `Created npm bash shim: ${npmSh} -> ${npmCliJsPosix}`);
+
+        // npm.cmd for Windows — uses %LOBSTERAI_NPM_BIN_DIR% env var to avoid
+        // hardcoding paths that may contain non-ASCII chars (breaks GBK cmd.exe).
+        if (process.platform === 'win32') {
+          const npmCmd = join(shimDir, 'npm.cmd');
+          const npmCmdContent = [
+            '@echo off',
+            '"%~dp0node.cmd" "%LOBSTERAI_NPM_BIN_DIR%\\npm-cli.js" %*',
+            '',
+          ].join('\r\n');
+          writeFileSync(npmCmd, npmCmdContent, 'utf8');
+          coworkLog('INFO', 'resolveNodeShim', `Created npm.cmd shim: ${npmCmd} (using env var LOBSTERAI_NPM_BIN_DIR)`);
+        }
+      } else {
+        coworkLog('WARN', 'resolveNodeShim', `npm-cli.js not found at: ${npmCliJs}`);
+      }
+
+      coworkLog('INFO', 'resolveNodeShim', `Created npx/npm shims pointing to: ${npmBinDir}`);
+    } else {
+      coworkLog('WARN', 'resolveNodeShim', `npmBinDir not available: ${npmBinDir || '(not provided)'}, exists: ${npmBinDir ? existsSync(npmBinDir) : 'N/A'}`);
+    }
+
+    // Verify shim files exist and are executable
+    const shimFiles = ['node', 'npx', 'npm'];
+    for (const name of shimFiles) {
+      const shimPath = join(shimDir, name);
+      const exists = existsSync(shimPath);
+      if (exists) {
+        try {
+          const stat = statSync(shimPath);
+          coworkLog('INFO', 'resolveNodeShim', `Shim verify: ${name} exists, mode=0o${stat.mode.toString(8)}, size=${stat.size}`);
+        } catch (e) {
+          coworkLog('WARN', 'resolveNodeShim', `Shim verify: ${name} exists but stat failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else {
+        coworkLog('WARN', 'resolveNodeShim', `Shim verify: ${name} NOT found at ${shimPath}`);
+      }
     }
 
     return shimDir;
@@ -889,6 +987,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
     const devBinDir = join(app.getAppPath(), 'node_modules', '.bin');
     if (existsSync(devBinDir)) {
       env.PATH = [devBinDir, env.PATH].filter(Boolean).join(delimiter);
+      coworkLog('INFO', 'applyPackagedEnvOverrides', `Dev mode: prepended node_modules/.bin to PATH: ${devBinDir}`);
     }
     return;
   }
@@ -901,6 +1000,10 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   const userPath = resolveUserShellPath();
   if (userPath) {
     env.PATH = userPath;
+    coworkLog('INFO', 'applyPackagedEnvOverrides', `Resolved user shell PATH (${userPath.split(delimiter).length} entries)`);
+    for (const entry of userPath.split(delimiter)) {
+      coworkLog('INFO', 'applyPackagedEnvOverrides', `  PATH entry: ${entry} (exists: ${existsSync(entry)})`);
+    }
   } else {
     // Fallback: append common node installation paths
     const home = env.HOME || app.getPath('home');
@@ -912,25 +1015,27 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       `${home}/.fnm/current/bin`,
     ];
     env.PATH = [env.PATH, ...commonPaths].filter(Boolean).join(delimiter);
+    coworkLog('WARN', 'applyPackagedEnvOverrides', `Failed to resolve user shell PATH, using fallback common paths`);
   }
 
   const resourcesPath = process.resourcesPath;
+  coworkLog('INFO', 'applyPackagedEnvOverrides', `Packaged mode: resourcesPath=${resourcesPath}`);
 
-  // Prepend bundled node_modules/.bin to PATH so that npx/npm from the
-  // packaged npm dependency are found even if the user has no global
-  // Node.js installation. This ensures MCP servers using npx always work.
-  const unpackedBinDir = join(resourcesPath, 'app.asar.unpacked', 'node_modules', '.bin');
-  if (existsSync(unpackedBinDir)) {
-    env.PATH = [unpackedBinDir, env.PATH].filter(Boolean).join(delimiter);
-  }
+  // Create node/npx/npm shims that wrap Electron as a Node.js runtime via
+  // ELECTRON_RUN_AS_NODE=1 and point npx/npm to the bundled npm package.
+  // This avoids relying on node_modules/.bin symlinks which don't work on
+  // Windows cross-platform builds.
+  const npmBinDir = join(resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin');
+  coworkLog('INFO', 'applyPackagedEnvOverrides', `npmBinDir=${npmBinDir}, exists=${existsSync(npmBinDir)}`);
 
-  // Create a `node` shim that wraps Electron as a Node.js runtime via
-  // ELECTRON_RUN_AS_NODE=1. This is needed so that npx (whose shebang is
-  // #!/usr/bin/env node) can work even when the user has no system Node.js.
-  const shimDir = ensureElectronNodeShim(process.execPath);
+  // Set env var so .cmd shims can reference npmBinDir without hardcoding
+  // non-ASCII characters (which break on Windows when cmd.exe uses GBK code page).
+  env.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
+
+  const shimDir = ensureElectronNodeShim(process.execPath, npmBinDir);
   if (shimDir) {
-    env.PATH = appendEnvPath(env.PATH, [shimDir]);
-    coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node shim PATH entry: ${shimDir}`);
+    env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
+    coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
   }
 
   const nodePaths = [
@@ -941,6 +1046,70 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   if (nodePaths.length > 0) {
     env.NODE_PATH = appendEnvPath(env.NODE_PATH, nodePaths);
   }
+
+  // Verify node/npx resolution in the constructed environment
+  verifyNodeEnvironment(env);
+}
+
+/**
+ * Verify that node/npx/npm can be resolved from the constructed environment PATH.
+ * Logs diagnostic info for debugging MCP server startup issues on macOS.
+ */
+function verifyNodeEnvironment(env: Record<string, string | undefined>): void {
+  const tag = 'verifyNodeEnv';
+  const pathValue = env.PATH || '';
+
+  // Log final PATH entries
+  const pathEntries = pathValue.split(delimiter);
+  coworkLog('INFO', tag, `Final PATH has ${pathEntries.length} entries:`);
+  for (let i = 0; i < pathEntries.length; i++) {
+    const entry = pathEntries[i];
+    const exists = entry ? existsSync(entry) : false;
+    coworkLog('INFO', tag, `  [${i}] ${entry} (exists: ${exists})`);
+  }
+
+  // Try to resolve node, npx, npm using 'which' (macOS/Linux) or 'where' (Windows)
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  for (const tool of ['node', 'npx', 'npm']) {
+    try {
+      const result = spawnSync(whichCmd, [tool], {
+        env: { ...env } as NodeJS.ProcessEnv,
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+      if (result.status === 0 && result.stdout) {
+        const resolved = result.stdout.trim();
+        coworkLog('INFO', tag, `${whichCmd} ${tool} => ${resolved}`);
+
+        // Try to get version
+        if (tool === 'node') {
+          try {
+            const versionResult = spawnSync(resolved, ['--version'], {
+              env: { ...env, ELECTRON_RUN_AS_NODE: '1' } as NodeJS.ProcessEnv,
+              encoding: 'utf-8',
+              timeout: 5000,
+            });
+            coworkLog('INFO', tag, `node --version => ${(versionResult.stdout || '').trim()} (exit: ${versionResult.status})`);
+            if (versionResult.stderr) {
+              coworkLog('WARN', tag, `node --version stderr: ${versionResult.stderr.trim()}`);
+            }
+          } catch (e) {
+            coworkLog('WARN', tag, `node --version failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+      } else {
+        coworkLog('WARN', tag, `${whichCmd} ${tool} => NOT FOUND (exit: ${result.status}, stderr: ${(result.stderr || '').trim()})`);
+      }
+    } catch (e) {
+      coworkLog('WARN', tag, `${whichCmd} ${tool} threw: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Log key env vars
+  coworkLog('INFO', tag, `NODE_PATH=${env.NODE_PATH || '(not set)'}`);
+  coworkLog('INFO', tag, `LOBSTERAI_ELECTRON_PATH=${env.LOBSTERAI_ELECTRON_PATH || '(not set)'}`);
+  coworkLog('INFO', tag, `LOBSTERAI_NPM_BIN_DIR=${env.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`);
+  coworkLog('INFO', tag, `HOME=${env.HOME || '(not set)'}`);
 }
 
 /**

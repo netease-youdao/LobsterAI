@@ -228,19 +228,6 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
             {modalTitle}
           </div>
-          {/* GitHub link for registry entries */}
-          {isRegistry && registryEntry?.githubUrl && (
-            <button
-              type="button"
-              onClick={() => window.electron.shell.openExternal(registryEntry!.githubUrl)}
-              className="text-xs text-claude-accent hover:text-claude-accent/80 transition-colors flex items-center gap-1"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
-                <path fillRule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5zm4.943-.508a.75.75 0 01.156-1.049 8.571 8.571 0 011.486-.358.75.75 0 01.27 1.475 7.07 7.07 0 00-1.225.296.75.75 0 01-.687-.364zM14 3.75a.75.75 0 01.75-.75h2.5a.75.75 0 01.75.75v2.5a.75.75 0 01-1.5 0V5.56l-3.22 3.22a.75.75 0 11-1.06-1.06l3.22-3.22h-.69a.75.75 0 01-.75-.75z" clipRule="evenodd" />
-              </svg>
-              {i18nService.t('mcpViewOnGithub')}
-            </button>
-          )}
         </div>
 
         <div className="space-y-4">
