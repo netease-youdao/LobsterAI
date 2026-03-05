@@ -20,7 +20,7 @@ export default defineConfig({
             outDir: 'dist-electron',
             minify: false,
             rollupOptions: {
-              external: ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim'],
+              external: ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'],
               output: {
                 // Keep CJS format (default), but load via ESM loader.mjs
                 inlineDynamicImports: true,

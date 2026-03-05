@@ -9,8 +9,8 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { app } from 'electron';
-import NIM from "../../libs/nim.js";
-import type { V2NIM } from '../../libs/nim/index.d.ts';
+import NIM from 'nim-web-sdk-ng/dist/nodejs/nim';
+import type { V2NIM } from 'nim-web-sdk-ng/dist/nodejs/nim';
 import {
   NimConfig,
   NimGatewayStatus,
@@ -643,6 +643,16 @@ export class NimGateway extends EventEmitter {
       const msgId = String(msg.messageServerId || msg.messageClientId || '');
       const senderId = String(msg.senderId || '');
 
+      // Only process online messages (messageSource === 1).
+      // V2NIMMessageSource: 0=unknown, 1=online, 2=offline, 3=roaming.
+      // Offline (2) and roaming (3) messages are historical records pulled
+      // during sync; we skip them to avoid re-processing old conversations.
+      const messageSource: number = msg.messageSource ?? 0;
+      if (messageSource !== 1) {
+        this.log(`[NIM Gateway] Skipping non-online message (source=${messageSource}): ${msgId}`);
+        return;
+      }
+
       // Ignore messages from self
       if (this.config && senderId === this.config.account) {
         this.log('[NIM Gateway] Ignoring self message');
@@ -726,6 +736,14 @@ export class NimGateway extends EventEmitter {
             attachments.push(downloaded);
           }
         }
+      }
+
+      // Mark P2P message as read so the sender sees the "read" receipt
+      // and the conversation unread count is cleared on the server side.
+      if (this.v2Client?.V2NIMMessageService) {
+        this.v2Client.V2NIMMessageService.sendP2PMessageReceipt(msg).catch((err: any) => {
+          this.log('[NIM Gateway] sendP2PMessageReceipt failed (ignored):', err?.message || err);
+        });
       }
 
       // Create IMMessage
