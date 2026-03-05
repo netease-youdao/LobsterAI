@@ -1,6 +1,6 @@
 /**
  * Xiaomifeng Gateway (小蜜蜂)
- * Manages node-nim SDK V2 connection for receiving messages
+ * Manages NIM SDK V2 connection for receiving messages
  * Sends messages via HTTP API
  * 
  * Based on NIM Gateway, adapted for Xiaomifeng's custom message format (type 100)
@@ -11,6 +11,9 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { app } from 'electron';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const NIM = require('nim-web-sdk-ng/dist/nodejs/nim.js').default;
+import type { V2NIM } from 'nim-web-sdk-ng/dist/nodejs/nim';
 import {
   XiaomifengConfig,
   XiaomifengGatewayStatus,
@@ -166,10 +169,8 @@ export class XiaomifengGateway extends EventEmitter {
   private accessToken: string | null = null;
   private tokenExpiry: number = 0;
 
-  // node-nim SDK references (like NIM Gateway)
-  private v2Client: any = null;
-  private loginService: any = null;
-  private messageService: any = null;
+  // NIM SDK reference
+  private v2Client: V2NIM | null = null;
 
   private config: XiaomifengConfig | null = null;
   private status: XiaomifengGatewayStatus = { ...DEFAULT_XIAOMIFENG_STATUS };
@@ -313,12 +314,10 @@ export class XiaomifengGateway extends EventEmitter {
       if (!savedConfig) return;
       try {
         if (this.v2Client) {
-          try {
-            this.v2Client.uninit();
-          } catch (_) { /* ignore */ }
+          // try {
+          //   await this.v2Client.destroy();
+          // } catch (_) { /* ignore */ }
           this.v2Client = null;
-          this.loginService = null;
-          this.messageService = null;
         }
         this.reconnectAttempts++;
         await this.start(savedConfig);
@@ -334,7 +333,7 @@ export class XiaomifengGateway extends EventEmitter {
   }
 
   /**
-   * Start Xiaomifeng gateway using node-nim SDK
+   * Start Xiaomifeng gateway using nim SDK
    */
   async start(config: XiaomifengConfig): Promise<void> {
     // Cancel any pending reconnection timer first
@@ -366,72 +365,31 @@ export class XiaomifengGateway extends EventEmitter {
     }
 
     this.log = config.debug ? console.log.bind(console) : () => {};
-    console.log('[Xiaomifeng Gateway] Starting with node-nim SDK...');
+    console.log('[Xiaomifeng Gateway] Starting with nim SDK...');
     console.log('[Xiaomifeng Gateway] Using fixed appKey:', XiaomifengGateway.FIXED_APP_KEY);
     //console.log('[Xiaomifeng Gateway] Will skip messages older than:', new Date(this.lastProcessedTimestamp).toISOString());
     console.log('[Xiaomifeng Gateway] config.debug =', config.debug);
 
     try {
-      // Require node-nim SDK (native module)
-      let nodenim: any;
-      try {
-        console.log('[Xiaomifeng Gateway] About to require node-nim...');
-        console.log('[Xiaomifeng Gateway] process.platform:', process.platform);
-        console.log('[Xiaomifeng Gateway] process.arch:', process.arch);
-        console.log('[Xiaomifeng Gateway] __dirname:', __dirname);
-        
-        // 检查是否已经有其他地方加载了 node-nim
-        const cachedModule = require.cache[require.resolve('node-nim')];
-        if (cachedModule) {
-          console.log('[Xiaomifeng Gateway] node-nim already in require cache');
-          nodenim = cachedModule.exports;
-        } else {
-          console.log('[Xiaomifeng Gateway] Loading node-nim fresh...');
-          nodenim = require('node-nim');
-        }
-        console.log('[Xiaomifeng Gateway] node-nim SDK loaded successfully');
-      } catch (loadError: any) {
-        console.error('[Xiaomifeng Gateway] Failed to load node-nim SDK:', loadError.message);
-        console.error('[Xiaomifeng Gateway] Load error stack:', loadError.stack);
-        throw new Error(`Failed to load node-nim SDK: ${loadError.message}`);
-      }
-
-      // Create V2 client
-      this.v2Client = new nodenim.V2NIMClient();
-      console.log('[Xiaomifeng Gateway] V2NIMClient instance created');
-
       const dataPath = getSdkDataPath(config.clientId);
       this.log('[Xiaomifeng Gateway] Data path:', dataPath);
 
-      // Initialize SDK with fixed appKey
-      // NOTE: node-nim SDK is a singleton - if NIM Gateway has already initialized with a different appKey,
-      // this will fail. Only one appKey can be used per process.
+      // Initialize NIM SDK using getInstance
       console.log('[Xiaomifeng Gateway] Attempting SDK init with appKey:', XiaomifengGateway.FIXED_APP_KEY);
-      const initResult = this.v2Client.init({
+      this.v2Client = new NIM({
         appkey: XiaomifengGateway.FIXED_APP_KEY,
-        appDataPath: dataPath,
-      });
-      console.log('[Xiaomifeng Gateway] SDK init result:', JSON.stringify(initResult));
-
-      // Check for init errors - init() may return an error object or null/undefined on success
-      if (initResult && (initResult.code !== undefined || initResult.desc !== undefined)) {
-        const errorDesc = initResult.desc || `Error code: ${initResult.code}`;
-        console.error('[Xiaomifeng Gateway] SDK init failed:', errorDesc);
-        throw new Error(`NIM SDK V2 initialization failed: ${errorDesc}. Note: node-nim SDK is singleton - if NIM Gateway is already running with a different appKey, Xiaomifeng Gateway cannot start.`);
-      }
-
+        debugLevel: "log",
+        apiVersion: 'v2',
+      }) as unknown as V2NIM;
       console.log('[Xiaomifeng Gateway] SDK initialized successfully, dataPath:', dataPath);
 
-      // Get services
-      this.loginService = this.v2Client.getLoginService();
-      this.messageService = this.v2Client.getMessageService();
-
-      if (!this.loginService || !this.messageService) {
+      // Verify services are available
+      if (!this.v2Client.V2NIMLoginService || !this.v2Client.V2NIMMessageService) {
         throw new Error('NIM SDK V2 services not available');
       }
 
-      // Register message receive callback
-      this.messageService.on('receiveMessages', (messages: any[]) => {
+      // Register message receive callback (call directly on v2Client to preserve 'this' context)
+      this.v2Client.V2NIMMessageService.on('onReceiveMessages', (messages: any[]) => {
         this.log('[Xiaomifeng Gateway] Received messages:', messages.length);
         for (const msg of messages) {
           this.handleIncomingMessage(msg);
@@ -439,7 +397,7 @@ export class XiaomifengGateway extends EventEmitter {
       });
 
       // Register login status callback
-      this.loginService.on('loginStatus', (loginStatus: number) => {
+      this.v2Client.V2NIMLoginService.on('onLoginStatus', (loginStatus: number) => {
         console.log('[Xiaomifeng Gateway] Login status changed:', loginStatus);
         // V2NIMLoginStatus: 0=LOGOUT, 1=LOGINED, 2=LOGINING
         if (loginStatus === 1) {
@@ -461,7 +419,7 @@ export class XiaomifengGateway extends EventEmitter {
         }
       });
 
-      this.loginService.on('kickedOffline', (detail: any) => {
+      this.v2Client.V2NIMLoginService.on('onKickedOffline', (detail: any) => {
         console.log('[Xiaomifeng Gateway] Kicked offline, detail:', JSON.stringify(detail));
         this.status.connected = false;
         
@@ -497,7 +455,7 @@ export class XiaomifengGateway extends EventEmitter {
         this.emit('status');
       });
 
-      this.loginService.on('loginFailed', (error: any) => {
+      this.v2Client.V2NIMLoginService.on('onLoginFailed', (error: any) => {
         console.error('[Xiaomifeng Gateway] Login failed:', JSON.stringify(error));
         this.status.connected = false;
         this.status.lastError = `Login failed: ${error?.desc || JSON.stringify(error)}`;
@@ -510,7 +468,7 @@ export class XiaomifengGateway extends EventEmitter {
         this.scheduleReconnect(delay);
       });
 
-      this.loginService.on('disconnected', (error: any) => {
+      this.v2Client.V2NIMLoginService.on('onDisconnected', (error: any) => {
         this.log('[Xiaomifeng Gateway] Disconnected:', error);
         this.status.connected = false;
         // 如果是被踢下线，保留原来的错误信息，不要覆盖
@@ -525,7 +483,7 @@ export class XiaomifengGateway extends EventEmitter {
       // Login: use clientId as account, secret as token
       console.log('[Xiaomifeng Gateway] Initiating login with account:', config.clientId);
       console.log('[Xiaomifeng Gateway] Token length:', config.secret?.length || 0);
-      this.loginService.login(config.clientId, config.secret, {})
+      this.v2Client.V2NIMLoginService.login(config.clientId, config.secret, {})
         .then(() => {
           console.log('[Xiaomifeng Gateway] Login promise resolved');
         })
@@ -566,21 +524,14 @@ export class XiaomifengGateway extends EventEmitter {
         this.reconnectTimer = null;
       }
 
-      // Logout
-      if (this.loginService) {
-        try {
-          await this.loginService.logout();
-        } catch (e) {
-          // Ignore logout errors
-        }
-      }
-
-      // Uninit SDK
+      // Logout and destroy SDK
       if (this.v2Client) {
         try {
-          this.v2Client.uninit();
+          if (this.v2Client.V2NIMLoginService) {
+            await this.v2Client.V2NIMLoginService.logout();
+          }
         } catch (e) {
-          // Ignore uninit errors
+          // Ignore logout errors
         }
       }
 
@@ -602,17 +553,23 @@ export class XiaomifengGateway extends EventEmitter {
    */
   private cleanup(): void {
     this.v2Client = null;
-    this.loginService = null;
-    this.messageService = null;
   }
 
   /**
-   * Handle incoming message from node-nim SDK
+   * Handle incoming message from nim SDK
    */
   private async handleIncomingMessage(msg: any): Promise<void> {
     try {
       const msgId = String(msg.messageServerId || msg.messageClientId || '');
       const senderId = String(msg.senderId || '');
+
+      // Only process online messages (messageSource === 1 = V2NIM_MESSAGE_SOURCE_ONLINE)
+      // Ignore offline/roaming messages synced on reconnect
+      const messageSource: number = msg.messageSource ?? 0;
+      if (messageSource !== 1) {
+        this.log(`[Xiaomifeng Gateway] Ignoring non-online message (messageSource=${messageSource})`);
+        return;
+      }
 
       // Ignore messages from self
       if (this.config && senderId === this.config.clientId) {
@@ -648,9 +605,13 @@ export class XiaomifengGateway extends EventEmitter {
         return;
       }
 
-      this.log(`[Xiaomifeng Gateway] Ignoring non-text/non-custom message type: ${msgType}`);
-      return;
-      
+      // Handle regular text messages
+      if (msgType !== 'text') {
+        this.log(`[Xiaomifeng Gateway] Ignoring non-text/non-custom message type: ${msgType}`);
+        return;
+      }
+
+      await this.processTextMessage(msg, msgId, senderId);
     } catch (err: any) {
       console.error(`[Xiaomifeng Gateway] Error handling incoming message: ${err.message}`);
     }
@@ -774,7 +735,7 @@ export class XiaomifengGateway extends EventEmitter {
     }
 
     // Parse bee message format using safeParseJSON
-    const beeMessage = safeParseJSON(rawContent, null);
+    const beeMessage = safeParseJSON(rawContent, null) as any;
     if (!beeMessage) {
       this.log('[Xiaomifeng Gateway] Failed to parse custom message JSON');
       return;
@@ -782,13 +743,6 @@ export class XiaomifengGateway extends EventEmitter {
 
     const beeSenderId = beeMessage.senderId || msg.senderId || '';
     const beeChatId = beeMessage.chatId || '';
-    const beeChatType = beeMessage.chatType || 0;
-
-    // check chatType - only process chatType = 1 (direct messages)
-    if (beeChatType !== 1) {
-      this.log('[Xiaomifeng Gateway] Skipping custom message with chatType:', beeChatType);
-      return;
-    }
 
     // Parse inner content using safeParseJSON
     const innerContent = safeParseJSON(beeMessage.content, { text: beeMessage.content }) as { text: any; subType?: number };
@@ -891,7 +845,7 @@ export class XiaomifengGateway extends EventEmitter {
       this.tokenExpiry = now + expiresIn * 1000;
       
       console.log(`[Xiaomifeng Gateway] Got accessToken, valid for: ${expiresIn}s`);
-      return this.accessToken;
+      return this.accessToken || '';
 
     } catch (error: any) {
       console.error('[Xiaomifeng Gateway] Failed to get accessToken:', error.message);
