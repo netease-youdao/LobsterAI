@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import { execSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync, readdirSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
@@ -29,6 +29,69 @@ function appendEnvPath(current: string | undefined, additions: string[]): string
   return items.size > 0 ? Array.from(items).join(delimiter) : current;
 }
 
+function hasCommandInEnv(command: string, env: Record<string, string | undefined>): boolean {
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  try {
+    const result = spawnSync(whichCmd, [command], {
+      env: { ...env } as NodeJS.ProcessEnv,
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+let cachedElectronNodeRuntimePath: string | null = null;
+
+function resolveElectronNodeRuntimePath(): string {
+  if (!app.isPackaged || process.platform !== 'darwin') {
+    return process.execPath;
+  }
+
+  try {
+    const appName = app.getName();
+    const frameworksDir = join(process.resourcesPath, '..', 'Frameworks');
+    if (!existsSync(frameworksDir)) {
+      return process.execPath;
+    }
+
+    const helperApps = readdirSync(frameworksDir)
+      .filter((entry) => entry.startsWith(`${appName} Helper`) && entry.endsWith('.app'))
+      .sort((a, b) => {
+        const score = (name: string): number => {
+          if (name === `${appName} Helper.app`) return 0;
+          if (name === `${appName} Helper (Renderer).app`) return 1;
+          if (name === `${appName} Helper (Plugin).app`) return 2;
+          if (name === `${appName} Helper (GPU).app`) return 3;
+          return 10;
+        };
+        return score(a) - score(b);
+      });
+
+    for (const helperApp of helperApps) {
+      const helperExeName = helperApp.replace(/\.app$/, '');
+      const helperExePath = join(frameworksDir, helperApp, 'Contents', 'MacOS', helperExeName);
+      if (existsSync(helperExePath)) {
+        coworkLog('INFO', 'resolveNodeShim', `Using Electron helper runtime for node shim: ${helperExePath}`);
+        return helperExePath;
+      }
+    }
+  } catch (error) {
+    coworkLog('WARN', 'resolveNodeShim', `Failed to resolve Electron helper runtime: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return process.execPath;
+}
+
+export function getElectronNodeRuntimePath(): string {
+  if (!cachedElectronNodeRuntimePath) {
+    cachedElectronNodeRuntimePath = resolveElectronNodeRuntimePath();
+  }
+  return cachedElectronNodeRuntimePath;
+}
+
 /**
  * Cached user shell PATH. Resolved once and reused across calls.
  */
@@ -49,13 +112,30 @@ function resolveUserShellPath(): string | null {
 
   try {
     const shell = process.env.SHELL || '/bin/bash';
-    const result = execSync(`${shell} -ilc 'echo __PATH__=$PATH'`, {
-      encoding: 'utf-8',
-      timeout: 5000,
-      env: { ...process.env },
-    });
-    const match = result.match(/__PATH__=(.+)/);
-    cachedUserShellPath = match ? match[1].trim() : null;
+    // Prefer non-interactive login shell first to avoid potential side effects
+    // from interactive startup scripts (which may launch extra GUI processes).
+    const pathProbes = [
+      `${shell} -lc 'echo __PATH__=$PATH'`,
+    ];
+
+    let resolved: string | null = null;
+    for (const probe of pathProbes) {
+      try {
+        const result = execSync(probe, {
+          encoding: 'utf-8',
+          timeout: 5000,
+          env: { ...process.env },
+        });
+        const match = result.match(/__PATH__=(.+)/);
+        if (match?.[1]) {
+          resolved = match[1].trim();
+          break;
+        }
+      } catch {
+        // Try next probe.
+      }
+    }
+    cachedUserShellPath = resolved;
   } catch (error) {
     console.warn('[coworkUtil] Failed to resolve user shell PATH:', error);
     cachedUserShellPath = null;
@@ -842,9 +922,15 @@ function ensureWindowsBashUtf8InitScript(): string | null {
 }
 
 function applyPackagedEnvOverrides(env: Record<string, string | undefined>): void {
+  const electronNodeRuntimePath = getElectronNodeRuntimePath();
+
+  if (app.isPackaged && !env.LOBSTERAI_ELECTRON_PATH) {
+    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+  }
+
   // On Windows, resolve git-bash and ensure Git toolchain directories are available in PATH.
   if (process.platform === 'win32') {
-    env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
 
     // Force UTF-8 encoding for MSYS2/git-bash.
     //
@@ -1032,10 +1118,20 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   // non-ASCII characters (which break on Windows when cmd.exe uses GBK code page).
   env.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
 
-  const shimDir = ensureElectronNodeShim(process.execPath, npmBinDir);
-  if (shimDir) {
-    env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
-    coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
+  const hasSystemNode = hasCommandInEnv('node', env);
+  const hasSystemNpx = hasCommandInEnv('npx', env);
+  const hasSystemNpm = hasCommandInEnv('npm', env);
+  const shouldInjectShim = process.platform === 'win32' || !(hasSystemNode && hasSystemNpx && hasSystemNpm);
+  if (shouldInjectShim) {
+    const shimDir = ensureElectronNodeShim(electronNodeRuntimePath, npmBinDir);
+    if (shimDir) {
+      env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
+      env.LOBSTERAI_NODE_SHIM_ACTIVE = '1';
+      coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
+    }
+  } else {
+    delete env.LOBSTERAI_NODE_SHIM_ACTIVE;
+    coworkLog('INFO', 'resolveNodeShim', 'System node/npx/npm detected; skipped Electron node shim injection');
   }
 
   const nodePaths = [
@@ -1163,7 +1259,11 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
   const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
   env.SKILLS_ROOT = skillsRoot;
   env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
-  env.LOBSTERAI_ELECTRON_PATH = process.execPath.replace(/\\/g, '/');
+  if (process.platform === 'win32' || env.LOBSTERAI_NODE_SHIM_ACTIVE === '1') {
+    env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
+  } else {
+    delete env.LOBSTERAI_ELECTRON_PATH;
+  }
 
   // Inject internal API base URL for skill scripts (e.g. scheduled-task creation)
   const internalApiBaseURL = getInternalApiBaseURL();

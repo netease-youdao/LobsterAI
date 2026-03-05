@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { type ChildProcessByStdio, spawnSync } from 'child_process';
+import { type ChildProcessByStdio, spawn, spawnSync } from 'child_process';
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -10,7 +10,7 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkStore, CoworkMessage, CoworkExecutionMode } from '../coworkStore';
 import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
-import { getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
+import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { cpRecursiveSync } from '../fsCompat';
@@ -2528,6 +2528,7 @@ export class CoworkRunner extends EventEmitter {
 
     const claudeCodePath = getClaudeCodePath();
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
+    const electronNodeRuntimePath = getElectronNodeRuntimePath();
     let stderrTail = '';
 
     // Log MCP-relevant environment for debugging
@@ -2579,6 +2580,28 @@ export class CoworkRunner extends EventEmitter {
       });
     }
 
+    const handleSdkStderr = (message: string): void => {
+      stderrTail += message;
+      if (stderrTail.length > STDERR_TAIL_MAX_CHARS) {
+        stderrTail = stderrTail.slice(-STDERR_TAIL_MAX_CHARS);
+      }
+      coworkLog('WARN', 'ClaudeCodeProcess', 'stderr output', { stderr: message });
+
+      // Detect fatal errors early and abort the session
+      for (const pattern of STDERR_FATAL_PATTERNS) {
+        if (pattern.test(message)) {
+          coworkLog('ERROR', 'ClaudeCodeProcess', 'Fatal error detected in stderr, aborting', {
+            pattern: pattern.toString(),
+            stderr: message,
+          });
+          if (!abortController.signal.aborted) {
+            abortController.abort();
+          }
+          break;
+        }
+      }
+    };
+
     const options: Record<string, unknown> = {
       cwd,
       abortController,
@@ -2587,27 +2610,7 @@ export class CoworkRunner extends EventEmitter {
       permissionMode: 'default',
       includePartialMessages: true,
       disallowedTools: ['WebSearch', 'WebFetch'],
-      stderr: (message: string) => {
-        stderrTail += message;
-        if (stderrTail.length > STDERR_TAIL_MAX_CHARS) {
-          stderrTail = stderrTail.slice(-STDERR_TAIL_MAX_CHARS);
-        }
-        coworkLog('WARN', 'ClaudeCodeProcess', 'stderr output', { stderr: message });
-
-        // Detect fatal errors early and abort the session
-        for (const pattern of STDERR_FATAL_PATTERNS) {
-          if (pattern.test(message)) {
-            coworkLog('ERROR', 'ClaudeCodeProcess', 'Fatal error detected in stderr, aborting', {
-              pattern: pattern.toString(),
-              stderr: message,
-            });
-            if (!abortController.signal.aborted) {
-              abortController.abort();
-            }
-            break;
-          }
-        }
-      },
+      stderr: handleSdkStderr,
       canUseTool: async (
         toolName: string,
         toolInput: unknown,
@@ -2687,6 +2690,71 @@ export class CoworkRunner extends EventEmitter {
         return { behavior: 'allow', updatedInput };
       },
     };
+
+    if (app.isPackaged) {
+      // The SDK's default ProcessTransport uses child_process.fork() and may
+      // relaunch the Electron app binary on some macOS installs. Override the
+      // process spawner to force Node-mode execution via Electron directly.
+      options.spawnClaudeCodeProcess = (spawnOptions: {
+        command: string;
+        args: string[];
+        cwd?: string;
+        env?: NodeJS.ProcessEnv;
+        signal?: AbortSignal;
+      }) => {
+        const useElectronShim =
+          process.platform === 'win32'
+          || spawnOptions.env?.LOBSTERAI_NODE_SHIM_ACTIVE === '1';
+        const spawnEnv: NodeJS.ProcessEnv = {
+          ...(spawnOptions.env ?? {}),
+          ELECTRON_RUN_AS_NODE: '1',
+        };
+        if (useElectronShim) {
+          spawnEnv.LOBSTERAI_ELECTRON_PATH = spawnOptions.env?.LOBSTERAI_ELECTRON_PATH || electronNodeRuntimePath;
+        } else {
+          delete spawnEnv.LOBSTERAI_ELECTRON_PATH;
+        }
+
+        let command = spawnOptions.command || 'node';
+        if (app.isPackaged && process.platform === 'darwin' && command && path.isAbsolute(command)) {
+          const commandCandidates = new Set<string>([command, path.resolve(command)]);
+          const appExecCandidates = new Set<string>([process.execPath, path.resolve(process.execPath)]);
+          try {
+            commandCandidates.add(fs.realpathSync.native(command));
+          } catch {
+            // Ignore realpath resolution errors.
+          }
+          try {
+            appExecCandidates.add(fs.realpathSync.native(process.execPath));
+          } catch {
+            // Ignore realpath resolution errors.
+          }
+          const pointsToAppExecutable = Array.from(commandCandidates).some((candidate) => appExecCandidates.has(candidate));
+          if (pointsToAppExecutable) {
+            command = electronNodeRuntimePath;
+            spawnEnv.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+            coworkLog('WARN', 'runClaudeCodeLocal', 'SDK spawner command points to app executable; rewriting to Electron helper runtime');
+          }
+        }
+        coworkLog('INFO', 'runClaudeCodeLocal', 'Using packaged custom SDK spawner', {
+          command,
+          args: spawnOptions.args,
+        });
+
+        const child = spawn(command, spawnOptions.args, {
+          cwd: spawnOptions.cwd,
+          env: spawnEnv,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          signal: spawnOptions.signal,
+        });
+
+        child.stderr?.on('data', (chunk: Buffer | string) => {
+          handleSdkStderr(chunk.toString());
+        });
+
+        return child;
+      };
+    }
 
     if (activeSession.claudeSessionId) {
       options.resume = activeSession.claudeSessionId;
@@ -2845,35 +2913,82 @@ export class CoworkRunner extends EventEmitter {
             let serverConfig: Record<string, unknown>;
             switch (server.transportType) {
               case 'stdio':
+                {
+                  const stdioCommand = server.command || '';
+                  let effectiveStdioCommand = stdioCommand;
+                  const stdioArgs = server.args || [];
+                  let stdioEnv = server.env && Object.keys(server.env).length > 0
+                    ? { ...server.env }
+                    : undefined;
+
+                  if (app.isPackaged && process.platform === 'darwin' && stdioCommand && path.isAbsolute(stdioCommand)) {
+                    const commandCandidates = new Set<string>([stdioCommand, path.resolve(stdioCommand)]);
+                    const appExecCandidates = new Set<string>([
+                      process.execPath,
+                      path.resolve(process.execPath),
+                      electronNodeRuntimePath,
+                      path.resolve(electronNodeRuntimePath),
+                    ]);
+
+                    try {
+                      commandCandidates.add(fs.realpathSync.native(stdioCommand));
+                    } catch {
+                      // Ignore realpath resolution errors.
+                    }
+
+                    try {
+                      appExecCandidates.add(fs.realpathSync.native(process.execPath));
+                    } catch {
+                      // Ignore realpath resolution errors.
+                    }
+                    try {
+                      appExecCandidates.add(fs.realpathSync.native(electronNodeRuntimePath));
+                    } catch {
+                      // Ignore realpath resolution errors.
+                    }
+
+                    const pointsToAppExecutable = Array.from(commandCandidates).some((candidate) => appExecCandidates.has(candidate));
+                    if (pointsToAppExecutable) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      stdioEnv = {
+                        ...(stdioEnv || {}),
+                        ELECTRON_RUN_AS_NODE: '1',
+                        LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
+                      };
+                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command points to app executable; rewriting command to Electron helper runtime`);
+                    }
+                  }
+
                 serverConfig = {
                   type: 'stdio',
-                  command: server.command || '',
-                  args: server.args || [],
-                  env: server.env && Object.keys(server.env).length > 0 ? server.env : undefined,
+                  command: effectiveStdioCommand,
+                  args: stdioArgs,
+                  env: stdioEnv && Object.keys(stdioEnv).length > 0 ? stdioEnv : undefined,
                 };
                 coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": stdio command="${server.command}", args=${JSON.stringify(server.args || [])}`);
-                if (server.env && Object.keys(server.env).length > 0) {
-                  coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": custom env vars: ${JSON.stringify(server.env)}`);
+                if (stdioEnv && Object.keys(stdioEnv).length > 0) {
+                  coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": custom env vars: ${JSON.stringify(stdioEnv)}`);
                 }
                 // Resolve command path to verify it's findable
-                if (server.command) {
+                if (effectiveStdioCommand) {
                   const whichCmd = process.platform === 'win32' ? 'where' : 'which';
                   try {
-                    const resolveResult = spawnSync(whichCmd, [server.command], {
-                      env: { ...envVars, ...(server.env || {}) } as NodeJS.ProcessEnv,
+                    const resolveResult = spawnSync(whichCmd, [effectiveStdioCommand], {
+                      env: { ...envVars, ...(stdioEnv || {}) } as NodeJS.ProcessEnv,
                       encoding: 'utf-8',
                       timeout: 5000,
                     });
                     if (resolveResult.status === 0 && resolveResult.stdout) {
-                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${server.command}" resolves to: ${resolveResult.stdout.trim()}`);
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" resolves to: ${resolveResult.stdout.trim()}`);
                     } else {
-                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${server.command}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
+                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
                     }
                   } catch (e) {
-                    coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${server.command}": ${e instanceof Error ? e.message : String(e)}`);
+                    coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${effectiveStdioCommand}": ${e instanceof Error ? e.message : String(e)}`);
                   }
                 }
                 break;
+                }
               case 'sse':
                 serverConfig = {
                   type: 'sse',
