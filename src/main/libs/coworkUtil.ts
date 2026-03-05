@@ -1023,6 +1023,8 @@ export async function getEnhancedEnvWithTmpdir(
 const SESSION_TITLE_FALLBACK = 'New Session';
 const SESSION_TITLE_MAX_CHARS = 50;
 const SESSION_TITLE_TIMEOUT_MS = 8000;
+const COWORK_MODEL_PROBE_TIMEOUT_MS = 6000;
+const API_ERROR_SNIPPET_MAX_CHARS = 240;
 
 function buildAnthropicMessagesUrl(baseUrl: string): string {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
@@ -1036,6 +1038,35 @@ function buildAnthropicMessagesUrl(baseUrl: string): string {
     return `${normalized}/messages`;
   }
   return `${normalized}/v1/messages`;
+}
+
+function extractApiErrorSnippet(rawText: string): string {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  try {
+    const payload = JSON.parse(trimmed) as Record<string, unknown>;
+    const payloadError = payload.error;
+    if (typeof payloadError === 'string' && payloadError.trim()) {
+      return payloadError.trim().slice(0, API_ERROR_SNIPPET_MAX_CHARS);
+    }
+    if (payloadError && typeof payloadError === 'object') {
+      const message = (payloadError as Record<string, unknown>).message;
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim().slice(0, API_ERROR_SNIPPET_MAX_CHARS);
+      }
+    }
+    const payloadMessage = payload.message;
+    if (typeof payloadMessage === 'string' && payloadMessage.trim()) {
+      return payloadMessage.trim().slice(0, API_ERROR_SNIPPET_MAX_CHARS);
+    }
+  } catch {
+    // Fall through to plain-text extraction when response is not JSON.
+  }
+
+  return trimmed.replace(/\s+/g, ' ').slice(0, API_ERROR_SNIPPET_MAX_CHARS);
 }
 
 function extractTextFromAnthropicResponse(payload: unknown): string {
@@ -1118,6 +1149,66 @@ function buildFallbackSessionTitle(userIntent: string | null): string {
     .map((line) => line.trim())
     .find(Boolean) || '';
   return normalizeTitleToPlainText(firstLine, SESSION_TITLE_FALLBACK);
+}
+
+export async function probeCoworkModelReadiness(
+  timeoutMs = COWORK_MODEL_PROBE_TIMEOUT_MS
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { config, error } = resolveCurrentApiConfig();
+  if (!config) {
+    return {
+      ok: false,
+      error: error || 'API configuration not found.',
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(buildAnthropicMessagesUrl(config.baseURL), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: 1,
+        temperature: 0,
+        messages: [{ role: 'user', content: 'Reply with "ok".' }],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      const errorSnippet = extractApiErrorSnippet(errorText);
+      return {
+        ok: false,
+        error: errorSnippet
+          ? `Model validation failed (${response.status}): ${errorSnippet}`
+          : `Model validation failed with status ${response.status}.`,
+      };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      const timeoutSeconds = Math.ceil(timeoutMs / 1000);
+      return {
+        ok: false,
+        error: `Model validation timed out after ${timeoutSeconds}s.`,
+      };
+    }
+    return {
+      ok: false,
+      error: `Model validation failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function generateSessionTitle(userIntent: string | null): Promise<string> {

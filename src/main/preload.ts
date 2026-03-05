@@ -109,7 +109,7 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
   getApiConfig: () => ipcRenderer.invoke('get-api-config'),
-  checkApiConfig: () => ipcRenderer.invoke('check-api-config'),
+  checkApiConfig: (options?: { probeModel?: boolean }) => ipcRenderer.invoke('check-api-config', options),
   saveApiConfig: (config: { apiKey: string; baseURL: string; model: string; apiType?: 'anthropic' | 'openai' }) =>
     ipcRenderer.invoke('save-api-config', config),
   generateSessionTitle: (userInput: string | null) =>

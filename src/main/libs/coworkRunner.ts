@@ -73,6 +73,23 @@ const STREAMING_THINKING_MAX_CHARS = 60_000;
 const TOOL_RESULT_MAX_CHARS = 120_000;
 const FINAL_RESULT_MAX_CHARS = 120_000;
 const STDERR_TAIL_MAX_CHARS = 24_000;
+const SDK_STARTUP_TIMEOUT_MS = 30_000;
+const STDERR_FATAL_PATTERNS = [
+  /authentication[_ ]error/i,
+  /invalid[_ ]api[_ ]key/i,
+  /unauthorized/i,
+  /model[_ ]not[_ ]found/i,
+  /connection[_ ]refused/i,
+  /ECONNREFUSED/,
+  /could not connect/i,
+  /api[_ ]key[_ ]not[_ ]valid/i,
+  /permission[_ ]denied/i,
+  /access[_ ]denied/i,
+  /rate[_ ]limit/i,
+  /quota[_ ]exceeded/i,
+  /billing/i,
+  /overloaded/i,
+];
 const CONTENT_TRUNCATED_HINT = '\n...[truncated to prevent memory pressure]';
 const TOOL_INPUT_PREVIEW_MAX_CHARS = 4000;
 const TOOL_INPUT_PREVIEW_MAX_DEPTH = 5;
@@ -2602,6 +2619,20 @@ export class CoworkRunner extends EventEmitter {
           stderrTail = stderrTail.slice(-STDERR_TAIL_MAX_CHARS);
         }
         coworkLog('WARN', 'ClaudeCodeProcess', 'stderr output', { stderr: message });
+
+        // Detect fatal errors early and abort the session
+        for (const pattern of STDERR_FATAL_PATTERNS) {
+          if (pattern.test(message)) {
+            coworkLog('ERROR', 'ClaudeCodeProcess', 'Fatal error detected in stderr, aborting', {
+              pattern: pattern.toString(),
+              stderr: message,
+            });
+            if (!abortController.signal.aborted) {
+              abortController.abort();
+            }
+            break;
+          }
+        }
       },
       canUseTool: async (
         toolName: string,
@@ -2695,6 +2726,8 @@ export class CoworkRunner extends EventEmitter {
     if (systemPrompt) {
       options.systemPrompt = systemPrompt;
     }
+
+    let startupTimer: ReturnType<typeof setTimeout> | null = null;
 
     try {
       coworkLog('INFO', 'runClaudeCodeLocal', 'Starting local Claude Code session', {
@@ -2920,10 +2953,28 @@ export class CoworkRunner extends EventEmitter {
         queryPrompt = prompt;
       }
 
+      // Set up a startup timeout BEFORE calling query(): if no events arrive
+      // within the timeout, abort. This covers both the query() call itself
+      // (which spawns the subprocess) and the initial event wait.
+      startupTimer = setTimeout(() => {
+        coworkLog('ERROR', 'runClaudeCodeLocal', 'SDK startup timeout: no events received within timeout', {
+          timeoutMs: SDK_STARTUP_TIMEOUT_MS,
+        });
+        if (!abortController.signal.aborted) {
+          abortController.abort();
+        }
+      }, SDK_STARTUP_TIMEOUT_MS);
+
       const result = await query({ prompt: queryPrompt, options } as any);
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');
       let eventCount = 0;
+
       for await (const event of result as AsyncIterable<unknown>) {
+        // Clear startup timeout on first event
+        if (startupTimer) {
+          clearTimeout(startupTimer);
+          startupTimer = null;
+        }
         if (this.isSessionStopRequested(sessionId, activeSession)) {
           break;
         }
@@ -2933,9 +2984,14 @@ export class CoworkRunner extends EventEmitter {
         coworkLog('INFO', 'runClaudeCodeLocal', `Event #${eventCount}: type=${eventType}`);
         this.handleClaudeEvent(sessionId, event);
       }
+      // Clean up timer if loop ended before first event (e.g. empty iterator)
+      if (startupTimer) {
+        clearTimeout(startupTimer);
+        startupTimer = null;
+      }
       coworkLog('INFO', 'runClaudeCodeLocal', `Event iteration completed, total events: ${eventCount}`);
 
-      if (this.isSessionStopRequested(sessionId, activeSession)) {
+      if (this.stoppedSessions.has(sessionId)) {
         this.store.updateSession(sessionId, { status: 'idle' });
         return;
       }
@@ -2950,7 +3006,13 @@ export class CoworkRunner extends EventEmitter {
         this.emit('complete', sessionId, activeSession.claudeSessionId);
       }
     } catch (error) {
-      if (this.isSessionStopRequested(sessionId, activeSession)) {
+      // Clean up startup timer if still pending
+      if (startupTimer) {
+        clearTimeout(startupTimer);
+        startupTimer = null;
+      }
+
+      if (this.stoppedSessions.has(sessionId)) {
         this.store.updateSession(sessionId, { status: 'idle' });
         return;
       }

@@ -10,7 +10,7 @@ import { SkillManager } from './skillManager';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
-import { generateSessionTitle } from './libs/coworkUtil';
+import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setScheduledTaskDeps } from './libs/coworkOpenAICompatProxy';
 import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
@@ -1227,12 +1227,6 @@ if (!gotTheLock) {
         config.executionMode || 'local',
         options.activeSkillIds || []
       );
-      const runner = getCoworkRunner();
-
-      // Update session status to 'running' before starting async task
-      // This ensures the frontend receives the correct status immediately
-      coworkStoreInstance.updateSession(session.id, { status: 'running' });
-
       // Build metadata, include imageAttachments if present
       const messageMetadata: Record<string, unknown> = {};
       if (options.activeSkillIds?.length) {
@@ -1246,6 +1240,27 @@ if (!gotTheLock) {
         content: options.prompt,
         metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
+
+      const probe = await probeCoworkModelReadiness();
+      if (probe.ok === false) {
+        coworkStoreInstance.updateSession(session.id, { status: 'error' });
+        coworkStoreInstance.addMessage(session.id, {
+          type: 'system',
+          content: `Error: ${probe.error}`,
+          metadata: { error: probe.error },
+        });
+        const failedSession = coworkStoreInstance.getSession(session.id) || {
+          ...session,
+          status: 'error' as const,
+        };
+        return { success: true, session: failedSession };
+      }
+
+      const runner = getCoworkRunner();
+
+      // Update session status to 'running' before starting async task
+      // This ensures the frontend receives the correct status immediately
+      coworkStoreInstance.updateSession(session.id, { status: 'running' });
 
       // Start the session asynchronously (skip initial user message since we already added it)
       runner.startSession(session.id, options.prompt, {
@@ -1920,8 +1935,14 @@ if (!gotTheLock) {
     return getCurrentApiConfig();
   });
 
-  ipcMain.handle('check-api-config', async () => {
+  ipcMain.handle('check-api-config', async (_event, options?: { probeModel?: boolean }) => {
     const { config, error } = resolveCurrentApiConfig();
+    if (config && options?.probeModel) {
+      const probe = await probeCoworkModelReadiness();
+      if (probe.ok === false) {
+        return { hasConfig: false, config: null, error: probe.error };
+      }
+    }
     return { hasConfig: config !== null, config, error };
   });
 
