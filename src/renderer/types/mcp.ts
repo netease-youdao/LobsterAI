@@ -50,6 +50,20 @@ export interface McpRegistryEntry {
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
 }
 
+// Remote marketplace server entry
+export interface McpMarketplaceServer {
+  id: string;
+  name: string;
+  description_zh?: string;
+  description_en?: string;
+  category: string;
+  transportType: string;
+  command: string;
+  defaultArgs: string[];
+  requiredEnvKeys?: string[];
+  optionalEnvKeys?: string[];
+}
+
 // Dynamic marketplace category from remote
 export interface McpMarketplaceCategoryInfo {
   id: string;
