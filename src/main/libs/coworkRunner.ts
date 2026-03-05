@@ -2883,9 +2883,11 @@ export class CoworkRunner extends EventEmitter {
       };
     }
 
-    if (activeSession.claudeSessionId) {
-      options.resume = activeSession.claudeSessionId;
-    }
+    // NOTE: Do NOT pass activeSession.claudeSessionId here.  This method always
+    // starts a fresh subprocess, so any previous SDK session ID (e.g. from a
+    // prior run, after stop, or after model switch) is unreachable by the new
+    // process.  Clear the stale value so the new SDK session's ID will replace it.
+    activeSession.claudeSessionId = null;
 
     if (systemPrompt) {
       options.systemPrompt = systemPrompt;
