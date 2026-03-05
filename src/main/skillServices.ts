@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
 import { cpRecursiveSync } from './fsCompat';
+import { getElectronNodeRuntimePath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
 
 /**
@@ -19,8 +20,8 @@ function resolveUserShellPath(): string | null {
 
   try {
     const shell = process.env.SHELL || '/bin/bash';
-    // Use login-interactive shell to source profile, then print PATH
-    const result = execSync(`${shell} -ilc 'echo __PATH__=$PATH'`, {
+    // Use non-interactive login shell to avoid side effects in interactive startup scripts.
+    const result = execSync(`${shell} -lc 'echo __PATH__=$PATH'`, {
       encoding: 'utf-8',
       timeout: 5000,
       env: { ...process.env },
@@ -39,6 +40,7 @@ function resolveUserShellPath(): string | null {
  */
 function buildSkillServiceEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
+  const electronNodeRuntimePath = getElectronNodeRuntimePath();
 
   if (app.isPackaged) {
     if (!env.HOME) {
@@ -65,7 +67,7 @@ function buildSkillServiceEnv(): Record<string, string | undefined> {
 
   // Expose Electron executable so skill scripts can run JS with ELECTRON_RUN_AS_NODE
   // even when system Node.js is not installed.
-  env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+  env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
   appendPythonRuntimeToEnv(env);
 
   return env;
@@ -208,12 +210,12 @@ export class SkillServiceManager {
   private resolveNodeRuntime(
     env: NodeJS.ProcessEnv
   ): { command: string; args: string[]; extraEnv?: NodeJS.ProcessEnv } {
-    if (!app.isPackaged && this.hasCommand('node', env)) {
+    if (this.hasCommand('node', env)) {
       return { command: 'node', args: [] };
     }
 
     return {
-      command: process.execPath,
+      command: getElectronNodeRuntimePath(),
       args: [],
       extraEnv: { ELECTRON_RUN_AS_NODE: '1' },
     };
@@ -331,10 +333,11 @@ export class SkillServiceManager {
     this.ensureWebSearchRuntimeReady(skillPath);
     const baseEnv = this.skillEnv as NodeJS.ProcessEnv ?? process.env;
     const runtime = this.resolveNodeRuntime(baseEnv);
+    const electronNodeRuntimePath = getElectronNodeRuntimePath();
     const env = {
       ...baseEnv,
       ...(runtime.extraEnv ?? {}),
-      LOBSTERAI_ELECTRON_PATH: process.execPath,
+      LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
     };
 
     // Node/Electron validates stdio streams synchronously. Use fd to avoid
@@ -355,7 +358,7 @@ export class SkillServiceManager {
     fs.writeFileSync(pidFile, child.pid!.toString());
     child.unref();
 
-    const runtimeLabel = runtime.command === process.execPath ? 'electron-node' : 'node';
+    const runtimeLabel = runtime.command === 'node' ? 'node' : 'electron-node';
     console.log(`[SkillServices] Web Search Bridge Server starting (PID: ${child.pid}, runtime: ${runtimeLabel})`);
     console.log(`[SkillServices] Logs: ${logFile}`);
   }
