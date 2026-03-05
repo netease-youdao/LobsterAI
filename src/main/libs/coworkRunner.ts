@@ -99,7 +99,6 @@ const SKILLS_MARKER = '/skills/';
 const TASK_WORKSPACE_CONTAINER_DIR = '.lobsterai-tasks';
 const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
-const BLOCKED_BUILTIN_WEB_TOOLS = new Set(['websearch', 'webfetch']);
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
 const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
 const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item)\b/i;
@@ -1973,48 +1972,6 @@ export class CoworkRunner extends EventEmitter {
       || GIT_CLEAN_COMMAND_RE.test(command);
   }
 
-  private isBlockedBuiltinWebTool(toolName: string): boolean {
-    const normalized = String(toolName ?? '').trim().toLowerCase();
-    if (!normalized) {
-      return false;
-    }
-
-    const compact = normalized.replace(/[^a-z0-9]/g, '');
-    if (BLOCKED_BUILTIN_WEB_TOOLS.has(compact)) {
-      return true;
-    }
-
-    const segments = normalized.split(/[^a-z0-9]+/).filter(Boolean);
-    if (segments.length >= 2) {
-      const tail = `${segments[segments.length - 2]}${segments[segments.length - 1]}`;
-      if (BLOCKED_BUILTIN_WEB_TOOLS.has(tail)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private denyBlockedBuiltinWebTool(
-    sessionId: string,
-    executionMode: 'local' | 'sandbox',
-    toolName: string
-  ): PermissionResult | null {
-    if (!this.isBlockedBuiltinWebTool(toolName)) {
-      return null;
-    }
-
-    coworkLog('WARN', 'toolPolicy', 'Blocked disabled built-in web tool', {
-      sessionId,
-      executionMode,
-      toolName,
-    });
-    return {
-      behavior: 'deny',
-      message: 'Tool blocked by app policy: WebSearch/WebFetch are disabled in this environment.',
-    };
-  }
-
   private truncateCommandPreview(command: string, maxLength = 120): string {
     const compact = command.replace(/\s+/g, ' ').trim();
     if (compact.length <= maxLength) return compact;
@@ -2613,6 +2570,7 @@ export class CoworkRunner extends EventEmitter {
       pathToClaudeCodeExecutable: claudeCodePath,
       permissionMode: 'default',
       includePartialMessages: true,
+      disallowedTools: ['WebSearch', 'WebFetch'],
       stderr: (message: string) => {
         stderrTail += message;
         if (stderrTail.length > STDERR_TAIL_MAX_CHARS) {
@@ -2648,11 +2606,6 @@ export class CoworkRunner extends EventEmitter {
           toolInput && typeof toolInput === 'object'
             ? (toolInput as Record<string, unknown>)
             : { value: toolInput };
-
-        const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'local', resolvedName);
-        if (blockedToolResult) {
-          return blockedToolResult;
-        }
 
         if (resolvedName === 'Bash') {
           const command = this.extractToolCommand(resolvedInput);
@@ -3407,11 +3360,6 @@ export class CoworkRunner extends EventEmitter {
               ? (toolInputRaw as Record<string, unknown>)
               : {};
 
-          const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'sandbox', toolName);
-          if (blockedToolResult) {
-            this.writeSandboxPermissionResponse(activeSession, paths.responsesDir, requestId, blockedToolResult);
-            return;
-          }
 
           const responsePath = path.join(paths.responsesDir, `${requestId}.json`);
           this.sandboxPermissions.set(requestId, { sessionId, responsePath });
@@ -3905,11 +3853,6 @@ export class CoworkRunner extends EventEmitter {
             ? (toolInputRaw as Record<string, unknown>)
             : {};
 
-        const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'sandbox', toolName);
-        if (blockedToolResult) {
-          this.writeSandboxPermissionResponse(activeSession, paths.responsesDir, reqId, blockedToolResult);
-          return;
-        }
 
         const responsePath = path.join(paths.responsesDir, `${reqId}.json`);
         this.sandboxPermissions.set(reqId, { sessionId, responsePath });
