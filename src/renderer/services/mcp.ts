@@ -1,4 +1,26 @@
-import { McpServerConfig, McpServerFormData } from '../types/mcp';
+import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo, McpCategory } from '../types/mcp';
+
+/**
+ * Convert remote marketplace server data to McpRegistryEntry format.
+ */
+function convertMarketplaceToRegistry(
+  servers: McpMarketplaceServer[],
+): McpRegistryEntry[] {
+  return servers.map((s) => ({
+    id: s.id,
+    name: s.name,
+    descriptionKey: '',
+    description_zh: s.description_zh,
+    description_en: s.description_en,
+    category: s.category as McpCategory,
+    categoryKey: '',
+    transportType: s.transportType as McpRegistryEntry['transportType'],
+    command: s.command,
+    defaultArgs: s.defaultArgs,
+    requiredEnvKeys: s.requiredEnvKeys,
+    optionalEnvKeys: s.optionalEnvKeys,
+  }));
+}
 
 class McpService {
   private servers: McpServerConfig[] = [];
@@ -92,6 +114,23 @@ class McpService {
 
   getServerById(id: string): McpServerConfig | undefined {
     return this.servers.find(s => s.id === id);
+  }
+
+  async fetchMarketplace(): Promise<{
+    registry: McpRegistryEntry[];
+    categories: McpMarketplaceCategoryInfo[];
+  } | null> {
+    try {
+      const result = await window.electron.mcp.fetchMarketplace();
+      if (result.success && result.data) {
+        const registry = convertMarketplaceToRegistry(result.data.servers);
+        return { registry, categories: result.data.categories };
+      }
+      return null;
+    } catch (error) {
+      console.error('Failed to fetch MCP marketplace:', error);
+      return null;
+    }
   }
 }
 

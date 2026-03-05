@@ -38,15 +38,23 @@ export interface McpRegistryEntry {
   id: string;                    // unique identifier, e.g. 'filesystem'
   name: string;                  // display name
   descriptionKey: string;        // i18n translation key for description
+  description_zh?: string;       // Chinese description (remote data)
+  description_en?: string;       // English description (remote data)
   category: McpCategory;         // category tag
   categoryKey: string;           // i18n translation key for category
-  githubUrl: string;             // GitHub repository URL
   transportType: McpTransportType;
   command: string;               // default command, e.g. 'npx'
   defaultArgs: string[];         // default arguments
   requiredEnvKeys?: string[];    // env vars the user must fill
   optionalEnvKeys?: string[];    // optional env vars
   argPlaceholders?: string[];    // placeholder hints for args (e.g. path)
+}
+
+// Dynamic marketplace category from remote
+export interface McpMarketplaceCategoryInfo {
+  id: string;
+  name_zh: string;
+  name_en: string;
 }
 
 export type McpCategory =

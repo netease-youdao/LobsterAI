@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('electron', {
     update: (id: string, data: any) => ipcRenderer.invoke('mcp:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('mcp:delete', id),
     setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('mcp:setEnabled', options),
+    fetchMarketplace: () => ipcRenderer.invoke('mcp:fetchMarketplace'),
   },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),

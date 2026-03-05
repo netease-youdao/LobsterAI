@@ -195,6 +195,30 @@ interface McpServerConfigIPC {
   updatedAt: number;
 }
 
+interface McpMarketplaceServer {
+  id: string;
+  name: string;
+  description_zh: string;
+  description_en: string;
+  category: string;
+  transportType: 'stdio' | 'sse' | 'http';
+  command: string;
+  defaultArgs: string[];
+  requiredEnvKeys?: string[];
+  optionalEnvKeys?: string[];
+}
+
+interface McpMarketplaceCategory {
+  id: string;
+  name_zh: string;
+  name_en: string;
+}
+
+interface McpMarketplaceData {
+  categories: McpMarketplaceCategory[];
+  servers: McpMarketplaceServer[];
+}
+
 interface IElectronAPI {
   platform: string;
   arch: string;
@@ -224,6 +248,7 @@ interface IElectronAPI {
     update: (id: string, data: any) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
     delete: (id: string) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
     setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    fetchMarketplace: () => Promise<{ success: boolean; data?: McpMarketplaceData; error?: string }>;
   };
   api: {
     fetch: (options: {

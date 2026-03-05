@@ -152,7 +152,6 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     // Attach registry metadata if installing from registry
     if (isRegistry && registryEntry) {
       data.isBuiltIn = true;
-      data.githubUrl = registryEntry.githubUrl;
       data.registryId = registryEntry.id;
     }
 

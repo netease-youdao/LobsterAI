@@ -1193,6 +1193,40 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('mcp:fetchMarketplace', async () => {
+    const url = app.isPackaged
+      ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
+      : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace';
+    try {
+      const https = await import('https');
+      const data = await new Promise<string>((resolve, reject) => {
+        const req = https.get(url, { timeout: 10000 }, (res) => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`HTTP ${res.statusCode}`));
+            res.resume();
+            return;
+          }
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => { body += chunk; });
+          res.on('end', () => resolve(body));
+          res.on('error', reject);
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+      });
+      const json = JSON.parse(data);
+      const value = json?.data?.value;
+      if (!value) {
+        return { success: false, error: 'Invalid response: missing data.value' };
+      }
+      const marketplace = typeof value === 'string' ? JSON.parse(value) : value;
+      return { success: true, data: marketplace };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch marketplace' };
+    }
+  });
+
   // Cowork IPC handlers
   ipcMain.handle('cowork:session:start', async (_event, options: {
     prompt: string;
