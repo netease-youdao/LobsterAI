@@ -2794,7 +2794,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       onClick={onClose}
     >
       <div
-        className="flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
+        className="relative flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
         {/* Left sidebar */}
@@ -2880,66 +2880,68 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             </div>
           </form>
 
-          {isTestResultModalOpen && testResult && (
+        </div>
+
+        {isTestResultModalOpen && testResult && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={() => setIsTestResultModalOpen(false)}
+          >
             <div
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4"
-              onClick={() => setIsTestResultModalOpen(false)}
+              role="dialog"
+              aria-modal="true"
+              aria-label={i18nService.t('connectionTestResult')}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-2xl dark:bg-claude-darkSurface bg-claude-bg dark:border-claude-darkBorder border-claude-border border shadow-modal p-4"
             >
-              <div
-                role="dialog"
-                aria-modal="true"
-                aria-label={i18nService.t('connectionTestResult')}
-                onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-md rounded-2xl dark:bg-claude-darkSurface bg-claude-bg dark:border-claude-darkBorder border-claude-border border shadow-modal p-4"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
-                    {i18nService.t('connectionTestResult')}
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={() => setIsTestResultModalOpen(false)}
-                    className="p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover"
-                  >
-                    <XMarkIcon className="h-4 w-4" />
-                  </button>
-                </div>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('connectionTestResult')}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setIsTestResultModalOpen(false)}
+                  className="p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
 
-                <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
-                  <span className="text-[11px]">•</span>
-                  <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {testResult.success ? (
-                      <CheckCircleIcon className="h-4 w-4" />
-                    ) : (
-                      <XCircleIcon className="h-4 w-4" />
-                    )}
-                    {testResult.success ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}
-                  </span>
-                </div>
+              <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
+                <span className="text-[11px]">•</span>
+                <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {testResult.success ? (
+                    <CheckCircleIcon className="h-4 w-4" />
+                  ) : (
+                    <XCircleIcon className="h-4 w-4" />
+                  )}
+                  {testResult.success ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}
+                </span>
+              </div>
 
-                <p className="mt-3 text-xs leading-5 dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
-                  {testResult.message}
-                </p>
+              <p className="mt-3 text-xs leading-5 dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
+                {testResult.message}
+              </p>
 
-                <div className="mt-4 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setIsTestResultModalOpen(false)}
-                    className="px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors active:scale-[0.98]"
-                  >
-                    {i18nService.t('close')}
-                  </button>
-                </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsTestResultModalOpen(false)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors active:scale-[0.98]"
+                >
+                  {i18nService.t('close')}
+                </button>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {(isAddingModel || isEditingModel) && (
-            <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4"
-              onClick={handleCancelModelEdit}
-            >
+        {(isAddingModel || isEditingModel) && (
+          <div
+            className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={handleCancelModelEdit}
+          >
               <div
                 role="dialog"
                 aria-modal="true"
@@ -3094,7 +3096,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           {/* Memory Modal */}
           {showMemoryModal && (
             <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4"
+              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
               onClick={resetCoworkMemoryEditor}
             >
               <div
@@ -3142,7 +3144,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               </div>
             </div>
           )}
-        </div>
       </div>
     </div>
   );
