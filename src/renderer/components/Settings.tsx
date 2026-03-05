@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { configService } from '../services/config';
 import { apiService } from '../services/api';
+import { checkForAppUpdate } from '../services/appUpdate';
+import type { AppUpdateInfo } from '../services/appUpdate';
 import { themeService } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
@@ -48,6 +50,7 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
+  onUpdateFound?: (info: AppUpdateInfo) => void;
 }
 
 const providerKeys = [
@@ -338,7 +341,7 @@ const getDefaultActiveProvider = (): ProviderType => {
   return firstEnabledProvider ?? providerKeys[0];
 };
 
-const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
+const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
   const dispatch = useDispatch();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
@@ -369,6 +372,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
+  const updateCheckTimerRef = useRef<number | null>(null);
   
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
@@ -393,6 +397,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const [testMode, setTestMode] = useState(false);
   const [logoClickCount, setLogoClickCount] = useState(0);
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error'>('idle');
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -411,6 +416,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       }, 1200);
     }
   }, []);
+
+  const handleCheckUpdate = useCallback(async () => {
+    if (updateCheckStatus === 'checking' || !appVersion) return;
+    setUpdateCheckStatus('checking');
+    try {
+      const info = await checkForAppUpdate(appVersion);
+      if (info) {
+        setUpdateCheckStatus('idle');
+        onUpdateFound?.(info);
+      } else {
+        setUpdateCheckStatus('upToDate');
+        if (updateCheckTimerRef.current != null) {
+          window.clearTimeout(updateCheckTimerRef.current);
+        }
+        updateCheckTimerRef.current = window.setTimeout(() => {
+          setUpdateCheckStatus('idle');
+          updateCheckTimerRef.current = null;
+        }, 3000);
+      }
+    } catch {
+      setUpdateCheckStatus('error');
+      if (updateCheckTimerRef.current != null) {
+        window.clearTimeout(updateCheckTimerRef.current);
+      }
+      updateCheckTimerRef.current = window.setTimeout(() => {
+        setUpdateCheckStatus('idle');
+        updateCheckTimerRef.current = null;
+      }, 3000);
+    }
+  }, [appVersion, updateCheckStatus, onUpdateFound]);
 
   const handleOpenUserManual = useCallback(() => {
     void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
@@ -485,6 +520,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   useEffect(() => () => {
     if (emailCopiedTimerRef.current != null) {
       window.clearTimeout(emailCopiedTimerRef.current);
+    }
+    if (updateCheckTimerRef.current != null) {
+      window.clearTimeout(updateCheckTimerRef.current);
     }
   }, []);
 
@@ -2688,7 +2726,23 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             <div className="w-full mt-8 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutVersion')}</span>
-                <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{appVersion}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{appVersion}</span>
+                  <button
+                    type="button"
+                    disabled={updateCheckStatus === 'checking'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCheckUpdate();
+                    }}
+                    className="text-xs px-2 py-0.5 rounded-md border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent hover:border-claude-accent dark:hover:border-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {updateCheckStatus === 'checking' && i18nService.t('updateChecking')}
+                    {updateCheckStatus === 'upToDate' && i18nService.t('updateUpToDate')}
+                    {updateCheckStatus === 'error' && i18nService.t('updateCheckFailed')}
+                    {updateCheckStatus === 'idle' && i18nService.t('checkForUpdate')}
+                  </button>
+                </div>
               </div>
               <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutContactEmail')}</span>

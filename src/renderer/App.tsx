@@ -253,6 +253,14 @@ const App: React.FC = () => {
     setShowUpdateModal(true);
   }, [updateInfo]);
 
+  const handleUpdateFound = useCallback((info: AppUpdateInfo) => {
+    setUpdateInfo(info);
+    setUpdateModalState('info');
+    setUpdateError(null);
+    setDownloadProgress(null);
+    setShowUpdateModal(true);
+  }, []);
+
   const handleConfirmUpdate = useCallback(async () => {
     if (!updateInfo) return;
 
@@ -564,6 +572,7 @@ const App: React.FC = () => {
               onClose={handleCloseSettings}
               initialTab={settingsOptions.initialTab}
               notice={settingsOptions.notice}
+              onUpdateFound={handleUpdateFound}
             />
           )}
         </div>
@@ -633,6 +642,7 @@ const App: React.FC = () => {
           onClose={handleCloseSettings}
           initialTab={settingsOptions.initialTab}
           notice={settingsOptions.notice}
+          onUpdateFound={handleUpdateFound}
         />
       )}
       {showUpdateModal && updateInfo && (
