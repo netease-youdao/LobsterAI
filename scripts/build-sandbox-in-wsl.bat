@@ -86,7 +86,9 @@ if exist "%OUTPUT_FILE%" (
     echo   Output: sandbox\image\out\linux-%ARCH%.qcow2
     for %%A in ("%OUTPUT_FILE%") do echo   Size:   %%~zA bytes
     echo.
-    echo Next step: python scripts\upload-sandbox-image.py --arch %ARCH%
+    echo Next step:
+    echo   1) bash scripts/publish-sandbox-image.sh v0.1.5
+    echo   2) python scripts\upload-sandbox-image.py --arch %ARCH% --version v0.1.5
 ) else (
     echo   WARNING: Expected output file not found: %OUTPUT_FILE%
     echo   Check the build output above for errors.
