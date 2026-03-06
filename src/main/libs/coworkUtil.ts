@@ -335,15 +335,43 @@ function checkWindowsGitBashHealth(bashPath: string): { ok: boolean; reason?: st
       return { ok: false, reason: 'path does not exist' };
     }
 
-    const result = spawnSync(
+    // Use a minimal env for the health check to avoid interference from
+    // BASH_ENV, MSYS2_PATH_TYPE, or other env vars that could slow startup.
+    // Only pass PATH + SYSTEMROOT (required for Windows DLL loading) + HOME.
+    const healthEnv: Record<string, string> = {
+      PATH: process.env.PATH || '',
+      SYSTEMROOT: process.env.SYSTEMROOT || process.env.SystemRoot || 'C:\\Windows',
+      HOME: process.env.HOME || process.env.USERPROFILE || '',
+    };
+
+    // Try non-login shell first (-c instead of -lc) for speed.
+    // Login shells source /etc/profile which can be slow on some systems.
+    // cygpath is a standalone binary and does not require a login shell.
+    const fastResult = spawnSync(
       bashPath,
-      ['-lc', 'cygpath -u "C:\\\\Windows"'],
+      ['-c', 'cygpath -u "C:\\\\Windows"'],
       {
         encoding: 'utf-8',
         timeout: 5000,
         windowsHide: true,
+        env: healthEnv,
       }
     );
+
+    const result = (fastResult.error || (typeof fastResult.status === 'number' && fastResult.status !== 0))
+      // Non-login shell failed — retry with login shell and a longer timeout.
+      // Some Git Bash builds require login shell to set up PATH for cygpath.
+      ? spawnSync(
+        bashPath,
+        ['-lc', 'cygpath -u "C:\\\\Windows"'],
+        {
+          encoding: 'utf-8',
+          timeout: 15000,
+          windowsHide: true,
+          env: healthEnv,
+        }
+      )
+      : fastResult;
 
     if (result.error) {
       return { ok: false, reason: result.error.message };
@@ -1130,6 +1158,12 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
       env.LOBSTERAI_NODE_SHIM_ACTIVE = '1';
       coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
+
+      // Re-compute ORIGINAL_PATH after shim injection so that git-bash
+      // also sees the bundled node/npx/npm in its PATH.
+      if (process.platform === 'win32') {
+        ensureWindowsOriginalPath(env);
+      }
     }
   } else {
     delete env.LOBSTERAI_NODE_SHIM_ACTIVE;

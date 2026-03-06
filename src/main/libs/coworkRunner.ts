@@ -2112,6 +2112,23 @@ export class CoworkRunner extends EventEmitter {
     ].join('\n');
   }
 
+  private buildWindowsBundledRuntimePrompt(): string {
+    if (process.platform !== 'win32') {
+      return '';
+    }
+
+    return [
+      '## Windows Bundled Runtime Environment',
+      '- This application ships with built-in Node.js and Python runtimes that are pre-configured in PATH.',
+      '- The following commands are available out of the box: `node`, `npm`, `npx`, `python`, `python3`, `pip`, `pip3`.',
+      '- Always use bare command names (e.g. `node`, `python`, `npm`, `pip`) — never use full absolute paths to system-installed runtimes.',
+      '- Do NOT tell the user to install Node.js, Python, npm, or pip. They are already bundled with this application.',
+      '- Do NOT suggest downloading Node.js or Python from external websites or using package managers like winget/chocolatey/scoop to install them.',
+      '- When a task requires Node.js or Python, proceed directly without checking whether they are installed.',
+      '- For project dependencies, run `npm install` or `pip install` directly — the bundled package managers handle it.',
+    ].join('\n');
+  }
+
   private buildWorkspaceSafetyPrompt(
     workspaceRoot: string,
     cwd: string,
@@ -2152,6 +2169,7 @@ export class CoworkRunner extends EventEmitter {
   ): string {
     const safetyPrompt = this.buildWorkspaceSafetyPrompt(workspaceRoot, cwd, confirmationMode);
     const windowsEncodingPrompt = this.buildWindowsEncodingPrompt();
+    const windowsBundledRuntimePrompt = this.buildWindowsBundledRuntimePrompt();
     const memoryRecallPrompt = [
       '## Memory Strategy',
       '- Historical retrieval is tool-first: when the user references previous chats, earlier outputs, prior decisions, or says "还记得/之前/上次/刚才", call `conversation_search` or `recent_chats` before answering.',
@@ -2167,7 +2185,7 @@ export class CoworkRunner extends EventEmitter {
       );
     }
     const trimmedBasePrompt = baseSystemPrompt?.trim();
-    return [safetyPrompt, windowsEncodingPrompt, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
+    return [safetyPrompt, windowsEncodingPrompt, windowsBundledRuntimePrompt, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
       .filter((section): section is string => Boolean(section?.trim()))
       .join('\n\n');
   }
