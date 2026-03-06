@@ -18,6 +18,8 @@ import {
   IMMessage,
   IMMediaAttachment,
   DEFAULT_NIM_STATUS,
+  NimTeamPolicy,
+  NimSessionType,
 } from './types';
 import {
   downloadNimMedia,
@@ -26,6 +28,7 @@ import {
   cleanupOldNimMediaFiles,
 } from './nimMedia';
 import { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
+import { NimQChatClient, QChatInboundMessage } from './nimQChatClient';
 
 // Message deduplication cache
 const processedMessages = new Map<string, number>();
@@ -58,11 +61,15 @@ function convertMessageType(v2Type: number): NimMessageType {
 /**
  * Parse conversationId format: {appId}|{type}|{targetId}
  */
-function parseConversationId(conversationId: string): { sessionType: 'p2p' | 'team' | 'superTeam'; targetId: string } {
+function parseConversationId(conversationId: string): { sessionType: NimSessionType; targetId: string } {
   const parts = conversationId.split('|');
   if (parts.length >= 3) {
     const typeNum = parseInt(parts[1], 10);
-    const sessionType = typeNum === 1 ? 'p2p' as const : typeNum === 2 ? 'team' as const : 'p2p' as const;
+    // V2NIMConversationType: 1=p2p, 2=team, 3=superTeam
+    const sessionType: NimSessionType = typeNum === 1 ? 'p2p'
+                                       : typeNum === 2 ? 'team'
+                                       : typeNum === 3 ? 'superTeam'
+                                       : 'p2p';
     return { sessionType, targetId: parts[2] };
   }
   return { sessionType: 'p2p', targetId: '' };
@@ -71,7 +78,7 @@ function parseConversationId(conversationId: string): { sessionType: 'p2p' | 'te
 /**
  * Build conversationId using SDK utility or manual fallback
  */
-function buildConversationId(conversationIdUtil: any, accountId: string, sessionType: 'p2p' | 'team' | 'superTeam' = 'p2p'): string {
+function buildConversationId(conversationIdUtil: any, accountId: string, sessionType: NimSessionType = 'p2p'): string {
   if (conversationIdUtil) {
     switch (sessionType) {
       case 'p2p':
@@ -138,6 +145,41 @@ function splitMessageIntoChunks(text: string, maxLength: number = MAX_MESSAGE_LE
   return chunks;
 }
 
+/**
+ * Check if a team message should be processed based on teamPolicy
+ * @param params.teamPolicy The team message policy from config
+ * @param params.teamAllowlist List of allowed team IDs (when policy is 'allowlist')
+ * @param params.teamId The team ID from the message
+ * @param params.forcePushAccountIds Account IDs that were @-mentioned in the message
+ * @param params.botAccount The bot's account ID
+ */
+function isTeamMessageAllowed(params: {
+  teamPolicy: NimTeamPolicy;
+  teamAllowlist: string[];
+  teamId: string;
+  forcePushAccountIds: string[];
+  botAccount: string;
+}): { allowed: boolean; reason?: string } {
+  const { teamPolicy, teamAllowlist, teamId, forcePushAccountIds, botAccount } = params;
+
+  // Always check if bot was @-mentioned first
+  if (!forcePushAccountIds.includes(botAccount)) {
+    return { allowed: false, reason: 'bot not mentioned' };
+  }
+
+  if (teamPolicy === 'disabled') {
+    return { allowed: false, reason: 'team messages disabled' };
+  }
+
+  if (teamPolicy === 'allowlist') {
+    if (!teamAllowlist.includes(teamId)) {
+      return { allowed: false, reason: 'team not in allowlist' };
+    }
+  }
+
+  return { allowed: true };
+}
+
 export class NimGateway extends EventEmitter {
   private v2Client: V2NIM | null = null;
   private config: NimConfig | null = null;
@@ -172,6 +214,11 @@ export class NimGateway extends EventEmitter {
    * Used to suppress reconnect timers that were scheduled before stop() was called.
    */
   private stopRequested: boolean = false;
+
+  /**
+   * QChat client instance for circle group messages
+   */
+  private qchatClient: NimQChatClient | null = null;
 
   constructor() {
     super();
@@ -327,7 +374,7 @@ export class NimGateway extends EventEmitter {
       // Initialize NIM SDK using new NIM() for multi-instance support
       this.v2Client = new NIM({
         appkey: config.appKey,
-        debugLevel: "log",
+        debugLevel: "warn",
         apiVersion: 'v2',
       }) as unknown as V2NIM;
 
@@ -370,6 +417,11 @@ export class NimGateway extends EventEmitter {
             this.cleanupInterval = setInterval(() => {
               this.cleanupMediaFiles();
             }, 24 * 60 * 60 * 1000);
+          }
+
+          // Activate QChat if enabled
+          if (this.config?.qchatEnabled) {
+            this.activateQChat();
           }
         } else if (loginStatus === 0) {
           this.status.connected = false;
@@ -501,6 +553,16 @@ export class NimGateway extends EventEmitter {
     }
     this.reconnectAttempts = 0;
 
+    // Stop QChat client first
+    if (this.qchatClient) {
+      try {
+        await this.qchatClient.stop();
+      } catch (qchatErr: any) {
+        console.warn('[NIM Gateway] QChat stop error (ignored):', qchatErr?.message || qchatErr);
+      }
+      this.qchatClient = null;
+    }
+
     if (!this.v2Client) {
       this.log('[NIM Gateway] Not running');
       return;
@@ -594,6 +656,53 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Fetch the display name for a team via V2NIMTeamService.getTeamInfo().
+   * teamType: 1 = advanced team (高级群), 2 = super team (超大群).
+   * Falls back to the provided fallbackId on any error.
+   */
+  private async fetchTeamName(teamId: string, teamType: number, fallbackId: string): Promise<string> {
+    try {
+      const nim = this.v2Client as any;
+      if (!nim?.V2NIMTeamService) {
+        console.log('[NIM Gateway] fetchTeamName: V2NIMTeamService not available');
+        return fallbackId;
+      }
+      const team = await nim.V2NIMTeamService.getTeamInfo(teamId, teamType);
+      console.log('[NIM Gateway] getTeamInfo result:', JSON.stringify(team, null, 2));
+      const name = team?.name;
+      return name && name.trim() ? name.trim() : fallbackId;
+    } catch (err: any) {
+      // If local cache miss, try fetching from cloud
+      try {
+        const nim = this.v2Client as any;
+        const team = await nim.V2NIMTeamService.getTeamInfoFromCloud(teamId, teamType);
+        console.log('[NIM Gateway] getTeamInfoFromCloud result:', JSON.stringify(team, null, 2));
+        const name = team?.name;
+        return name && name.trim() ? name.trim() : fallbackId;
+      } catch (err2: any) {
+        console.log('[NIM Gateway] fetchTeamName error:', err2?.message || err2);
+        return fallbackId;
+      }
+    }
+  }
+
+  /**
+   * Fetch QChat channel display name.
+   * Falls back to channelId on any error.
+   */
+  private async fetchChannelName(channelId: string): Promise<string> {
+    try {
+      const nim = this.v2Client as any;
+      if (!nim?.qchatChannel) return channelId;
+      const channels = await nim.qchatChannel.getChannels({ channelIds: [channelId] });
+      const name = channels?.[0]?.name;
+      return name && name.trim() ? name.trim() : channelId;
+    } catch {
+      return channelId;
+    }
+  }
+
+  /**
    * Check if message was already processed (deduplication)
    */
   private isMessageProcessed(messageId: string): boolean {
@@ -650,7 +759,6 @@ export class NimGateway extends EventEmitter {
       // during sync; we skip them to avoid re-processing old conversations.
       const messageSource: number = msg.messageSource ?? 0;
       if (messageSource !== 1) {
-        this.log(`[NIM Gateway] Skipping non-online message (source=${messageSource}): ${msgId}`);
         return;
       }
 
@@ -682,6 +790,10 @@ export class NimGateway extends EventEmitter {
         return;
       }
 
+      // 打印原始消息结构，便于确认 SDK 字段名
+      console.log('[NIM Gateway] Raw message:', JSON.stringify(msg, null, 2));
+
+
       const msgType = convertMessageType(msg.messageType);
 
       // 支持的消息类型：text, image, audio, video, file
@@ -691,12 +803,42 @@ export class NimGateway extends EventEmitter {
         return;
       }
 
-      const { sessionType } = parseConversationId(msg.conversationId || '');
+      const { sessionType, targetId } = parseConversationId(msg.conversationId || '');
+      const isP2P = sessionType === 'p2p';
+      const isTeam = sessionType === 'team' || sessionType === 'superTeam';
 
-      // Only handle P2P messages
-      if (sessionType !== 'p2p') {
-        this.log(`[NIM Gateway] Ignoring non-p2p message, sessionType: ${sessionType}`);
-        return;
+      // Handle team messages: only process if bot is @-mentioned and policy allows
+      if (isTeam) {
+        const botAccount = this.config?.account || '';
+        const forcePushIds: string[] = msg.pushConfig?.forcePushAccountIds ?? [];
+        const teamPolicy: NimTeamPolicy = this.config?.teamPolicy || 'disabled';
+        const teamAllowlistStr = this.config?.teamAllowlist || '';
+        const teamAllowlist = teamAllowlistStr.split(',').map(s => s.trim()).filter(Boolean);
+
+        // Always log team message details (not gated by debug) for easier diagnostics
+        console.log('[NIM Gateway] Team message check:', JSON.stringify({
+          teamId: targetId,
+          teamPolicy,
+          teamAllowlist,
+          forcePushIds,
+          botAccount,
+          conversationId: msg.conversationId,
+        }));
+
+        const check = isTeamMessageAllowed({
+          teamPolicy,
+          teamAllowlist,
+          teamId: targetId,
+          forcePushAccountIds: forcePushIds,
+          botAccount,
+        });
+
+        if (!check.allowed) {
+          console.log(`[NIM Gateway] Ignoring team message: ${check.reason}, teamId: ${targetId}`);
+          return;
+        }
+
+        console.log(`[NIM Gateway] Team message accepted: bot was @-mentioned in ${targetId}`);
       }
 
       // 构建消息内容和媒体附件
@@ -741,20 +883,46 @@ export class NimGateway extends EventEmitter {
 
       // Mark P2P message as read so the sender sees the "read" receipt
       // and the conversation unread count is cleared on the server side.
-      if (this.v2Client?.V2NIMMessageService) {
+      // Note: Only P2P messages support read receipts, team messages do not.
+      if (isP2P && this.v2Client?.V2NIMMessageService) {
         this.v2Client.V2NIMMessageService.sendP2PMessageReceipt(msg).catch((err: any) => {
           this.log('[NIM Gateway] sendP2PMessageReceipt failed (ignored):', err?.message || err);
         });
       }
 
+      // P2P: 直接使用消息自带的昵称字段，无需额外 API 调用
+      // V2 SDK 字段可能是 fromNick / senderNick / nickname，都尝试一下
+      const rawNick = msg.fromNick || msg.senderNick || msg.nickname || msg.nickName || '';
+      // 打印原始 msg 的所有 key，便于确认真实字段名（仅 debug 模式）
+      console.log('[NIM Gateway] P2P msg keys:', Object.keys(msg));
+      console.log('[NIM Gateway] P2P nick fields:', JSON.stringify({
+        fromNick: msg.fromNick,
+        senderNick: msg.senderNick,
+        nickname: msg.nickname,
+        nickName: msg.nickName,
+        senderId,
+        rawNick,
+      }));
+      const senderName = isP2P
+        ? (rawNick.trim() ? rawNick.trim() : senderId)
+        : senderId;
+      // For team messages, fetch the real group name via V2NIMTeamService.
+      // conversationId format: {appId}|{type}|{teamId}, type=2 for team, 3 for superTeam.
+      const teamTypeNum = sessionType === 'superTeam' ? 2 : 1;
+      const groupName = isTeam
+        ? await this.fetchTeamName(targetId, teamTypeNum, targetId)
+        : undefined;
+
       // Create IMMessage
       const message: IMMessage = {
         platform: 'nim',
         messageId: msgId,
-        conversationId: msg.conversationId || senderId,
+        conversationId: msg.conversationId || (isTeam ? targetId : senderId),
         senderId,
+        senderName,
+        groupName,
         content,
-        chatType: 'direct',
+        chatType: isTeam ? 'group' : 'direct',
         timestamp: msg.createTime || Date.now(),
         attachments: attachments.length > 0 ? attachments : undefined,
       };
@@ -769,17 +937,24 @@ export class NimGateway extends EventEmitter {
         content: content.substring(0, 100),
         conversationId: msg.conversationId,
         hasAttachments: attachments.length > 0,
+        isTeam,
       }, null, 2));
 
       // Create reply function with media support
+      // For team messages, reply to the team with @-mention; for P2P, reply to sender
       const replyFn = async (text: string) => {
         this.log('[NIM Gateway] 发送回复:', JSON.stringify({
-          to: senderId,
+          to: isTeam ? targetId : senderId,
+          sessionType,
           replyLength: text.length,
           reply: text.substring(0, 200),
         }, null, 2));
 
-        await this.sendReplyWithMedia(senderId, text);
+        if (isTeam) {
+          await this.sendTeamReply(targetId, text, msg, senderId, sessionType as 'team' | 'superTeam');
+        } else {
+          await this.sendReplyWithMedia(senderId, text);
+        }
         this.status.lastOutboundAt = Date.now();
       };
 
@@ -908,6 +1083,146 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Send a reply to a team message with quote and forcePush @-mention
+   * @param teamId The team ID to send to
+   * @param text The reply text
+   * @param originalMsg The original message to quote/reply to
+   * @param originalSenderId The original sender's account ID (for @-mention)
+   * @param sessionType The session type ('team' or 'superTeam')
+   */
+  private async sendTeamReply(
+    teamId: string,
+    text: string,
+    originalMsg: any,
+    originalSenderId: string,
+    sessionType: 'team' | 'superTeam'
+  ): Promise<void> {
+    if (!this.v2Client?.V2NIMMessageService || !this.v2Client?.V2NIMMessageCreator) {
+      throw new Error('NIM SDK not ready');
+    }
+
+    // Parse media markers first
+    const markers = parseMediaMarkers(text);
+
+    if (markers.length > 0) {
+      // Has media: send text first, then media
+      const strippedText = stripMediaMarkers(text, markers);
+      if (strippedText.trim()) {
+        await this.sendTeamTextReply(teamId, strippedText, originalMsg, originalSenderId, sessionType);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      // Send media files
+      for (let i = 0; i < markers.length; i++) {
+        const marker = markers[i];
+        if (fs.existsSync(marker.path)) {
+          await this.sendMediaToTeam(teamId, marker.path, sessionType);
+          this.log(`[NIM Gateway] Sent team media: ${marker.type} ${marker.path}`);
+        } else {
+          this.log(`[NIM Gateway] Team media file not found: ${marker.path}`);
+        }
+        if (i < markers.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    } else {
+      // No media, just send text reply
+      await this.sendTeamTextReply(teamId, text, originalMsg, originalSenderId, sessionType);
+    }
+  }
+
+  /**
+   * Send text reply to a team message with quote and forcePush
+   */
+  private async sendTeamTextReply(
+    teamId: string,
+    text: string,
+    originalMsg: any,
+    originalSenderId: string,
+    sessionType: 'team' | 'superTeam'
+  ): Promise<void> {
+    const chunks = splitMessageIntoChunks(text);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const replyMsg = this.v2Client!.V2NIMMessageCreator.createTextMessage(chunk);
+      if (!replyMsg) {
+        this.log('[NIM Gateway] Failed to create team reply message');
+        continue;
+      }
+
+      const conversationId = buildConversationId(
+        this.v2Client!.V2NIMConversationIdUtil,
+        teamId,
+        sessionType
+      );
+
+      // Use replyMessage with forcePush to notify the original sender
+      const sendParams = {
+        pushConfig: {
+          forcePush: true,
+          forcePushAccountIds: [originalSenderId],
+        },
+      };
+
+      this.log(`[NIM Gateway] Sending team reply: teamId=${teamId}, forcePush=${originalSenderId}, chunk=${i + 1}/${chunks.length}`);
+
+      try {
+        // Only quote the original message for the first chunk
+        if (i === 0) {
+          await this.v2Client!.V2NIMMessageService.replyMessage(
+            replyMsg,
+            originalMsg,
+            sendParams,
+            () => {}
+          );
+        } else {
+          // Subsequent chunks are sent as regular messages
+          await this.v2Client!.V2NIMMessageService.sendMessage(
+            replyMsg,
+            conversationId,
+            sendParams,
+            () => {}
+          );
+        }
+      } catch (error: any) {
+        console.error(`[NIM Gateway] Failed to send team reply: ${error.message}`);
+      }
+
+      if (chunks.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  }
+
+  /**
+   * Send media file to a team
+   */
+  private async sendMediaToTeam(
+    teamId: string,
+    filePath: string,
+    sessionType: 'team' | 'superTeam'
+  ): Promise<void> {
+    if (!this.v2Client?.V2NIMMessageService || !this.v2Client?.V2NIMMessageCreator) {
+      throw new Error('NIM SDK not ready');
+    }
+
+    const conversationId = buildConversationId(
+      this.v2Client.V2NIMConversationIdUtil,
+      teamId,
+      sessionType
+    );
+
+    await sendNimMediaMessage(
+      this.v2Client.V2NIMMessageService,
+      this.v2Client.V2NIMMessageCreator,
+      conversationId,
+      filePath,
+      this.log
+    );
+  }
+
+  /**
    * Get the current notification target for persistence.
    */
   getNotificationTarget(): string | null {
@@ -951,6 +1266,182 @@ export class NimGateway extends EventEmitter {
       cleanupOldNimMediaFiles();
     } catch (error: any) {
       this.log('[NIM Gateway] Media cleanup error:', error.message);
+    }
+  }
+
+  // ==================== QChat (Circle Groups) Support ====================
+
+  /**
+   * Activate QChat subscription after IM login succeeds
+   */
+  private async activateQChat(): Promise<void> {
+    if (!this.v2Client || !this.config) return;
+
+    const serverIdsStr = this.config.qchatServerIds || '';
+    const serverIds = serverIdsStr.split(',').map(s => s.trim()).filter(Boolean);
+
+    this.log('[NIM Gateway] Activating QChat...');
+
+    this.qchatClient = new NimQChatClient({
+      account: this.config.account,
+      serverIds: serverIds.length > 0 ? serverIds : undefined,
+      onMessage: (msg) => this.handleQChatMessage(msg),
+      onError: (err) => this.log('[NIM QChat] Error:', err.message),
+      log: this.log,
+    });
+
+    this.qchatClient.setNim(this.v2Client);
+
+    try {
+      await this.qchatClient.initListeners();
+      await this.qchatClient.activate();
+      this.log('[NIM Gateway] QChat activated');
+    } catch (err: any) {
+      this.log('[NIM Gateway] QChat activation failed:', err.message || err);
+    }
+  }
+
+  /**
+   * Handle incoming QChat message
+   */
+  private async handleQChatMessage(msg: QChatInboundMessage): Promise<void> {
+    try {
+      // Skip messages from self
+      if (msg.senderAccid === this.config?.account) {
+        this.log('[NIM QChat] Ignoring self message');
+        return;
+      }
+
+      // Only process @-mentioned messages
+      if (!msg.wasMentioned) {
+        this.log(`[NIM QChat] Ignoring non-mentioned message in ${msg.serverId}:${msg.channelId}`);
+        return;
+      }
+
+      // Apply whitelist if configured
+      if (this.config?.accountWhitelist) {
+        const whitelist = this.config.accountWhitelist.split(',').map(s => s.trim()).filter(Boolean);
+        if (whitelist.length > 0 && !whitelist.includes(msg.senderAccid)) {
+          this.log(`[NIM QChat] Sender ${msg.senderAccid} not in whitelist`);
+          return;
+        }
+      }
+
+      this.status.lastInboundAt = Date.now();
+
+      this.log('[NIM QChat] 收到消息:', JSON.stringify({
+        messageId: msg.messageId,
+        serverId: msg.serverId,
+        channelId: msg.channelId,
+        sender: msg.senderAccid,
+        senderNick: msg.senderNick,
+        text: msg.text.substring(0, 100),
+        wasMentioned: msg.wasMentioned,
+      }, null, 2));
+
+      // Fetch real channel name (fall back to channelId).
+      // senderNick comes directly from the QChat message payload; use accid as fallback.
+      const channelName = await this.fetchChannelName(msg.channelId);
+      const senderName = (msg.senderNick && msg.senderNick.trim()) ? msg.senderNick.trim() : msg.senderAccid;
+
+      const imMessage: IMMessage = {
+        platform: 'nim',
+        messageId: msg.messageId,
+        conversationId: `qchat:${msg.serverId}:${msg.channelId}`,
+        senderId: msg.senderAccid,
+        senderName,
+        groupName: channelName,
+        content: msg.text,
+        chatType: 'group',
+        chatSubType: 'qchat',
+        timestamp: msg.timestamp,
+      };
+
+      // Create reply function for QChat
+      const replyFn = async (text: string) => {
+        this.log('[NIM QChat] 发送回复:', JSON.stringify({
+          serverId: msg.serverId,
+          channelId: msg.channelId,
+          replyLength: text.length,
+        }, null, 2));
+
+        await this.sendQChatReply(msg.serverId, msg.channelId, text);
+        this.status.lastOutboundAt = Date.now();
+      };
+
+      // Store last sender for notifications
+      this.lastSenderId = msg.senderAccid;
+
+      // Emit message event
+      this.emit('message', imMessage);
+
+      // Call message callback if set
+      if (this.onMessageCallback) {
+        try {
+          await this.onMessageCallback(imMessage, replyFn);
+        } catch (error: any) {
+          console.error(`[NIM QChat] Error in message callback: ${error.message}`);
+          await replyFn(`抱歉，处理消息时出现错误：${error.message}`);
+        }
+      }
+    } catch (err: any) {
+      console.error(`[NIM QChat] Error handling message: ${err.message}`);
+    }
+  }
+
+  /**
+   * Send reply to a QChat channel
+   */
+  private async sendQChatReply(
+    serverId: string,
+    channelId: string,
+    text: string
+  ): Promise<void> {
+    if (!this.qchatClient) {
+      throw new Error('QChat client not initialized');
+    }
+
+    // Parse media markers
+    const markers = parseMediaMarkers(text);
+
+    if (markers.length > 0) {
+      // Has media: send stripped text first
+      const strippedText = stripMediaMarkers(text, markers);
+      if (strippedText.trim()) {
+        await this.sendQChatLongText(serverId, channelId, strippedText);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      // Note: QChat media sending is not implemented yet
+      // For now, log a warning for media markers
+      for (const marker of markers) {
+        this.log(`[NIM QChat] Media sending not yet supported: ${marker.type} ${marker.path}`);
+      }
+    } else {
+      // No media, just send text
+      await this.sendQChatLongText(serverId, channelId, text);
+    }
+  }
+
+  /**
+   * Send long text to QChat with auto-splitting
+   */
+  private async sendQChatLongText(
+    serverId: string,
+    channelId: string,
+    text: string
+  ): Promise<void> {
+    const chunks = splitMessageIntoChunks(text);
+
+    for (const chunk of chunks) {
+      const result = await this.qchatClient!.sendText(serverId, channelId, chunk);
+      if (!result.ok) {
+        this.log(`[NIM QChat] Send failed: ${result.error}`);
+      }
+
+      if (chunks.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
   }
 }

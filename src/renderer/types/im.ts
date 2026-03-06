@@ -85,6 +85,8 @@ export interface DiscordGatewayStatus {
 
 // ==================== NIM (NetEase IM) Types ====================
 
+export type NimTeamPolicy = 'open' | 'allowlist' | 'disabled';
+
 export interface NimConfig {
   enabled: boolean;
   appKey: string;
@@ -92,6 +94,12 @@ export interface NimConfig {
   token: string;
   accountWhitelist: string;
   debug?: boolean;
+  // 群组消息配置
+  teamPolicy?: NimTeamPolicy;      // 群消息策略，默认 'disabled'
+  teamAllowlist?: string;          // 逗号分隔的群 ID 白名单
+  // QChat 圈组配置
+  qchatEnabled?: boolean;          // 是否启用圈组
+  qchatServerIds?: string;         // 逗号分隔的服务器 ID，空则自动发现
 }
 
 export interface NimGatewayStatus {

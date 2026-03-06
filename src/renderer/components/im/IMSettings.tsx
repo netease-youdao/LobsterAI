@@ -115,7 +115,10 @@ const IMSettings: React.FC = () => {
   };
 
   // Handle NIM config change
-  const handleNimChange = (field: 'appKey' | 'account' | 'token' | 'accountWhitelist', value: string) => {
+  const handleNimChange = (
+    field: 'appKey' | 'account' | 'token' | 'accountWhitelist' | 'teamPolicy' | 'teamAllowlist' | 'qchatEnabled' | 'qchatServerIds',
+    value: string | boolean
+  ) => {
     dispatch(setNimConfig({ [field]: value }));
   };
 
@@ -149,6 +152,14 @@ const IMSettings: React.FC = () => {
         await runConnectivityTest('nim', { nim: cur } as Partial<IMGatewayConfig>);
       }
     }
+  };
+
+  // Save NIM config with explicit updated fields (for select/toggle that need immediate save)
+  // This avoids the race condition where Redux state hasn't updated yet
+  const saveNimConfigWithUpdate = async (updates: Partial<typeof config.nim>) => {
+    if (!configLoaded) return;
+    const updatedNimConfig = { ...config.nim, ...updates };
+    await imService.updateConfig({ nim: updatedNimConfig });
   };
 
   const getCheckTitle = (code: IMConnectivityCheck['code']): string => {
@@ -719,11 +730,11 @@ const IMSettings: React.FC = () => {
               <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
                 {i18nService.t('nimCredentialsGuide') || '如何获取云信凭证：'}
               </p>
-              <ol className="mt-2 ml-3 text-xs text-blue-600 dark:text-blue-400 space-y-1 list-decimal list-inside">
+              <ol className="mt-2 text-xs text-blue-600 dark:text-blue-400 space-y-1 list-decimal list-inside">
                 <li>{i18nService.t('nimGuideStep1') || '登录网易云信控制台（yunxin.163.com）'}</li>
                 <li>{i18nService.t('nimGuideStep2') || '创建或选择应用，获取 App Key'}</li>
-                <li>{i18nService.t('nimGuideStep3') || '在"账号管理"中创建 IM 账号（accid）'}</li>
-                <li>{i18nService.t('nimGuideStep4') || '为该账号生成 Token（建议长期有效）'}</li>
+                <li>{i18nService.t('nimGuideStep3') || '在"账号数-子功能配置"中创建 IM 账号（accid）'}</li>
+                <li>{i18nService.t('nimGuideStep4') || '为该账号生成 Token（密码）- 建议长期有效'}</li>
               </ol>
             </div>
 
@@ -798,6 +809,97 @@ const IMSettings: React.FC = () => {
                 {i18nService.t('nimAccountWhitelistHint') || '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。'}
               </p>
             </div>
+
+            {/* Team Policy (群消息策略) */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('nimTeamPolicy') || '群消息策略'}
+              </label>
+              <select
+                value={config.nim.teamPolicy || 'disabled'}
+                onChange={(e) => {
+                  const newValue = e.target.value as 'disabled' | 'open' | 'allowlist';
+                  handleNimChange('teamPolicy', newValue);
+                  saveNimConfigWithUpdate({ teamPolicy: newValue });
+                }}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+              >
+                <option value="disabled">{i18nService.t('nimTeamPolicyDisabled') || '禁用 - 不响应群消息'}</option>
+                <option value="open">{i18nService.t('nimTeamPolicyOpen') || '开放 - 响应所有群的@消息'}</option>
+                <option value="allowlist">{i18nService.t('nimTeamPolicyAllowlist') || '白名单 - 仅响应指定群的@消息'}</option>
+              </select>
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('nimTeamPolicyHint') || '群消息仅响应@机器人的消息'}
+              </p>
+            </div>
+
+            {/* Team Allowlist - only show when policy is 'allowlist' */}
+            {config.nim.teamPolicy === 'allowlist' && (
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('nimTeamAllowlist') || '群白名单'}
+                </label>
+                <input
+                  type="text"
+                  value={config.nim.teamAllowlist || ''}
+                  onChange={(e) => handleNimChange('teamAllowlist', e.target.value)}
+                  onBlur={handleSaveConfig}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  placeholder="team_id_1,team_id_2"
+                />
+                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                  {i18nService.t('nimTeamAllowlistHint') || '填写允许响应的群ID，多个用逗号分隔'}
+                </p>
+              </div>
+            )}
+
+            {/* QChat Enable Toggle */}
+            <div className="flex items-center justify-between py-2">
+              <div>
+                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('nimQChatEnabled') || '启用圈组 (QChat)'}
+                </label>
+                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary mt-0.5">
+                  {i18nService.t('nimQChatEnabledHint') || '订阅圈组消息，仅响应@机器人的消息'}
+                </p>
+              </div>
+              <div
+                className={`w-10 h-5 rounded-full flex items-center transition-colors cursor-pointer ${
+                  config.nim.qchatEnabled ? 'bg-green-500' : 'dark:bg-claude-darkBorder bg-claude-border'
+                }`}
+                onClick={() => {
+                  const newValue = !config.nim.qchatEnabled;
+                  handleNimChange('qchatEnabled', newValue);
+                  saveNimConfigWithUpdate({ qchatEnabled: newValue });
+                }}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
+                    config.nim.qchatEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </div>
+            </div>
+
+            {/* QChat Server IDs - only show when QChat is enabled */}
+            {config.nim.qchatEnabled && (
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('nimQChatServerIds') || '圈组服务器 ID'}
+                </label>
+                <input
+                  type="text"
+                  value={config.nim.qchatServerIds || ''}
+                  onChange={(e) => handleNimChange('qchatServerIds', e.target.value)}
+                  onBlur={handleSaveConfig}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  placeholder={i18nService.t('nimQChatServerIdsPlaceholder') || '留空自动发现所有已加入的服务器'}
+                />
+                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                  {i18nService.t('nimQChatServerIdsHint') || '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。'}
+                </p>
+              </div>
+            )}
 
             <div className="pt-1">
               {renderConnectivityTestButton('nim')}

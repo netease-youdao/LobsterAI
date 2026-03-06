@@ -466,6 +466,12 @@ interface NimConfig {
   token: string;
   accountWhitelist: string;
   debug?: boolean;
+  // 群组消息配置
+  teamPolicy?: 'open' | 'allowlist' | 'disabled';
+  teamAllowlist?: string;
+  // QChat 圈组配置
+  qchatEnabled?: boolean;
+  qchatServerIds?: string;
 }
 
 interface XiaomifengConfig {

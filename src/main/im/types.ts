@@ -124,6 +124,9 @@ export interface DiscordGatewayStatus {
 
 // ==================== NIM (NetEase IM) Types ====================
 
+export type NimTeamPolicy = 'open' | 'allowlist' | 'disabled';
+export type NimSessionType = 'p2p' | 'team' | 'superTeam';
+
 export interface NimConfig {
   enabled: boolean;
   appKey: string;
@@ -131,6 +134,12 @@ export interface NimConfig {
   token: string;
   accountWhitelist: string;
   debug?: boolean;
+  // 群组消息配置
+  teamPolicy?: NimTeamPolicy;      // 群消息策略，默认 'disabled'
+  teamAllowlist?: string;          // 逗号分隔的群 ID 白名单
+  // QChat 圈组配置
+  qchatEnabled?: boolean;          // 是否启用圈组
+  qchatServerIds?: string;         // 逗号分隔的服务器 ID，空则自动发现
 }
 
 export interface NimGatewayStatus {
@@ -209,8 +218,11 @@ export interface IMMessage {
   conversationId: string;
   senderId: string;
   senderName?: string;
+  groupName?: string;         // 群名/频道名（用于会话标题）
   content: string;
   chatType: 'direct' | 'group';
+  /** 子类型，用于区分同平台不同会话来源，如 'qchat' */
+  chatSubType?: string;
   timestamp: number;
   attachments?: IMMediaAttachment[];
   mediaGroupId?: string;      // 媒体组 ID（用于合并多张图片）
@@ -334,6 +346,10 @@ export const DEFAULT_NIM_CONFIG: NimConfig = {
   token: '',
   accountWhitelist: '',
   debug: true,
+  teamPolicy: 'disabled',
+  teamAllowlist: '',
+  qchatEnabled: false,
+  qchatServerIds: '',
 };
 
 export const DEFAULT_XIAOMIFENG_CONFIG: XiaomifengConfig = {
