@@ -377,6 +377,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private gatewayClientVersion: string | null = null;
   private gatewayClientEntryPath: string | null = null;
   private gatewayReadyPromise: Promise<void> | null = null;
+  private browserPrewarmAttempted = false;
 
   constructor(store: CoworkStore, engineManager: OpenClawEngineManager) {
     super();
@@ -730,6 +731,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (this.gatewayReadyPromise) {
       await waitWithTimeout(this.gatewayReadyPromise, GATEWAY_READY_TIMEOUT_MS);
     }
+
+    // Fire-and-forget: pre-warm the browser so Chrome is already running
+    // before the AI agent calls the browser tool (avoids 15s startup timeout).
+    this.prewarmBrowserIfNeeded(connection);
   }
 
   private async createGatewayClient(connection: OpenClawGatewayConnectionInfo): Promise<void> {
@@ -811,6 +816,98 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.gatewayClientVersion = null;
     this.gatewayClientEntryPath = null;
     this.gatewayReadyPromise = null;
+    this.browserPrewarmAttempted = false;
+  }
+
+  private prewarmBrowserIfNeeded(connection: OpenClawGatewayConnectionInfo): void {
+    if (this.browserPrewarmAttempted) return;
+    if (!connection.port || !connection.token) return;
+    this.browserPrewarmAttempted = true;
+
+    const browserControlPort = connection.port + 2;
+    const token = connection.token;
+    console.log(`[OpenClawRuntime] browser pre-warm: gatewayPort=${connection.port}, browserControlPort=${browserControlPort}`);
+    void this.prewarmBrowserWithRetry(browserControlPort, token);
+  }
+
+  private probeBrowserControlService(toolCallId: string, phase: string): void {
+    const connection = this.engineManager.getGatewayConnectionInfo();
+    if (!connection.port || !connection.token) {
+      console.log(`[OpenClawRuntime] browser probe (${toolCallId}/${phase}): no gateway connection info`);
+      return;
+    }
+    const browserControlPort = connection.port + 2;
+    const token = connection.token;
+    const probeStartTime = Date.now();
+    console.log(`[OpenClawRuntime] browser probe (${toolCallId}/${phase}): checking port ${browserControlPort} ...`);
+
+    // Probe multiple endpoints to diagnose reachability
+    const endpoints = [`http://127.0.0.1:${browserControlPort}/status`, `http://127.0.0.1:${browserControlPort}/`];
+    for (const probeUrl of endpoints) {
+      fetch(probeUrl, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000),
+      })
+        .then(async (response) => {
+          const body = await response.text().catch(() => '');
+          console.log(
+            `[OpenClawRuntime] browser probe (${toolCallId}/${phase}): ${probeUrl} → HTTP ${response.status} (${Date.now() - probeStartTime}ms) body=${body.slice(0, 500)}`,
+          );
+        })
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[OpenClawRuntime] browser probe (${toolCallId}/${phase}): ${probeUrl} → FAILED (${Date.now() - probeStartTime}ms) error=${message}`,
+          );
+        });
+    }
+  }
+
+  private async prewarmBrowserWithRetry(
+    port: number,
+    token: string,
+    maxRetries = 5,
+  ): Promise<void> {
+    const url = `http://127.0.0.1:${port}/start?profile=openclaw`;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const startTime = Date.now();
+      console.log(
+        `[OpenClawRuntime] browser pre-warm attempt ${attempt}/${maxRetries} → POST http://127.0.0.1:${port}/start?profile=openclaw`,
+      );
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          signal: AbortSignal.timeout(90_000),
+        });
+        const body = await response.text();
+        if (response.ok) {
+          console.log(
+            `[OpenClawRuntime] browser pre-warm succeeded (${Date.now() - startTime}ms): ${body.slice(0, 200)}`,
+          );
+          return;
+        }
+        console.warn(
+          `[OpenClawRuntime] browser pre-warm attempt ${attempt} returned HTTP ${response.status} (${Date.now() - startTime}ms): ${body.slice(0, 200)}`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[OpenClawRuntime] browser pre-warm attempt ${attempt} failed (${Date.now() - startTime}ms): ${message}`,
+        );
+      }
+
+      if (attempt < maxRetries) {
+        const delayMs = Math.min(5000, 2000 * attempt);
+        console.log(`[OpenClawRuntime] browser pre-warm retrying in ${delayMs}ms...`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+
+    console.warn('[OpenClawRuntime] browser pre-warm exhausted all retries (non-fatal, browser will start on first tool use)');
   }
 
   private async loadGatewayClientCtor(clientEntryPath: string): Promise<GatewayClientCtor> {
@@ -1000,6 +1097,46 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     const toolNameRaw = typeof data.name === 'string' ? data.name.trim() : '';
     const toolName = toolNameRaw || 'Tool';
+
+    if (toolNameRaw.toLowerCase() === 'browser') {
+      const isError = Boolean(data.isError);
+      // Log full data keys and values for diagnosis
+      const dataKeys = Object.keys(data);
+      const resultType = data.result === undefined ? 'undefined'
+        : data.result === null ? 'null'
+          : typeof data.result === 'string' ? `string(len=${data.result.length})`
+            : Array.isArray(data.result) ? `array(len=${data.result.length})`
+              : `object(keys=${Object.keys(data.result as Record<string, unknown>).join(',')})`;
+      console.log(
+        `[OpenClawRuntime] browser tool event: phase=${phase} toolCallId=${toolCallId}`
+        + ` dataKeys=[${dataKeys.join(',')}] resultType=${resultType}`
+        + (phase === 'start' ? ` args=${JSON.stringify(data.args ?? {}).slice(0, 500)}` : '')
+        + (phase === 'result' ? ` isError=${isError}` : ''),
+      );
+      if (phase === 'result') {
+        // Log full result for browser events (may contain error details)
+        try {
+          const fullResult = JSON.stringify(data.result, null, 2);
+          console.log(`[OpenClawRuntime] browser tool result (${toolCallId}): ${fullResult?.slice(0, 2000) ?? '(null)'}`);
+        } catch {
+          console.log(`[OpenClawRuntime] browser tool result (${toolCallId}): [unstringifiable] ${String(data.result).slice(0, 500)}`);
+        }
+        if (isError) {
+          // Log any additional error-related fields
+          const errorFields: Record<string, unknown> = {};
+          for (const key of dataKeys) {
+            if (/error|reason|message|detail|status/i.test(key)) {
+              errorFields[key] = data[key];
+            }
+          }
+          if (Object.keys(errorFields).length > 0) {
+            console.log(`[OpenClawRuntime] browser tool error fields (${toolCallId}): ${JSON.stringify(errorFields).slice(0, 1000)}`);
+          }
+        }
+      }
+      // Probe browser control service reachability from Electron main process
+      this.probeBrowserControlService(toolCallId, phase);
+    }
 
     if (phase === 'start') {
       this.splitAssistantSegmentBeforeTool(turn);

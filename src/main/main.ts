@@ -598,24 +598,32 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
 
   const task = async (): Promise<OpenClawEngineStatus> => {
     const reason = options.reason || 'unknown';
+    const t0 = Date.now();
+    const elapsed = () => `${Date.now() - t0}ms`;
     try {
+      console.log(`[OpenClaw] bootstrap starting (reason=${reason})`);
       const syncResult = await syncOpenClawConfig({
         reason: `bootstrap:${reason}`,
         restartGatewayIfRunning: false,
       });
+      console.log(`[OpenClaw] bootstrap: syncOpenClawConfig done (${elapsed()}), success=${syncResult.success}`);
       if (!syncResult.success) {
         return syncResult.status || manager.getStatus();
       }
       if (options.forceReinstall) {
         await manager.stopGateway();
+        console.log(`[OpenClaw] bootstrap: stopGateway done (${elapsed()})`);
       }
       const ensuredStatus = await manager.ensureReady();
+      console.log(`[OpenClaw] bootstrap: ensureReady done (${elapsed()}), phase=${ensuredStatus.phase}`);
       if (ensuredStatus.phase !== 'ready' && ensuredStatus.phase !== 'running') {
         return ensuredStatus;
       }
-      return await manager.startGateway();
+      const result = await manager.startGateway();
+      console.log(`[OpenClaw] bootstrap completed (${elapsed()}), phase=${result.phase}`);
+      return result;
     } catch (error) {
-      console.error(`[OpenClaw] bootstrap failed (${reason}):`, error);
+      console.error(`[OpenClaw] bootstrap failed (${reason}, ${elapsed()}):`, error);
       return manager.getStatus();
     }
   };
