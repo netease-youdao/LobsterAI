@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "0.1.24",
+  "version": "0.2.0",
   "main": "dist-electron/main.js",
   "engines": {
     "node": ">=24 <25"
@@ -65,7 +65,9 @@
     "js-yaml": "^4.1.1",
     "katex": "^0.16.21",
     "mermaid": "^10.9.5",
+    "nim-web-sdk-ng": "10.9.77-alpha.2",
     "node-nim": "^10.9.76",
+    "npm": "^11.11.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.0.0",

@@ -704,8 +704,8 @@ export class IMGatewayManager extends EventEmitter {
       addCheck({
         code: 'telegram_privacy_mode_hint',
         level: 'info',
-        message: 'Telegram 可能受 Bot Privacy Mode 影响。',
-        suggestion: '若群聊中不响应，请在 @BotFather 检查 Privacy Mode 配置。',
+        message: 'Telegram 群聊中仅响应 @机器人 或回复机器人的消息。',
+        suggestion: '请先在 @BotFather 中关闭 Privacy Mode（/setprivacy → Disable），然后在群聊中使用 @机器人 + 内容触发对话。',
       });
     } else if (platform === 'dingtalk') {
       addCheck({

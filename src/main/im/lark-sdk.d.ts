@@ -57,6 +57,7 @@ declare module '@larksuiteoapi/node-sdk' {
     request(params: {
       method: string;
       url: string;
+      data?: any;
     }): Promise<{ code: number; msg?: string; data?: any }>;
   }
 

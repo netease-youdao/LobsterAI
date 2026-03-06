@@ -215,9 +215,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       ? activeSkills.map(buildInlinedSkillPrompt).join('\n\n')
       : undefined;
 
-    // Separate image attachments (with base64 data) from regular file attachments
+    // Extract image attachments (with base64 data) for vision-capable models
     const imageAtts: CoworkImageAttachment[] = [];
-    const fileAttachments: CoworkAttachment[] = [];
     for (const attachment of attachments) {
       if (attachment.isImage && attachment.dataUrl) {
         const extracted = extractBase64FromDataUrl(attachment.dataUrl);
@@ -227,14 +226,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             mimeType: extracted.mimeType,
             base64Data: extracted.base64Data,
           });
-          continue;
         }
       }
-      fileAttachments.push(attachment);
     }
 
-    // Build prompt with only non-image file attachments
-    const attachmentLines = fileAttachments
+    // Build prompt with ALL attachments that have real file paths (both regular files and images).
+    // Image attachments also need their file paths in the prompt so the model knows
+    // where the original files are located (e.g., for skills like seedream that need --image <path>).
+    // Note: inline/clipboard images have pseudo-paths starting with 'inline:' and are excluded.
+    const attachmentLines = attachments
       .filter((a) => !a.path.startsWith('inline:'))
       .map((attachment) => `${INPUT_FILE_LABEL}: ${attachment.path}`)
       .join('\n');

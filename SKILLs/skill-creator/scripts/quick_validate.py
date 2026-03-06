@@ -1,46 +1,17 @@
 #!/usr/bin/env python3
 """
 Quick validation script for skills - minimal version
-
-Usage:
-    quick_validate.py <skill-name>
-    quick_validate.py <absolute-path-to-skill>
-
-Examples:
-    quick_validate.py my-skill
-    quick_validate.py /home/ubuntu/skills/my-skill
-
-Skills are expected at /home/ubuntu/skills/<skill-name>/
 """
 
 import sys
+import os
 import re
 import yaml
 from pathlib import Path
 
-SKILLS_BASE_PATH = Path("/home/ubuntu/skills")
-
-
-def resolve_skill_path(skill_path_or_name):
-    """
-    Resolve skill path to absolute path.
-    
-    If given an absolute path, use it directly.
-    If given a skill name or relative path, resolve it under SKILLS_BASE_PATH.
-    """
-    path = Path(skill_path_or_name)
-    
-    # If it's an absolute path, use it directly
-    if path.is_absolute():
-        return path
-    
-    # Otherwise, treat it as a skill name and look in SKILLS_BASE_PATH
-    return SKILLS_BASE_PATH / skill_path_or_name
-
-
-def validate_skill(skill_path_or_name):
+def validate_skill(skill_path):
     """Basic validation of a skill"""
-    skill_path = resolve_skill_path(skill_path_or_name)
+    skill_path = Path(skill_path)
 
     # Check SKILL.md exists
     skill_md = skill_path / 'SKILL.md'
@@ -68,7 +39,7 @@ def validate_skill(skill_path_or_name):
         return False, f"Invalid YAML in frontmatter: {e}"
 
     # Define allowed properties
-    ALLOWED_PROPERTIES = {'name', 'description', 'license', 'allowed-tools', 'metadata'}
+    ALLOWED_PROPERTIES = {'name', 'description', 'license', 'allowed-tools', 'metadata', 'compatibility'}
 
     # Check for unexpected properties (excluding nested keys under metadata)
     unexpected_keys = set(frontmatter.keys()) - ALLOWED_PROPERTIES
@@ -90,9 +61,9 @@ def validate_skill(skill_path_or_name):
         return False, f"Name must be a string, got {type(name).__name__}"
     name = name.strip()
     if name:
-        # Check naming convention (hyphen-case: lowercase with hyphens)
+        # Check naming convention (kebab-case: lowercase with hyphens)
         if not re.match(r'^[a-z0-9-]+$', name):
-            return False, f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)"
+            return False, f"Name '{name}' should be kebab-case (lowercase letters, digits, and hyphens only)"
         if name.startswith('-') or name.endswith('-') or '--' in name:
             return False, f"Name '{name}' cannot start/end with hyphen or contain consecutive hyphens"
         # Check name length (max 64 characters per spec)
@@ -112,23 +83,21 @@ def validate_skill(skill_path_or_name):
         if len(description) > 1024:
             return False, f"Description is too long ({len(description)} characters). Maximum is 1024 characters."
 
+    # Validate compatibility field if present (optional)
+    compatibility = frontmatter.get('compatibility', '')
+    if compatibility:
+        if not isinstance(compatibility, str):
+            return False, f"Compatibility must be a string, got {type(compatibility).__name__}"
+        if len(compatibility) > 500:
+            return False, f"Compatibility is too long ({len(compatibility)} characters). Maximum is 500 characters."
+
     return True, "Skill is valid!"
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: quick_validate.py <skill-name>")
-        print("       quick_validate.py <absolute-path-to-skill>")
-        print("\nExamples:")
-        print("  quick_validate.py my-skill")
-        print("  quick_validate.py /home/ubuntu/skills/my-skill")
-        print(f"\nSkills are expected at {SKILLS_BASE_PATH}/<skill-name>/")
+        print("Usage: python quick_validate.py <skill_directory>")
         sys.exit(1)
     
-    skill_input = sys.argv[1]
-    resolved_path = resolve_skill_path(skill_input)
-    
-    print(f"🔍 Validating skill at: {resolved_path}")
-    
-    valid, message = validate_skill(skill_input)
+    valid, message = validate_skill(sys.argv[1])
     print(message)
     sys.exit(0 if valid else 1)

@@ -4,14 +4,13 @@ import {
   MagnifyingGlassIcon,
   TrashIcon,
   PencilIcon,
-  ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline';
 import ConnectorIcon from '../icons/ConnectorIcon';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
 import { setMcpServers } from '../../store/slices/mcpSlice';
 import { RootState } from '../../store';
-import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
+import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo } from '../../types/mcp';
 import { mcpRegistry, mcpCategories } from '../../data/mcpRegistry';
 import ErrorMessage from '../ErrorMessage';
 import Tooltip from '../ui/Tooltip';
@@ -38,6 +37,9 @@ const McpManager: React.FC = () => {
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
   const [installingRegistry, setInstallingRegistry] = useState<McpRegistryEntry | null>(null);
   const [activeCategory, setActiveCategory] = useState('all');
+  const [dynamicRegistry, setDynamicRegistry] = useState<McpRegistryEntry[]>(mcpRegistry);
+  const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(mcpCategories);
+  const currentLanguage = i18nService.getLanguage();
 
   useEffect(() => {
     let isActive = true;
@@ -50,6 +52,29 @@ const McpManager: React.FC = () => {
     return () => { isActive = false; };
   }, [dispatch]);
 
+  useEffect(() => {
+    let isActive = true;
+    const fetchMarketplace = async () => {
+      const result = await mcpService.fetchMarketplace();
+      if (!isActive || !result) return;
+      setDynamicRegistry(result.registry);
+      const cats: Array<{ id: string; key: string; name_zh?: string; name_en?: string }> = [
+        { id: 'all', key: 'mcpCategoryAll' },
+        ...result.categories
+          .filter((c: McpMarketplaceCategoryInfo) => c.id !== 'all')
+          .map((c: McpMarketplaceCategoryInfo) => ({
+            id: c.id,
+            key: '',
+            name_zh: c.name_zh,
+            name_en: c.name_en,
+          })),
+      ];
+      setDynamicCategories(cats);
+    };
+    fetchMarketplace();
+    return () => { isActive = false; };
+  }, []);
+
   const installedRegistryIds = useMemo(() => {
     const ids = new Set<string>();
     for (const s of servers) {
@@ -58,14 +83,62 @@ const McpManager: React.FC = () => {
     return ids;
   }, [servers]);
 
+  const getRegistryEntryDescription = (entry: McpRegistryEntry): string => {
+    const remoteDescription = currentLanguage === 'zh' ? entry.description_zh : entry.description_en;
+    if (remoteDescription) return remoteDescription;
+    if (entry.descriptionKey) return i18nService.t(entry.descriptionKey);
+    return '';
+  };
+
+  const getStdioCommandSummary = (command?: string, args?: string[]): string => {
+    if (!command) return '';
+    if (!args || args.length === 0) return command;
+    return `${command} ${args[args.length - 1]}`;
+  };
+
+  const getRegistryEntryForServer = (server: McpServerConfig): McpRegistryEntry | undefined => {
+    if (server.registryId) {
+      return dynamicRegistry.find(entry => entry.id === server.registryId);
+    }
+    if (!server.isBuiltIn) return undefined;
+    return dynamicRegistry.find((entry) => (
+      entry.name.toLowerCase() === server.name.toLowerCase()
+      && entry.transportType === server.transportType
+      && entry.command === server.command
+    ));
+  };
+
+  const getTransportSummary = (server: McpServerConfig): string => {
+    if (server.transportType === 'stdio') {
+      const parts = [server.command || ''];
+      if (server.args && server.args.length > 0) {
+        parts.push(server.args[0]);
+        if (server.args.length > 1) parts.push('...');
+      }
+      return parts.join(' ');
+    }
+    return server.url || '';
+  };
+
+  const getInstalledDescription = (server: McpServerConfig): string => {
+    const persistedDescription = server.description?.trim();
+    if (persistedDescription) return persistedDescription;
+    const registryEntry = getRegistryEntryForServer(server);
+    if (registryEntry) {
+      const registryDescription = getRegistryEntryDescription(registryEntry).trim();
+      if (registryDescription) return registryDescription;
+    }
+    return getTransportSummary(server);
+  };
+
   const filteredInstalled = useMemo(() => {
     const query = searchQuery.toLowerCase();
     if (!query) return servers;
     return servers.filter(server =>
       server.name.toLowerCase().includes(query)
-      || server.description.toLowerCase().includes(query)
+      || getInstalledDescription(server).toLowerCase().includes(query)
     );
-  }, [servers, searchQuery]);
+  }, [servers, searchQuery, dynamicRegistry, currentLanguage]);
 
   const filteredCustom = useMemo(() => {
     const custom = servers.filter(s => !s.isBuiltIn);
@@ -79,18 +152,18 @@ const McpManager: React.FC = () => {
 
   const filteredMarketplace = useMemo(() => {
     const query = searchQuery.toLowerCase();
-    let entries = mcpRegistry.filter(e => !installedRegistryIds.has(e.id));
+    let entries = [...dynamicRegistry];
     if (query) {
       entries = entries.filter(e =>
         e.name.toLowerCase().includes(query)
-        || i18nService.t(e.descriptionKey).toLowerCase().includes(query)
+        || getRegistryEntryDescription(e).toLowerCase().includes(query)
       );
     }
     if (activeCategory !== 'all') {
       entries = entries.filter(e => e.category === activeCategory);
     }
     return entries;
-  }, [installedRegistryIds, searchQuery, activeCategory]);
+  }, [searchQuery, activeCategory, dynamicRegistry, currentLanguage]);
 
   const handleToggleEnabled = async (serverId: string) => {
     const targetServer = servers.find(s => s.id === serverId);
@@ -179,27 +252,11 @@ const McpManager: React.FC = () => {
     setIsFormOpen(true);
   };
 
-  const getTransportSummary = (server: McpServerConfig): string => {
-    if (server.transportType === 'stdio') {
-      const parts = [server.command || ''];
-      if (server.args && server.args.length > 0) {
-        parts.push(server.args[0]);
-        if (server.args.length > 1) parts.push('...');
-      }
-      return parts.join(' ');
-    }
-    return server.url || '';
-  };
-
-  const handleOpenGithub = (url: string) => {
-    window.electron.shell.openExternal(url);
-  };
-
   const existingNames = useMemo(() => servers.map(s => s.name), [servers]);
 
   const marketplaceCount = useMemo(
-    () => mcpRegistry.filter(e => !installedRegistryIds.has(e.id)).length,
-    [installedRegistryIds]
+    () => dynamicRegistry.length,
+    [dynamicRegistry]
   );
 
   const customCount = useMemo(
@@ -233,54 +290,52 @@ const McpManager: React.FC = () => {
         />
       )}
 
-      {/* Tab bar + search */}
+      {/* Search */}
       <div className="flex items-center gap-3">
-        {/* Tabs */}
-        <div className="flex items-center border-b dark:border-claude-darkBorder border-claude-border mr-auto">
-          <button type="button" onClick={() => setActiveTab('installed')} className={tabClass('installed')}>
-            {i18nService.t('mcpInstalled')}
-            {servers.length > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurface bg-claude-surface">
-                {servers.length}
-              </span>
-            )}
-            <div className={tabIndicatorClass('installed')} />
-          </button>
-          <button type="button" onClick={() => setActiveTab('marketplace')} className={tabClass('marketplace')}>
-            {i18nService.t('mcpMarketplace')}
-            {marketplaceCount > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurface bg-claude-surface">
-                {marketplaceCount}
-              </span>
-            )}
-            <div className={tabIndicatorClass('marketplace')} />
-          </button>
-          <button type="button" onClick={() => setActiveTab('custom')} className={tabClass('custom')}>
-            {i18nService.t('mcpCustom')}
-            {customCount > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurface bg-claude-surface">
-                {customCount}
-              </span>
-            )}
-            <div className={tabIndicatorClass('custom')} />
-          </button>
+        <div className="relative flex-1">
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <input
+            type="text"
+            placeholder={i18nService.t('searchMcpServers')}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 text-sm rounded-xl dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-2 focus:ring-claude-accent"
+          />
         </div>
-
-        {/* Search (shown on all tabs except when no servers) */}
-        {(
-          <div className="relative w-48">
-            <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-            <input
-              type="text"
-              placeholder={i18nService.t('searchMcpServers')}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-1 focus:ring-claude-accent"
-            />
-          </div>
-        )}
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center border-b dark:border-claude-darkBorder border-claude-border">
+        <button type="button" onClick={() => setActiveTab('installed')} className={tabClass('installed')}>
+          {i18nService.t('mcpInstalled')}
+          {servers.length > 0 && (
+            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover">
+              {servers.length}
+            </span>
+          )}
+          <div className={tabIndicatorClass('installed')} />
+        </button>
+        <button type="button" onClick={() => setActiveTab('marketplace')} className={tabClass('marketplace')}>
+          {i18nService.t('mcpMarketplace')}
+          {marketplaceCount > 0 && (
+            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover">
+              {marketplaceCount}
+            </span>
+          )}
+          <div className={tabIndicatorClass('marketplace')} />
+        </button>
+        <button type="button" onClick={() => setActiveTab('custom')} className={tabClass('custom')}>
+          {i18nService.t('mcpCustom')}
+          {customCount > 0 && (
+            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover">
+              {customCount}
+            </span>
+          )}
+          <div className={tabIndicatorClass('custom')} />
+        </button>
+      </div>
+
+      <div>
       {/* ── Tab: Installed ──────────────────────────────── */}
       {activeTab === 'installed' && (
         <div className="grid grid-cols-2 gap-3">
@@ -289,92 +344,94 @@ const McpManager: React.FC = () => {
               {i18nService.t('mcpNoInstalledServers')}
             </div>
           ) : (
-            filteredInstalled.map((server) => (
-              <div
-                key={server.id}
-                className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50"
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
-                      <ConnectorIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+            filteredInstalled.map((server) => {
+              const registryEntry = getRegistryEntryForServer(server);
+              const installedDescription = getInstalledDescription(server);
+              return (
+                <div
+                  key={server.id}
+                  className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
+                        <ConnectorIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                      </div>
+                      <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
+                        {server.name}
+                      </span>
                     </div>
-                    <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
-                      {server.name}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {server.githubUrl && (
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
                       <button
                         type="button"
-                        onClick={() => handleOpenGithub(server.githubUrl!)}
+                        onClick={() => handleOpenEditForm(server)}
                         className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                        title={i18nService.t('mcpViewOnGithub')}
+                        title={i18nService.t('editMcpServer')}
                       >
-                        <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+                        <PencilIcon className="h-3.5 w-3.5" />
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditForm(server)}
-                      className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                      title={i18nService.t('editMcpServer')}
-                    >
-                      <PencilIcon className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleRequestDelete(server)}
-                      className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                      title={i18nService.t('deleteMcpServer')}
-                    >
-                      <TrashIcon className="h-3.5 w-3.5" />
-                    </button>
-                    <div
-                      className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
-                        server.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
-                      }`}
-                      onClick={() => handleToggleEnabled(server.id)}
-                    >
+                      <button
+                        type="button"
+                        onClick={() => handleRequestDelete(server)}
+                        className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                        title={i18nService.t('deleteMcpServer')}
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                      </button>
                       <div
-                        className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
-                          server.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                        className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
+                          server.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
                         }`}
-                      />
+                        onClick={() => handleToggleEnabled(server.id)}
+                      >
+                        <div
+                          className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
+                            server.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                          }`}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <Tooltip
-                  content={server.description || getTransportSummary(server)}
-                  position="bottom"
-                  maxWidth="360px"
-                  className="block w-full"
-                >
-                  <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                    {server.description || getTransportSummary(server)}
-                  </p>
-                </Tooltip>
+                  <Tooltip
+                    content={installedDescription}
+                    position="bottom"
+                    maxWidth="360px"
+                    className="block w-full"
+                  >
+                    <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
+                      {installedDescription}
+                    </p>
+                  </Tooltip>
 
-                <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  <span className={`px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
-                    {server.transportType}
-                  </span>
-                  {server.transportType === 'stdio' && server.command && (
-                    <>
-                      <span>·</span>
-                      <span className="truncate">{server.command}</span>
-                    </>
-                  )}
-                  {(server.transportType === 'sse' || server.transportType === 'http') && server.url && (
-                    <>
-                      <span>·</span>
-                      <span className="truncate">{server.url}</span>
-                    </>
-                  )}
+                  <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    <span className={`px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
+                      {server.transportType}
+                    </span>
+                    {server.transportType === 'stdio' && server.command && (
+                      <>
+                        <span>·</span>
+                        <span className="truncate">{getStdioCommandSummary(server.command, server.args)}</span>
+                      </>
+                    )}
+                    {(server.transportType === 'sse' || server.transportType === 'http') && server.url && (
+                      <>
+                        <span>·</span>
+                        <span className="truncate">{server.url}</span>
+                      </>
+                    )}
+                    {registryEntry?.requiredEnvKeys && registryEntry.requiredEnvKeys.length > 0 && (
+                      <>
+                        <span>·</span>
+                        <span className="text-amber-500 dark:text-amber-400">
+                          {registryEntry.requiredEnvKeys.length} key{registryEntry.requiredEnvKeys.length > 1 ? 's' : ''}
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -384,7 +441,7 @@ const McpManager: React.FC = () => {
         <div>
           {/* Category filter pills */}
           <div className="flex items-center gap-1.5 mb-4 flex-wrap">
-            {mcpCategories.map((cat) => (
+            {dynamicCategories.map((cat) => (
               <button
                 key={cat.id}
                 type="button"
@@ -395,7 +452,7 @@ const McpManager: React.FC = () => {
                     : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border'
                 }`}
               >
-                {i18nService.t(cat.key)}
+                {(i18nService.getLanguage() === 'zh' ? cat.name_zh : cat.name_en) || i18nService.t(cat.key)}
               </button>
             ))}
           </div>
@@ -421,26 +478,24 @@ const McpManager: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenGithub(entry.githubUrl)}
-                        className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                        title={i18nService.t('mcpViewOnGithub')}
-                      >
-                        <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleInstallFromRegistry(entry)}
-                        className="px-2.5 py-1 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
-                      >
-                        {i18nService.t('mcpInstall')}
-                      </button>
+                      {installedRegistryIds.has(entry.id) ? (
+                        <span className="px-2.5 py-1 text-xs rounded-lg bg-claude-surface dark:bg-claude-darkSurface text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                          {i18nService.t('mcpInstalled')}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleInstallFromRegistry(entry)}
+                          className="px-2.5 py-1 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+                        >
+                          {i18nService.t('mcpInstall')}
+                        </button>
+                      )}
                     </div>
                   </div>
 
                   <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                    {i18nService.t(entry.descriptionKey)}
+                    {getRegistryEntryDescription(entry)}
                   </p>
 
                   <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -448,7 +503,7 @@ const McpManager: React.FC = () => {
                       {entry.transportType}
                     </span>
                     <span>·</span>
-                    <span className="truncate">{entry.command} {entry.defaultArgs[entry.defaultArgs.length - 1]}</span>
+                    <span className="truncate">{getStdioCommandSummary(entry.command, entry.defaultArgs)}</span>
                     {entry.requiredEnvKeys && entry.requiredEnvKeys.length > 0 && (
                       <>
                         <span>·</span>
@@ -493,16 +548,6 @@ const McpManager: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {server.githubUrl && (
-                        <button
-                          type="button"
-                          onClick={() => handleOpenGithub(server.githubUrl!)}
-                          className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                          title={i18nService.t('mcpViewOnGithub')}
-                        >
-                          <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                        </button>
-                      )}
                       <button
                         type="button"
                         onClick={() => handleOpenEditForm(server)}
@@ -567,6 +612,7 @@ const McpManager: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
 
       {/* Delete confirmation modal */}
       {pendingDelete && (

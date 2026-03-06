@@ -152,6 +152,15 @@ function resolveRuntimeRoot(runtimeBinary: string): string {
   return path.resolve(path.dirname(runtimeBinary), '..');
 }
 
+function toQemuOptionPath(targetPath: string): string {
+  const normalized = process.platform === 'win32'
+    ? path.resolve(targetPath).replace(/\\/g, '/')
+    : path.resolve(targetPath);
+  // QEMU option values (drive/virtfs/chardev sub-options) use commas as separators.
+  // Escape commas in paths to avoid truncation when user paths contain commas.
+  return normalized.replace(/,/g, '\\,');
+}
+
 function resolveAarch64Firmware(options: {
   runtime: SandboxRuntimeInfo;
   ipcDir: string;
@@ -183,9 +192,13 @@ function buildQemuArgs(options: {
   accelOverride?: string | null;
   ipcPort?: number;
   skillsDir?: string;
+  memoryMb?: number;
 }): string[] {
+  const memoryMb = options.memoryMb
+    ?? (process.env.COWORK_SANDBOX_MEMORY ? parseInt(process.env.COWORK_SANDBOX_MEMORY, 10) : null)
+    ?? 4096;
   const args: string[] = [
-    '-m', '4096',
+    '-m', String(memoryMb),
     '-smp', '2',
     '-nographic',
     '-snapshot',
@@ -226,15 +239,15 @@ function buildQemuArgs(options: {
       const firmware = resolveAarch64Firmware(options);
       if (firmware) {
         args.push(
-          '-drive', `if=pflash,format=raw,readonly=on,file=${firmware.codePath}`,
-          '-drive', `if=pflash,format=raw,file=${firmware.varsPath}`
+          '-drive', `if=pflash,format=raw,readonly=on,file=${toQemuOptionPath(firmware.codePath)}`,
+          '-drive', `if=pflash,format=raw,file=${toQemuOptionPath(firmware.varsPath)}`
         );
       }
     }
   }
 
   args.push(
-    '-drive', `file=${options.runtime.imagePath},if=virtio,format=qcow2`,
+    '-drive', `file=${toQemuOptionPath(options.runtime.imagePath)},if=virtio,format=qcow2`,
     '-netdev', 'user,id=net0',
     '-device', 'virtio-net,netdev=net0'
   );
@@ -253,30 +266,33 @@ function buildQemuArgs(options: {
     // macOS / Linux: use virtfs (9p) for shared directories
     args.push(
       '-virtfs',
-      `local,path=${options.ipcDir},mount_tag=ipc,security_model=none`
+      `local,path=${toQemuOptionPath(options.ipcDir)},mount_tag=ipc,security_model=none`
     );
     args.push(
       '-virtfs',
-      `local,path=${options.cwdMapping.hostPath},mount_tag=${options.cwdMapping.mountTag},security_model=none`
+      `local,path=${toQemuOptionPath(options.cwdMapping.hostPath)},mount_tag=${options.cwdMapping.mountTag},security_model=none`
     );
     for (const mount of options.extraMounts ?? []) {
       args.push(
         '-virtfs',
-        `local,path=${mount.hostPath},mount_tag=${mount.mountTag},security_model=none`
+        `local,path=${toQemuOptionPath(mount.hostPath)},mount_tag=${mount.mountTag},security_model=none`
       );
     }
     const hasExplicitExtraMounts = (options.extraMounts ?? []).length > 0;
     if (!hasExplicitExtraMounts && options.skillsDir && fs.existsSync(options.skillsDir)) {
       args.push(
         '-virtfs',
-        `local,path=${options.skillsDir},mount_tag=skills,security_model=none`
+        `local,path=${toQemuOptionPath(options.skillsDir)},mount_tag=skills,security_model=none`
       );
     }
   }
 
+  const serialLogPath = process.platform === 'win32'
+    ? path.join(options.ipcDir, 'serial.log').replace(/\\/g, '/')
+    : path.join(options.ipcDir, 'serial.log');
   args.push(
     '-serial',
-    `file:${path.join(options.ipcDir, 'serial.log')}`
+    `file:${serialLogPath}`
   );
 
   return args;
@@ -306,6 +322,7 @@ export function spawnCoworkSandboxVm(options: {
   launcher?: SandboxLauncherMode;
   ipcPort?: number;
   skillsDir?: string;
+  memoryMb?: number;
 }): ChildProcessByStdio<null, Readable, Readable> {
   const args = buildQemuArgs(options);
 
@@ -316,6 +333,7 @@ export function spawnCoworkSandboxVm(options: {
     ipcPort: options.ipcPort ?? null,
     launcher: options.launcher ?? 'direct',
     accelOverride: options.accelOverride ?? null,
+    memoryMb: options.memoryMb ?? null,
     args: args.join(' '),
   });
 

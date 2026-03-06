@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { MagnifyingGlassIcon, Cog6ToothIcon, PuzzlePieceIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
+import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { Skill } from '../../types/skill';
 
@@ -32,7 +33,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
     .filter(s => s.enabled)
     .filter(s =>
       s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.description.toLowerCase().includes(searchQuery.toLowerCase())
+      skillService.getLocalizedSkillDescription(s.id, s.name, s.description).toLowerCase().includes(searchQuery.toLowerCase())
     );
 
   // Calculate available height and focus search input when popover opens
@@ -165,7 +166,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
                     )}
                   </div>
                   <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary truncate mt-0.5">
-                    {skill.description}
+                    {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
                   </p>
                 </div>
               </button>

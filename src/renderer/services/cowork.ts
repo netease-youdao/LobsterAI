@@ -151,6 +151,9 @@ class CoworkService {
     const result = await cowork.startSession(options);
     if (result.success && result.session) {
       store.dispatch(addSession(result.session));
+      if (result.session.status !== 'running') {
+        store.dispatch(setStreaming(false));
+      }
       return result.session;
     }
 
@@ -356,11 +359,11 @@ class CoworkService {
     return window.electron.getApiConfig();
   }
 
-  async checkApiConfig(): Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string } | null> {
+  async checkApiConfig(options?: { probeModel?: boolean }): Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string } | null> {
     if (!window.electron?.checkApiConfig) {
       return null;
     }
-    return window.electron.checkApiConfig();
+    return window.electron.checkApiConfig(options);
   }
 
   async saveApiConfig(config: CoworkApiConfig): Promise<{ success: boolean; error?: string } | null> {

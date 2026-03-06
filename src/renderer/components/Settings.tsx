@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { configService } from '../services/config';
 import { apiService } from '../services/api';
+import { checkForAppUpdate } from '../services/appUpdate';
+import type { AppUpdateInfo } from '../services/appUpdate';
 import { themeService } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
@@ -31,6 +33,7 @@ import {
   MoonshotIcon,
   ZhipuIcon,
   MiniMaxIcon,
+  YouDaoZhiYunIcon,
   QwenIcon,
   XiaomiIcon,
   StepfunIcon,
@@ -49,6 +52,7 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
+  onUpdateFound?: (info: AppUpdateInfo) => void;
 }
 
 const providerKeys = [
@@ -59,6 +63,7 @@ const providerKeys = [
   'moonshot',
   'zhipu',
   'minimax',
+  'youdaozhiyun',
   'qwen',
   'xiaomi',
   'stepfun',
@@ -129,6 +134,7 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   moonshot: { label: 'Moonshot', icon: <MoonshotIcon /> },
   zhipu: { label: 'Zhipu', icon: <ZhipuIcon /> },
   minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
+  youdaozhiyun: { label: '有道智云', icon: <YouDaoZhiYunIcon /> },
   qwen: { label: 'Qwen', icon: <QwenIcon /> },
   xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
   stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
@@ -226,6 +232,9 @@ const copyTextToClipboard = async (text: string): Promise<boolean> => {
 
 const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
   if (provider === 'openai' || provider === 'gemini' || provider === 'stepfun') {
+    return 'openai';
+  }
+  if (provider === 'youdaozhiyun') {
     return 'openai';
   }
   if (provider === 'anthropic') {
@@ -341,7 +350,7 @@ const getDefaultActiveProvider = (): ProviderType => {
   return firstEnabledProvider ?? providerKeys[0];
 };
 
-const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
+const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
   const dispatch = useDispatch();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
@@ -372,6 +381,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
+  const updateCheckTimerRef = useRef<number | null>(null);
   
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
@@ -393,6 +403,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const [appVersion, setAppVersion] = useState('');
   const [emailCopied, setEmailCopied] = useState(false);
   const [isExportingLogs, setIsExportingLogs] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [logoClickCount, setLogoClickCount] = useState(0);
+  const [testModeUnlocked, setTestModeUnlocked] = useState(false);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error'>('idle');
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -411,6 +425,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       }, 1200);
     }
   }, []);
+
+  const handleCheckUpdate = useCallback(async () => {
+    if (updateCheckStatus === 'checking' || !appVersion) return;
+    setUpdateCheckStatus('checking');
+    try {
+      const info = await checkForAppUpdate(appVersion);
+      if (info) {
+        setUpdateCheckStatus('idle');
+        onUpdateFound?.(info);
+      } else {
+        setUpdateCheckStatus('upToDate');
+        if (updateCheckTimerRef.current != null) {
+          window.clearTimeout(updateCheckTimerRef.current);
+        }
+        updateCheckTimerRef.current = window.setTimeout(() => {
+          setUpdateCheckStatus('idle');
+          updateCheckTimerRef.current = null;
+        }, 3000);
+      }
+    } catch {
+      setUpdateCheckStatus('error');
+      if (updateCheckTimerRef.current != null) {
+        window.clearTimeout(updateCheckTimerRef.current);
+      }
+      updateCheckTimerRef.current = window.setTimeout(() => {
+        setUpdateCheckStatus('idle');
+        updateCheckTimerRef.current = null;
+      }, 3000);
+    }
+  }, [appVersion, updateCheckStatus, onUpdateFound]);
 
   const handleOpenUserManual = useCallback(() => {
     void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
@@ -486,6 +530,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     if (emailCopiedTimerRef.current != null) {
       window.clearTimeout(emailCopiedTimerRef.current);
     }
+    if (updateCheckTimerRef.current != null) {
+      window.clearTimeout(updateCheckTimerRef.current);
+    }
   }, []);
 
   const loadCoworkSandboxStatus = useCallback(async () => {
@@ -528,6 +575,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       setTheme(config.theme);
       setLanguage(config.language);
       setUseSystemProxy(config.useSystemProxy ?? false);
+      const savedTestMode = config.app?.testMode ?? false;
+      setTestMode(savedTestMode);
+      if (savedTestMode) setTestModeUnlocked(true);
 
       // Load auto-launch setting
       window.electron.autoLaunch.get().then(({ enabled }) => {
@@ -591,6 +641,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             ...prev,
             minimax: {
               ...prev.minimax,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
+        } else if (normalizedApiBaseUrl.includes('openapi.youdao.com')) {
+          setActiveProvider('youdaozhiyun');
+          setProviders(prev => ({
+            ...prev,
+            youdaozhiyun: {
+              ...prev.youdaozhiyun,
               enabled: true,
               apiKey: config.api.key,
               baseUrl: config.api.baseUrl
@@ -1070,6 +1131,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         language,
         useSystemProxy,
         shortcuts,
+        app: {
+          ...configService.getConfig().app,
+          testMode,
+        },
       });
 
       // 应用主题
@@ -2673,7 +2738,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         return (
           <div className="flex min-h-full flex-col items-center pt-6 pb-3">
             {/* Logo & App Name */}
-            <img src="logo.png" alt="LobsterAI" className="w-16 h-16 mb-3" />
+            <img
+              src="logo.png"
+              alt="LobsterAI"
+              className="w-16 h-16 mb-3 cursor-pointer select-none"
+              onClick={() => {
+                const next = logoClickCount + 1;
+                setLogoClickCount(next);
+                if (next >= 10 && !testModeUnlocked) {
+                  setTestModeUnlocked(true);
+                }
+              }}
+            />
             <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
             <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
 
@@ -2681,7 +2757,23 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             <div className="w-full mt-8 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutVersion')}</span>
-                <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{appVersion}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{appVersion}</span>
+                  <button
+                    type="button"
+                    disabled={updateCheckStatus === 'checking'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCheckUpdate();
+                    }}
+                    className="text-xs px-2 py-0.5 rounded-md border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent hover:border-claude-accent dark:hover:border-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {updateCheckStatus === 'checking' && i18nService.t('updateChecking')}
+                    {updateCheckStatus === 'upToDate' && i18nService.t('updateUpToDate')}
+                    {updateCheckStatus === 'error' && i18nService.t('updateCheckFailed')}
+                    {updateCheckStatus === 'idle' && i18nService.t('checkForUpdate')}
+                  </button>
+                </div>
               </div>
               <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutContactEmail')}</span>
@@ -2704,7 +2796,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   )}
                 </div>
               </div>
-              <div className="flex items-center justify-between px-4 py-3">
+              <div className={`flex items-center justify-between px-4 py-3${testModeUnlocked ? ' border-b border-claude-border dark:border-claude-darkBorder' : ''}`}>
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutUserManual')}</span>
                 <button
                   type="button"
@@ -2717,6 +2809,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   {ABOUT_USER_MANUAL_URL}
                 </button>
               </div>
+              {testModeUnlocked && (
+                <div className="flex items-center justify-between px-4 py-3">
+                  <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('testMode')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={testMode}
+                    onClick={() => setTestMode((prev) => !prev)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                      testMode ? 'bg-claude-accent' : 'bg-gray-300 dark:bg-gray-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        testMode ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Footer */}
@@ -2767,7 +2879,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       onClick={onClose}
     >
       <div
-        className="flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
+        className="relative flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
         {/* Left sidebar */}
@@ -2853,66 +2965,68 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             </div>
           </form>
 
-          {isTestResultModalOpen && testResult && (
+        </div>
+
+        {isTestResultModalOpen && testResult && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={() => setIsTestResultModalOpen(false)}
+          >
             <div
-              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4"
-              onClick={() => setIsTestResultModalOpen(false)}
+              role="dialog"
+              aria-modal="true"
+              aria-label={i18nService.t('connectionTestResult')}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-2xl dark:bg-claude-darkSurface bg-claude-bg dark:border-claude-darkBorder border-claude-border border shadow-modal p-4"
             >
-              <div
-                role="dialog"
-                aria-modal="true"
-                aria-label={i18nService.t('connectionTestResult')}
-                onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-md rounded-2xl dark:bg-claude-darkSurface bg-claude-bg dark:border-claude-darkBorder border-claude-border border shadow-modal p-4"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
-                    {i18nService.t('connectionTestResult')}
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={() => setIsTestResultModalOpen(false)}
-                    className="p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover"
-                  >
-                    <XMarkIcon className="h-4 w-4" />
-                  </button>
-                </div>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('connectionTestResult')}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setIsTestResultModalOpen(false)}
+                  className="p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
 
-                <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
-                  <span className="text-[11px]">•</span>
-                  <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {testResult.success ? (
-                      <CheckCircleIcon className="h-4 w-4" />
-                    ) : (
-                      <XCircleIcon className="h-4 w-4" />
-                    )}
-                    {testResult.success ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}
-                  </span>
-                </div>
+              <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
+                <span className="text-[11px]">•</span>
+                <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {testResult.success ? (
+                    <CheckCircleIcon className="h-4 w-4" />
+                  ) : (
+                    <XCircleIcon className="h-4 w-4" />
+                  )}
+                  {testResult.success ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}
+                </span>
+              </div>
 
-                <p className="mt-3 text-xs leading-5 dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
-                  {testResult.message}
-                </p>
+              <p className="mt-3 text-xs leading-5 dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
+                {testResult.message}
+              </p>
 
-                <div className="mt-4 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setIsTestResultModalOpen(false)}
-                    className="px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors active:scale-[0.98]"
-                  >
-                    {i18nService.t('close')}
-                  </button>
-                </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsTestResultModalOpen(false)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors active:scale-[0.98]"
+                >
+                  {i18nService.t('close')}
+                </button>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {(isAddingModel || isEditingModel) && (
-            <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4"
-              onClick={handleCancelModelEdit}
-            >
+        {(isAddingModel || isEditingModel) && (
+          <div
+            className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={handleCancelModelEdit}
+          >
               <div
                 role="dialog"
                 aria-modal="true"
@@ -3067,7 +3181,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           {/* Memory Modal */}
           {showMemoryModal && (
             <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4"
+              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
               onClick={resetCoworkMemoryEditor}
             >
               <div
@@ -3115,7 +3229,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               </div>
             </div>
           )}
-        </div>
       </div>
     </div>
   );

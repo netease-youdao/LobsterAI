@@ -1,10 +1,8 @@
 import { app } from 'electron';
 import { execSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync, readdirSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import { loadClaudeSdk } from './claudeSdk';
-import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
+import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
@@ -31,6 +29,70 @@ function appendEnvPath(current: string | undefined, additions: string[]): string
   return items.size > 0 ? Array.from(items).join(delimiter) : current;
 }
 
+function hasCommandInEnv(command: string, env: Record<string, string | undefined>): boolean {
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  try {
+    const result = spawnSync(whichCmd, [command], {
+      env: { ...env } as NodeJS.ProcessEnv,
+      encoding: 'utf-8',
+      timeout: 5000,
+      windowsHide: process.platform === 'win32',
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+let cachedElectronNodeRuntimePath: string | null = null;
+
+function resolveElectronNodeRuntimePath(): string {
+  if (!app.isPackaged || process.platform !== 'darwin') {
+    return process.execPath;
+  }
+
+  try {
+    const appName = app.getName();
+    const frameworksDir = join(process.resourcesPath, '..', 'Frameworks');
+    if (!existsSync(frameworksDir)) {
+      return process.execPath;
+    }
+
+    const helperApps = readdirSync(frameworksDir)
+      .filter((entry) => entry.startsWith(`${appName} Helper`) && entry.endsWith('.app'))
+      .sort((a, b) => {
+        const score = (name: string): number => {
+          if (name === `${appName} Helper.app`) return 0;
+          if (name === `${appName} Helper (Renderer).app`) return 1;
+          if (name === `${appName} Helper (Plugin).app`) return 2;
+          if (name === `${appName} Helper (GPU).app`) return 3;
+          return 10;
+        };
+        return score(a) - score(b);
+      });
+
+    for (const helperApp of helperApps) {
+      const helperExeName = helperApp.replace(/\.app$/, '');
+      const helperExePath = join(frameworksDir, helperApp, 'Contents', 'MacOS', helperExeName);
+      if (existsSync(helperExePath)) {
+        coworkLog('INFO', 'resolveNodeShim', `Using Electron helper runtime for node shim: ${helperExePath}`);
+        return helperExePath;
+      }
+    }
+  } catch (error) {
+    coworkLog('WARN', 'resolveNodeShim', `Failed to resolve Electron helper runtime: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return process.execPath;
+}
+
+export function getElectronNodeRuntimePath(): string {
+  if (!cachedElectronNodeRuntimePath) {
+    cachedElectronNodeRuntimePath = resolveElectronNodeRuntimePath();
+  }
+  return cachedElectronNodeRuntimePath;
+}
+
 /**
  * Cached user shell PATH. Resolved once and reused across calls.
  */
@@ -51,13 +113,30 @@ function resolveUserShellPath(): string | null {
 
   try {
     const shell = process.env.SHELL || '/bin/bash';
-    const result = execSync(`${shell} -ilc 'echo __PATH__=$PATH'`, {
-      encoding: 'utf-8',
-      timeout: 5000,
-      env: { ...process.env },
-    });
-    const match = result.match(/__PATH__=(.+)/);
-    cachedUserShellPath = match ? match[1].trim() : null;
+    // Prefer non-interactive login shell first to avoid potential side effects
+    // from interactive startup scripts (which may launch extra GUI processes).
+    const pathProbes = [
+      `${shell} -lc 'echo __PATH__=$PATH'`,
+    ];
+
+    let resolved: string | null = null;
+    for (const probe of pathProbes) {
+      try {
+        const result = execSync(probe, {
+          encoding: 'utf-8',
+          timeout: 5000,
+          env: { ...process.env },
+        });
+        const match = result.match(/__PATH__=(.+)/);
+        if (match?.[1]) {
+          resolved = match[1].trim();
+          break;
+        }
+      } catch {
+        // Try next probe.
+      }
+    }
+    cachedUserShellPath = resolved;
   } catch (error) {
     console.warn('[coworkUtil] Failed to resolve user shell PATH:', error);
     cachedUserShellPath = null;
@@ -70,6 +149,27 @@ function resolveUserShellPath(): string | null {
  * Cached Windows registry PATH. Resolved once and reused.
  */
 let cachedWindowsRegistryPath: string | null | undefined;
+
+function readWindowsRegistryPathValue(registryKey: string): string {
+  try {
+    const output = execSync(`reg query "${registryKey}" /v Path`, {
+      encoding: 'utf-8',
+      timeout: 8000,
+      windowsHide: true,
+    });
+
+    for (const line of output.split(/\r?\n/)) {
+      const match = line.match(/^\s*Path\s+REG_\w+\s+(.+)$/i);
+      if (match?.[1]) {
+        return match[1].trim();
+      }
+    }
+  } catch {
+    // Ignore missing keys or access-denied errors.
+  }
+
+  return '';
+}
 
 /**
  * Resolve the latest PATH from the Windows registry (Machine + User).
@@ -95,30 +195,10 @@ function resolveWindowsRegistryPath(): string | null {
   }
 
   try {
-    // Use PowerShell to read both Machine and User PATH from registry.
-    // [Environment]::GetEnvironmentVariable reads directly from the registry,
-    // not from the current process environment, so it always returns the latest values.
-    //
-    // Use -EncodedCommand with Base64 to avoid quote-escaping issues.
-    // When Node.js calls execSync, outer double quotes for `-Command "..."` can
-    // conflict with inner double quotes needed by PowerShell string arguments.
-    // -EncodedCommand bypasses all quoting problems entirely.
-    const psScript = [
-      '$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")',
-      '$userPath = [Environment]::GetEnvironmentVariable("Path", "User")',
-      '[Console]::Write("$machinePath;$userPath")',
-    ].join('; ');
-    // PowerShell -EncodedCommand expects a Base64-encoded UTF-16LE string
-    const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
-
-    const result = execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encodedCommand}`, {
-      encoding: 'utf-8',
-      timeout: 10000,
-      windowsHide: true,
-    });
-
-    const registryPath = result.trim();
-    if (registryPath) {
+    const machinePath = readWindowsRegistryPathValue('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment');
+    const userPath = readWindowsRegistryPathValue('HKCU\\Environment');
+    const registryPath = [machinePath, userPath].filter(Boolean).join(';');
+    if (registryPath.trim()) {
       // Deduplicate and remove empty entries
       const entries = registryPath
         .split(';')
@@ -332,18 +412,15 @@ function getWindowsGitToolDirs(bashPath: string): string[] {
   return candidates.filter((dir) => existsSync(dir));
 }
 
-function ensureWindowsElectronNodeShim(electronPath: string): string | null {
-  if (process.platform !== 'win32') {
-    return null;
-  }
-
+function ensureElectronNodeShim(electronPath: string, npmBinDir?: string): string | null {
   try {
     const shimDir = join(app.getPath('userData'), 'cowork', 'bin');
     mkdirSync(shimDir, { recursive: true });
+    coworkLog('INFO', 'resolveNodeShim', `Shim directory: ${shimDir}, electronPath: ${electronPath}, npmBinDir: ${npmBinDir || '(none)'}`);
 
+    // --- node shim ---
+    // Shell script (macOS/Linux/Windows git-bash)
     const nodeSh = join(shimDir, 'node');
-    const nodeCmd = join(shimDir, 'node.cmd');
-
     const nodeShContent = [
       '#!/usr/bin/env bash',
       'if [ -z "${LOBSTERAI_ELECTRON_PATH:-}" ]; then',
@@ -354,23 +431,123 @@ function ensureWindowsElectronNodeShim(electronPath: string): string | null {
       '',
     ].join('\n');
 
-    const nodeCmdContent = [
-      '@echo off',
-      'if "%LOBSTERAI_ELECTRON_PATH%"=="" (',
-      '  echo LOBSTERAI_ELECTRON_PATH is not set 1>&2',
-      '  exit /b 127',
-      ')',
-      'set ELECTRON_RUN_AS_NODE=1',
-      '"%LOBSTERAI_ELECTRON_PATH%" %*',
-      '',
-    ].join('\r\n');
-
     writeFileSync(nodeSh, nodeShContent, 'utf8');
-    writeFileSync(nodeCmd, nodeCmdContent, 'utf8');
     try {
       chmodSync(nodeSh, 0o755);
     } catch {
-      // Ignore chmod errors on Windows file systems that do not support POSIX modes.
+      // Ignore chmod errors on file systems that do not support POSIX modes.
+    }
+    coworkLog('INFO', 'resolveNodeShim', `Created node bash shim: ${nodeSh}`);
+
+    // Windows .cmd wrapper (only needed on Windows)
+    if (process.platform === 'win32') {
+      const nodeCmd = join(shimDir, 'node.cmd');
+      const nodeCmdContent = [
+        '@echo off',
+        'if "%LOBSTERAI_ELECTRON_PATH%"=="" (',
+        '  echo LOBSTERAI_ELECTRON_PATH is not set 1>&2',
+        '  exit /b 127',
+        ')',
+        'set ELECTRON_RUN_AS_NODE=1',
+        '"%LOBSTERAI_ELECTRON_PATH%" %*',
+        '',
+      ].join('\r\n');
+      writeFileSync(nodeCmd, nodeCmdContent, 'utf8');
+      coworkLog('INFO', 'resolveNodeShim', `Created node.cmd shim: ${nodeCmd}`);
+    }
+
+    // --- npx / npm shims ---
+    // Create shims that invoke npx-cli.js / npm-cli.js from the bundled npm
+    // package via the node shim above. This avoids relying on symlinks in
+    // node_modules/.bin which do not work on Windows cross-platform builds.
+    if (npmBinDir && existsSync(npmBinDir)) {
+      const npxCliJs = join(npmBinDir, 'npx-cli.js');
+      const npmCliJs = join(npmBinDir, 'npm-cli.js');
+
+      // Convert to POSIX path for bash scripts on Windows (git-bash)
+      const npxCliJsPosix = npxCliJs.replace(/\\/g, '/');
+      const npmCliJsPosix = npmCliJs.replace(/\\/g, '/');
+
+      coworkLog('INFO', 'resolveNodeShim', `npmBinDir exists: true, npx-cli.js exists: ${existsSync(npxCliJs)}, npm-cli.js exists: ${existsSync(npmCliJs)}`);
+
+      if (existsSync(npxCliJs)) {
+        // npx bash shim
+        const npxSh = join(shimDir, 'npx');
+        const npxShContent = [
+          '#!/usr/bin/env bash',
+          'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"',
+          `exec "$SCRIPT_DIR/node" "${npxCliJsPosix}" "$@"`,
+          '',
+        ].join('\n');
+        writeFileSync(npxSh, npxShContent, 'utf8');
+        try { chmodSync(npxSh, 0o755); } catch { /* ignore */ }
+        coworkLog('INFO', 'resolveNodeShim', `Created npx bash shim: ${npxSh} -> ${npxCliJsPosix}`);
+
+        // npx.cmd for Windows — uses %LOBSTERAI_NPM_BIN_DIR% env var to avoid
+        // hardcoding paths that may contain non-ASCII chars (breaks GBK cmd.exe).
+        if (process.platform === 'win32') {
+          const npxCmd = join(shimDir, 'npx.cmd');
+          const npxCmdContent = [
+            '@echo off',
+            '"%~dp0node.cmd" "%LOBSTERAI_NPM_BIN_DIR%\\npx-cli.js" %*',
+            '',
+          ].join('\r\n');
+          writeFileSync(npxCmd, npxCmdContent, 'utf8');
+          coworkLog('INFO', 'resolveNodeShim', `Created npx.cmd shim: ${npxCmd} (using env var LOBSTERAI_NPM_BIN_DIR)`);
+        }
+      } else {
+        coworkLog('WARN', 'resolveNodeShim', `npx-cli.js not found at: ${npxCliJs}`);
+      }
+
+      if (existsSync(npmCliJs)) {
+        // npm bash shim
+        const npmSh = join(shimDir, 'npm');
+        const npmShContent = [
+          '#!/usr/bin/env bash',
+          'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"',
+          `exec "$SCRIPT_DIR/node" "${npmCliJsPosix}" "$@"`,
+          '',
+        ].join('\n');
+        writeFileSync(npmSh, npmShContent, 'utf8');
+        try { chmodSync(npmSh, 0o755); } catch { /* ignore */ }
+        coworkLog('INFO', 'resolveNodeShim', `Created npm bash shim: ${npmSh} -> ${npmCliJsPosix}`);
+
+        // npm.cmd for Windows — uses %LOBSTERAI_NPM_BIN_DIR% env var to avoid
+        // hardcoding paths that may contain non-ASCII chars (breaks GBK cmd.exe).
+        if (process.platform === 'win32') {
+          const npmCmd = join(shimDir, 'npm.cmd');
+          const npmCmdContent = [
+            '@echo off',
+            '"%~dp0node.cmd" "%LOBSTERAI_NPM_BIN_DIR%\\npm-cli.js" %*',
+            '',
+          ].join('\r\n');
+          writeFileSync(npmCmd, npmCmdContent, 'utf8');
+          coworkLog('INFO', 'resolveNodeShim', `Created npm.cmd shim: ${npmCmd} (using env var LOBSTERAI_NPM_BIN_DIR)`);
+        }
+      } else {
+        coworkLog('WARN', 'resolveNodeShim', `npm-cli.js not found at: ${npmCliJs}`);
+      }
+
+      coworkLog('INFO', 'resolveNodeShim', `Created npx/npm shims pointing to: ${npmBinDir}`);
+    } else {
+      coworkLog('WARN', 'resolveNodeShim', `npmBinDir not available: ${npmBinDir || '(not provided)'}, exists: ${npmBinDir ? existsSync(npmBinDir) : 'N/A'}`);
+    }
+
+    // Verify shim files exist and are executable
+    const shimFiles = ['node', 'npx', 'npm'];
+    for (const name of shimFiles) {
+      const shimPath = join(shimDir, name);
+      const exists = existsSync(shimPath);
+      if (exists) {
+        try {
+          const stat = statSync(shimPath);
+          coworkLog('INFO', 'resolveNodeShim', `Shim verify: ${name} exists, mode=0o${stat.mode.toString(8)}, size=${stat.size}`);
+        } catch (e) {
+          coworkLog('WARN', 'resolveNodeShim', `Shim verify: ${name} exists but stat failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else {
+        coworkLog('WARN', 'resolveNodeShim', `Shim verify: ${name} NOT found at ${shimPath}`);
+      }
     }
 
     return shimDir;
@@ -619,6 +796,27 @@ function ensureWindowsBashBootstrapPath(env: Record<string, string | undefined>)
 }
 
 /**
+ * Convert a single Windows path to MSYS2/POSIX format.
+ *
+ * When the Windows path contains non-ASCII characters (e.g. Chinese usernames
+ * like C:\Users\中文用户\...), MSYS2's automatic Windows→POSIX conversion may
+ * corrupt the path if it runs before LANG=C.UTF-8 takes effect. Pre-converting
+ * to POSIX format (/c/Users/中文用户/...) bypasses this problematic conversion
+ * because MSYS2 recognises the value as already POSIX and passes it through
+ * directly to its internal wide-char file APIs.
+ */
+function singleWindowsPathToPosix(windowsPath: string): string {
+  if (!windowsPath) return windowsPath;
+  const driveMatch = windowsPath.match(/^([A-Za-z]):[/\\](.*)/);
+  if (driveMatch) {
+    const driveLetter = driveMatch[1].toLowerCase();
+    const rest = driveMatch[2].replace(/\\/g, '/').replace(/\/+$/, '');
+    return `/${driveLetter}${rest ? '/' + rest : ''}`;
+  }
+  return windowsPath.replace(/\\/g, '/');
+}
+
+/**
  * Convert a Windows-format PATH string to MSYS2/POSIX format for git-bash.
  *
  * Windows PATH uses semicolons (;) as delimiters and backslash paths (C:\...),
@@ -726,9 +924,15 @@ function ensureWindowsBashUtf8InitScript(): string | null {
 }
 
 function applyPackagedEnvOverrides(env: Record<string, string | undefined>): void {
+  const electronNodeRuntimePath = getElectronNodeRuntimePath();
+
+  if (app.isPackaged && !env.LOBSTERAI_ELECTRON_PATH) {
+    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+  }
+
   // On Windows, resolve git-bash and ensure Git toolchain directories are available in PATH.
   if (process.platform === 'win32') {
-    env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
 
     // Force UTF-8 encoding for MSYS2/git-bash.
     //
@@ -770,8 +974,12 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
     if (!env.BASH_ENV) {
       const initScript = ensureWindowsBashUtf8InitScript();
       if (initScript) {
-        env.BASH_ENV = initScript;
-        coworkLog('INFO', 'applyPackagedEnvOverrides', `Set BASH_ENV for UTF-8 console code page: ${initScript}`);
+        // Convert to MSYS2 POSIX format to avoid encoding issues when the
+        // path contains non-ASCII characters (e.g. Chinese Windows username).
+        // MSYS2's automatic Windows→POSIX conversion can corrupt non-ASCII
+        // chars if it runs before LANG=C.UTF-8 takes effect during DLL init.
+        env.BASH_ENV = singleWindowsPathToPosix(initScript);
+        coworkLog('INFO', 'applyPackagedEnvOverrides', `Set BASH_ENV for UTF-8 console code page: ${env.BASH_ENV}`);
       }
     }
 
@@ -835,12 +1043,6 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
 
     appendPythonRuntimeToEnv(env);
 
-    const shimDir = ensureWindowsElectronNodeShim(process.execPath);
-    if (shimDir) {
-      env.PATH = appendEnvPath(env.PATH, [shimDir]);
-      coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node shim PATH entry: ${shimDir}`);
-    }
-
     // Tell git-bash to inherit the PATH from the parent process instead of
     // rebuilding it from scratch. Without this, git-bash's /etc/profile (login
     // shell) defaults to constructing a minimal PATH containing only Windows
@@ -868,6 +1070,13 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   }
 
   if (!app.isPackaged) {
+    // In dev mode, prepend project's node_modules/.bin to PATH so bundled
+    // npx/npm are found even if the user has no global Node.js installation.
+    const devBinDir = join(app.getAppPath(), 'node_modules', '.bin');
+    if (existsSync(devBinDir)) {
+      env.PATH = [devBinDir, env.PATH].filter(Boolean).join(delimiter);
+      coworkLog('INFO', 'applyPackagedEnvOverrides', `Dev mode: prepended node_modules/.bin to PATH: ${devBinDir}`);
+    }
     return;
   }
 
@@ -879,6 +1088,10 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   const userPath = resolveUserShellPath();
   if (userPath) {
     env.PATH = userPath;
+    coworkLog('INFO', 'applyPackagedEnvOverrides', `Resolved user shell PATH (${userPath.split(delimiter).length} entries)`);
+    for (const entry of userPath.split(delimiter)) {
+      coworkLog('INFO', 'applyPackagedEnvOverrides', `  PATH entry: ${entry} (exists: ${existsSync(entry)})`);
+    }
   } else {
     // Fallback: append common node installation paths
     const home = env.HOME || app.getPath('home');
@@ -890,9 +1103,39 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       `${home}/.fnm/current/bin`,
     ];
     env.PATH = [env.PATH, ...commonPaths].filter(Boolean).join(delimiter);
+    coworkLog('WARN', 'applyPackagedEnvOverrides', `Failed to resolve user shell PATH, using fallback common paths`);
   }
 
   const resourcesPath = process.resourcesPath;
+  coworkLog('INFO', 'applyPackagedEnvOverrides', `Packaged mode: resourcesPath=${resourcesPath}`);
+
+  // Create node/npx/npm shims that wrap Electron as a Node.js runtime via
+  // ELECTRON_RUN_AS_NODE=1 and point npx/npm to the bundled npm package.
+  // This avoids relying on node_modules/.bin symlinks which don't work on
+  // Windows cross-platform builds.
+  const npmBinDir = join(resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin');
+  coworkLog('INFO', 'applyPackagedEnvOverrides', `npmBinDir=${npmBinDir}, exists=${existsSync(npmBinDir)}`);
+
+  // Set env var so .cmd shims can reference npmBinDir without hardcoding
+  // non-ASCII characters (which break on Windows when cmd.exe uses GBK code page).
+  env.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
+
+  const hasSystemNode = hasCommandInEnv('node', env);
+  const hasSystemNpx = hasCommandInEnv('npx', env);
+  const hasSystemNpm = hasCommandInEnv('npm', env);
+  const shouldInjectShim = process.platform === 'win32' || !(hasSystemNode && hasSystemNpx && hasSystemNpm);
+  if (shouldInjectShim) {
+    const shimDir = ensureElectronNodeShim(electronNodeRuntimePath, npmBinDir);
+    if (shimDir) {
+      env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
+      env.LOBSTERAI_NODE_SHIM_ACTIVE = '1';
+      coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
+    }
+  } else {
+    delete env.LOBSTERAI_NODE_SHIM_ACTIVE;
+    coworkLog('INFO', 'resolveNodeShim', 'System node/npx/npm detected; skipped Electron node shim injection');
+  }
+
   const nodePaths = [
     join(resourcesPath, 'app.asar', 'node_modules'),
     join(resourcesPath, 'app.asar.unpacked', 'node_modules'),
@@ -901,6 +1144,86 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   if (nodePaths.length > 0) {
     env.NODE_PATH = appendEnvPath(env.NODE_PATH, nodePaths);
   }
+
+  // Verify node/npx resolution in the constructed environment
+  verifyNodeEnvironment(env);
+}
+
+/**
+ * Verify that node/npx/npm can be resolved from the constructed environment PATH.
+ * Logs diagnostic info for debugging MCP server startup issues on macOS.
+ */
+function verifyNodeEnvironment(env: Record<string, string | undefined>): void {
+  const tag = 'verifyNodeEnv';
+  const pathValue = env.PATH || '';
+
+  // Log final PATH entries
+  const pathEntries = pathValue.split(delimiter);
+  coworkLog('INFO', tag, `Final PATH has ${pathEntries.length} entries:`);
+  for (let i = 0; i < pathEntries.length; i++) {
+    const entry = pathEntries[i];
+    const exists = entry ? existsSync(entry) : false;
+    coworkLog('INFO', tag, `  [${i}] ${entry} (exists: ${exists})`);
+  }
+
+  // Try to resolve node, npx, npm using 'which' (macOS/Linux) or 'where' (Windows)
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  for (const tool of ['node', 'npx', 'npm']) {
+    try {
+      const result = spawnSync(whichCmd, [tool], {
+        env: { ...env } as NodeJS.ProcessEnv,
+        encoding: 'utf-8',
+        timeout: 5000,
+        windowsHide: process.platform === 'win32',
+      });
+      if (result.status === 0 && result.stdout) {
+        const resolved = result.stdout.trim();
+        coworkLog('INFO', tag, `${whichCmd} ${tool} => ${resolved}`);
+        const resolvedCandidates = resolved
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const resolvedForExec = process.platform === 'win32'
+          ? resolvedCandidates.find((candidate) => /\.(cmd|exe|bat)$/i.test(candidate)) || resolvedCandidates[0]
+          : resolvedCandidates[0];
+
+        // Try to get version
+        if (tool === 'node' && resolvedForExec) {
+          try {
+            let execTarget = resolvedForExec;
+            if (process.platform === 'win32' && /\.cmd$/i.test(resolvedForExec)) {
+              execTarget = env.LOBSTERAI_ELECTRON_PATH || process.execPath;
+            }
+            const versionResult = spawnSync(execTarget, ['--version'], {
+              env: { ...env, ELECTRON_RUN_AS_NODE: '1' } as NodeJS.ProcessEnv,
+              encoding: 'utf-8',
+              timeout: 5000,
+              windowsHide: process.platform === 'win32',
+            });
+            coworkLog('INFO', tag, `node --version (${execTarget}) => ${(versionResult.stdout || '').trim()} (exit: ${versionResult.status})`);
+            if (versionResult.error) {
+              coworkLog('WARN', tag, `node --version spawn error: ${versionResult.error.message}`);
+            }
+            if (versionResult.stderr) {
+              coworkLog('WARN', tag, `node --version stderr: ${versionResult.stderr.trim()}`);
+            }
+          } catch (e) {
+            coworkLog('WARN', tag, `node --version failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+      } else {
+        coworkLog('WARN', tag, `${whichCmd} ${tool} => NOT FOUND (exit: ${result.status}, stderr: ${(result.stderr || '').trim()})`);
+      }
+    } catch (e) {
+      coworkLog('WARN', tag, `${whichCmd} ${tool} threw: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Log key env vars
+  coworkLog('INFO', tag, `NODE_PATH=${env.NODE_PATH || '(not set)'}`);
+  coworkLog('INFO', tag, `LOBSTERAI_ELECTRON_PATH=${env.LOBSTERAI_ELECTRON_PATH || '(not set)'}`);
+  coworkLog('INFO', tag, `LOBSTERAI_NPM_BIN_DIR=${env.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`);
+  coworkLog('INFO', tag, `HOME=${env.HOME || '(not set)'}`);
 }
 
 /**
@@ -947,11 +1270,18 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
 
   applyPackagedEnvOverrides(env);
 
-  // Inject SKILLs directory path for skill scripts
-  const skillsRoot = getSkillsRoot();
+  // Inject SKILLs directory path for skill scripts.
+  // On Windows, normalise backslashes to forward slashes so the value is usable
+  // in both Node.js (which accepts forward slashes) and bash (which treats
+  // backslashes as escape characters).
+  const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
   env.SKILLS_ROOT = skillsRoot;
   env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
-  env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+  if (process.platform === 'win32' || env.LOBSTERAI_NODE_SHIM_ACTIVE === '1') {
+    env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
+  } else {
+    delete env.LOBSTERAI_ELECTRON_PATH;
+  }
 
   // Inject internal API base URL for skill scripts (e.g. scheduled-task creation)
   const internalApiBaseURL = getInternalApiBaseURL();
@@ -1022,50 +1352,252 @@ export async function getEnhancedEnvWithTmpdir(
   return env;
 }
 
-export async function generateSessionTitle(userIntent: string | null): Promise<string> {
-  if (!userIntent) return 'New Session';
+const SESSION_TITLE_FALLBACK = 'New Session';
+const SESSION_TITLE_MAX_CHARS = 50;
+const SESSION_TITLE_TIMEOUT_MS = 8000;
+const COWORK_MODEL_PROBE_TIMEOUT_MS = 6000;
+const API_ERROR_SNIPPET_MAX_CHARS = 240;
 
-  const claudeCodePath = getClaudeCodePath();
-  const currentEnv = await getEnhancedEnv();
+function buildAnthropicMessagesUrl(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, '');
+  if (!normalized) {
+    return '/v1/messages';
+  }
+  if (normalized.endsWith('/v1/messages')) {
+    return normalized;
+  }
+  if (normalized.endsWith('/v1')) {
+    return `${normalized}/messages`;
+  }
+  return `${normalized}/v1/messages`;
+}
 
-  // Ensure child_process.fork() runs cli.js as Node, not as another Electron app
-  if (app.isPackaged) {
-    currentEnv.ELECTRON_RUN_AS_NODE = '1';
+function extractApiErrorSnippet(rawText: string): string {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return '';
   }
 
   try {
-    const { unstable_v2_prompt } = await loadClaudeSdk();
-    const promptOptions: Record<string, unknown> = {
-      model: getCurrentApiConfig()?.model || 'claude-sonnet',
-      env: currentEnv,
-      pathToClaudeCodeExecutable: claudeCodePath,
+    const payload = JSON.parse(trimmed) as Record<string, unknown>;
+    const payloadError = payload.error;
+    if (typeof payloadError === 'string' && payloadError.trim()) {
+      return payloadError.trim().slice(0, API_ERROR_SNIPPET_MAX_CHARS);
+    }
+    if (payloadError && typeof payloadError === 'object') {
+      const message = (payloadError as Record<string, unknown>).message;
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim().slice(0, API_ERROR_SNIPPET_MAX_CHARS);
+      }
+    }
+    const payloadMessage = payload.message;
+    if (typeof payloadMessage === 'string' && payloadMessage.trim()) {
+      return payloadMessage.trim().slice(0, API_ERROR_SNIPPET_MAX_CHARS);
+    }
+  } catch {
+    // Fall through to plain-text extraction when response is not JSON.
+  }
+
+  return trimmed.replace(/\s+/g, ' ').slice(0, API_ERROR_SNIPPET_MAX_CHARS);
+}
+
+function extractTextFromAnthropicResponse(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const record = payload as Record<string, unknown>;
+  const content = record.content;
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (!item || typeof item !== 'object') return '';
+        const block = item as Record<string, unknown>;
+        if (typeof block.text === 'string') {
+          return block.text;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (typeof record.output_text === 'string') {
+    return record.output_text.trim();
+  }
+  return '';
+}
+
+function normalizeTitleToPlainText(value: string, fallback: string): string {
+  if (!value.trim()) return fallback;
+
+  let title = value.trim();
+  const fenced = /```(?:[\w-]+)?\s*([\s\S]*?)```/i.exec(title);
+  if (fenced?.[1]) {
+    title = fenced[1].trim();
+  }
+
+  title = title
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/_([^_\n]+)_/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/, '')
+    .replace(/^\s*>\s?/, '')
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/^\s*\d+\.\s+/, '')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const labeledTitle = /^(?:title|标题)\s*[:：]\s*(.+)$/i.exec(title);
+  if (labeledTitle?.[1]) {
+    title = labeledTitle[1].trim();
+  }
+
+  title = title
+    .replace(/^["'`“”‘’]+/, '')
+    .replace(/["'`“”‘’]+$/, '')
+    .trim();
+
+  if (!title) return fallback;
+  if (title.length > SESSION_TITLE_MAX_CHARS) {
+    title = title.slice(0, SESSION_TITLE_MAX_CHARS).trim();
+  }
+  return title || fallback;
+}
+
+function buildFallbackSessionTitle(userIntent: string | null): string {
+  const normalizedInput = typeof userIntent === 'string' ? userIntent.trim() : '';
+  if (!normalizedInput) {
+    return SESSION_TITLE_FALLBACK;
+  }
+  const firstLine = normalizedInput
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || '';
+  return normalizeTitleToPlainText(firstLine, SESSION_TITLE_FALLBACK);
+}
+
+export async function probeCoworkModelReadiness(
+  timeoutMs = COWORK_MODEL_PROBE_TIMEOUT_MS
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { config, error } = resolveCurrentApiConfig();
+  if (!config) {
+    return {
+      ok: false,
+      error: error || 'API configuration not found.',
     };
+  }
 
-    const result: SDKResultMessage = await unstable_v2_prompt(
-      `Generate a short, clear title (max 50 chars) for this conversation based on the user input below.
-IMPORTANT: The title MUST be in the SAME language as the user input. If user writes in Chinese, output Chinese title. If user writes in English, output English title.
-User input: ${userIntent}
-Output only the title, nothing else.`,
-      promptOptions as any
-    );
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (result.subtype === 'success') {
-      return result.result;
+  try {
+    const response = await fetch(buildAnthropicMessagesUrl(config.baseURL), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: 1,
+        temperature: 0,
+        messages: [{ role: 'user', content: 'Reply with "ok".' }],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      const errorSnippet = extractApiErrorSnippet(errorText);
+      return {
+        ok: false,
+        error: errorSnippet
+          ? `Model validation failed (${response.status}): ${errorSnippet}`
+          : `Model validation failed with status ${response.status}.`,
+      };
     }
 
-    console.error('Claude SDK returned non-success result:', result);
-    return 'New Session';
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      const timeoutSeconds = Math.ceil(timeoutMs / 1000);
+      return {
+        ok: false,
+        error: `Model validation timed out after ${timeoutSeconds}s.`,
+      };
+    }
+    return {
+      ok: false,
+      error: `Model validation failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export async function generateSessionTitle(userIntent: string | null): Promise<string> {
+  const normalizedInput = typeof userIntent === 'string' ? userIntent.trim() : '';
+  const fallbackTitle = buildFallbackSessionTitle(normalizedInput);
+  if (!normalizedInput) {
+    return fallbackTitle;
+  }
+
+  const { config, error } = resolveCurrentApiConfig();
+  if (!config) {
+    if (error) {
+      console.warn('[cowork-title] Skip title generation due to missing API config:', error);
+    }
+    return fallbackTitle;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SESSION_TITLE_TIMEOUT_MS);
+
+  try {
+    const url = buildAnthropicMessagesUrl(config.baseURL);
+    const prompt = `Generate a short title from this input, keep the same language, return plain text only (no markdown), and keep it within ${SESSION_TITLE_MAX_CHARS} characters: ${normalizedInput}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: 80,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.warn(
+        '[cowork-title] Failed to generate title:',
+        response.status,
+        errorText.slice(0, 240)
+      );
+      return fallbackTitle;
+    }
+
+    const payload = await response.json();
+    const llmTitle = extractTextFromAnthropicResponse(payload);
+    return normalizeTitleToPlainText(llmTitle, fallbackTitle);
   } catch (error) {
     console.error('Failed to generate session title:', error);
-    console.error('Claude Code path:', claudeCodePath);
-    console.error('Is packaged:', app.isPackaged);
-    console.error('Resources path:', process.resourcesPath);
-
-    if (userIntent) {
-      const words = userIntent.trim().split(/\s+/).slice(0, 5);
-      return words.join(' ').toUpperCase() + (userIntent.trim().split(/\s+/).length > 5 ? '...' : '');
-    }
-
-    return 'New Session';
+    return fallbackTitle;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

@@ -10,7 +10,7 @@ import { SkillManager } from './skillManager';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
-import { generateSessionTitle } from './libs/coworkUtil';
+import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setScheduledTaskDeps } from './libs/coworkOpenAICompatProxy';
 import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
@@ -1193,6 +1193,40 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('mcp:fetchMarketplace', async () => {
+    const url = app.isPackaged
+      ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
+      : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace';
+    try {
+      const https = await import('https');
+      const data = await new Promise<string>((resolve, reject) => {
+        const req = https.get(url, { timeout: 10000 }, (res) => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`HTTP ${res.statusCode}`));
+            res.resume();
+            return;
+          }
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => { body += chunk; });
+          res.on('end', () => resolve(body));
+          res.on('error', reject);
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+      });
+      const json = JSON.parse(data);
+      const value = json?.data?.value;
+      if (!value) {
+        return { success: false, error: 'Invalid response: missing data.value' };
+      }
+      const marketplace = typeof value === 'string' ? JSON.parse(value) : value;
+      return { success: true, data: marketplace };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch marketplace' };
+    }
+  });
+
   // Cowork IPC handlers
   ipcMain.handle('cowork:session:start', async (_event, options: {
     prompt: string;
@@ -1227,12 +1261,6 @@ if (!gotTheLock) {
         config.executionMode || 'local',
         options.activeSkillIds || []
       );
-      const runner = getCoworkRunner();
-
-      // Update session status to 'running' before starting async task
-      // This ensures the frontend receives the correct status immediately
-      coworkStoreInstance.updateSession(session.id, { status: 'running' });
-
       // Build metadata, include imageAttachments if present
       const messageMetadata: Record<string, unknown> = {};
       if (options.activeSkillIds?.length) {
@@ -1246,6 +1274,27 @@ if (!gotTheLock) {
         content: options.prompt,
         metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
+
+      const probe = await probeCoworkModelReadiness();
+      if (probe.ok === false) {
+        coworkStoreInstance.updateSession(session.id, { status: 'error' });
+        coworkStoreInstance.addMessage(session.id, {
+          type: 'system',
+          content: `Error: ${probe.error}`,
+          metadata: { error: probe.error },
+        });
+        const failedSession = coworkStoreInstance.getSession(session.id) || {
+          ...session,
+          status: 'error' as const,
+        };
+        return { success: true, session: failedSession };
+      }
+
+      const runner = getCoworkRunner();
+
+      // Update session status to 'running' before starting async task
+      // This ensures the frontend receives the correct status immediately
+      coworkStoreInstance.updateSession(session.id, { status: 'running' });
 
       // Start the session asynchronously (skip initial user message since we already added it)
       runner.startSession(session.id, options.prompt, {
@@ -1920,8 +1969,14 @@ if (!gotTheLock) {
     return getCurrentApiConfig();
   });
 
-  ipcMain.handle('check-api-config', async () => {
+  ipcMain.handle('check-api-config', async (_event, options?: { probeModel?: boolean }) => {
     const { config, error } = resolveCurrentApiConfig();
+    if (config && options?.probeModel) {
+      const probe = await probeCoworkModelReadiness();
+      if (probe.ok === false) {
+        return { hasConfig: false, config: null, error: probe.error };
+      }
+    }
     return { hasConfig: config !== null, config, error };
   });
 

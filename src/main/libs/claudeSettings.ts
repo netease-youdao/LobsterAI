@@ -90,7 +90,12 @@ type MatchedProvider = {
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
-  if (providerName === 'openai' || providerName === 'gemini' || providerName === 'stepfun') {
+  if (
+    providerName === 'openai'
+    || providerName === 'gemini'
+    || providerName === 'stepfun'
+    || providerName === 'youdaozhiyun'
+  ) {
     return 'openai';
   }
   if (providerName === 'anthropic') {

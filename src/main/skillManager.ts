@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 import extractZip from 'extract-zip';
 import { SqliteStore } from './sqliteStore';
 import { cpRecursiveSync } from './fsCompat';
+import { getElectronNodeRuntimePath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
 
 /**
@@ -18,8 +19,8 @@ function resolveUserShellPath(): string | null {
 
   try {
     const shell = process.env.SHELL || '/bin/bash';
-    // Use login-interactive shell to source profile, then print PATH
-    const result = execSync(`${shell} -ilc 'echo __PATH__=$PATH'`, {
+    // Use non-interactive login shell to avoid side effects in interactive startup scripts.
+    const result = execSync(`${shell} -lc 'echo __PATH__=$PATH'`, {
       encoding: 'utf-8',
       timeout: 5000,
       env: { ...process.env },
@@ -190,7 +191,7 @@ function buildSkillEnv(): Record<string, string | undefined> {
 
   // Expose Electron executable so skill scripts can run JS with ELECTRON_RUN_AS_NODE
   // even when system Node.js is not installed.
-  env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+  env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath();
   appendPythonRuntimeToEnv(env);
 
   // Re-normalize after appendPythonRuntimeToEnv may have added a PATH key
@@ -793,6 +794,50 @@ const downloadGithubArchive = async (
   return extractRoot;
 };
 
+const isRemoteZipUrl = (source: string): boolean => {
+  try {
+    const url = new URL(source);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && url.pathname.toLowerCase().endsWith('.zip');
+  } catch {
+    return false;
+  }
+};
+
+const downloadZipUrl = async (zipUrl: string, tempRoot: string): Promise<string> => {
+  const response = await session.defaultSession.fetch(zipUrl, {
+    method: 'GET',
+    headers: { 'User-Agent': 'LobsterAI Skill Downloader' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Download failed (${response.status} ${response.statusText})`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const zipPath = path.join(tempRoot, 'remote-skill.zip');
+  const extractRoot = path.join(tempRoot, 'remote-skill');
+  fs.writeFileSync(zipPath, buffer);
+  fs.mkdirSync(extractRoot, { recursive: true });
+  await extractZip(zipPath, { dir: extractRoot });
+
+  const extractedDirs = fs.readdirSync(extractRoot)
+    .map(entry => path.join(extractRoot, entry))
+    .filter(entryPath => {
+      try {
+        return fs.statSync(entryPath).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+
+  if (extractedDirs.length === 1) {
+    return extractedDirs[0];
+  }
+
+  return extractRoot;
+};
+
 const normalizeGithubSubpath = (value: string): string | null => {
   const trimmed = value.trim().replace(/^\/+|\/+$/g, '');
   if (!trimmed) return null;
@@ -1186,6 +1231,10 @@ export class SkillManager {
             return { success: false, error: 'Skill source must be a directory, zip file, or SKILL.md file' };
           }
         }
+      } else if (isRemoteZipUrl(trimmed)) {
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
+        cleanupPath = tempRoot;
+        localSource = await downloadZipUrl(trimmed, tempRoot);
       } else {
         const normalized = this.normalizeGitSource(trimmed);
         if (!normalized) {
@@ -1732,13 +1781,13 @@ export class SkillManager {
     return path.dirname(skill.skillPath);
   }
 
-  private getScriptRuntimeCandidates(): Array<{ command: string; extraEnv?: NodeJS.ProcessEnv }> {
+  private getScriptRuntimeCandidates(env: NodeJS.ProcessEnv): Array<{ command: string; extraEnv?: NodeJS.ProcessEnv }> {
     const candidates: Array<{ command: string; extraEnv?: NodeJS.ProcessEnv }> = [];
-    if (!app.isPackaged) {
+    if (hasCommand('node', env)) {
       candidates.push({ command: 'node' });
     }
     candidates.push({
-      command: process.execPath,
+      command: getElectronNodeRuntimePath(),
       extraEnv: { ELECTRON_RUN_AS_NODE: '1' },
     });
     return candidates;
@@ -1756,7 +1805,7 @@ export class SkillManager {
     // Build base environment with user's shell PATH
     const baseEnv = buildSkillEnv();
 
-    for (const runtime of this.getScriptRuntimeCandidates()) {
+    for (const runtime of this.getScriptRuntimeCandidates(baseEnv as NodeJS.ProcessEnv)) {
       const env: NodeJS.ProcessEnv = {
         ...baseEnv,
         ...runtime.extraEnv,

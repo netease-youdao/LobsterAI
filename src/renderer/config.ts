@@ -77,6 +77,17 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    youdaozhiyun: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     qwen: {
       enabled: boolean;
       apiKey: string;
@@ -205,6 +216,7 @@ export interface AppConfig {
   app: {
     port: number;
     isDevelopment: boolean;
+    testMode?: boolean;
   };
   // 快捷键配置
   shortcuts?: {
@@ -303,6 +315,18 @@ export const defaultConfig: AppConfig = {
         { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
       ]
     },
+    youdaozhiyun: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://openapi.youdao.com/llmgateway/api/v1/chat/completions',
+      apiFormat: 'openai',
+      models: [
+        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+        { id: 'deepseek-inhouse-chat', name: 'DeepSeek Chat (安全)', supportsImage: false },
+        { id: 'deepseek-inhouse-reasoner', name: 'DeepSeek Reasoner (安全)', supportsImage: false }
+      ]
+    },
     qwen: {
       enabled: false,
       apiKey: '',
@@ -381,6 +405,7 @@ export const defaultConfig: AppConfig = {
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',
+    testMode: process.env.NODE_ENV === 'development',
   },
   shortcuts: {
     newChat: 'Ctrl+N',
@@ -399,7 +424,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'youdaozhiyun', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 

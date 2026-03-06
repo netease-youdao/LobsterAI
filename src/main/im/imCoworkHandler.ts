@@ -17,6 +17,7 @@ interface MessageAccumulator {
   messages: CoworkMessage[];
   resolve: (text: string) => void;
   reject: (error: Error) => void;
+  timeoutId?: NodeJS.Timeout;
 }
 
 interface PendingIMPermission {
@@ -30,6 +31,7 @@ interface PendingIMPermission {
 }
 
 const PERMISSION_CONFIRM_TIMEOUT_MS = 60_000;
+const ACCUMULATOR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const IM_ALLOW_RESPONSE_RE = /^(允许|同意|yes|y)$/i;
 const IM_DENY_RESPONSE_RE = /^(拒绝|不同意|no|n)$/i;
 const IM_ALLOW_OPTION_LABEL = '允许本次操作';
@@ -370,15 +372,32 @@ export class IMCoworkHandler extends EventEmitter {
     return new Promise((resolve, reject) => {
       const existingAccumulator = this.messageAccumulators.get(sessionId);
       if (existingAccumulator) {
+        if (existingAccumulator.timeoutId) {
+          clearTimeout(existingAccumulator.timeoutId);
+        }
         this.messageAccumulators.delete(sessionId);
         existingAccumulator.reject(new Error('Replaced by a newer IM request'));
       }
+
+      const timeoutId = setTimeout(() => {
+        const accumulator = this.messageAccumulators.get(sessionId);
+        if (accumulator && accumulator.timeoutId === timeoutId) {
+          const partialReply = this.formatReply(accumulator.messages);
+          this.cleanupAccumulator(sessionId);
+          if (partialReply && partialReply !== '处理完成，但没有生成回复。') {
+            accumulator.resolve(partialReply + '\n\n[处理超时，以上为部分结果]');
+          } else {
+            accumulator.reject(new Error('处理超时，请稍后重试'));
+          }
+        }
+      }, ACCUMULATOR_TIMEOUT_MS);
 
       // Set up message accumulator
       this.messageAccumulators.set(sessionId, {
         messages: [],
         resolve,
         reject,
+        timeoutId,
       });
     });
   }
@@ -606,6 +625,10 @@ export class IMCoworkHandler extends EventEmitter {
    * Clean up accumulator
    */
   private cleanupAccumulator(sessionId: string): void {
+    const accumulator = this.messageAccumulators.get(sessionId);
+    if (accumulator?.timeoutId) {
+      clearTimeout(accumulator.timeoutId);
+    }
     this.messageAccumulators.delete(sessionId);
   }
 
@@ -660,6 +683,9 @@ export class IMCoworkHandler extends EventEmitter {
   destroy(): void {
     // Clear all pending accumulators
     this.messageAccumulators.forEach((accumulator) => {
+      if (accumulator.timeoutId) {
+        clearTimeout(accumulator.timeoutId);
+      }
       accumulator.reject(new Error('Handler destroyed'));
     });
     this.messageAccumulators.clear();
