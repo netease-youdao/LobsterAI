@@ -64,9 +64,12 @@ const LEGACY_SKILLS_ROOT_HINTS = [
   '/workspace/SKILLs',
 ];
 const INFERRED_FILE_SEARCH_IGNORE = new Set(['.git', 'node_modules', '.cowork-temp', '.idea', '.vscode']);
-const SANDBOX_HISTORY_MAX_MESSAGES = 12;
-const SANDBOX_HISTORY_MAX_TOTAL_CHARS = 16000;
-const SANDBOX_HISTORY_MAX_MESSAGE_CHARS = 2000;
+const SANDBOX_HISTORY_MAX_MESSAGES = 18;
+const SANDBOX_HISTORY_MAX_TOTAL_CHARS = 24000;
+const SANDBOX_HISTORY_MAX_MESSAGE_CHARS = 3000;
+const LOCAL_HISTORY_MAX_MESSAGES = 24;
+const LOCAL_HISTORY_MAX_TOTAL_CHARS = 32000;
+const LOCAL_HISTORY_MAX_MESSAGE_CHARS = 4000;
 const STREAM_UPDATE_THROTTLE_MS = 90;
 const STREAMING_TEXT_MAX_CHARS = 120_000;
 const STREAMING_THINKING_MAX_CHARS = 60_000;
@@ -1659,7 +1662,11 @@ export class CoworkRunner extends EventEmitter {
     return `<message role="${role}">\n${content}\n</message>`;
   }
 
-  private buildSandboxHistoryBlocks(messages: CoworkMessage[], currentPrompt: string): string[] {
+  private buildHistoryBlocks(
+    messages: CoworkMessage[],
+    currentPrompt: string,
+    limits: { maxMessages: number; maxTotalChars: number; maxMessageChars: number }
+  ): string[] {
     if (messages.length === 0) {
       return [];
     }
@@ -1678,7 +1685,7 @@ export class CoworkRunner extends EventEmitter {
     const selectedFromNewest: string[] = [];
     let totalChars = 0;
     for (let i = history.length - 1; i >= 0; i -= 1) {
-      if (selectedFromNewest.length >= SANDBOX_HISTORY_MAX_MESSAGES) {
+      if (selectedFromNewest.length >= limits.maxMessages) {
         break;
       }
       const block = this.formatSandboxHistoryMessage(history[i]);
@@ -1687,9 +1694,9 @@ export class CoworkRunner extends EventEmitter {
       }
 
       const nextTotal = totalChars + block.length;
-      if (nextTotal > SANDBOX_HISTORY_MAX_TOTAL_CHARS) {
+      if (nextTotal > limits.maxTotalChars) {
         if (selectedFromNewest.length === 0) {
-          const truncated = this.truncateSandboxHistoryContent(block, SANDBOX_HISTORY_MAX_TOTAL_CHARS);
+          const truncated = this.truncateSandboxHistoryContent(block, limits.maxTotalChars);
           if (truncated) {
             selectedFromNewest.push(truncated);
           }
@@ -1702,6 +1709,14 @@ export class CoworkRunner extends EventEmitter {
     }
 
     return selectedFromNewest.reverse();
+  }
+
+  private buildSandboxHistoryBlocks(messages: CoworkMessage[], currentPrompt: string): string[] {
+    return this.buildHistoryBlocks(messages, currentPrompt, {
+      maxMessages: SANDBOX_HISTORY_MAX_MESSAGES,
+      maxTotalChars: SANDBOX_HISTORY_MAX_TOTAL_CHARS,
+      maxMessageChars: SANDBOX_HISTORY_MAX_MESSAGE_CHARS,
+    });
   }
 
   private injectSandboxHistoryPrompt(sessionId: string, currentPrompt: string, effectivePrompt: string): string {
@@ -1717,6 +1732,38 @@ export class CoworkRunner extends EventEmitter {
 
     return [
       'The sandbox VM was restarted. Continue using the reconstructed conversation context below.',
+      'Use this context for continuity and do not quote it unless necessary.',
+      '<conversation_history>',
+      ...historyBlocks,
+      '</conversation_history>',
+      '',
+      '<current_user_request>',
+      effectivePrompt,
+      '</current_user_request>',
+    ].join('\n');
+  }
+
+  /**
+   * Inject conversation history into a local-mode prompt when the session is
+   * restarted after a stop (subprocess was killed, no SDK session to resume).
+   */
+  private injectLocalHistoryPrompt(sessionId: string, currentPrompt: string, effectivePrompt: string): string {
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      return effectivePrompt;
+    }
+
+    const historyBlocks = this.buildHistoryBlocks(session.messages, currentPrompt, {
+      maxMessages: LOCAL_HISTORY_MAX_MESSAGES,
+      maxTotalChars: LOCAL_HISTORY_MAX_TOTAL_CHARS,
+      maxMessageChars: LOCAL_HISTORY_MAX_MESSAGE_CHARS,
+    });
+    if (historyBlocks.length === 0) {
+      return effectivePrompt;
+    }
+
+    return [
+      'The session was interrupted and restarted. Continue using the conversation history below.',
       'Use this context for continuity and do not quote it unless necessary.',
       '<conversation_history>',
       ...historyBlocks,
@@ -2474,7 +2521,15 @@ export class CoworkRunner extends EventEmitter {
     // Run claude-code using the SDK
     try {
       const promptPrefix = this.buildPromptPrefix();
-      const effectivePrompt = promptPrefix ? `${promptPrefix}\n\n---\n\n${prompt}` : prompt;
+      let effectivePrompt = promptPrefix ? `${promptPrefix}\n\n---\n\n${prompt}` : prompt;
+
+      // If the session already has messages (restarted after stop), inject
+      // conversation history so the model retains context from prior turns.
+      const currentSession = this.store.getSession(sessionId);
+      if (currentSession && currentSession.messages.length > 0) {
+        effectivePrompt = this.injectLocalHistoryPrompt(sessionId, prompt, effectivePrompt);
+      }
+
       await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork session error:', error);
@@ -3038,10 +3093,10 @@ export class CoworkRunner extends EventEmitter {
       };
     }
 
-    // NOTE: Do NOT pass activeSession.claudeSessionId here.  This method always
-    // starts a fresh subprocess, so any previous SDK session ID (e.g. from a
-    // prior run, after stop, or after model switch) is unreachable by the new
-    // process.  Clear the stale value so the new SDK session's ID will replace it.
+    // The SDK session state is bound to the subprocess and its project directory.
+    // After stop, the subprocess is killed and the session cannot be reliably
+    // resumed (cwd/model mismatch causes "No conversation found" errors).
+    // Instead, we inject conversation history into the prompt in startSession().
     activeSession.claudeSessionId = null;
 
     if (systemPrompt) {
