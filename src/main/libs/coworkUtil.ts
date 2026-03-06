@@ -1389,7 +1389,7 @@ export async function getEnhancedEnvWithTmpdir(
 const SESSION_TITLE_FALLBACK = 'New Session';
 const SESSION_TITLE_MAX_CHARS = 50;
 const SESSION_TITLE_TIMEOUT_MS = 8000;
-const COWORK_MODEL_PROBE_TIMEOUT_MS = 6000;
+const COWORK_MODEL_PROBE_TIMEOUT_MS = 20000;
 const API_ERROR_SNIPPET_MAX_CHARS = 240;
 
 function buildAnthropicMessagesUrl(baseUrl: string): string {
