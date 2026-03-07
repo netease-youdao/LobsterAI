@@ -199,13 +199,14 @@ const IMSettings: React.FC = () => {
   const runConnectivityTest = async (
     platform: IMPlatform,
     configOverride?: Partial<IMGatewayConfig>
-  ) => {
+  ): Promise<IMConnectivityTestResult | null> => {
     setTestingPlatform(platform);
     const result = await imService.testGateway(platform, configOverride);
     if (result) {
       setConnectivityResults((prev) => ({ ...prev, [platform]: result }));
     }
     setTestingPlatform(null);
+    return result;
   };
 
   // Toggle gateway on/off and persist enabled state
@@ -339,9 +340,17 @@ const IMSettings: React.FC = () => {
 
     // Run connectivity test (always passes configOverride so the backend uses
     // the latest unsaved credential values from the form).
-    await runConnectivityTest(platform, {
+    const result = await runConnectivityTest(platform, {
       [platform]: config[platform],
     } as Partial<IMGatewayConfig>);
+
+    // Auto-enable: if the platform was OFF but auth_check passed, start it automatically.
+    if (!isEnabled && result) {
+      const authCheck = result.checks.find((c) => c.code === 'auth_check');
+      if (authCheck && authCheck.level === 'pass') {
+        toggleGateway(platform);
+      }
+    }
   };
 
   // Handle platform toggle

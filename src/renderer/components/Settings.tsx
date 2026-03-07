@@ -64,11 +64,11 @@ const providerKeys = [
   'moonshot',
   'zhipu',
   'minimax',
-  'youdaozhiyun',
-  'qwen',
-  'xiaomi',
-  'stepfun',
   'volcengine',
+  'qwen',
+  'stepfun',
+  'youdaozhiyun',
+  'xiaomi',
   'openrouter',
   'ollama',
   'custom',
@@ -135,7 +135,7 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   moonshot: { label: 'Moonshot', icon: <MoonshotIcon /> },
   zhipu: { label: 'Zhipu', icon: <ZhipuIcon /> },
   minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
-  youdaozhiyun: { label: '有道智云', icon: <YouDaoZhiYunIcon /> },
+  youdaozhiyun: { label: 'Youdao', icon: <YouDaoZhiYunIcon /> },
   qwen: { label: 'Qwen', icon: <QwenIcon /> },
   xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
   stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
@@ -255,6 +255,16 @@ const getProviderDefaultBaseUrl = (
 ): string | null => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
   return defaults ? defaults[apiFormat] : null;
+};
+const resolveBaseUrl = (
+  provider: ProviderType,
+  baseUrl: string,
+  apiFormat: 'anthropic' | 'openai'
+): string => {
+  if (baseUrl.trim()) return baseUrl;
+  return getProviderDefaultBaseUrl(provider, apiFormat)
+    || defaultConfig.providers?.[provider]?.baseUrl
+    || '';
 };
 const shouldAutoSwitchProviderBaseUrl = (provider: ProviderType, currentBaseUrl: string): boolean => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
@@ -1104,6 +1114,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }));
   };
 
+  const enableProvider = (provider: ProviderType) => {
+    setProviders(prev => {
+      if (prev[provider].enabled) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [provider]: {
+          ...prev[provider],
+          enabled: true,
+        },
+      };
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSaving(true);
@@ -1111,13 +1137,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
     try {
       const normalizedProviders = Object.fromEntries(
-        Object.entries(providers).map(([providerKey, providerConfig]) => [
-          providerKey,
-          {
-            ...providerConfig,
-            apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
-          },
-        ])
+        Object.entries(providers).map(([providerKey, providerConfig]) => {
+          const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
+          return [
+            providerKey,
+            {
+              ...providerConfig,
+              apiFormat,
+              baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+            },
+          ];
+        })
       ) as ProvidersConfig;
 
       // Find the first enabled provider to use as the primary API
@@ -1370,7 +1400,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     try {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
       // Apply Coding Plan endpoint switch
-      let effectiveBaseUrl = providerConfig.baseUrl;
+      let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, getEffectiveApiFormat(testingProvider, providerConfig.apiFormat));
       let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
       
       // Handle Zhipu GLM Coding Plan endpoint switch
@@ -1472,12 +1502,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       }
 
       if (response.ok) {
+        enableProvider(testingProvider);
         showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
       } else {
         const data = response.data || {};
         // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
         if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
+          enableProvider(testingProvider);
           showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
           return;
         }
@@ -1497,13 +1529,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     const entries = await Promise.all(
       Object.entries(providers).map(async ([providerKey, providerConfig]) => {
         const apiKey = await encryptWithPassword(providerConfig.apiKey, password);
+        const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
         return [
           providerKey,
           {
             enabled: providerConfig.enabled,
             apiKey,
-            baseUrl: providerConfig.baseUrl,
-            apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
+            baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+            apiFormat,
             codingPlanEnabled: (providerConfig as ProviderConfig).codingPlanEnabled,
             models: providerConfig.models,
           },
@@ -2432,7 +2465,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
                     disabled={isBaseUrlLocked}
                     className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-xs ${isBaseUrlLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    placeholder={i18nService.t('baseUrlPlaceholder')}
+                    placeholder={getProviderDefaultBaseUrl(activeProvider, getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat)) || defaultConfig.providers?.[activeProvider]?.baseUrl || i18nService.t('baseUrlPlaceholder')}
                   />
                   {providers[activeProvider].baseUrl && !isBaseUrlLocked && (
                     <div className="absolute right-2 inset-y-0 flex items-center">
