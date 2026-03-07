@@ -271,7 +271,7 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -294,6 +294,8 @@ class ApiService {
       return 'qwen';
     } else if (normalizedModelId.startsWith('mimo') || normalizedModelId.includes('xiaomi')) {
       return 'xiaomi';
+    } else if (normalizedModelId.startsWith('step-')) {
+      return 'stepfun';
     } else if (normalizedModelId.startsWith('doubao') || normalizedModelId.includes('volcengine') || normalizedModelId.includes('ep-') || normalizedModelId.startsWith('ark-')) {
       return 'volcengine';
     }
