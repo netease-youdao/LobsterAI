@@ -1,6 +1,6 @@
 import React from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { XMarkIcon } from '@heroicons/react/24/outline';
+import XMarkIcon from '../icons/XMarkIcon';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import { RootState } from '../../store';
 import { toggleActiveSkill, clearActiveSkills } from '../../store/slices/skillSlice';
