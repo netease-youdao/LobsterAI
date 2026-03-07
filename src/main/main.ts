@@ -1379,6 +1379,19 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:deleteBatch', async (_event, sessionIds: string[]) => {
+    try {
+      const coworkStoreInstance = getCoworkStore();
+      coworkStoreInstance.deleteSessions(sessionIds);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to batch delete sessions',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:pin', async (_event, options: { sessionId: string; pinned: boolean }) => {
     try {
       const coworkStoreInstance = getCoworkStore();

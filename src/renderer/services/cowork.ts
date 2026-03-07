@@ -5,6 +5,7 @@ import {
   addSession,
   updateSessionStatus,
   deleteSession as deleteSessionAction,
+  deleteSessions as deleteSessionsAction,
   addMessage,
   updateMessageContent,
   setStreaming,
@@ -215,6 +216,20 @@ class CoworkService {
     }
 
     console.error('Failed to delete session:', result.error);
+    return false;
+  }
+
+  async deleteSessions(sessionIds: string[]): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork) return false;
+
+    const result = await cowork.deleteSessions(sessionIds);
+    if (result.success) {
+      store.dispatch(deleteSessionsAction(sessionIds));
+      return true;
+    }
+
+    console.error('Failed to batch delete sessions:', result.error);
     return false;
   }
 
