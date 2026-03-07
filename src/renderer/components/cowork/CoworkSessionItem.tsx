@@ -4,16 +4,22 @@ import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
+import ListChecksIcon from '../icons/ListChecksIcon';
 import { i18nService } from '../../services/i18n';
 
 interface CoworkSessionItemProps {
   session: CoworkSessionSummary;
   hasUnread: boolean;
   isActive: boolean;
+  isBatchMode: boolean;
+  isSelected: boolean;
+  showBatchOption?: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onTogglePin: (pinned: boolean) => void;
   onRename: (title: string) => void;
+  onToggleSelection: () => void;
+  onEnterBatchMode: () => void;
 }
 
 const statusLabels: Record<CoworkSessionStatus, string> = {
@@ -84,10 +90,15 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   session,
   hasUnread,
   isActive,
+  isBatchMode,
+  isSelected,
+  showBatchOption = true,
   onSelect,
   onDelete,
   onTogglePin,
   onRename,
+  onToggleSelection,
+  onEnterBatchMode,
 }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -125,7 +136,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
       closeMenu();
       return;
     }
-    const menuHeight = 120;
+    const menuHeight = showBatchOption ? 156 : 120;
     const position = calculateMenuPosition(menuHeight);
     if (position) {
       setMenuPosition(position);
@@ -194,6 +205,12 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     setShowConfirmDelete(false);
   };
 
+  const handleBatchClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    closeMenu();
+    onEnterBatchMode();
+  };
+
   useEffect(() => {
     if (!menuPosition) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -222,7 +239,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
 
   useEffect(() => {
     if (!menuPosition) return;
-    const menuHeight = showConfirmDelete ? 112 : 120;
+    const menuHeight = showConfirmDelete ? 112 : (showBatchOption ? 156 : 120);
     const position = calculateMenuPosition(menuHeight);
     if (position && (position.x !== menuPosition.x || position.y !== menuPosition.y)) {
       setMenuPosition(position);
@@ -245,19 +262,27 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const showRunningIndicator = session.status === 'running';
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
   const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
+  const batchLabel = i18nService.t('batchOperations');
   const menuItems = useMemo(() => {
-    return [
+    const items = [
       { key: 'rename', label: renameLabel, onClick: handleRenameClick, tone: 'neutral' as const },
       { key: 'pin', label: pinButtonLabel, onClick: handleTogglePin, tone: 'neutral' as const },
       { key: 'delete', label: deleteLabel, onClick: handleDeleteClick, tone: 'danger' as const },
     ];
+    if (showBatchOption) {
+      items.unshift({ key: 'batch', label: batchLabel, onClick: handleBatchClick, tone: 'neutral' as const });
+    }
+    return items;
   }, [
+    batchLabel,
     deleteLabel,
+    handleBatchClick,
     handleDeleteClick,
     handleRenameClick,
     handleTogglePin,
     pinButtonLabel,
     renameLabel,
+    showBatchOption,
   ]);
 
   return (
@@ -265,6 +290,10 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
       onClick={() => {
         if (isRenaming) return;
         closeMenu();
+        if (isBatchMode) {
+          onToggleSelection();
+          return;
+        }
         onSelect();
       }}
       className={`group relative p-3 rounded-lg cursor-pointer transition-all duration-150 ${
@@ -275,6 +304,20 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     >
       {/* Content area */}
       <div className="flex items-start">
+        {isBatchMode && (
+          <div className="flex items-center mr-2 mt-0.5 flex-shrink-0">
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={(e) => {
+                e.stopPropagation();
+                onToggleSelection();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-claude-accent cursor-pointer"
+            />
+          </div>
+        )}
         <div className="flex-1 min-w-0">
           <div className={`flex items-center mb-1 ${showStatusIndicator ? 'gap-2' : 'gap-0'}`}>
             {/* Status indicator */}
@@ -321,6 +364,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
       </div>
 
       {/* Actions - absolutely positioned overlay */}
+      {!isBatchMode && (
       <div
         className={`absolute right-1.5 top-1.5 transition-opacity ${
           isRenaming
@@ -346,6 +390,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
           )}
         </button>
       </div>
+      )}
 
       {menuPosition && (
         <div
@@ -365,6 +410,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                   : 'dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
               }`}
             >
+              {item.key === 'batch' && <ListChecksIcon className="h-4 w-4" />}
               {item.key === 'rename' && <PencilSquareIcon className="h-4 w-4" />}
               {item.key === 'pin' && (
                 <PushPinIcon

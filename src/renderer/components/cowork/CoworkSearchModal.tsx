@@ -5,6 +5,8 @@ import { i18nService } from '../../services/i18n';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionList from './CoworkSessionList';
 
+const emptySet = new Set<string>();
+
 interface CoworkSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -105,10 +107,15 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
             <CoworkSessionList
               sessions={filteredSessions}
               currentSessionId={currentSessionId}
+              isBatchMode={false}
+              selectedIds={emptySet}
+              showBatchOption={false}
               onSelectSession={handleSelectSession}
               onDeleteSession={onDeleteSession}
               onTogglePin={onTogglePin}
               onRenameSession={onRenameSession}
+              onToggleSelection={() => {}}
+              onEnterBatchMode={() => {}}
             />
           )}
         </div>
