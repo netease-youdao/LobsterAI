@@ -2332,7 +2332,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             </div>
 
             {/* Provider Settings - Right Side */}
-            <div className="w-3/5 pl-4 space-y-4 overflow-y-auto">
+            <div className="w-3/5 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
               <div className="flex items-center justify-between pb-2 border-b dark:border-claude-darkBorder border-claude-border">
                 <h3 className="text-base font-medium dark:text-claude-darkText text-claude-text">
                   {(providerMeta[activeProvider]?.label ?? activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1))} {i18nService.t('providerSettings')}
