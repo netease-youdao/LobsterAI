@@ -1184,7 +1184,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const { currentSession, isStreaming } = useSelector((state: RootState) => state.cowork);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
@@ -1597,8 +1596,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (!shouldAutoScroll) {
       return;
     }
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll]);
 
@@ -1844,7 +1844,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         className="flex-1 overflow-y-auto min-h-0 pt-3"
       >
         {renderConversationTurns()}
-        <div ref={messagesEndRef} className="h-20" />
+        <div className="h-20" />
       </div>
 
       {/* Streaming Activity Bar */}
