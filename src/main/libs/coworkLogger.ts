@@ -35,7 +35,23 @@ function rotateIfNeeded(): void {
 }
 
 function formatTimestamp(): string {
-  return new Date().toISOString();
+  const date = new Date();
+  const pad = (value: number, length = 2): string => value.toString().padStart(length, '0');
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hour = pad(date.getHours());
+  const minute = pad(date.getMinutes());
+  const second = pad(date.getSeconds());
+  const millisecond = pad(date.getMilliseconds(), 3);
+
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absOffset = Math.abs(offsetMinutes);
+  const offsetHour = pad(Math.floor(absOffset / 60));
+  const offsetMinute = pad(absOffset % 60);
+
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}${sign}${offsetHour}:${offsetMinute}`;
 }
 
 export function coworkLog(level: 'INFO' | 'WARN' | 'ERROR', tag: string, message: string, extra?: Record<string, unknown>): void {

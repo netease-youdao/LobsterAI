@@ -1,32 +1,33 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
-import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import CoworkPromptInput from './CoworkPromptInput';
 import MarkdownContent from '../MarkdownContent';
 import {
   CheckIcon,
   InformationCircleIcon,
-  PuzzlePieceIcon,
-  EllipsisHorizontalIcon,
-  PencilSquareIcon,
   ShareIcon,
-  TrashIcon,
   ExclamationTriangleIcon,
   ChevronRightIcon,
+  PhotoIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
+import PencilSquareIcon from '../icons/PencilSquareIcon';
+import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
-  onContinue: (prompt: string, skillPrompt?: string) => void;
+  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => void;
   onStop: () => void;
   onNavigateHome?: () => void;
   isSidebarCollapsed?: boolean;
@@ -795,14 +796,18 @@ const CopyButton: React.FC<{
   );
 };
 
-const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = ({ message, skills }) => {
+const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
   const [isHovered, setIsHovered] = useState(false);
+  const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
   // Get skills used for this message
   const messageSkillIds = (message.metadata as CoworkMessageMetadata)?.skillIds || [];
   const messageSkills = messageSkillIds
     .map(id => skills.find(s => s.id === id))
     .filter((s): s is NonNullable<typeof s> => s !== undefined);
+
+  // Get image attachments from metadata
+  const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
 
   return (
     <div
@@ -815,10 +820,31 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
               <div className="w-fit max-w-[42rem] rounded-2xl px-4 py-2.5 dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text shadow-subtle">
-                <MarkdownContent
-                  content={message.content}
-                  className="max-w-none whitespace-pre-wrap break-words"
-                />
+                {message.content?.trim() && (
+                  <MarkdownContent
+                    content={message.content}
+                    className="max-w-none whitespace-pre-wrap break-words"
+                  />
+                )}
+                {imageAttachments.length > 0 && (
+                  <div className={`flex flex-wrap gap-2 ${message.content?.trim() ? 'mt-2' : ''}`}>
+                    {imageAttachments.map((img, idx) => (
+                      <div key={idx} className="relative group">
+                        <img
+                          src={`data:${img.mimeType};base64,${img.base64Data}`}
+                          alt={img.name}
+                          className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border dark:border-claude-darkBorder/50 border-claude-border/50 hover:border-claude-accent/50 transition-colors"
+                          title={img.name}
+                          onClick={() => setExpandedImage(`data:${img.mimeType};base64,${img.base64Data}`)}
+                        />
+                        <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
+                          <PhotoIcon className="h-3 w-3 flex-shrink-0" />
+                          <span className="truncate">{img.name}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-end gap-1.5 mt-1">
                 {messageSkills.map(skill => (
@@ -827,7 +853,7 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
                     className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-claude-accent/5 dark:bg-claude-accent/10"
                     title={skill.description}
                   >
-                    <PuzzlePieceIcon className="h-2.5 w-2.5 text-claude-accent/70" />
+                    <PuzzleIcon className="h-2.5 w-2.5 text-claude-accent/70" />
                     <span className="text-[10px] font-medium text-claude-accent/70 max-w-[60px] truncate">
                       {skill.name}
                     </span>
@@ -842,9 +868,23 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
           </div>
         </div>
       </div>
+      {/* Image lightbox overlay */}
+      {expandedImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 cursor-pointer"
+          onClick={() => setExpandedImage(null)}
+        >
+          <img
+            src={expandedImage}
+            alt="Preview"
+            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
-};
+});
 
 const AssistantMessageItem: React.FC<{
   message: CoworkMessage;
@@ -1131,10 +1171,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   updateBadge,
 }) => {
   const isMac = window.electron.platform === 'darwin';
-  const { currentSession, isStreaming } = useSelector((state: RootState) => state.cowork);
+  const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
+  const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
@@ -1547,17 +1587,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (!shouldAutoScroll) {
       return;
     }
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll]);
+
+  const messages = currentSession?.messages;
+  const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
+  const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
   if (!currentSession) {
     return null;
   }
-
-  const displayItems = buildDisplayItems(currentSession.messages);
-  const turns = buildConversationTurns(displayItems);
 
   const renderConversationTurns = () => {
     if (turns.length === 0) {
@@ -1794,7 +1836,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         className="flex-1 overflow-y-auto min-h-0 pt-3"
       >
         {renderConversationTurns()}
-        <div ref={messagesEndRef} className="h-20" />
+        <div className="h-20" />
       </div>
 
       {/* Streaming Activity Bar */}

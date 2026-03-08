@@ -1,4 +1,7 @@
-build/
+build/*
+!build/entitlements.mac.plist
+!build/icons/
+!build/icons/**
 release/
 node_modules
 dist
@@ -11,6 +14,7 @@ __pycache__/
 sandbox/image/out/
 sandbox/image/publish/
 sandbox/image/.work/
+.work/
 sandbox/runtime/out/
 sandbox/runtime-darwin-*/
 
@@ -18,11 +22,14 @@ sandbox/runtime-darwin-*/
 resources/mingit/
 resources/MinGit-*.zip
 resources/PortableGit-*.7z.exe
+resources/python-win/
+resources/python-*.zip
 
 # SKILLs runtime files
 SKILLs/**/.connection
 SKILLs/**/.server.log
 SKILLs/**/.server.pid
+SKILLs/**/.venv/
 
 package-lock.json
 
@@ -31,3 +38,6 @@ nul
 
 .playwright-mcp/
 .cowork-temp/
+
+# editorconfig files
+.vscode/

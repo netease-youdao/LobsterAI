@@ -11,6 +11,7 @@ import type { CoworkRunner, PermissionRequest } from '../libs/coworkRunner';
 import type { CoworkStore, CoworkMessage } from '../coworkStore';
 import type { IMStore } from './imStore';
 import type { IMMessage, IMPlatform, IMMediaAttachment } from './types';
+import { buildIMMediaInstruction } from './imMediaInstruction';
 
 interface MessageAccumulator {
   messages: CoworkMessage[];
@@ -30,6 +31,7 @@ interface PendingIMPermission {
 }
 
 const PERMISSION_CONFIRM_TIMEOUT_MS = 60_000;
+const ACCUMULATOR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const IM_ALLOW_RESPONSE_RE = /^(允许|同意|yes|y)$/i;
 const IM_DENY_RESPONSE_RE = /^(拒绝|不同意|no|n)$/i;
 const IM_ALLOW_OPTION_LABEL = '允许本次操作';
@@ -39,7 +41,6 @@ export interface IMCoworkHandlerOptions {
   coworkStore: CoworkStore;
   imStore: IMStore;
   getSkillsPrompt?: () => Promise<string | null>;
-  timeout?: number; // Timeout in ms, default 120000 (2 minutes)
 }
 
 export class IMCoworkHandler extends EventEmitter {
@@ -47,7 +48,6 @@ export class IMCoworkHandler extends EventEmitter {
   private coworkStore: CoworkStore;
   private imStore: IMStore;
   private getSkillsPrompt?: () => Promise<string | null>;
-  private timeout: number;
 
   // Track active sessions' message accumulation
   private messageAccumulators: Map<string, MessageAccumulator> = new Map();
@@ -63,7 +63,6 @@ export class IMCoworkHandler extends EventEmitter {
     this.coworkStore = options.coworkStore;
     this.imStore = options.imStore;
     this.getSkillsPrompt = options.getSkillsPrompt;
-    this.timeout = options.timeout ?? 120000;
 
     this.setupEventListeners();
   }
@@ -92,6 +91,12 @@ export class IMCoworkHandler extends EventEmitter {
       return await this.processMessageInternal(message, false);
     } catch (error) {
       if (!this.isSessionNotFoundError(error)) {
+        if (this.shouldRetryWithFreshSession(error, message)) {
+          console.warn(
+            `[IMCoworkHandler] Detected recoverable API 400 for ${message.platform}:${message.conversationId}, recreating session and retrying once`
+          );
+          return this.processMessageInternal(message, true);
+        }
         throw error;
       }
 
@@ -106,7 +111,9 @@ export class IMCoworkHandler extends EventEmitter {
     const coworkSessionId = await this.getOrCreateCoworkSession(
       message.conversationId,
       message.platform,
-      forceNewSession
+      forceNewSession,
+      message.senderId,
+      message
     );
     this.sessionConversationMap.set(coworkSessionId, {
       conversationId: message.conversationId,
@@ -176,7 +183,9 @@ export class IMCoworkHandler extends EventEmitter {
   private async getOrCreateCoworkSession(
     imConversationId: string,
     platform: IMPlatform,
-    forceNewSession: boolean = false
+    forceNewSession: boolean = false,
+    senderId?: string,
+    message?: IMMessage
   ): Promise<string> {
     if (forceNewSession) {
       const stale = this.imStore.getSessionMapping(imConversationId, platform);
@@ -214,16 +223,18 @@ export class IMCoworkHandler extends EventEmitter {
     }
 
     // Create new Cowork session
-    return this.createCoworkSessionForConversation(imConversationId, platform);
+    return this.createCoworkSessionForConversation(imConversationId, platform, senderId, message);
   }
 
   private async createCoworkSessionForConversation(
     imConversationId: string,
-    platform: IMPlatform
+    platform: IMPlatform,
+    senderId?: string,
+    message?: IMMessage
   ): Promise<string> {
     // Create new Cowork session
     const config = this.coworkStore.getConfig();
-    const title = `IM-${platform}-${Date.now()}`;
+    const title = this.buildSessionTitle(platform, imConversationId, senderId, message);
     const systemPrompt = await this.buildSystemPromptWithSkills();
 
     const selectedWorkspaceRoot = (config.workingDirectory || '').trim();
@@ -253,28 +264,98 @@ export class IMCoworkHandler extends EventEmitter {
     return session.id;
   }
 
+  /**
+   * Build a human-readable session title based on platform and sender identity.
+   *
+   * NIM title rules:
+   *   - P2P direct:  "云信-P2P-{senderName|senderId}"
+   *   - Team group:  "云信-群聊-{groupName|teamId}"
+   *   - QChat:       "云信-圈组-{groupName|channelId}"
+   *
+   * Other platforms use the original "IM-{platform}-{timestamp}" style.
+   */
+  private buildSessionTitle(
+    platform: IMPlatform,
+    _imConversationId: string,
+    senderId?: string,
+    message?: IMMessage
+  ): string {
+    if (platform === 'nim') {
+      if (message?.chatSubType === 'qchat') {
+        const channelLabel = message.groupName || _imConversationId;
+        return `云信-圈组-${channelLabel}`;
+      }
+      if (message?.chatType === 'group') {
+        const groupLabel = message.groupName || senderId || _imConversationId;
+        return `云信-群聊-${groupLabel}`;
+      }
+      // P2P direct message
+      const peerLabel = message?.senderName || senderId || _imConversationId;
+      return `云信-P2P-${peerLabel}`;
+    }
+    return `IM-${platform}-${Date.now()}`;
+  }
+
   private async buildSystemPromptWithSkills(): Promise<string> {
     const config = this.coworkStore.getConfig();
     const imSettings = this.imStore.getIMSettings();
     const systemPrompt = config.systemPrompt || '';
 
-    if (!imSettings.skillsEnabled || !this.getSkillsPrompt) {
-      return systemPrompt;
+    // Build media instruction for IM media sending capability
+    const mediaInstruction = buildIMMediaInstruction(imSettings);
+
+    let combinedPrompt = systemPrompt;
+
+    if (imSettings.skillsEnabled && this.getSkillsPrompt) {
+      const skillsPrompt = await this.getSkillsPrompt();
+      if (skillsPrompt) {
+        combinedPrompt = combinedPrompt
+          ? `${skillsPrompt}\n\n${combinedPrompt}`
+          : skillsPrompt;
+      }
     }
 
-    const skillsPrompt = await this.getSkillsPrompt();
-    if (!skillsPrompt) {
-      return systemPrompt;
+    // Append media instruction at the end so it's always present
+    if (mediaInstruction) {
+      combinedPrompt = combinedPrompt
+        ? `${combinedPrompt}\n\n${mediaInstruction}`
+        : mediaInstruction;
     }
 
-    return systemPrompt
-      ? `${skillsPrompt}\n\n${systemPrompt}`
-      : skillsPrompt;
+    return combinedPrompt;
   }
 
   private isSessionNotFoundError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return /^Session\s.+\snot found$/i.test(message.trim());
+  }
+
+  private isRecoverableApi400Error(error: unknown): boolean {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    if (!message.includes('400')) {
+      return false;
+    }
+
+    return (
+      message.includes('api error')
+      || message.includes('bad_response_status_code')
+      || message.includes('invalid chat setting')
+      || message.includes('signature: field required')
+    );
+  }
+
+  private shouldRetryWithFreshSession(error: unknown, message: IMMessage): boolean {
+    if (!this.isRecoverableApi400Error(error)) {
+      return false;
+    }
+
+    const mapping = this.imStore.getSessionMapping(message.conversationId, message.platform);
+    if (!mapping) {
+      return false;
+    }
+
+    const session = this.coworkStore.getSession(mapping.coworkSessionId);
+    return Boolean(session?.claudeSessionId);
   }
 
   /**
@@ -322,15 +403,18 @@ export class IMCoworkHandler extends EventEmitter {
         existingAccumulator.reject(new Error('Replaced by a newer IM request'));
       }
 
-      // Set up timeout
       const timeoutId = setTimeout(() => {
         const accumulator = this.messageAccumulators.get(sessionId);
-        if (accumulator) {
-          this.messageAccumulators.delete(sessionId);
-          this.coworkRunner.stopSession(sessionId);
-          reject(new Error('Request timed out'));
+        if (accumulator && accumulator.timeoutId === timeoutId) {
+          const partialReply = this.formatReply(accumulator.messages);
+          this.cleanupAccumulator(sessionId);
+          if (partialReply && partialReply !== '处理完成，但没有生成回复。') {
+            accumulator.resolve(partialReply + '\n\n[处理超时，以上为部分结果]');
+          } else {
+            accumulator.reject(new Error('处理超时，请稍后重试'));
+          }
         }
-      }, this.timeout);
+      }, ACCUMULATOR_TIMEOUT_MS);
 
       // Set up message accumulator
       this.messageAccumulators.set(sessionId, {
@@ -361,10 +445,13 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   private clearPendingPermissionsBySessionId(sessionId: string): void {
-    for (const [key, pending] of this.pendingPermissionByConversation.entries()) {
-      if (pending.sessionId !== sessionId) continue;
-      this.clearPendingPermissionByKey(key);
-    }
+    const keysToRemove: string[] = [];
+    this.pendingPermissionByConversation.forEach((pending, key) => {
+      if (pending.sessionId === sessionId) {
+        keysToRemove.push(key);
+      }
+    });
+    keysToRemove.forEach((key) => this.clearPendingPermissionByKey(key));
   }
 
   private buildIMPermissionPrompt(request: PermissionRequest): string {
@@ -559,7 +646,7 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   /**
-   * Clean up accumulator and timeout
+   * Clean up accumulator
    */
   private cleanupAccumulator(sessionId: string): void {
     const accumulator = this.messageAccumulators.get(sessionId);
@@ -579,8 +666,8 @@ export class IMCoworkHandler extends EventEmitter {
       // Skip user messages (they're the input)
       if (msg.type === 'user') continue;
 
-      // Only include assistant messages in reply
-      if (msg.type === 'assistant' && msg.content) {
+      // Only include assistant messages in reply (skip thinking messages)
+      if (msg.type === 'assistant' && msg.content && !msg.metadata?.isThinking) {
         parts.push(msg.content);
       }
     }
@@ -619,22 +706,22 @@ export class IMCoworkHandler extends EventEmitter {
    */
   destroy(): void {
     // Clear all pending accumulators
-    for (const [_sessionId, accumulator] of this.messageAccumulators) {
+    this.messageAccumulators.forEach((accumulator) => {
       if (accumulator.timeoutId) {
         clearTimeout(accumulator.timeoutId);
       }
       accumulator.reject(new Error('Handler destroyed'));
-    }
+    });
     this.messageAccumulators.clear();
     this.imSessionIds.clear();
     this.sessionConversationMap.clear();
 
-    for (const [key, pending] of this.pendingPermissionByConversation.entries()) {
+    this.pendingPermissionByConversation.forEach((pending) => {
       if (pending.timeoutId) {
         clearTimeout(pending.timeoutId);
       }
-      this.pendingPermissionByConversation.delete(key);
-    }
+    });
+    this.pendingPermissionByConversation.clear();
 
     // Remove event listeners
     this.coworkRunner.removeListener('message', this.handleMessage.bind(this));

@@ -83,7 +83,9 @@ if exist "%ROOT_DIR%\sandbox\image\out\linux-arm64.qcow2" (
 )
 
 echo.
-echo Next step: Run "python scripts\upload-sandbox-image.py" to upload to CDN.
+echo Next step:
+echo   1) Package files: bash scripts/publish-sandbox-image.sh v0.1.5
+echo   2) Upload CDN:   python scripts\upload-sandbox-image.py --arch %ARCHS% --version v0.1.5
 echo.
 
 endlocal

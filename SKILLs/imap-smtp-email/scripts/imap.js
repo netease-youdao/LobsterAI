@@ -46,7 +46,7 @@ function parseArgs() {
 
 // Create IMAP connection config
 function createImapConfig() {
-  return {
+  const config = {
     user: process.env.IMAP_USER,
     password: process.env.IMAP_PASS,
     host: process.env.IMAP_HOST || '127.0.0.1',
@@ -58,6 +58,8 @@ function createImapConfig() {
     connTimeout: 10000,
     authTimeout: 10000,
   };
+  console.error(`[imap-debug] Config: host=${config.host}, port=${config.port}, user=${config.user}, tls=${config.tls}, rejectUnauthorized=${config.tlsOptions.rejectUnauthorized}, hasPassword=${!!config.password}`);
+  return config;
 }
 
 // Connect to IMAP server with ID support
@@ -72,24 +74,30 @@ async function connect() {
     const imap = new Imap(config);
 
     imap.once('ready', () => {
+      console.error('[imap-debug] Connection ready, sending ID command...');
       // Send IMAP ID command for 163.com compatibility
       if (typeof imap.id === 'function') {
         imap.id(IMAP_ID, (err) => {
           if (err) {
-            console.warn('Warning: IMAP ID command failed:', err.message);
+            console.warn('[imap-debug] Warning: IMAP ID command failed:', err.message);
+          } else {
+            console.error('[imap-debug] IMAP ID command succeeded');
           }
           resolve(imap);
         });
       } else {
         // ID not supported, continue without it
+        console.error('[imap-debug] IMAP ID not supported, continuing without it');
         resolve(imap);
       }
     });
 
     imap.once('error', (err) => {
+      console.error('[imap-debug] Connection error:', err.message, 'code:', err.code, 'source:', err.source);
       reject(new Error(`IMAP connection failed: ${err.message}`));
     });
 
+    console.error('[imap-debug] Connecting...');
     imap.connect();
   });
 }
@@ -161,19 +169,44 @@ function searchMessages(imap, criteria, fetchOptions) {
 }
 
 // Parse email from raw buffer
-async function parseEmail(bodyStr, includeAttachments = false) {
+// summaryOnly: when true, omit full text/html to keep output compact for list views
+async function parseEmail(bodyStr, { includeAttachments = false, summaryOnly = false } = {}) {
   const parsed = await simpleParser(bodyStr);
 
-  return {
+  const snippet = parsed.text
+    ? parsed.text.slice(0, 200)
+    : (parsed.html ? parsed.html.slice(0, 200).replace(/<[^>]*>/g, '') : '');
+
+  // Format date as ISO 8601 with local timezone offset (e.g. "2026-03-03T07:50:00+08:00")
+  // This avoids JSON.stringify converting Date to UTC, and is consistent across all platforms
+  let dateStr = null;
+  if (parsed.date) {
+    try {
+      const d = parsed.date;
+      console.error(`[imap-debug] date raw: ${d}`);
+      console.error(`[imap-debug] date ISO(UTC): ${d.toISOString()}`);
+      console.error(`[imap-debug] date toString(local): ${d.toString()}`);
+      console.error(`[imap-debug] date timezoneOffset: ${d.getTimezoneOffset()} min`);
+      const pad = (n) => String(n).padStart(2, '0');
+      const tzOffset = -d.getTimezoneOffset();
+      const sign = tzOffset >= 0 ? '+' : '-';
+      const tzHours = pad(Math.floor(Math.abs(tzOffset) / 60));
+      const tzMinutes = pad(Math.abs(tzOffset) % 60);
+      dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+        + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+        + `${sign}${tzHours}:${tzMinutes}`;
+      console.error(`[imap-debug] date formatted: ${dateStr}`);
+    } catch (e) {
+      dateStr = parsed.date.toISOString();
+    }
+  }
+
+  const result = {
     from: parsed.from?.text || 'Unknown',
     to: parsed.to?.text,
     subject: parsed.subject || '(no subject)',
-    date: parsed.date,
-    text: parsed.text,
-    html: parsed.html,
-    snippet: parsed.text
-      ? parsed.text.slice(0, 200)
-      : (parsed.html ? parsed.html.slice(0, 200).replace(/<[^>]*>/g, '') : ''),
+    date: dateStr,
+    snippet,
     attachments: parsed.attachments?.map((a) => ({
       filename: a.filename,
       contentType: a.contentType,
@@ -182,6 +215,14 @@ async function parseEmail(bodyStr, includeAttachments = false) {
       cid: a.cid,
     })),
   };
+
+  // Only include full text/html for single-email fetch, not for list views
+  if (!summaryOnly) {
+    result.text = parsed.text;
+    result.html = parsed.html;
+  }
+
+  return result;
 }
 
 // Check for new/unread emails
@@ -218,7 +259,7 @@ async function checkEmails(mailbox = DEFAULT_MAILBOX, limit = 10, recentTime = n
 
     for (const item of sortedMessages) {
       const bodyStr = item.body;
-      const parsed = await parseEmail(bodyStr);
+      const parsed = await parseEmail(bodyStr, { summaryOnly: true });
 
       results.push({
         uid: item.attributes.uid,
@@ -285,7 +326,7 @@ async function downloadAttachments(uid, mailbox = DEFAULT_MAILBOX, outputDir = '
     }
 
     const item = messages[0];
-    const parsed = await parseEmail(item.body, true);
+    const parsed = await parseEmail(item.body, { includeAttachments: true });
 
     if (!parsed.attachments || parsed.attachments.length === 0) {
       return {
@@ -406,7 +447,7 @@ async function searchEmails(options) {
     }).slice(0, limit);
 
     for (const item of sortedMessages) {
-      const parsed = await parseEmail(item.body);
+      const parsed = await parseEmail(item.body, { summaryOnly: true });
       results.push({
         uid: item.attributes.uid,
         ...parsed,

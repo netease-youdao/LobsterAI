@@ -16,47 +16,6 @@ import { SearchResponse } from './search/types';
 type SearchEngine = 'google' | 'bing';
 type SearchEnginePreference = SearchEngine | 'auto';
 
-function collectStringValues(input: unknown, out: string[]): void {
-  if (typeof input === 'string') {
-    out.push(input);
-    return;
-  }
-
-  if (Array.isArray(input)) {
-    for (const item of input) {
-      collectStringValues(item, out);
-    }
-    return;
-  }
-
-  if (input && typeof input === 'object') {
-    for (const value of Object.values(input as Record<string, unknown>)) {
-      collectStringValues(value, out);
-    }
-  }
-}
-
-function scoreDecodedJsonText(text: string): number {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return -10000;
-  }
-
-  const values: string[] = [];
-  collectStringValues(parsed, values);
-  const joined = values.join('\n');
-  if (!joined) return 0;
-
-  const cjkCount = (joined.match(/[\u3400-\u9FFF]/g) || []).length;
-  const replacementCount = (joined.match(/\uFFFD/g) || []).length;
-  const mojibakeCount = (joined.match(/[ÃÂÐÑØÙÞæçèéêëìíîïðñòóôõöøùúûüýþÿ]/g) || []).length;
-  const nonAsciiCount = (joined.match(/[^\x00-\x7F]/g) || []).length;
-
-  return cjkCount * 4 + nonAsciiCount - replacementCount * 8 - mojibakeCount * 3;
-}
-
 function decodeJsonRequestBody(raw: Buffer): string {
   if (raw.length === 0) {
     return '';
@@ -72,37 +31,25 @@ function decodeJsonRequestBody(raw: Buffer): string {
     return new TextDecoder('utf-16be', { fatal: false }).decode(raw.subarray(2));
   }
 
-  let utf8Decoded: string | null = null;
+  // Per RFC 8259, JSON must be UTF-8. Prefer UTF-8 when it decodes cleanly.
+  // The scoring heuristic (scoreDecodedJsonText) is unreliable for CJK text:
+  // gb18030 uses 2 bytes per CJK char vs UTF-8's 3 bytes, so the same bytes
+  // decoded as gb18030 produce more CJK chars → higher score → wrong choice.
   try {
-    utf8Decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    const utf8Decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    JSON.parse(utf8Decoded);
+    return utf8Decoded;
   } catch {
-    utf8Decoded = null;
+    // UTF-8 decoding or JSON parsing failed
   }
 
-  let gbDecoded: string | null = null;
+  // Fallback: try gb18030 for clients that send non-UTF-8 bodies (e.g. Windows GBK)
   try {
-    gbDecoded = new TextDecoder('gb18030', { fatal: true }).decode(raw);
-  } catch {
-    gbDecoded = null;
-  }
-
-  if (utf8Decoded && gbDecoded) {
-    const utf8Score = scoreDecodedJsonText(utf8Decoded);
-    const gbScore = scoreDecodedJsonText(gbDecoded);
-    if (gbScore > utf8Score) {
-      console.warn(`[Bridge Server] Request body decoded using gb18030 (score ${gbScore} > utf8 ${utf8Score})`);
-      return gbDecoded;
-    }
-    return utf8Decoded;
-  }
-
-  if (utf8Decoded) {
-    return utf8Decoded;
-  }
-
-  if (gbDecoded) {
+    const gbDecoded = new TextDecoder('gb18030', { fatal: true }).decode(raw);
     console.warn('[Bridge Server] Request body decoded using gb18030 fallback');
     return gbDecoded;
+  } catch {
+    // gb18030 also failed
   }
 
   return new TextDecoder('utf-8', { fatal: false }).decode(raw);
@@ -192,6 +139,7 @@ export class BridgeServer {
     this.app.post('/api/browser/launch', this.handleBrowserLaunch.bind(this));
     this.app.post('/api/browser/connect', this.handleBrowserConnect.bind(this));
     this.app.post('/api/browser/disconnect', this.handleBrowserDisconnect.bind(this));
+    this.app.post('/api/browser/close', this.handleBrowserClose.bind(this));
     this.app.get('/api/browser/status', this.handleBrowserStatus.bind(this));
 
     // Search operations
@@ -358,6 +306,23 @@ export class BridgeServer {
       res.json({
         success: true,
         data: { message: 'Disconnected successfully' }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  // Close browser and disconnect all connections
+  private async handleBrowserClose(req: Request, res: Response): Promise<void> {
+    try {
+      await this.resetBrowserState();
+
+      res.json({
+        success: true,
+        data: { message: 'Browser closed successfully' }
       });
     } catch (error) {
       res.status(500).json({

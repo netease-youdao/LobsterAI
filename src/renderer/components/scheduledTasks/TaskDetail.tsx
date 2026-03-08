@@ -6,7 +6,9 @@ import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTask, Schedule } from '../../types/scheduledTask';
 import TaskRunHistory from './TaskRunHistory';
-import { PencilIcon, PlayIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { PlayIcon } from '@heroicons/react/24/outline';
+import PencilIcon from '../icons/PencilIcon';
+import TrashIcon from '../icons/TrashIcon';
 
 function formatScheduleLabel(schedule: Schedule): string {
   switch (schedule.type) {

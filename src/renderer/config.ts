@@ -13,6 +13,7 @@ export interface AppConfig {
       supportsImage?: boolean;
     }>;
     defaultModel: string;
+    defaultModelProvider?: string;
   };
   // 多模型提供商配置
   providers?: {
@@ -22,7 +23,6 @@ export interface AppConfig {
       baseUrl: string;
       // API 协议格式：anthropic 为 Anthropic 兼容，openai 为 OpenAI 兼容
       apiFormat?: 'anthropic' | 'openai';
-      // OpenAI 兼容协议下优先使用的上游接口
       openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
@@ -48,6 +48,8 @@ export interface AppConfig {
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
       openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+      /** 是否启用 Moonshot Coding Plan 模式（使用专属 Coding API 端点） */
+      codingPlanEnabled?: boolean;
       models?: Array<{
         id: string;
         name: string;
@@ -60,6 +62,8 @@ export interface AppConfig {
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
       openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+      /** 是否启用 GLM Coding Plan 模式（使用专属 Coding API 端点） */
+      codingPlanEnabled?: boolean;
       models?: Array<{
         id: string;
         name: string;
@@ -78,12 +82,26 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    youdaozhiyun: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     qwen: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
       openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+      /** 是否启用 Qwen Coding Plan 模式（使用专属 Coding API 端点） */
+      codingPlanEnabled?: boolean;
       models?: Array<{
         id: string;
         name: string;
@@ -126,7 +144,33 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    volcengine: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+      /** 是否启用 Volcengine Coding Plan 模式（使用专属 Coding API 端点） */
+      codingPlanEnabled?: boolean;
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     xiaomi: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
+    stepfun: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
@@ -168,6 +212,7 @@ export interface AppConfig {
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
       openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+      codingPlanEnabled?: boolean;
       models?: Array<{
         id: string;
         name: string;
@@ -179,12 +224,15 @@ export interface AppConfig {
   theme: 'light' | 'dark' | 'system';
   // 语言配置
   language: 'zh' | 'en';
+  // 是否使用系统代理
+  useSystemProxy: boolean;
   // 语言初始化标记 (用于判断是否是首次启动)
   language_initialized?: boolean;
   // 应用配置
   app: {
     port: number;
     isDevelopment: boolean;
+    testMode?: boolean;
   };
   // 快捷键配置
   shortcuts?: {
@@ -207,6 +255,7 @@ export const defaultConfig: AppConfig = {
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
     ],
     defaultModel: 'deepseek-chat',
+    defaultModelProvider: 'deepseek',
   },
   providers: {
     openai: {
@@ -256,6 +305,7 @@ export const defaultConfig: AppConfig = {
       apiKey: '',
       baseUrl: 'https://api.moonshot.cn/anthropic',
       apiFormat: 'anthropic',
+      codingPlanEnabled: false,
       models: [
         { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true }
       ]
@@ -265,6 +315,7 @@ export const defaultConfig: AppConfig = {
       apiKey: '',
       baseUrl: 'https://open.bigmodel.cn/api/anthropic',
       apiFormat: 'anthropic',
+      codingPlanEnabled: false,
       models: [
         { id: 'glm-5', name: 'GLM 5', supportsImage: false },
         { id: 'glm-4.7', name: 'GLM 4.7', supportsImage: false }
@@ -280,11 +331,24 @@ export const defaultConfig: AppConfig = {
         { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
       ]
     },
+    youdaozhiyun: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://openapi.youdao.com/llmgateway/api/v1/chat/completions',
+      apiFormat: 'openai',
+      models: [
+        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+        { id: 'deepseek-inhouse-chat', name: 'DeepSeek Chat (安全)', supportsImage: false },
+        { id: 'deepseek-inhouse-reasoner', name: 'DeepSeek Reasoner (安全)', supportsImage: false }
+      ]
+    },
     qwen: {
       enabled: false,
       apiKey: '',
       baseUrl: 'https://dashscope.aliyuncs.com/apps/anthropic',
       apiFormat: 'anthropic',
+      codingPlanEnabled: false,
       models: [
         { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true },
         { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus', supportsImage: false }
@@ -297,6 +361,28 @@ export const defaultConfig: AppConfig = {
       apiFormat: 'anthropic',
       models: [
         { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false }
+      ]
+    },
+    stepfun: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://api.stepfun.com/v1',
+      apiFormat: 'openai',
+      models: [
+        { id: 'step-3.5-flash', name: 'Step 3.5 Flash', supportsImage: false }
+      ]
+    },
+    volcengine: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/compatible',
+      apiFormat: 'anthropic',
+      codingPlanEnabled: false,
+      models: [
+        { id: 'ark-code-latest', name: 'Auto', supportsImage: false },
+        { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao-Seed-2.0-pro', supportsImage: false },
+        { id: 'doubao-seed-2-0-lite-260215', name: 'Doubao-Seed-2.0-lite', supportsImage: false },
+        { id: 'doubao-seed-2-0-mini-260215', name: 'Doubao-Seed-2.0-mini', supportsImage: false }
       ]
     },
     openrouter: {
@@ -314,8 +400,8 @@ export const defaultConfig: AppConfig = {
     ollama: {
       enabled: false,
       apiKey: '',
-      baseUrl: 'http://localhost:11434',
-      apiFormat: 'anthropic',
+      baseUrl: 'http://localhost:11434/v1',
+      apiFormat: 'openai',
       models: [
         { id: 'qwen3-coder-next', name: 'Qwen3-Coder-Next', supportsImage: false },
         { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false }
@@ -331,9 +417,11 @@ export const defaultConfig: AppConfig = {
   },
   theme: 'system',
   language: 'zh',
+  useSystemProxy: false,
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',
+    testMode: process.env.NODE_ENV === 'development',
   },
   shortcuts: {
     newChat: 'Ctrl+N',
@@ -352,7 +440,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'xiaomi', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama', 'custom'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 
@@ -376,12 +464,13 @@ export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] =>
     ...GLOBAL_PROVIDERS,
   ];
   const uniqueProviders = [...new Set(orderedProviders)];
-  const ollamaIndex = uniqueProviders.indexOf('ollama');
-  if (ollamaIndex === -1) {
-    return uniqueProviders;
+  // Move ollama and custom to the end, with custom last
+  for (const key of ['ollama', 'custom'] as const) {
+    const idx = uniqueProviders.indexOf(key);
+    if (idx !== -1) {
+      uniqueProviders.splice(idx, 1);
+      uniqueProviders.push(key);
+    }
   }
-
-  uniqueProviders.splice(ollamaIndex, 1);
-  uniqueProviders.push('ollama');
   return uniqueProviders;
 };

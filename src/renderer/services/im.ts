@@ -24,11 +24,18 @@ import type {
 class IMService {
   private statusUnsubscribe: (() => void) | null = null;
   private messageUnsubscribe: (() => void) | null = null;
+  private initPromise: Promise<void> | null = null;
 
   /**
-   * Initialize IM service
+   * Initialize IM service (with concurrency guard to prevent duplicate init)
    */
   async init(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this._doInit();
+    return this.initPromise;
+  }
+
+  private async _doInit(): Promise<void> {
     // Set up status change listener
     this.statusUnsubscribe = window.electron.im.onStatusChange((status: IMGatewayStatus) => {
       store.dispatch(setStatus(status));
@@ -56,6 +63,7 @@ class IMService {
       this.messageUnsubscribe();
       this.messageUnsubscribe = null;
     }
+    this.initPromise = null;
   }
 
   /**
@@ -212,7 +220,7 @@ class IMService {
    */
   isAnyConnected(): boolean {
     const status = this.getStatus();
-    return status.dingtalk.connected || status.feishu.connected || status.telegram.connected || status.discord.connected;
+    return status.dingtalk.connected || status.feishu.connected || status.telegram.connected || status.discord.connected || status.nim.connected || status.xiaomifeng.connected || status.wecom.connected;
   }
 }
 

@@ -5,6 +5,7 @@ import {
   addSession,
   updateSessionStatus,
   deleteSession as deleteSessionAction,
+  deleteSessions as deleteSessionsAction,
   addMessage,
   updateMessageContent,
   setStreaming,
@@ -56,6 +57,18 @@ class CoworkService {
 
     // Message listener - also check if session exists (for IM-created sessions)
     const messageCleanup = cowork.onStreamMessage(async ({ sessionId, message }) => {
+      // Debug: log user messages to check if imageAttachments are preserved
+      if (message.type === 'user') {
+        const meta = message.metadata as Record<string, unknown> | undefined;
+        console.log('[CoworkService] onStreamMessage received user message', {
+          sessionId,
+          messageId: message.id,
+          hasMetadata: !!meta,
+          metadataKeys: meta ? Object.keys(meta) : [],
+          hasImageAttachments: !!(meta?.imageAttachments),
+          imageAttachmentsCount: Array.isArray(meta?.imageAttachments) ? (meta.imageAttachments as unknown[]).length : 0,
+        });
+      }
       // Check if session exists in current list
       const state = store.getState().cowork;
       const sessionExists = state.sessions.some(s => s.id === sessionId);
@@ -139,6 +152,9 @@ class CoworkService {
     const result = await cowork.startSession(options);
     if (result.success && result.session) {
       store.dispatch(addSession(result.session));
+      if (result.session.status !== 'running') {
+        store.dispatch(setStreaming(false));
+      }
       return result.session;
     }
 
@@ -162,6 +178,7 @@ class CoworkService {
       prompt: options.prompt,
       systemPrompt: options.systemPrompt,
       activeSkillIds: options.activeSkillIds,
+      imageAttachments: options.imageAttachments,
     });
     if (!result.success) {
       store.dispatch(setStreaming(false));
@@ -199,6 +216,20 @@ class CoworkService {
     }
 
     console.error('Failed to delete session:', result.error);
+    return false;
+  }
+
+  async deleteSessions(sessionIds: string[]): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork) return false;
+
+    const result = await cowork.deleteSessions(sessionIds);
+    if (result.success) {
+      store.dispatch(deleteSessionsAction(sessionIds));
+      return true;
+    }
+
+    console.error('Failed to batch delete sessions:', result.error);
     return false;
   }
 
@@ -343,11 +374,11 @@ class CoworkService {
     return window.electron.getApiConfig();
   }
 
-  async checkApiConfig(): Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string } | null> {
+  async checkApiConfig(options?: { probeModel?: boolean }): Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string } | null> {
     if (!window.electron?.checkApiConfig) {
       return null;
     }
-    return window.electron.checkApiConfig();
+    return window.electron.checkApiConfig(options);
   }
 
   async saveApiConfig(config: CoworkApiConfig): Promise<{ success: boolean; error?: string } | null> {

@@ -18,9 +18,7 @@ import {
 } from './types';
 import { extractMediaFromMessage, cleanupOldMediaFiles } from './telegramMedia';
 import { parseMediaMarkers } from './dingtalkMediaParser';
-
-// Import node-fetch for HTTP requests (grammy's default)
-const nodeFetch = require('node-fetch');
+import { fetchWithSystemProxy } from './http';
 
 /**
  * Custom fetch wrapper that uses Node.js native AbortController
@@ -55,7 +53,7 @@ async function grammyFetch(url: string, options: RequestInit = {}): Promise<Resp
     options = { ...options, signal: nativeController.signal };
   }
 
-  return nodeFetch(url, options);
+  return fetchWithSystemProxy(url, options);
 }
 
 // 媒体组缓冲接口
@@ -117,6 +115,15 @@ export class TelegramGateway extends EventEmitter {
     callback: (message: IMMessage, replyFn: (text: string) => Promise<void>) => Promise<void>
   ): void {
     this.onMessageCallback = callback;
+  }
+
+  /**
+   * Update config on a running gateway without restart
+   */
+  updateConfig(config: TelegramConfig): void {
+    if (this.config) {
+      this.config = { ...this.config, ...config };
+    }
   }
 
   /**
@@ -296,8 +303,31 @@ export class TelegramGateway extends EventEmitter {
         : 'Unknown';
       const senderId = message.from?.id?.toString() || 'unknown';
 
+      // Check allowed user IDs whitelist
+      if (this.config?.allowedUserIds && this.config.allowedUserIds.length > 0) {
+        const log = this.config?.debug ? console.log : () => {};
+        log(`[Telegram] 白名单校验: senderId=${senderId}, allowedUserIds=${JSON.stringify(this.config.allowedUserIds)}`);
+        if (!this.config.allowedUserIds.includes(senderId)) {
+          console.log(`[Telegram] 消息被拒绝 - 发送者 ${senderId} (${senderName}) 不在白名单中`);
+          return;
+        }
+        log(`[Telegram] 白名单校验通过: ${senderId} (${senderName})`);
+      }
+
       // Extract text content (could be text or caption)
       const textContent = message.text || message.caption || '';
+
+      // In group chats, only respond when bot is mentioned or message is a reply to bot
+      if (isGroup) {
+        const botUsername = this.status.botUsername;
+        const isMentioned = botUsername && this.checkBotMentioned(message, botUsername);
+        const isReplyToBot = message.reply_to_message?.from?.id === this.bot?.botInfo?.id;
+        if (!isMentioned && !isReplyToBot) {
+          const log = this.config?.debug ? console.log : () => {};
+          log('[Telegram Gateway] Ignoring group message without bot mention');
+          return;
+        }
+      }
 
       // Extract media attachments
       const attachments = await extractMediaFromMessage(ctx);
@@ -309,6 +339,10 @@ export class TelegramGateway extends EventEmitter {
 
       // Build content description for media
       let content = textContent;
+      // Strip @botusername from content in group chats
+      if (isGroup && this.status.botUsername) {
+        content = this.stripBotMention(content, this.status.botUsername);
+      }
       if (!content && attachments.length > 0) {
         // Generate descriptive content for media-only messages
         content = this.generateMediaDescription(attachments);
@@ -753,6 +787,14 @@ export class TelegramGateway extends EventEmitter {
     // Emit message event
     this.emit('message', imMessage);
 
+    // Add processing reaction (fire-and-forget)
+    if (ctx.message?.message_id && ctx.chat?.id) {
+      ctx.react('👀').catch((err: any) => {
+        const log = this.config?.debug ? console.log : () => {};
+        log(`[Telegram Gateway] Failed to add reaction: ${err.message}`);
+      });
+    }
+
     // Call message callback if set
     if (this.onMessageCallback) {
       try {
@@ -822,6 +864,48 @@ export class TelegramGateway extends EventEmitter {
   }
 
   /**
+   * Check if the bot is mentioned in the message entities
+   */
+  private checkBotMentioned(message: any, botUsername: string): boolean {
+    const entities = message.entities || message.caption_entities || [];
+    const text = message.text || message.caption || '';
+    for (const entity of entities) {
+      if (entity.type === 'mention') {
+        const mentionText = text.substring(entity.offset, entity.offset + entity.length);
+        if (mentionText.toLowerCase() === `@${botUsername.toLowerCase()}`) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Strip @botusername from message content
+   */
+  private stripBotMention(content: string, botUsername: string): string {
+    const regex = new RegExp(`@${botUsername}\\s?`, 'gi');
+    return content.replace(regex, '').trim();
+  }
+
+  /**
+   * Send a notification message to the last known chat.
+   */
+  /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): number | null {
+    return this.lastChatId;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(chatId: number): void {
+    this.lastChatId = chatId;
+  }
+
+  /**
    * Send a notification message to the last known chat.
    */
   async sendNotification(text: string): Promise<void> {
@@ -829,6 +913,69 @@ export class TelegramGateway extends EventEmitter {
       throw new Error('No conversation available for notification');
     }
     await this.bot.api.sendMessage(this.lastChatId, text);
+    this.status.lastOutboundAt = Date.now();
+  }
+
+  /**
+   * Send a notification message with media support to the last known chat.
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    if (!this.bot || !this.lastChatId) {
+      throw new Error('No conversation available for notification');
+    }
+
+    const chatId = this.lastChatId;
+    const markers = parseMediaMarkers(text);
+    const validFiles: Array<{ path: string; name?: string; type: string }> = [];
+
+    for (const marker of markers) {
+      let filePath = marker.path;
+      if (filePath.startsWith('~/')) {
+        filePath = path.join(process.env.HOME || '', filePath.slice(2));
+      }
+      if (fs.existsSync(filePath)) {
+        validFiles.push({ path: filePath, name: marker.name, type: marker.type });
+      } else {
+        console.warn(`[Telegram Gateway] Notification media file not found: ${filePath}`);
+      }
+    }
+
+    // Send media files
+    for (const file of validFiles) {
+      try {
+        const fileBuffer = fs.readFileSync(file.path);
+        const fileName = path.basename(file.path);
+        const inputFile = new InputFile(fileBuffer, fileName);
+        const ext = path.extname(file.path).toLowerCase();
+
+        if (file.type === 'image' || ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext)) {
+          await this.bot.api.sendPhoto(chatId, inputFile, { caption: file.name });
+        } else if (file.type === 'video' || ['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
+          await this.bot.api.sendVideo(chatId, inputFile, { caption: file.name });
+        } else if (file.type === 'audio' || ['.mp3', '.ogg', '.wav', '.m4a', '.aac'].includes(ext)) {
+          await this.bot.api.sendAudio(chatId, inputFile, { caption: file.name, title: file.name });
+        } else {
+          await this.bot.api.sendDocument(chatId, inputFile, { caption: file.name });
+        }
+      } catch (mediaError: any) {
+        console.error(`[Telegram Gateway] Failed to send notification media: ${mediaError.message}`);
+      }
+    }
+
+    // Send text content with splitting
+    const textContent = text.trim();
+    if (textContent) {
+      const MAX_LENGTH = 4000;
+      const chunks = this.splitMessage(textContent, MAX_LENGTH);
+      for (const chunk of chunks) {
+        try {
+          await this.bot.api.sendMessage(chatId, chunk, { parse_mode: 'Markdown' });
+        } catch {
+          await this.bot.api.sendMessage(chatId, chunk);
+        }
+      }
+    }
+
     this.status.lastOutboundAt = Date.now();
   }
 }

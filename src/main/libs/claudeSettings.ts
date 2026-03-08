@@ -10,6 +10,17 @@ import {
 } from './coworkOpenAICompatProxy';
 import { normalizeProviderApiFormat, type AnthropicApiFormat } from './coworkFormatTransform';
 
+const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
+// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
+const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
+// Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
+const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
+// Moonshot/Kimi Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const MOONSHOT_CODING_PLAN_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1';
+const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
+
 type ProviderModel = {
   id: string;
 };
@@ -19,12 +30,14 @@ type ProviderConfig = {
   apiKey: string;
   baseUrl: string;
   apiFormat?: 'anthropic' | 'openai' | 'native';
+  codingPlanEnabled?: boolean;
   models?: ProviderModel[];
 };
 
 type AppConfig = {
   model?: {
     defaultModel?: string;
+    defaultModelProvider?: string;
   };
   providers?: Record<string, ProviderConfig>;
 };
@@ -73,10 +86,11 @@ type MatchedProvider = {
   providerConfig: ProviderConfig;
   modelId: string;
   apiFormat: AnthropicApiFormat;
+  baseURL: string;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
-  if (providerName === 'openai' || providerName === 'gemini') {
+  if (providerName === 'openai' || providerName === 'gemini' || providerName === 'stepfun' || providerName === 'youdaozhiyun') {
     return 'openai';
   }
   if (providerName === 'anthropic') {
@@ -107,20 +121,73 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: 'No available model configured in enabled providers.' };
   }
 
-  const providerEntry = Object.entries(providers).find(([, provider]) => {
-    if (!provider?.enabled || !provider.models) {
-      return false;
+  let providerEntry: [string, ProviderConfig] | undefined;
+  const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
+  if (preferredProviderName) {
+    const preferredProvider = providers[preferredProviderName];
+    if (
+      preferredProvider?.enabled
+      && preferredProvider.models?.some((model) => model.id === modelId)
+    ) {
+      providerEntry = [preferredProviderName, preferredProvider];
     }
-    return provider.models.some((model) => model.id === modelId);
-  });
+  }
+
+  if (!providerEntry) {
+    providerEntry = Object.entries(providers).find(([, provider]) => {
+      if (!provider?.enabled || !provider.models) {
+        return false;
+      }
+      return provider.models.some((model) => model.id === modelId);
+    });
+  }
 
   if (!providerEntry) {
     return { matched: null, error: `No enabled provider found for model: ${modelId}` };
   }
 
   const [providerName, providerConfig] = providerEntry;
-  const apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
-  const baseURL = providerConfig.baseUrl?.trim();
+  let apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
+  let baseURL = providerConfig.baseUrl?.trim();
+
+  // Handle Zhipu GLM Coding Plan endpoint switch
+  if (providerName === 'zhipu' && providerConfig.codingPlanEnabled) {
+    baseURL = ZHIPU_CODING_PLAN_BASE_URL;
+    apiFormat = 'openai';
+  }
+
+  // Handle Qwen Coding Plan endpoint switch
+  // Coding Plan supports both OpenAI and Anthropic compatible formats
+  if (providerName === 'qwen' && providerConfig.codingPlanEnabled) {
+    if (apiFormat === 'anthropic') {
+      baseURL = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
+    } else {
+      baseURL = QWEN_CODING_PLAN_OPENAI_BASE_URL;
+      apiFormat = 'openai';
+    }
+  }
+
+  // Handle Volcengine Coding Plan endpoint switch
+  // Coding Plan supports both OpenAI and Anthropic compatible formats
+  if (providerName === 'volcengine' && providerConfig.codingPlanEnabled) {
+    if (apiFormat === 'anthropic') {
+      baseURL = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
+    } else {
+      baseURL = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
+      apiFormat = 'openai';
+    }
+  }
+
+  // Handle Moonshot/Kimi Coding Plan endpoint switch
+  // Coding Plan supports both OpenAI and Anthropic compatible formats
+  if (providerName === 'moonshot' && providerConfig.codingPlanEnabled) {
+    if (apiFormat === 'anthropic') {
+      baseURL = MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL;
+    } else {
+      baseURL = MOONSHOT_CODING_PLAN_OPENAI_BASE_URL;
+      apiFormat = 'openai';
+    }
+  }
 
   if (!baseURL) {
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
@@ -136,6 +203,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       providerConfig,
       modelId,
       apiFormat,
+      baseURL,
     },
   };
 }
@@ -165,7 +233,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
     };
   }
 
-  const resolvedBaseURL = matched.providerConfig.baseUrl.trim();
+  const resolvedBaseURL = matched.baseURL;
   const resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
   const effectiveApiKey = matched.providerName === 'ollama'
     && matched.apiFormat === 'anthropic'

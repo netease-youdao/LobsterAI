@@ -13,11 +13,14 @@ import {
   DingTalkMediaMessage,
   MediaMarker,
   IMMessage,
+  IMMediaAttachment,
   DEFAULT_DINGTALK_STATUS,
 } from './types';
 import { uploadMediaToDingTalk, detectMediaType, getOapiAccessToken } from './dingtalkMedia';
+import { downloadDingtalkFile, getDefaultMimeType, mapDingtalkMediaType } from './dingtalkMediaDownload';
 import { parseMediaMarkers } from './dingtalkMediaParser';
 import { createUtf8JsonBody, JSON_UTF8_CONTENT_TYPE, stringifyAsciiJson } from './jsonEncoding';
+import { sanitizeLogArg, sanitizeLogArgs } from './logSanitizer';
 
 const DINGTALK_API = 'https://api.dingtalk.com';
 
@@ -31,6 +34,8 @@ interface MessageContent {
   messageType: string;
   mediaPath?: string;
   mediaType?: string;
+  fileName?: string;
+  duration?: string;
 }
 
 export class DingTalkGateway extends EventEmitter {
@@ -49,15 +54,25 @@ export class DingTalkGateway extends EventEmitter {
   private reconnectDelayMs = 3000; // Reduced to 3 seconds
   private isReconnecting = false;
   private isStopping = false;
-  private lastMessageTime = 0;
+  private lastActivityTime = 0;
 
   // Health check configuration
   private readonly HEALTH_CHECK_INTERVAL = 10000; // 10 seconds
-  private readonly MESSAGE_TIMEOUT = 60000; // 60 seconds - force reconnect if no message
+  private readonly MESSAGE_TIMEOUT = 300000; // 5 minutes - force reconnect if no activity
   private readonly TOKEN_REFRESH_INTERVAL = 3600000; // 1 hour
 
   constructor() {
     super();
+  }
+
+  private patchSdkDebugLogger(client: any): void {
+    if (!client || typeof client.printDebug !== 'function') {
+      return;
+    }
+    const rawPrintDebug = client.printDebug.bind(client);
+    client.printDebug = (message: unknown) => {
+      rawPrintDebug(sanitizeLogArg(message));
+    };
   }
 
   /**
@@ -85,7 +100,7 @@ export class DingTalkGateway extends EventEmitter {
       this.refreshAccessToken();
     }, this.TOKEN_REFRESH_INTERVAL);
 
-    this.lastMessageTime = Date.now();
+    this.lastActivityTime = Date.now();
   }
 
   /**
@@ -124,12 +139,12 @@ export class DingTalkGateway extends EventEmitter {
     }
 
     const now = Date.now();
-    const timeSinceLastMessage = now - this.lastMessageTime;
+    const timeSinceLastActivity = now - this.lastActivityTime;
 
-    // If no messages for MESSAGE_TIMEOUT, force reconnection
+    // If no activity for MESSAGE_TIMEOUT, force reconnection
     // Don't test token because it might be cached and give false positive
-    if (timeSinceLastMessage > this.MESSAGE_TIMEOUT) {
-      console.log(`[DingTalk Gateway] No messages for ${Math.floor(timeSinceLastMessage / 1000)}s, forcing reconnection...`);
+    if (timeSinceLastActivity > this.MESSAGE_TIMEOUT) {
+      console.log(`[DingTalk Gateway] No activity for ${Math.floor(timeSinceLastActivity / 1000)}s, forcing reconnection...`);
       this.log('[DingTalk Gateway] Long silence detected, SDK connection may be dead, forcing reconnection...');
       await this.reconnect();
     }
@@ -250,7 +265,9 @@ export class DingTalkGateway extends EventEmitter {
     this.config = config;
     this.savedConfig = { ...config }; // Save config for reconnection
     this.isStopping = false;
-    this.log = config.debug ? console.log.bind(console) : () => {};
+    this.log = config.debug ? (...args: unknown[]) => {
+      console.log(...sanitizeLogArgs(args));
+    } : () => {};
     this.log('[DingTalk Gateway] Starting...');
 
     try {
@@ -263,6 +280,9 @@ export class DingTalkGateway extends EventEmitter {
         debug: config.debug || false,
         keepAlive: true,
       });
+      if (config.debug) {
+        this.patchSdkDebugLogger(this.client);
+      }
 
       // Register message callback
       this.client.registerCallbackListener(TOPIC_ROBOT, async (res: any) => {
@@ -272,8 +292,8 @@ export class DingTalkGateway extends EventEmitter {
           return;
         }
 
-        // Update last message time for health check
-        this.lastMessageTime = Date.now();
+        // Update last activity time for health check
+        this.lastActivityTime = Date.now();
 
         const messageId = res.headers?.messageId;
         try {
@@ -428,7 +448,66 @@ export class DingTalkGateway extends EventEmitter {
       };
     }
 
+    if (msgtype === 'picture') {
+      return {
+        text: '[图片]',
+        mediaPath: data.content?.downloadCode,
+        mediaType: 'image',
+        messageType: 'picture',
+      };
+    }
+
+    if (msgtype === 'video') {
+      return {
+        text: '[视频]',
+        mediaPath: data.content?.downloadCode,
+        mediaType: 'video',
+        messageType: 'video',
+        duration: data.content?.duration,
+      };
+    }
+
+    if (msgtype === 'file') {
+      return {
+        text: '[文件]',
+        mediaPath: data.content?.downloadCode,
+        mediaType: 'file',
+        fileName: data.content?.fileName,
+        messageType: 'file',
+      };
+    }
+
     return { text: data.text?.content?.trim() || `[${msgtype}消息]`, messageType: msgtype };
+  }
+
+  // Retry configuration
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY = 2000; // 2 seconds
+
+  /**
+   * Execute a request with retry logic
+   */
+  private async retryableRequest(fn: () => Promise<void>, label: string): Promise<void> {
+    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      try {
+        await fn();
+        return;
+      } catch (error: any) {
+        // Clear token cache on auth errors so next attempt gets a fresh token
+        const status = error.response?.status;
+        if (status === 401 || status === 403) {
+          accessToken = null;
+          accessTokenExpiry = 0;
+          this.log(`[DingTalk Gateway] Token 可能过期，已清除缓存`);
+        }
+        if (attempt === this.MAX_RETRIES) {
+          console.error(`[DingTalk Gateway] ${label} 最终失败 (${this.MAX_RETRIES}次尝试后): ${error.message}`);
+          throw error;
+        }
+        console.warn(`[DingTalk Gateway] ${label} 失败 (${attempt}/${this.MAX_RETRIES}): ${error.message}，${this.RETRY_DELAY / 1000}s 后重试...`);
+        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+      }
+    }
   }
 
   /**
@@ -439,8 +518,6 @@ export class DingTalkGateway extends EventEmitter {
     text: string,
     options: { atUserId?: string | null } = {}
   ): Promise<void> {
-    const token = await this.getAccessToken();
-
     // Detect markdown
     const hasMarkdown = /^[#*>-]|[*_`#[\]]/.test(text) || text.includes('\n');
     const useMarkdown = hasMarkdown;
@@ -466,12 +543,15 @@ export class DingTalkGateway extends EventEmitter {
       text,
     }, null, 2));
 
-    await axios({
-      url: sessionWebhook,
-      method: 'POST',
-      data: createUtf8JsonBody(body),
-      headers: { 'x-acs-dingtalk-access-token': token, 'Content-Type': JSON_UTF8_CONTENT_TYPE },
-    });
+    await this.retryableRequest(async () => {
+      const token = await this.getAccessToken();
+      await axios({
+        url: sessionWebhook,
+        method: 'POST',
+        data: createUtf8JsonBody(body),
+        headers: { 'x-acs-dingtalk-access-token': token, 'Content-Type': JSON_UTF8_CONTENT_TYPE },
+      });
+    }, '发送文本消息');
   }
 
   /**
@@ -487,7 +567,6 @@ export class DingTalkGateway extends EventEmitter {
       openConversationId?: string;
     }
   ): Promise<void> {
-    const token = await this.getAccessToken();
     const robotCode = this.config?.robotCode || this.config?.clientId;
 
     // msgParam 需要是 JSON 字符串
@@ -535,18 +614,21 @@ export class DingTalkGateway extends EventEmitter {
       conversationType: options.conversationType,
     }, null, 2));
 
-    const response = await axios({
-      url,
-      method: 'POST',
-      data: createUtf8JsonBody(body),
-      headers: { 'x-acs-dingtalk-access-token': token, 'Content-Type': JSON_UTF8_CONTENT_TYPE },
-      timeout: 30000,
-    });
+    await this.retryableRequest(async () => {
+      const token = await this.getAccessToken();
+      const response = await axios({
+        url,
+        method: 'POST',
+        data: createUtf8JsonBody(body),
+        headers: { 'x-acs-dingtalk-access-token': token, 'Content-Type': JSON_UTF8_CONTENT_TYPE },
+        timeout: 30000,
+      });
 
-    // 检查响应 (新版 API 错误格式可能不同)
-    if (response.data?.code && response.data.code !== '0') {
-      throw new Error(`钉钉API返回错误: ${response.data.message || response.data.code}`);
-    }
+      // 检查响应 (新版 API 错误格式可能不同)
+      if (response.data?.code && response.data.code !== '0') {
+        throw new Error(`钉钉API返回错误: ${response.data.message || response.data.code}`);
+      }
+    }, '发送媒体消息');
   }
 
   /**
@@ -661,7 +743,7 @@ export class DingTalkGateway extends EventEmitter {
     }
 
     const content = this.extractMessageContent(data);
-    if (!content.text) {
+    if (!content.text && !content.mediaPath) {
       return;
     }
 
@@ -681,6 +763,34 @@ export class DingTalkGateway extends EventEmitter {
       mediaType: content.mediaType,
     }, null, 2));
 
+    // Download media attachments if present
+    let attachments: IMMediaAttachment[] | undefined;
+    if (content.mediaPath && content.mediaType && this.config) {
+      try {
+        const token = await this.getAccessToken();
+        const robotCode = this.config.robotCode || this.config.clientId;
+        const result = await downloadDingtalkFile(
+          token,
+          content.mediaPath,
+          robotCode,
+          content.mediaType,
+          content.fileName
+        );
+        if (result) {
+          attachments = [{
+            type: mapDingtalkMediaType(content.mediaType),
+            localPath: result.localPath,
+            mimeType: getDefaultMimeType(content.mediaType),
+            fileName: content.fileName,
+            fileSize: result.fileSize,
+            duration: content.duration ? parseInt(content.duration, 10) / 1000 : undefined,
+          }];
+        }
+      } catch (err: any) {
+        console.error(`[DingTalk] 下载媒体失败: ${err.message}`);
+      }
+    }
+
     // Create IMMessage
     const message: IMMessage = {
       platform: 'dingtalk',
@@ -691,6 +801,7 @@ export class DingTalkGateway extends EventEmitter {
       content: content.text,
       chatType: isDirect ? 'direct' : 'group',
       timestamp: data.createAt || Date.now(),
+      attachments,
     };
     this.status.lastInboundAt = Date.now();
 
@@ -710,6 +821,7 @@ export class DingTalkGateway extends EventEmitter {
         openConversationId: data.conversationId,
       });
       this.status.lastOutboundAt = Date.now();
+      this.lastActivityTime = Date.now();
     };
 
     // Store last conversation for notifications
@@ -735,6 +847,20 @@ export class DingTalkGateway extends EventEmitter {
   }
 
   /**
+   * Get the current notification target for persistence.
+   */
+  getNotificationTarget(): { conversationType: '1' | '2'; userId?: string; openConversationId?: string; sessionWebhook: string } | null {
+    return this.lastConversation;
+  }
+
+  /**
+   * Restore notification target from persisted state.
+   */
+  setNotificationTarget(target: { conversationType: '1' | '2'; userId?: string; openConversationId?: string; sessionWebhook: string }): void {
+    this.lastConversation = target;
+  }
+
+  /**
    * Send a notification message to the last known conversation.
    */
   async sendNotification(text: string): Promise<void> {
@@ -743,5 +869,22 @@ export class DingTalkGateway extends EventEmitter {
     }
     await this.sendBySession(this.lastConversation.sessionWebhook, text);
     this.status.lastOutboundAt = Date.now();
+    this.lastActivityTime = Date.now();
+  }
+
+  /**
+   * Send a notification message with media support to the last known conversation.
+   */
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    if (!this.lastConversation) {
+      throw new Error('No conversation available for notification');
+    }
+    await this.sendWithMedia(this.lastConversation.sessionWebhook, text, {
+      conversationType: this.lastConversation.conversationType,
+      userId: this.lastConversation.userId,
+      openConversationId: this.lastConversation.openConversationId,
+    });
+    this.status.lastOutboundAt = Date.now();
+    this.lastActivityTime = Date.now();
   }
 }

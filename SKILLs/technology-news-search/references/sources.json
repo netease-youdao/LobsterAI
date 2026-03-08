@@ -1,0 +1,988 @@
+{
+  "sources": [
+    {
+      "id": "techcrunch",
+      "name": "TechCrunch",
+      "url": "https://techcrunch.com/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "startup",
+      "domains": [
+        "general"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "theverge",
+      "name": "The Verge",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "consumer_tech",
+      "domains": [
+        "general"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "wired",
+      "name": "Wired",
+      "url": "https://www.wired.com/feed/rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "tech_culture",
+      "domains": [
+        "general"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "arstechnica",
+      "name": "Ars Technica",
+      "url": "https://arstechnica.com/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "tech_analysis",
+      "domains": [
+        "general"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "mit_tech_review",
+      "name": "MIT Technology Review",
+      "url": "https://www.technologyreview.com/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "research",
+      "domains": [
+        "general"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "venturebeat",
+      "name": "VentureBeat",
+      "url": "https://venturebeat.com/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "ai_enterprise",
+      "domains": [
+        "general",
+        "ai"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "hackernews",
+      "name": "Hacker News",
+      "url": "https://hn.algolia.com/api/v1/search?tags=front_page",
+      "type": "api",
+      "enabled": true,
+      "language": "en",
+      "category": "community",
+      "domains": [
+        "general"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "36kr",
+      "name": "36氪",
+      "url": "https://36kr.com/feed",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "category": "startup",
+      "domains": [
+        "general"
+      ],
+      "region": "cn"
+    },
+    {
+      "id": "huxiu",
+      "name": "虎嗅",
+      "url": "https://www.huxiu.com/rss/0.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "category": "business",
+      "domains": [
+        "general"
+      ],
+      "region": "cn"
+    },
+    {
+      "id": "ithome",
+      "name": "IT之家",
+      "url": "https://www.ithome.com/rss/",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "category": "tech_news",
+      "domains": [
+        "general"
+      ],
+      "region": "cn"
+    },
+    {
+      "id": "jiqizhixin",
+      "name": "机器之心",
+      "url": "https://www.jiqizhixin.com/rss",
+      "type": "rss",
+      "enabled": false,
+      "language": "zh",
+      "category": "ai",
+      "domains": [
+        "general",
+        "ai"
+      ],
+      "region": "cn"
+    },
+    {
+      "id": "qbitai",
+      "name": "量子位",
+      "url": "https://www.qbitai.com/feed",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "category": "ai",
+      "domains": [
+        "general",
+        "ai"
+      ],
+      "region": "cn"
+    },
+    {
+      "id": "tmtpost",
+      "name": "钛媒体",
+      "url": "https://www.tmtpost.com/rss.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "category": "tech_business",
+      "domains": [
+        "general"
+      ],
+      "region": "cn"
+    },
+    {
+      "id": "devto-react",
+      "name": "Dev.to - React",
+      "url": "https://dev.to/feed/tag/react",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-vue",
+      "name": "Dev.to - Vue",
+      "url": "https://dev.to/feed/tag/vue",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-electron",
+      "name": "Dev.to - Electron",
+      "url": "https://dev.to/feed/tag/electron",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-javascript",
+      "name": "Dev.to - JavaScript",
+      "url": "https://dev.to/feed/tag/javascript",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-typescript",
+      "name": "Dev.to - TypeScript",
+      "url": "https://dev.to/feed/tag/typescript",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend",
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-python",
+      "name": "Dev.to - Python",
+      "url": "https://dev.to/feed/tag/python",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-golang",
+      "name": "Dev.to - Go",
+      "url": "https://dev.to/feed/tag/go",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-nodejs",
+      "name": "Dev.to - Node.js",
+      "url": "https://dev.to/feed/tag/node",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-java",
+      "name": "Dev.to - Java",
+      "url": "https://dev.to/feed/tag/java",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-ai",
+      "name": "Dev.to - AI",
+      "url": "https://dev.to/feed/tag/ai",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "ai"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-machinelearning",
+      "name": "Dev.to - Machine Learning",
+      "url": "https://dev.to/feed/tag/machinelearning",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "ai"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-docker",
+      "name": "Dev.to - Docker",
+      "url": "https://dev.to/feed/tag/docker",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "devops"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "devto-kubernetes",
+      "name": "Dev.to - Kubernetes",
+      "url": "https://dev.to/feed/tag/kubernetes",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "devops"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-javascript",
+      "name": "Reddit - r/javascript",
+      "url": "https://www.reddit.com/r/javascript/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-reactjs",
+      "name": "Reddit - r/reactjs",
+      "url": "https://www.reddit.com/r/reactjs/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-vuejs",
+      "name": "Reddit - r/vuejs",
+      "url": "https://www.reddit.com/r/vuejs/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-electronjs",
+      "name": "Reddit - r/electronjs",
+      "url": "https://www.reddit.com/r/electronjs/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-webdev",
+      "name": "Reddit - r/webdev",
+      "url": "https://www.reddit.com/r/webdev/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-python",
+      "name": "Reddit - r/Python",
+      "url": "https://www.reddit.com/r/Python/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-golang",
+      "name": "Reddit - r/golang",
+      "url": "https://www.reddit.com/r/golang/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-nodejs",
+      "name": "Reddit - r/node",
+      "url": "https://www.reddit.com/r/node/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-java",
+      "name": "Reddit - r/java",
+      "url": "https://www.reddit.com/r/java/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-androiddev",
+      "name": "Reddit - r/androiddev",
+      "url": "https://www.reddit.com/r/androiddev/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "mobile"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-iosprogramming",
+      "name": "Reddit - r/iOSProgramming",
+      "url": "https://www.reddit.com/r/iOSProgramming/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "mobile"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-flutterdev",
+      "name": "Reddit - r/FlutterDev",
+      "url": "https://www.reddit.com/r/FlutterDev/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "mobile"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-machinelearning",
+      "name": "Reddit - r/MachineLearning",
+      "url": "https://www.reddit.com/r/MachineLearning/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "ai"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-artificial",
+      "name": "Reddit - r/artificial",
+      "url": "https://www.reddit.com/r/artificial/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "ai"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-localllama",
+      "name": "Reddit - r/LocalLLaMA",
+      "url": "https://www.reddit.com/r/LocalLLaMA/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "ai"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-docker",
+      "name": "Reddit - r/docker",
+      "url": "https://www.reddit.com/r/docker/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "devops"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-kubernetes",
+      "name": "Reddit - r/kubernetes",
+      "url": "https://www.reddit.com/r/kubernetes/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "devops"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-devops",
+      "name": "Reddit - r/devops",
+      "url": "https://www.reddit.com/r/devops/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "devops"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-arduino",
+      "name": "Reddit - r/arduino",
+      "url": "https://www.reddit.com/r/arduino/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "hardware"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-raspberry_pi",
+      "name": "Reddit - r/raspberry_pi",
+      "url": "https://www.reddit.com/r/raspberry_pi/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "hardware"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-netsec",
+      "name": "Reddit - r/netsec",
+      "url": "https://www.reddit.com/r/netsec/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "security"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "reddit-cybersecurity",
+      "name": "Reddit - r/cybersecurity",
+      "url": "https://www.reddit.com/r/cybersecurity/.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "developer_community",
+      "domains": [
+        "security"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "react-blog",
+      "name": "React Blog",
+      "url": "https://react.dev/rss.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "vue-blog",
+      "name": "Vue.js Blog",
+      "url": "https://blog.vuejs.org/feed.rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "electron-blog",
+      "name": "Electron Blog",
+      "url": "https://www.electronjs.org/blog/rss.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "frontend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "nodejs-blog",
+      "name": "Node.js Blog",
+      "url": "https://nodejs.org/en/feed/blog.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "python-blog",
+      "name": "Python Blog",
+      "url": "https://blog.python.org/feeds/posts/default",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "go-blog",
+      "name": "Go Blog",
+      "url": "https://go.dev/blog/feed.atom",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "rust-blog",
+      "name": "Rust Blog",
+      "url": "https://blog.rust-lang.org/feed.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "backend"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "docker-blog",
+      "name": "Docker Blog",
+      "url": "https://www.docker.com/blog/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "devops"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "kubernetes-blog",
+      "name": "Kubernetes Blog",
+      "url": "https://kubernetes.io/feed.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "devops"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "android-blog",
+      "name": "Android Developers Blog",
+      "url": "https://android-developers.googleblog.com/feeds/posts/default",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "official_blog",
+      "domains": [
+        "mobile"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "hackaday",
+      "name": "Hackaday",
+      "url": "https://hackaday.com/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "specialized_news",
+      "domains": [
+        "hardware"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "arduino-blog",
+      "name": "Arduino Blog",
+      "url": "https://blog.arduino.cc/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "specialized_news",
+      "domains": [
+        "hardware"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "thehackernews",
+      "name": "The Hacker News",
+      "url": "https://thehackernews.com/feeds/posts/default",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "specialized_news",
+      "domains": [
+        "security"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "krebs-security",
+      "name": "Krebs on Security",
+      "url": "https://krebsonsecurity.com/feed/",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "specialized_news",
+      "domains": [
+        "security"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "phoronix",
+      "name": "Phoronix",
+      "url": "https://www.phoronix.com/rss.php",
+      "type": "rss",
+      "enabled": true,
+      "language": "en",
+      "category": "specialized_news",
+      "domains": [
+        "os"
+      ],
+      "region": "global"
+    },
+    {
+      "id": "juejin",
+      "name": "掘金",
+      "url": "https://api.juejin.cn/recommend_api/v1/article/recommend_all_feed",
+      "type": "rss",
+      "enabled": false,
+      "language": "zh",
+      "region": "cn",
+      "category": "developer_community",
+      "domains": [
+        "general",
+        "frontend",
+        "backend"
+      ]
+    },
+    {
+      "id": "infoq_cn",
+      "name": "InfoQ中文站",
+      "url": "https://www.infoq.cn/feed",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "tech_news",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "oschina",
+      "name": "开源中国",
+      "url": "https://www.oschina.net/news/rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "opensource",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "cnblogs",
+      "name": "博客园",
+      "url": "https://www.cnblogs.com/rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "developer_community",
+      "domains": [
+        "general",
+        "backend"
+      ]
+    },
+    {
+      "id": "segmentfault",
+      "name": "SegmentFault",
+      "url": "https://segmentfault.com/feeds",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "developer_community",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "v2ex",
+      "name": "V2EX",
+      "url": "https://www.v2ex.com/index.xml",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "community",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "geekpark",
+      "name": "极客公园",
+      "url": "https://www.geekpark.net/rss",
+      "type": "rss",
+      "enabled": false,
+      "language": "zh",
+      "region": "cn",
+      "category": "innovation",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "ifanr",
+      "name": "爱范儿",
+      "url": "https://www.ifanr.com/feed",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "consumer_tech",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "pingwest",
+      "name": "PingWest品玩",
+      "url": "https://www.pingwest.com/feed",
+      "type": "rss",
+      "enabled": false,
+      "language": "zh",
+      "region": "cn",
+      "category": "tech_business",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "sspai",
+      "name": "少数派",
+      "url": "https://sspai.com/feed",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "digital_life",
+      "domains": [
+        "general"
+      ]
+    },
+    {
+      "id": "leiphone",
+      "name": "雷锋网",
+      "url": "https://www.leiphone.com/feed",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "ai",
+      "domains": [
+        "general",
+        "ai"
+      ]
+    },
+    {
+      "id": "aliyun_developer",
+      "name": "阿里云开发者",
+      "url": "https://developer.aliyun.com/rss",
+      "type": "rss",
+      "enabled": true,
+      "language": "zh",
+      "region": "cn",
+      "category": "cloud",
+      "domains": [
+        "devops",
+        "backend"
+      ]
+    }
+  ]
+}

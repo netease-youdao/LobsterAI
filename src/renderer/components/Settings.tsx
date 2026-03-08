@@ -1,14 +1,19 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { configService } from '../services/config';
 import { apiService } from '../services/api';
+import { checkForAppUpdate } from '../services/appUpdate';
+import type { AppUpdateInfo } from '../services/appUpdate';
 import { themeService } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
-import { imService } from '../services/im';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, PlusCircleIcon, TrashIcon, PencilIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, ShieldCheckIcon, EnvelopeIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, ShieldCheckIcon, EnvelopeIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
+import PlusCircleIcon from './icons/PlusCircleIcon';
+import TrashIcon from './icons/TrashIcon';
+import PencilIcon from './icons/PencilIcon';
 import BrainIcon from './icons/BrainIcon';
 import { useDispatch, useSelector } from 'react-redux';
 import { setAvailableModels } from '../store/slices/modelSlice';
@@ -24,8 +29,25 @@ import type {
 import IMSettings from './im/IMSettings';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
+import {
+  OpenAIIcon,
+  DeepSeekIcon,
+  GeminiIcon,
+  AnthropicIcon,
+  MoonshotIcon,
+  ZhipuIcon,
+  MiniMaxIcon,
+  YouDaoZhiYunIcon,
+  QwenIcon,
+  XiaomiIcon,
+  StepfunIcon,
+  VolcengineIcon,
+  OpenRouterIcon,
+  OllamaIcon,
+  CustomProviderIcon,
+} from './icons/providers';
 
-type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email';
+type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -34,6 +56,7 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
+  onUpdateFound?: (info: AppUpdateInfo) => void;
 }
 
 const providerKeys = [
@@ -44,7 +67,10 @@ const providerKeys = [
   'moonshot',
   'zhipu',
   'minimax',
+  'volcengine',
   'qwen',
+  'youdaozhiyun',
+  'stepfun',
   'xiaomi',
   'openrouter',
   'ollama',
@@ -55,6 +81,11 @@ type ProviderType = (typeof providerKeys)[number];
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
 type Model = NonNullable<ProviderConfig['models']>[number];
+type ProviderConnectionTestResult = {
+  success: boolean;
+  message: string;
+  provider: ProviderType;
+};
 
 interface ProviderExportEntry {
   enabled: boolean;
@@ -62,6 +93,7 @@ interface ProviderExportEntry {
   baseUrl: string;
   apiFormat?: 'anthropic' | 'openai';
   openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+  codingPlanEnabled?: boolean;
   models?: Model[];
 }
 
@@ -85,6 +117,7 @@ interface ProvidersImportEntry {
   baseUrl?: string;
   apiFormat?: 'anthropic' | 'openai' | 'native';
   openaiApiType?: 'auto' | 'chat_completions' | 'responses';
+  codingPlanEnabled?: boolean;
   models?: Model[];
 }
 
@@ -100,78 +133,21 @@ interface ProvidersImportPayload {
 }
 
 const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode }> = {
-  openai: {
-    label: 'OpenAI',
-    icon: (
-      <svg fill="currentColor" fillRule="evenodd" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{flex: '0 0 auto', lineHeight: 1}}><title>OpenAI</title><path d="M21.55 10.004a5.416 5.416 0 00-.478-4.501c-1.217-2.09-3.662-3.166-6.05-2.66A5.59 5.59 0 0010.831 1C8.39.995 6.224 2.546 5.473 4.838A5.553 5.553 0 001.76 7.496a5.487 5.487 0 00.691 6.5 5.416 5.416 0 00.477 4.502c1.217 2.09 3.662 3.165 6.05 2.66A5.586 5.586 0 0013.168 23c2.443.006 4.61-1.546 5.361-3.84a5.553 5.553 0 003.715-2.66 5.488 5.488 0 00-.693-6.497v.001zm-8.381 11.558a4.199 4.199 0 01-2.675-.954c.034-.018.093-.05.132-.074l4.44-2.53a.71.71 0 00.364-.623v-6.176l1.877 1.069c.02.01.033.029.036.05v5.115c-.003 2.274-1.87 4.118-4.174 4.123zM4.192 17.78a4.059 4.059 0 01-.498-2.763c.032.02.09.055.131.078l4.44 2.53c.225.13.504.13.73 0l5.42-3.088v2.138a.068.068 0 01-.027.057L9.9 19.288c-1.999 1.136-4.552.46-5.707-1.51h-.001zM3.023 8.216A4.15 4.15 0 015.198 6.41l-.002.151v5.06a.711.711 0 00.364.624l5.42 3.087-1.876 1.07a.067.067 0 01-.063.005l-4.489-2.559c-1.995-1.14-2.679-3.658-1.53-5.63h.001zm15.417 3.54l-5.42-3.088L14.896 7.6a.067.067 0 01.063-.006l4.489 2.557c1.998 1.14 2.683 3.662 1.529 5.633a4.163 4.163 0 01-2.174 1.807V12.38a.71.71 0 00-.363-.623zm1.867-2.773a6.04 6.04 0 00-.132-.078l-4.44-2.53a.731.731 0 00-.729 0l-5.42 3.088V7.325a.068.068 0 01.027-.057L14.1 4.713c2-1.137 4.555-.46 5.707 1.513.487.833.664 1.809.499 2.757h.001zm-11.741 3.81l-1.877-1.068a.065.065 0 01-.036-.051V6.559c.001-2.277 1.873-4.122 4.181-4.12.976 0 1.92.338 2.671.954-.034.018-.092.05-.131.073l-4.44 2.53a.71.71 0 00-.365.623l-.003 6.173v.002zm1.02-2.168L12 9.25l2.414 1.375v2.75L12 14.75l-2.415-1.375v-2.75z"></path></svg>
-    ),
-  },
-  deepseek: {
-    label: 'DeepSeek',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{flex: '0 0 auto', lineHeight: 1}}><title>DeepSeek</title><path d="M23.748 4.482c-.254-.124-.364.113-.512.234-.051.039-.094.09-.137.136-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.156-.708-.311-.955-.65-.172-.241-.219-.51-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.093.172.187.129.323-.082.28-.18.552-.266.833-.055.179-.137.217-.329.14a5.526 5.526 0 01-1.736-1.18c-.857-.828-1.631-1.742-2.597-2.458a11.365 11.365 0 00-.689-.471c-.985-.957.13-1.743.388-1.836.27-.098.093-.432-.779-.428-.872.004-1.67.295-2.687.684a3.055 3.055 0 01-.465.137 9.597 9.597 0 00-2.883-.102c-1.885.21-3.39 1.102-4.497 2.623C.082 8.606-.231 10.684.152 12.85c.403 2.284 1.569 4.175 3.36 5.653 1.858 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.133-.284 4.994-1.86.47.234.962.327 1.78.397.63.059 1.236-.03 1.705-.128.735-.156.684-.837.419-.961-2.155-1.004-1.682-.595-2.113-.926 1.096-1.296 2.746-2.642 3.392-7.003.05-.347.007-.565 0-.845-.004-.17.035-.237.23-.256a4.173 4.173 0 001.545-.475c1.396-.763 1.96-2.015 2.093-3.517.02-.23-.004-.467-.247-.588zM11.581 18c-2.089-1.642-3.102-2.183-3.52-2.16-.392.024-.321.471-.235.763.09.288.207.486.371.739.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.167-1.361-.802-2.5-1.86-3.301-3.307-.774-1.393-1.224-2.887-1.298-4.482-.02-.386.093-.522.477-.592a4.696 4.696 0 011.529-.039c2.132.312 3.946 1.265 5.468 2.774.868.86 1.525 1.887 2.202 2.891.72 1.066 1.494 2.082 2.48 2.914.348.292.625.514.891.677-.802.09-2.14.11-3.054-.614zm1-6.44a.306.306 0 01.415-.287.302.302 0 01.2.288.306.306 0 01-.31.307.303.303 0 01-.304-.308zm3.11 1.596c-.2.081-.399.151-.59.16a1.245 1.245 0 01-.798-.254c-.274-.23-.47-.358-.552-.758a1.73 1.73 0 01.016-.588c.07-.327-.008-.537-.239-.727-.187-.156-.426-.199-.688-.199a.559.559 0 01-.254-.078c-.11-.054-.2-.19-.114-.358.028-.054.16-.186.192-.21.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.391.451.462.576.685.914.176.265.336.537.445.848.067.195-.019.354-.25.452z" fill="#4D6BFE"></path></svg>
-    ),
-  },
-  gemini: {
-    label: 'Gemini',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{flex: '0 0 auto', lineHeight: 1}}><title>Gemini</title><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="#3186FF"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#lobe-icons-gemini-fill-0)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#lobe-icons-gemini-fill-1)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#lobe-icons-gemini-fill-2)"></path><defs><linearGradient gradientUnits="userSpaceOnUse" id="lobe-icons-gemini-fill-0" x1="7" x2="11" y1="15.5" y2="12"><stop stopColor="#08B962"></stop><stop offset="1" stopColor="#08B962" stopOpacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="lobe-icons-gemini-fill-1" x1="8" x2="11.5" y1="5.5" y2="11"><stop stopColor="#F94543"></stop><stop offset="1" stopColor="#F94543" stopOpacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="lobe-icons-gemini-fill-2" x1="3.5" x2="17.5" y1="13.5" y2="12"><stop stopColor="#FABC12"></stop><stop offset=".46" stopColor="#FABC12" stopOpacity="0"></stop></linearGradient></defs></svg>
-    ),
-  },
-  anthropic: {
-    label: 'Anthropic',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{flex: '0 0 auto', lineHeight: 1}}><title>Anthropic</title><path d="M13.827 3.52h3.603L24 20.48h-3.603l-6.57-16.96zm-7.258 0h3.767L16.906 20.48h-3.674l-1.343-3.461H5.017l-1.344 3.46H0l6.569-16.96zm2.327 5.295L6.27 14.71h5.252l-2.626-5.894z" fill="#D97757"></path></svg>
-    ),
-  },
-  moonshot: {
-    label: 'Moonshot',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}><title>Kimi</title><path d="M21.846 0a1.923 1.923 0 110 3.846H20.15a.226.226 0 01-.227-.226V1.923C19.923.861 20.784 0 21.846 0z" fill="#1783FF"></path><path d="M11.065 11.199l7.257-7.2c.137-.136.06-.41-.116-.41H14.3a.164.164 0 00-.117.051l-7.82 7.756c-.122.12-.302.013-.302-.179V3.82c0-.127-.083-.23-.185-.23H3.186c-.103 0-.186.103-.186.23V19.77c0 .128.083.23.186.23h2.69c.103 0 .186-.102.186-.23v-3.25c0-.069.025-.135.069-.178l2.424-2.406a.158.158 0 01.205-.023l6.484 4.772a7.677 7.677 0 003.453 1.283c.108.012.2-.095.2-.23v-3.06c0-.117-.07-.212-.164-.227a5.028 5.028 0 01-2.027-.807l-5.613-4.064c-.117-.078-.132-.279-.028-.381z" fill="currentColor"></path></svg>
-    ),
-  },
-  zhipu: {
-    label: 'Zhipu',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}><title>Zhipu</title><path d="M11.991 23.503a.24.24 0 00-.244.248.24.24 0 00.244.249.24.24 0 00.245-.249.24.24 0 00-.22-.247l-.025-.001zM9.671 5.365a1.697 1.697 0 011.099 2.132l-.071.172-.016.04-.018.054c-.07.16-.104.32-.104.498-.035.71.47 1.279 1.186 1.314h.366c1.309.053 2.338 1.173 2.286 2.523-.052 1.332-1.152 2.38-2.478 2.327h-.174c-.715.018-1.274.64-1.239 1.368 0 .124.018.23.053.337.209.373.54.658.96.8.75.23 1.517-.125 1.9-.782l.018-.035c.402-.64 1.17-.96 1.92-.711.854.284 1.378 1.226 1.099 2.167a1.661 1.661 0 01-2.077 1.102 1.711 1.711 0 01-.907-.711l-.017-.035c-.2-.323-.463-.58-.851-.711l-.056-.018a1.646 1.646 0 00-1.954.746 1.66 1.66 0 01-1.065.764 1.677 1.677 0 01-1.989-1.279c-.209-.906.332-1.83 1.257-2.043a1.51 1.51 0 01.296-.035h.018c.68-.071 1.151-.622 1.116-1.333a1.307 1.307 0 00-.227-.693 2.515 2.515 0 01-.366-1.403 2.39 2.39 0 01.366-1.208c.14-.195.21-.444.227-.693.018-.71-.506-1.261-1.186-1.332l-.07-.018a1.43 1.43 0 01-.299-.07l-.05-.019a1.7 1.7 0 01-1.047-2.114 1.68 1.68 0 012.094-1.101zm-5.575 10.11c.26-.264.639-.367.994-.27.355.096.633.379.728.74.095.362-.007.748-.267 1.013-.402.41-1.053.41-1.455 0a1.062 1.062 0 010-1.482zm14.845-.294c.359-.09.738.024.992.297.254.274.344.665.237 1.025-.107.36-.396.634-.756.718-.551.128-1.1-.22-1.23-.781a1.05 1.05 0 01.757-1.26zm-.064-4.39c.314.32.49.753.49 1.206 0 .452-.176.886-.49 1.206-.315.32-.74.5-1.185.5-.444 0-.87-.18-1.184-.5a1.727 1.727 0 010-2.412 1.654 1.654 0 012.369 0zm-11.243.163c.364.484.447 1.128.218 1.691a1.665 1.665 0 01-2.188.923c-.855-.36-1.26-1.358-.907-2.228a1.68 1.68 0 011.33-1.038c.593-.08 1.183.169 1.547.652zm11.545-4.221c.368 0 .708.2.892.524.184.324.184.724 0 1.048a1.026 1.026 0 01-.892.524c-.568 0-1.03-.47-1.03-1.048 0-.579.462-1.048 1.03-1.048zm-14.358 0c.368 0 .707.2.891.524.184.324.184.724 0 1.048a1.026 1.026 0 01-.891.524c-.569 0-1.03-.47-1.03-1.048 0-.579.461-1.048 1.03-1.048zm10.031-1.475c.925 0 1.675.764 1.675 1.706s-.75 1.705-1.675 1.705-1.674-.763-1.674-1.705c0-.942.75-1.706 1.674-1.706zm-2.626-.684c.362-.082.653-.356.761-.718a1.062 1.062 0 00-.238-1.028 1.017 1.017 0 00-.996-.294c-.547.14-.881.7-.752 1.257.13.558.675.907 1.225.783zm0 16.876c.359-.087.644-.36.75-.72a1.062 1.062 0 00-.237-1.019 1.018 1.018 0 00-.985-.301 1.037 1.037 0 00-.762.717c-.108.361-.017.754.239 1.028.245.263.606.377.953.305l.043-.01zM17.19 3.5a.631.631 0 00.628-.64c0-.355-.279-.64-.628-.64a.631.631 0 00-.628.64c0 .355.28.64.628.64zm-10.38 0a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64a.631.631 0 00-.628.64c0 .355.279.64.628.64zm-5.182 7.852a.631.631 0 00-.628.64c0 .354.28.639.628.639a.63.63 0 00.627-.606l.001-.034a.62.62 0 00-.628-.64zm5.182 9.13a.631.631 0 00-.628.64c0 .355.279.64.628.64a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64zm10.38.018a.631.631 0 00-.628.64c0 .355.28.64.628.64a.631.631 0 00.628-.64c0-.355-.279-.64-.628-.64zm5.182-9.148a.631.631 0 00-.628.64c0 .354.279.639.628.639a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64zm-.384-4.992a.24.24 0 00.244-.249.24.24 0 00-.244-.249.24.24 0 00-.244.249c0 .142.122.249.244.249zM11.991.497a.24.24 0 00.245-.248A.24.24 0 0011.99 0a.24.24 0 00-.244.249c0 .133.108.236.223.247l.021.001zM2.011 6.36a.24.24 0 00.245-.249.24.24 0 00-.244-.249.24.24 0 00-.244.249.24.24 0 00.244.249zm0 11.263a.24.24 0 00-.243.248.24.24 0 00.244.249.24.24 0 00.244-.249.252.252 0 00-.244-.248zm19.995-.018a.24.24 0 00-.245.248.24.24 0 00.245.25.24.24 0 00.244-.25.252.252 0 00-.244-.248z" fill="#3859FF" fillRule="nonzero"></path></svg>
-    ),
-  },
-  minimax: {
-    label: 'MiniMax',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}><title>Minimax</title><defs><linearGradient id="lobe-icons-minimax-fill" x1="0%" x2="100.182%" y1="50.057%" y2="50.057%"><stop offset="0%" stopColor="#E2167E"></stop><stop offset="100%" stopColor="#FE603C"></stop></linearGradient></defs><path d="M16.278 2c1.156 0 2.093.927 2.093 2.07v12.501a.74.74 0 00.744.709.74.74 0 00.743-.709V9.099a2.06 2.06 0 012.071-2.049A2.06 2.06 0 0124 9.1v6.561a.649.649 0 01-.652.645.649.649 0 01-.653-.645V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v7.472a2.037 2.037 0 01-2.048 2.026 2.037 2.037 0 01-2.048-2.026v-12.5a.785.785 0 00-.788-.753.785.785 0 00-.789.752l-.001 15.904A2.037 2.037 0 0113.441 22a2.037 2.037 0 01-2.048-2.026V18.04c0-.356.292-.645.652-.645.36 0 .652.289.652.645v1.934c0 .263.142.506.372.638.23.131.514.131.744 0a.734.734 0 00.372-.638V4.07c0-1.143.937-2.07 2.093-2.07zm-5.674 0c1.156 0 2.093.927 2.093 2.07v11.523a.648.648 0 01-.652.645.648.648 0 01-.652-.645V4.07a.785.785 0 00-.789-.78.785.785 0 00-.789.78v14.013a2.06 2.06 0 01-2.07 2.048 2.06 2.06 0 01-2.071-2.048V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v3.8a2.06 2.06 0 01-2.071 2.049A2.06 2.06 0 010 12.9v-1.378c0-.357.292-.646.652-.646.36 0 .653.29.653.646V12.9c0 .418.343.757.766.757s.766-.339.766-.757V9.099a2.06 2.06 0 012.07-2.048 2.06 2.06 0 012.071 2.048v8.984c0 .419.343.758.767.758.423 0 .766-.339.766-.758V4.07c0-1.143.937-2.07 2.093-2.07z" fill="url(#lobe-icons-minimax-fill)" fillRule="nonzero"></path></svg>
-    ),
-  },
-  qwen: {
-    label: 'Qwen',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}><title>Qwen</title><path d="M12.604 1.34c.393.69.784 1.382 1.174 2.075a.18.18 0 00.157.091h5.552c.174 0 .322.11.446.327l1.454 2.57c.19.337.24.478.024.837-.26.43-.513.864-.76 1.3l-.367.658c-.106.196-.223.28-.04.512l2.652 4.637c.172.301.111.494-.043.77-.437.785-.882 1.564-1.335 2.34-.159.272-.352.375-.68.37-.777-.016-1.552-.01-2.327.016a.099.099 0 00-.081.05 575.097 575.097 0 01-2.705 4.74c-.169.293-.38.363-.725.364-.997.003-2.002.004-3.017.002a.537.537 0 01-.465-.271l-1.335-2.323a.09.09 0 00-.083-.049H4.982c-.285.03-.553-.001-.805-.092l-1.603-2.77a.543.543 0 01-.002-.54l1.207-2.12a.198.198 0 000-.197 550.951 550.951 0 01-1.875-3.272l-.79-1.395c-.16-.31-.173-.496.095-.965.465-.813.927-1.625 1.387-2.436.132-.234.304-.334.584-.335a338.3 338.3 0 012.589-.001.124.124 0 00.107-.063l2.806-4.895a.488.488 0 01.422-.246c.524-.001 1.053 0 1.583-.006L11.704 1c.341-.003.724.032.9.34zm-3.432.403a.06.06 0 00-.052.03L6.254 6.788a.157.157 0 01-.135.078H3.253c-.056 0-.07.025-.041.074l5.81 10.156c.025.042.013.062-.034.063l-2.795.015a.218.218 0 00-.2.116l-1.32 2.31c-.044.078-.021.118.068.118l5.716.008c.046 0 .08.02.104.061l1.403 2.454c.046.081.092.082.139 0l5.006-8.76.783-1.382a.055.055 0 01.096 0l1.424 2.53a.122.122 0 00.107.062l2.763-.02a.04.04 0 00.035-.02.041.041 0 000-.04l-2.9-5.086a.108.108 0 010-.113l.293-.507 1.12-1.977c.024-.041.012-.062-.035-.062H9.2c-.059 0-.073-.026-.043-.077l1.434-2.505a.107.107 0 000-.114L9.225 1.774a.06.06 0 00-.053-.031zm6.29 8.02c.046 0 .058.02.034.06l-.832 1.465-2.613 4.585a.056.056 0 01-.05.029.058.058 0 01-.05-.029L8.498 9.841c-.02-.034-.01-.052.028-.054l.216-.012 6.722-.012z" fill="url(#lobe-icons-qwen-fill)" fillRule="nonzero"></path><defs><linearGradient id="lobe-icons-qwen-fill" x1="0%" x2="100%" y1="0%" y2="0%"><stop offset="0%" stopColor="#6336E7" stopOpacity=".84"></stop><stop offset="100%" stopColor="#6F69F7" stopOpacity=".84"></stop></linearGradient></defs></svg>
-    ),
-  },
-  xiaomi: {
-    label: 'Xiaomi',
-    icon: (
-      <svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}><title>Xiaomi</title><defs><linearGradient id="lobe-icons-xiaomi-fill" x1="0%" x2="100%" y1="0%" y2="0%"><stop offset="0%" stopColor="#FF6900" stopOpacity=".84"></stop><stop offset="100%" stopColor="#FF8533" stopOpacity=".84"></stop></linearGradient></defs><path d="M.958 15.936a.459.459 0 01.459.44v2.729a.46.46 0 01-.918 0v-2.729a.459.459 0 01.459-.44zm4.814-2.035a.46.46 0 01.553.45v4.754a.458.458 0 11-.918 0V15.48L3.74 17.202a.462.462 0 01-.655.016.462.462 0 01-.065-.082L.628 14.67a.459.459 0 01.658-.637l2.124 2.187 2.127-2.188a.46.46 0 01.235-.13zm2.068.004a.46.46 0 01.458.445v4.755a.46.46 0 01-.458.458.459.459 0 01-.458-.458V14.35a.459.459 0 01.458-.445zm1.973 2.014a.46.46 0 01.46.457v2.729a.46.46 0 01-.784.324.46.46 0 01-.134-.324v-2.729a.46.46 0 01.458-.458zm.002-2.045a.458.458 0 01.328.157l2.127 2.19 2.125-2.19a.459.459 0 01.784.318v4.756a.46.46 0 01-.455.458.46.46 0 01-.458-.458V15.48l-1.667 1.723a.46.46 0 01-.65.008l-.005-.005c0-.002-.002-.002-.004-.003l-2.455-2.534a.46.46 0 01-.008-.667.461.461 0 01.338-.128zm6.797 1.206a.46.46 0 01.53.651A1.966 1.966 0 0019.81 18.4a.462.462 0 01.623.18.46.46 0 01-.181.624 2.863 2.863 0 01-1.38.353l-.142-.004a2.88 2.88 0 01-2.393-4.263.461.461 0 01.274-.21zm.864-.931a2.884 2.884 0 013.915 3.914.46.46 0 01-.402.24l-.057-.004a.458.458 0 01-.164-.055.46.46 0 01-.182-.622 1.967 1.967 0 00-2.669-2.67.459.459 0 11-.441-.803zM9.59 6.368c1.481 0 1.696 1.202 1.696 1.654v2.648h-.917v-.432c-.26.346-.792.535-1.36.535-.133 0-1.289-.03-1.384-1.136-.082-.932.675-1.61 2.053-1.61h.691c0-.563-.367-.886-.983-.886-.44.013-.864.174-1.2.458l-.36-.664c.484-.379 1.012-.567 1.764-.567zm4.427.1c1.263 0 2.082.97 2.083 2.15 0 1.181-.824 2.154-2.083 2.154-1.26 0-2.084-.972-2.084-2.152 0-1.18.82-2.153 2.084-2.153zm6.801.015c.68 0 1.202.465 1.197 1.548v2.642H21.1V8.29c0-.312-.002-.98-.63-.98s-.628.667-.628.838v2.524h-.89V8.148c0-.17-.001-.838-.63-.838-.628 0-.628.668-.628.98v2.383h-.917v-4.03h.917V7a1.22 1.22 0 01.947-.516c.398 0 .76.193.982.686a1.321 1.321 0 011.195-.686zm-18.093.872l1.457-1.772H5.32L3.311 8.07l2.14 2.602H4.24L2.725 8.796 1.21 10.672H0L2.138 8.07.13 5.583h1.138l1.458 1.772zm4.149 3.317h-.916V6.644h.916v4.028zm16.99 0h-.916V6.644h.916v4.028zM9.925 8.71c-1.055 0-1.359.412-1.326.742.032.329.324.537.757.537a1.013 1.013 0 001.014-.968l.002-.31h-.447zM14.018 7.3c-.663 0-1.184.487-1.184 1.32 0 .832.52 1.32 1.184 1.32.662 0 1.182-.49 1.182-1.32 0-.832-.52-1.32-1.182-1.32zM6.417 5.001a.568.568 0 01.587.582.588.588 0 01-1.175 0A.57.57 0 016.417 5zm16.991 0a.57.57 0 01.592.582.588.588 0 01-1.174 0 .57.57 0 01.357-.542.572.572 0 01.225-.04z" fill="url(#lobe-icons-xiaomi-fill)" fillRule="evenodd"></path></svg>
-    ),
-  },
-  openrouter: {
-    label: 'OpenRouter',
-    icon: (
-      <svg fill="currentColor" fillRule="evenodd" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{ flex: '0 0 auto', lineHeight: 1 }}><title>OpenRouter</title><path d="M16.804 1.957l7.22 4.105v.087L16.73 10.21l.017-2.117-.821-.03c-1.059-.028-1.611.002-2.268.11-1.064.175-2.038.577-3.147 1.352L8.345 11.03c-.284.195-.495.336-.68.455l-.515.322-.397.234.385.23.53.338c.476.314 1.17.796 2.701 1.866 1.11.775 2.083 1.177 3.147 1.352l.3.045c.694.091 1.375.094 2.825.033l.022-2.159 7.22 4.105v.087L16.589 22l.014-1.862-.635.022c-1.386.042-2.137.002-3.138-.162-1.694-.28-3.26-.926-4.881-2.059l-2.158-1.5a21.997 21.997 0 00-.755-.498l-.467-.28a55.927 55.927 0 00-.76-.43C2.908 14.73.563 14.116 0 14.116V9.888l.14.004c.564-.007 2.91-.622 3.809-1.124l1.016-.58.438-.274c.428-.28 1.072-.726 2.686-1.853 1.621-1.133 3.186-1.78 4.881-2.059 1.152-.19 1.974-.213 3.814-.138l.02-1.907z"></path></svg>
-    ),
-  },
-  ollama: {
-    label: 'Ollama',
-    icon: (
-      <svg fill="currentColor" fillRule="evenodd" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{flex: '0 0 auto', lineHeight: 1}}><title>Ollama</title><path d="M7.905 1.09c.216.085.411.225.588.41.295.306.544.744.734 1.263.191.522.315 1.1.362 1.68a5.054 5.054 0 012.049-.636l.051-.004c.87-.07 1.73.087 2.48.474.101.053.2.11.297.17.05-.569.172-1.134.36-1.644.19-.52.439-.957.733-1.264a1.67 1.67 0 01.589-.41c.257-.1.53-.118.796-.042.401.114.745.368 1.016.737.248.337.434.769.561 1.287.23.934.27 2.163.115 3.645l.053.04.026.019c.757.576 1.284 1.397 1.563 2.35.435 1.487.216 3.155-.534 4.088l-.018.021.002.003c.417.762.67 1.567.724 2.4l.002.03c.064 1.065-.2 2.137-.814 3.19l-.007.01.01.024c.472 1.157.62 2.322.438 3.486l-.006.039a.651.651 0 01-.747.536.648.648 0 01-.54-.742c.167-1.033.01-2.069-.48-3.123a.643.643 0 01.04-.617l.004-.006c.604-.924.854-1.83.8-2.72-.046-.779-.325-1.544-.8-2.273a.644.644 0 01.18-.886l.009-.006c.243-.159.467-.565.58-1.12a4.229 4.229 0 00-.095-1.974c-.205-.7-.58-1.284-1.105-1.683-.595-.454-1.383-.673-2.38-.61a.653.653 0 01-.632-.371c-.314-.665-.772-1.141-1.343-1.436a3.288 3.288 0 00-1.772-.332c-1.245.099-2.343.801-2.67 1.686a.652.652 0 01-.61.425c-1.067.002-1.893.252-2.497.703-.522.39-.878.935-1.066 1.588a4.07 4.07 0 00-.068 1.886c.112.558.331 1.02.582 1.269l.008.007c.212.207.257.53.109.785-.36.622-.629 1.549-.673 2.44-.05 1.018.186 1.902.719 2.536l.016.019a.643.643 0 01.095.69c-.576 1.236-.753 2.252-.562 3.052a.652.652 0 01-1.269.298c-.243-1.018-.078-2.184.473-3.498l.014-.035-.008-.012a4.339 4.339 0 01-.598-1.309l-.005-.019a5.764 5.764 0 01-.177-1.785c.044-.91.278-1.842.622-2.59l.012-.026-.002-.002c-.293-.418-.51-.953-.63-1.545l-.005-.024a5.352 5.352 0 01.093-2.49c.262-.915.777-1.701 1.536-2.269.06-.045.123-.09.186-.132-.159-1.493-.119-2.73.112-3.67.127-.518.314-.95.562-1.287.27-.368.614-.622 1.015-.737.266-.076.54-.059.797.042zm4.116 9.09c.936 0 1.8.313 2.446.855.63.527 1.005 1.235 1.005 1.94 0 .888-.406 1.58-1.133 2.022-.62.375-1.451.557-2.403.557-1.009 0-1.871-.259-2.493-.734-.617-.47-.963-1.13-.963-1.845 0-.707.398-1.417 1.056-1.946.668-.537 1.55-.849 2.485-.849zm0 .896a3.07 3.07 0 00-1.916.65c-.461.37-.722.835-.722 1.25 0 .428.21.829.61 1.134.455.347 1.124.548 1.943.548.799 0 1.473-.147 1.932-.426.463-.28.7-.686.7-1.257 0-.423-.246-.89-.683-1.256-.484-.405-1.14-.643-1.864-.643zm.662 1.21l.004.004c.12.151.095.37-.056.49l-.292.23v.446a.375.375 0 01-.376.373.375.375 0 01-.376-.373v-.46l-.271-.218a.347.347 0 01-.052-.49.353.353 0 01.494-.051l.215.172.22-.174a.353.353 0 01.49.051zm-5.04-1.919c.478 0 .867.39.867.871a.87.87 0 01-.868.871.87.87 0 01-.867-.87.87.87 0 01.867-.872zm8.706 0c.48 0 .868.39.868.871a.87.87 0 01-.868.871.87.87 0 01-.867-.87.87.87 0 01.867-.872zM7.44 2.3l-.003.002a.659.659 0 00-.285.238l-.005.006c-.138.189-.258.467-.348.832-.17.692-.216 1.631-.124 2.782.43-.128.899-.208 1.404-.237l.01-.001.019-.034c.046-.082.095-.161.148-.239.123-.771.022-1.692-.253-2.444-.134-.364-.297-.65-.453-.813a.628.628 0 00-.107-.09L7.44 2.3zm9.174.04l-.002.001a.628.628 0 00-.107.09c-.156.163-.32.45-.453.814-.29.794-.387 1.776-.23 2.572l.058.097.008.014h.03a5.184 5.184 0 011.466.212c.086-1.124.038-2.043-.128-2.722-.09-.365-.21-.643-.349-.832l-.004-.006a.659.659 0 00-.285-.239h-.004z"></path></svg>
-    ),
-  },
-  custom: {
-    label: 'Custom',
-    icon: (
-      <svg fill="currentColor" fillRule="evenodd" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg" style={{flex: '0 0 auto', lineHeight: 1}}><title>Custom</title><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"></path></svg>
-    ),
-  },
+  openai: { label: 'OpenAI', icon: <OpenAIIcon /> },
+  deepseek: { label: 'DeepSeek', icon: <DeepSeekIcon /> },
+  gemini: { label: 'Gemini', icon: <GeminiIcon /> },
+  anthropic: { label: 'Anthropic', icon: <AnthropicIcon /> },
+  moonshot: { label: 'Moonshot', icon: <MoonshotIcon /> },
+  zhipu: { label: 'Zhipu', icon: <ZhipuIcon /> },
+  minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
+  youdaozhiyun: { label: 'Youdao', icon: <YouDaoZhiYunIcon /> },
+  qwen: { label: 'Qwen', icon: <QwenIcon /> },
+  xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
+  stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
+  volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
+  openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
+  ollama: { label: 'Ollama', icon: <OllamaIcon /> },
+  custom: { label: 'Custom', icon: <CustomProviderIcon /> },
 };
 
 const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropic: string; openai: string }>> = {
@@ -185,7 +161,7 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   },
   zhipu: {
     anthropic: 'https://open.bigmodel.cn/api/anthropic',
-    openai: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    openai: 'https://open.bigmodel.cn/api/paas/v4',
   },
   minimax: {
     anthropic: 'https://api.minimaxi.com/anthropic',
@@ -198,6 +174,10 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   xiaomi: {
     anthropic: 'https://api.xiaomimimo.com/anthropic',
     openai: 'https://api.xiaomimimo.com/v1/chat/completions',
+  },
+  volcengine: {
+    anthropic: 'https://ark.cn-beijing.volces.com/api/compatible',
+    openai: 'https://ark.cn-beijing.volces.com/api/v3',
   },
   openrouter: {
     anthropic: 'https://openrouter.ai/api',
@@ -223,8 +203,48 @@ const normalizeOpenAIApiType = (value: unknown): 'auto' | 'chat_completions' | '
     ? value
     : 'auto'
 );
+const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
+const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
+const ABOUT_SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
+
+const copyTextFallback = (text: string): boolean => {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  return copied;
+};
+
+const copyTextToClipboard = async (text: string): Promise<boolean> => {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (clipboardError) {
+      console.warn('Navigator clipboard write failed, trying fallback:', clipboardError);
+    }
+  }
+
+  try {
+    return copyTextFallback(text);
+  } catch (fallbackError) {
+    console.error('Fallback clipboard copy failed:', fallbackError);
+    return false;
+  }
+};
 const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
-  if (provider === 'openai' || provider === 'gemini') {
+  if (provider === 'openai' || provider === 'gemini' || provider === 'stepfun') {
+    return 'openai';
+  }
+  if (provider === 'youdaozhiyun') {
     return 'openai';
   }
   if (provider === 'anthropic') {
@@ -250,6 +270,16 @@ const getProviderDefaultBaseUrl = (
 ): string | null => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
   return defaults ? defaults[apiFormat] : null;
+};
+const resolveBaseUrl = (
+  provider: ProviderType,
+  baseUrl: string,
+  apiFormat: 'anthropic' | 'openai'
+): string => {
+  if (baseUrl.trim()) return baseUrl;
+  return getProviderDefaultBaseUrl(provider, apiFormat)
+    || defaultConfig.providers?.[provider]?.baseUrl
+    || '';
 };
 const shouldAutoSwitchProviderBaseUrl = (provider: ProviderType, currentBaseUrl: string): boolean => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
@@ -286,7 +316,8 @@ const buildOpenAICompatibleChatCompletionsUrl = (baseUrl: string, provider: stri
     return `${normalized}/v1beta/openai/chat/completions`;
   }
 
-  if (normalized.endsWith('/v1')) {
+  // Handle /v1, /v4 etc. versioned paths
+  if (/\/v\d+$/.test(normalized)) {
     return `${normalized}/chat/completions`;
   }
   return `${normalized}/v1/chat/completions`;
@@ -349,18 +380,20 @@ const getDefaultActiveProvider = (): ProviderType => {
   return firstEnabledProvider ?? providerKeys[0];
 };
 
-const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
+const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
   const dispatch = useDispatch();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
+  const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(notice ?? null);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<ProviderConnectionTestResult | null>(null);
+  const [isTestResultModalOpen, setIsTestResultModalOpen] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isImportingProviders, setIsImportingProviders] = useState(false);
   const [isExportingProviders, setIsExportingProviders] = useState(false);
@@ -370,13 +403,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
+  const [showApiKey, setShowApiKey] = useState(false);
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+
+  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled);
   
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const emailCopiedTimerRef = useRef<number | null>(null);
+  const updateCheckTimerRef = useRef<number | null>(null);
   
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
@@ -394,8 +432,111 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [modelFormError, setModelFormError] = useState<string | null>(null);
 
+  // About tab
+  const [appVersion, setAppVersion] = useState('');
+  const [emailCopied, setEmailCopied] = useState(false);
+  const [isExportingLogs, setIsExportingLogs] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [logoClickCount, setLogoClickCount] = useState(0);
+  const [testModeUnlocked, setTestModeUnlocked] = useState(false);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error'>('idle');
+
+  useEffect(() => {
+    window.electron.appInfo.getVersion().then(setAppVersion);
+  }, []);
+
+  useEffect(() => {
+    setShowApiKey(false);
+  }, [activeProvider]);
+
+  const handleCopyContactEmail = useCallback(async () => {
+    const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
+    if (copied) {
+      setEmailCopied(true);
+      if (emailCopiedTimerRef.current != null) {
+        window.clearTimeout(emailCopiedTimerRef.current);
+      }
+      emailCopiedTimerRef.current = window.setTimeout(() => {
+        setEmailCopied(false);
+        emailCopiedTimerRef.current = null;
+      }, 1200);
+    }
+  }, []);
+
+  const handleCheckUpdate = useCallback(async () => {
+    if (updateCheckStatus === 'checking' || !appVersion) return;
+    setUpdateCheckStatus('checking');
+    try {
+      const info = await checkForAppUpdate(appVersion);
+      if (info) {
+        setUpdateCheckStatus('idle');
+        onUpdateFound?.(info);
+      } else {
+        setUpdateCheckStatus('upToDate');
+        if (updateCheckTimerRef.current != null) {
+          window.clearTimeout(updateCheckTimerRef.current);
+        }
+        updateCheckTimerRef.current = window.setTimeout(() => {
+          setUpdateCheckStatus('idle');
+          updateCheckTimerRef.current = null;
+        }, 3000);
+      }
+    } catch {
+      setUpdateCheckStatus('error');
+      if (updateCheckTimerRef.current != null) {
+        window.clearTimeout(updateCheckTimerRef.current);
+      }
+      updateCheckTimerRef.current = window.setTimeout(() => {
+        setUpdateCheckStatus('idle');
+        updateCheckTimerRef.current = null;
+      }, 3000);
+    }
+  }, [appVersion, updateCheckStatus, onUpdateFound]);
+
+  const handleOpenUserManual = useCallback(() => {
+    void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
+  }, []);
+
+  const handleOpenServiceTerms = useCallback(() => {
+    void window.electron.shell.openExternal(ABOUT_SERVICE_TERMS_URL);
+  }, []);
+
+  const handleExportLogs = useCallback(async () => {
+    if (isExportingLogs) {
+      return;
+    }
+
+    setError(null);
+    setNoticeMessage(null);
+    setIsExportingLogs(true);
+    try {
+      const result = await window.electron.log.exportZip();
+      if (!result.success) {
+        setError(result.error || i18nService.t('aboutExportLogsFailed'));
+        return;
+      }
+      if (result.canceled) {
+        return;
+      }
+
+      if (result.path) {
+        await window.electron.shell.showItemInFolder(result.path);
+      }
+
+      if ((result.missingEntries?.length ?? 0) > 0) {
+        const missingList = result.missingEntries?.join(', ') || '';
+        setNoticeMessage(`${i18nService.t('aboutExportLogsPartial')}: ${missingList}`);
+      } else {
+        setNoticeMessage(i18nService.t('aboutExportLogsSuccess'));
+      }
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : i18nService.t('aboutExportLogsFailed'));
+    } finally {
+      setIsExportingLogs(false);
+    }
+  }, [isExportingLogs]);
+
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
-  const imConfig = useSelector((state: RootState) => state.im.config);
 
   const [coworkExecutionMode, setCoworkExecutionMode] = useState<CoworkExecutionMode>(coworkConfig.executionMode || 'local');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
@@ -421,6 +562,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
+
+  useEffect(() => () => {
+    if (emailCopiedTimerRef.current != null) {
+      window.clearTimeout(emailCopiedTimerRef.current);
+    }
+    if (updateCheckTimerRef.current != null) {
+      window.clearTimeout(updateCheckTimerRef.current);
+    }
+  }, []);
 
   const loadCoworkSandboxStatus = useCallback(async () => {
     setCoworkSandboxLoading(true);
@@ -461,6 +611,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       initialLanguageRef.current = config.language;
       setTheme(config.theme);
       setLanguage(config.language);
+      setUseSystemProxy(config.useSystemProxy ?? false);
+      const savedTestMode = config.app?.testMode ?? false;
+      setTestMode(savedTestMode);
+      if (savedTestMode) setTestModeUnlocked(true);
 
       // Load auto-launch setting
       window.electron.autoLaunch.get().then(({ enabled }) => {
@@ -529,12 +683,34 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               baseUrl: config.api.baseUrl
             }
           }));
+        } else if (normalizedApiBaseUrl.includes('openapi.youdao.com')) {
+          setActiveProvider('youdaozhiyun');
+          setProviders(prev => ({
+            ...prev,
+            youdaozhiyun: {
+              ...prev.youdaozhiyun,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
         } else if (normalizedApiBaseUrl.includes('dashscope')) {
           setActiveProvider('qwen');
           setProviders(prev => ({
             ...prev,
             qwen: {
               ...prev.qwen,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
+        } else if (normalizedApiBaseUrl.includes('stepfun')) {
+          setActiveProvider('stepfun');
+          setProviders(prev => ({
+            ...prev,
+            stepfun: {
+              ...prev.stepfun,
               enabled: true,
               apiKey: config.api.key,
               baseUrl: config.api.baseUrl
@@ -595,6 +771,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             ...prev,  // 保留默认的 providers（包括新添加的 anthropic）
             ...config.providers,  // 覆盖已保存的配置
           };
+
+          // After merging, find the first enabled provider to set as activeProvider
+          // This ensures we don't use stale activeProvider from old config.api.baseUrl
+          const firstEnabledProvider = providerKeys.find(providerKey => merged[providerKey]?.enabled);
+          if (firstEnabledProvider) {
+            setActiveProvider(firstEnabledProvider);
+          }
+
           return Object.fromEntries(
             Object.entries(merged).map(([providerKey, providerConfig]) => {
               const models = providerConfig.models?.map(model => ({
@@ -695,6 +879,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setModelFormError(null);
     setActiveProvider(provider);
     // 切换 provider 时清除测试结果
+    setIsTestResultModalOpen(false);
     setTestResult(null);
   };
 
@@ -719,6 +904,54 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         return {
           ...prev,
           [provider]: nextProviderConfig,
+        };
+      }
+
+      // Handle codingPlanEnabled toggle for zhipu
+      if (field === 'codingPlanEnabled' && provider === 'zhipu') {
+        const codingPlanEnabled = value === 'true';
+        return {
+          ...prev,
+          zhipu: {
+            ...prev.zhipu,
+            codingPlanEnabled,
+          },
+        };
+      }
+
+      // Handle codingPlanEnabled toggle for qwen
+      if (field === 'codingPlanEnabled' && provider === 'qwen') {
+        const codingPlanEnabled = value === 'true';
+        return {
+          ...prev,
+          qwen: {
+            ...prev.qwen,
+            codingPlanEnabled,
+          },
+        };
+      }
+
+      // Handle codingPlanEnabled toggle for volcengine
+      if (field === 'codingPlanEnabled' && provider === 'volcengine') {
+        const codingPlanEnabled = value === 'true';
+        return {
+          ...prev,
+          volcengine: {
+            ...prev.volcengine,
+            codingPlanEnabled,
+          },
+        };
+      }
+
+      // Handle codingPlanEnabled toggle for moonshot
+      if (field === 'codingPlanEnabled' && provider === 'moonshot') {
+        const codingPlanEnabled = value === 'true';
+        return {
+          ...prev,
+          moonshot: {
+            ...prev.moonshot,
+            codingPlanEnabled,
+          },
         };
       }
 
@@ -901,6 +1134,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     }));
   };
 
+  const enableProvider = (provider: ProviderType) => {
+    setProviders(prev => {
+      if (prev[provider].enabled) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [provider]: {
+          ...prev[provider],
+          enabled: true,
+        },
+      };
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSaving(true);
@@ -908,14 +1157,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
 
     try {
       const normalizedProviders = Object.fromEntries(
-        Object.entries(providers).map(([providerKey, providerConfig]) => [
-          providerKey,
-          {
-            ...providerConfig,
-            apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
-            openaiApiType: getEffectiveOpenAIApiType(providerKey, providerConfig.openaiApiType),
-          },
-        ])
+        Object.entries(providers).map(([providerKey, providerConfig]) => {
+          const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
+          return [
+            providerKey,
+            {
+              ...providerConfig,
+              apiFormat,
+              baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+              openaiApiType: getEffectiveOpenAIApiType(providerKey, providerConfig.openaiApiType),
+            },
+          ];
+        })
       ) as ProvidersConfig;
 
       // Find the first enabled provider to use as the primary API
@@ -938,7 +1191,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         providers: normalizedProviders, // Save all providers configuration
         theme,
         language,
+        useSystemProxy,
         shortcuts,
+        app: {
+          ...configService.getConfig().app,
+          testMode,
+        },
       });
 
       // 应用主题
@@ -955,7 +1213,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       });
 
       // 更新 Redux store 中的可用模型列表
-      const allModels: { id: string; name: string; provider?: string; supportsImage?: boolean }[] = [];
+      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
       Object.entries(normalizedProviders).forEach(([providerName, config]) => {
         if (config.enabled && config.models) {
           config.models.forEach(model => {
@@ -963,6 +1221,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               id: model.id,
               name: model.name,
               provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
           });
@@ -977,9 +1236,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
       }
-
-      // Save IM config
-      await imService.updateConfig(imConfig);
 
       didSaveRef.current = true;
       onClose();
@@ -1055,12 +1311,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   };
 
   const handleSaveNewModel = () => {
-    const modelName = newModelName.trim();
     const modelId = newModelId.trim();
-    if (!modelName || !modelId) {
-      setModelFormError(i18nService.t('modelNameAndIdRequired'));
-      return;
+
+    if (activeProvider === 'ollama') {
+      // For Ollama, only the model name (stored as modelId) is required
+      if (!modelId) {
+        setModelFormError(i18nService.t('ollamaModelNameRequired'));
+        return;
+      }
+    } else {
+      const modelName = newModelName.trim();
+      if (!modelName || !modelId) {
+        setModelFormError(i18nService.t('modelNameAndIdRequired'));
+        return;
+      }
     }
+
+    // For Ollama, auto-fill display name from modelId if not provided
+    const modelName = activeProvider === 'ollama'
+      ? (newModelName.trim() && newModelName.trim() !== modelId ? newModelName.trim() : modelId)
+      : newModelName.trim();
 
     const currentModels = providers[activeProvider].models ?? [];
     const duplicateModel = currentModels.find(
@@ -1119,15 +1389,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     }
   };
 
+  const showTestResultModal = (
+    result: Omit<ProviderConnectionTestResult, 'provider'>,
+    provider: ProviderType
+  ) => {
+    setTestResult({
+      ...result,
+      provider,
+    });
+    setIsTestResultModalOpen(true);
+  };
+
   // 测试 API 连接
   const handleTestConnection = async () => {
+    const testingProvider = activeProvider;
+    const providerConfig = providers[testingProvider];
     setIsTesting(true);
+    setIsTestResultModalOpen(false);
     setTestResult(null);
 
-    const providerConfig = providers[activeProvider];
-
-    if (providerRequiresApiKey(activeProvider) && !providerConfig.apiKey) {
-      setTestResult({ success: false, message: i18nService.t('apiKeyRequired') });
+    if (providerRequiresApiKey(testingProvider) && !providerConfig.apiKey) {
+      showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
       setIsTesting(false);
       return;
     }
@@ -1135,20 +1417,60 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     // 获取第一个可用模型
     const firstModel = providerConfig.models?.[0];
     if (!firstModel) {
-      setTestResult({ success: false, message: i18nService.t('noModelsConfigured') });
+      showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider);
       setIsTesting(false);
       return;
     }
 
     try {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
-      const normalizedBaseUrl = providerConfig.baseUrl.replace(/\/+$/, '');
-
+      // Apply Coding Plan endpoint switch
+      let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, getEffectiveApiFormat(testingProvider, providerConfig.apiFormat));
+      let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
+      
+      // Handle Zhipu GLM Coding Plan endpoint switch
+      if (testingProvider === 'zhipu' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+        if (effectiveApiFormat === 'anthropic') {
+          effectiveBaseUrl = 'https://open.bigmodel.cn/api/anthropic';
+        } else {
+          effectiveBaseUrl = 'https://open.bigmodel.cn/api/coding/paas/v4';
+          effectiveApiFormat = 'openai';
+        }
+      }
+      // Handle Qwen Coding Plan endpoint switch
+      if (testingProvider === 'qwen' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+        if (effectiveApiFormat === 'anthropic') {
+          effectiveBaseUrl = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
+        } else {
+          effectiveBaseUrl = 'https://coding.dashscope.aliyuncs.com/v1';
+          effectiveApiFormat = 'openai';
+        }
+      }
+      // Handle Volcengine Coding Plan endpoint switch
+      if (testingProvider === 'volcengine' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+        if (effectiveApiFormat === 'anthropic') {
+          effectiveBaseUrl = 'https://ark.cn-beijing.volces.com/api/coding';
+        } else {
+          effectiveBaseUrl = 'https://ark.cn-beijing.volces.com/api/coding/v3';
+          effectiveApiFormat = 'openai';
+        }
+      }
+      // Handle Moonshot Coding Plan endpoint switch
+      if (testingProvider === 'moonshot' && (providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled) {
+        if (effectiveApiFormat === 'anthropic') {
+          effectiveBaseUrl = 'https://api.kimi.com/coding';
+        } else {
+          effectiveBaseUrl = 'https://api.kimi.com/coding/v1';
+          effectiveApiFormat = 'openai';
+        }
+      }
+      
+      const normalizedBaseUrl = effectiveBaseUrl.replace(/\/+$/, '');
       // 统一为两种协议格式：
       // - anthropic: /v1/messages
       // - openai provider: 根据 OpenAI 接口类型在 /v1/responses 与 /v1/chat/completions 间切换
       // - other openai-compatible providers: /v1/chat/completions
-      const useAnthropicFormat = getEffectiveApiFormat(activeProvider, providerConfig.apiFormat) === 'anthropic';
+      const useAnthropicFormat = effectiveApiFormat === 'anthropic';
 
       if (useAnthropicFormat) {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
@@ -1169,10 +1491,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           }),
         });
       } else {
-        const useResponsesApi = shouldUseOpenAIResponsesForProvider(activeProvider, providerConfig.openaiApiType);
+        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider, providerConfig.openaiApiType);
         const openaiUrl = useResponsesApi
           ? buildOpenAIResponsesUrl(normalizedBaseUrl)
-          : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, activeProvider);
+          : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, testingProvider);
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
@@ -1189,7 +1511,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               model: firstModel.id,
               messages: [{ role: 'user', content: 'Hi' }],
             };
-        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(activeProvider, firstModel.id)) {
+        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(testingProvider, firstModel.id)) {
           openAIRequestBody.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
         } else {
           if (!useResponsesApi) {
@@ -1205,25 +1527,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       }
 
       if (response.ok) {
-        setTestResult({ success: true, message: i18nService.t('connectionSuccess') });
+        enableProvider(testingProvider);
+        showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
       } else {
         const data = response.data || {};
         // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
         if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
-          setTestResult({ success: true, message: i18nService.t('connectionSuccess') });
+          enableProvider(testingProvider);
+          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
           return;
         }
-        setTestResult({
-          success: false,
-          message: errorMessage,
-        });
+        showTestResultModal({ success: false, message: errorMessage }, testingProvider);
       }
     } catch (err) {
-      setTestResult({
+      showTestResultModal({
         success: false,
         message: err instanceof Error ? err.message : i18nService.t('connectionFailed'),
-      });
+      }, testingProvider);
     } finally {
       setIsTesting(false);
     }
@@ -1233,14 +1554,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     const entries = await Promise.all(
       Object.entries(providers).map(async ([providerKey, providerConfig]) => {
         const apiKey = await encryptWithPassword(providerConfig.apiKey, password);
+        const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
         return [
           providerKey,
           {
             enabled: providerConfig.enabled,
             apiKey,
-            baseUrl: providerConfig.baseUrl,
-            apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
+            baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+            apiFormat,
             openaiApiType: getEffectiveOpenAIApiType(providerKey, providerConfig.openaiApiType),
+            codingPlanEnabled: (providerConfig as ProviderConfig).codingPlanEnabled,
             models: providerConfig.models,
           },
         ] as const;
@@ -1377,8 +1700,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           apiKey: apiKey ?? providers[providerKey].apiKey,
           baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
           apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          openaiApiType: getEffectiveOpenAIApiType(providerKey, providerData.openaiApiType ?? providers[providerKey].openaiApiType),
-          models: models ?? providers[providerKey].models,
+          openaiApiType: getEffectiveOpenAIApiType(providerKey, providerData.openaiApiType ?? providers[providerKey].openaiApiType),          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,          models: models ?? providers[providerKey].models,
         };
       }
 
@@ -1397,6 +1719,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         });
         return next;
       });
+      setIsTestResultModalOpen(false);
       setTestResult(null);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
@@ -1454,8 +1777,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           apiKey: apiKey ?? providers[providerKey].apiKey,
           baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
           apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          openaiApiType: getEffectiveOpenAIApiType(providerKey, providerData.openaiApiType ?? providers[providerKey].openaiApiType),
-          models: models ?? providers[providerKey].models,
+          openaiApiType: getEffectiveOpenAIApiType(providerKey, providerData.openaiApiType ?? providers[providerKey].openaiApiType),          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,          models: models ?? providers[providerKey].models,
         };
       }
 
@@ -1485,6 +1807,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         });
         return next;
       });
+      setIsTestResultModalOpen(false);
       setTestResult(null);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
@@ -1511,6 +1834,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
     { key: 'coworkSandbox',  label: i18nService.t('coworkSandbox'),  icon: <ShieldCheckIcon className="h-5 w-5" /> },
     { key: 'shortcuts',      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
+    { key: 'about',          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
   ], [language]);
 
   const activeTabLabel = useMemo(() => {
@@ -1587,6 +1911,37 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                       autoLaunch ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+
+            {/* System proxy Section */}
+            <div>
+              <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('useSystemProxy')}
+              </h4>
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-sm dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                  {i18nService.t('useSystemProxyDescription')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={useSystemProxy}
+                  onClick={() => {
+                    setUseSystemProxy((prev) => !prev);
+                  }}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    useSystemProxy
+                      ? 'bg-claude-accent'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      useSystemProxy ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
@@ -2050,7 +2405,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             </div>
 
             {/* Provider Settings - Right Side */}
-            <div className="w-3/5 pl-4 space-y-4 overflow-y-auto">
+            <div className="w-3/5 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
               <div className="flex items-center justify-between pb-2 border-b dark:border-claude-darkBorder border-claude-border">
                 <h3 className="text-base font-medium dark:text-claude-darkText text-claude-text">
                   {(providerMeta[activeProvider]?.label ?? activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1))} {i18nService.t('providerSettings')}
@@ -2071,14 +2426,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                     {i18nService.t('apiKey')}
                   </label>
-                  <input
-                    type="password"
-                    id={`${activeProvider}-apiKey`}
-                    value={providers[activeProvider].apiKey}
-                    onChange={(e) => handleProviderConfigChange(activeProvider, 'apiKey', e.target.value)}
-                    className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                    placeholder={i18nService.t('apiKeyPlaceholder')}
-                  />
+                  <div className="relative">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      id={`${activeProvider}-apiKey`}
+                      value={providers[activeProvider].apiKey}
+                      onChange={(e) => handleProviderConfigChange(activeProvider, 'apiKey', e.target.value)}
+                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-xs"
+                      placeholder={i18nService.t('apiKeyPlaceholder')}
+                    />
+                    <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                      {providers[activeProvider].apiKey && (
+                        <button
+                          type="button"
+                          onClick={() => handleProviderConfigChange(activeProvider, 'apiKey', '')}
+                          className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                          title={i18nService.t('clear') || 'Clear'}
+                        >
+                          <XCircleIconSolid className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                        title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                      >
+                        {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -2086,14 +2463,93 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 <label htmlFor={`${activeProvider}-baseUrl`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                   {i18nService.t('baseUrl')}
                 </label>
-                <input
-                  type="text"
-                  id={`${activeProvider}-baseUrl`}
-                  value={providers[activeProvider].baseUrl}
-                  onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
-                  className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                  placeholder={i18nService.t('baseUrlPlaceholder')}
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    id={`${activeProvider}-baseUrl`}
+                    value={
+                      activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled
+                        ? (getEffectiveApiFormat('zhipu', providers.zhipu.apiFormat) === 'anthropic'
+                            ? 'https://open.bigmodel.cn/api/anthropic'
+                            : 'https://open.bigmodel.cn/api/coding/paas/v4')
+                        : activeProvider === 'qwen' && providers.qwen.codingPlanEnabled
+                          ? (getEffectiveApiFormat('qwen', providers.qwen.apiFormat) === 'anthropic'
+                              ? 'https://coding.dashscope.aliyuncs.com/apps/anthropic'
+                              : 'https://coding.dashscope.aliyuncs.com/v1')
+                          : activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled
+                            ? (getEffectiveApiFormat('volcengine', providers.volcengine.apiFormat) === 'anthropic'
+                                ? 'https://ark.cn-beijing.volces.com/api/coding'
+                                : 'https://ark.cn-beijing.volces.com/api/coding/v3')
+                            : activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled
+                              ? (getEffectiveApiFormat('moonshot', providers.moonshot.apiFormat) === 'anthropic'
+                                  ? 'https://api.kimi.com/coding'
+                                  : 'https://api.kimi.com/coding/v1')
+                              : providers[activeProvider].baseUrl
+                    }
+                    onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
+                    disabled={isBaseUrlLocked}
+                    className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-xs ${isBaseUrlLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    placeholder={getProviderDefaultBaseUrl(activeProvider, getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat)) || defaultConfig.providers?.[activeProvider]?.baseUrl || i18nService.t('baseUrlPlaceholder')}
+                  />
+                  {providers[activeProvider].baseUrl && !isBaseUrlLocked && (
+                    <div className="absolute right-2 inset-y-0 flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => handleProviderConfigChange(activeProvider, 'baseUrl', '')}
+                        className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                        title={i18nService.t('clear') || 'Clear'}
+                      >
+                        <XCircleIconSolid className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {activeProvider === 'custom' && (
+                <div className="mt-1.5 space-y-0.5 text-[11px] text-claude-secondaryText dark:text-claude-darkSecondaryText">
+                  <p>
+                    <span className="text-sm text-claude-accent/50 mr-1">•</span>
+                    {i18nService.t('baseUrlHint1')}
+                    <code className="ml-1 text-claude-accent/80 dark:text-claude-accent/70 break-all">{i18nService.t('baseUrlHintExample1')}</code>
+                  </p>
+                  <p>
+                    <span className="text-sm text-claude-accent/50 mr-1">•</span>
+                    {i18nService.t('baseUrlHint2')}
+                    <code className="ml-1 text-claude-accent/80 dark:text-claude-accent/70 break-all">{i18nService.t('baseUrlHintExample2')}</code>
+                  </p>
+                </div>
+                )}
+                {/* GLM Coding Plan 提示 */}
+                {activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled && (
+                  <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                    <p className="text-[11px] text-claude-accent dark:text-claude-accent">
+                      <span className="font-medium">GLM Coding Plan:</span> {i18nService.t('zhipuCodingPlanEndpointHint')}
+                    </p>
+                  </div>
+                )}
+                {/* Qwen Coding Plan 提示 */}
+                {activeProvider === 'qwen' && providers.qwen.codingPlanEnabled && (
+                  <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                    <p className="text-[11px] text-claude-accent dark:text-claude-accent">
+                      <span className="font-medium">Coding Plan:</span> {i18nService.t('qwenCodingPlanEndpointHint')}
+                    </p>
+                  </div>
+                )}
+                {/* Volcengine Coding Plan 提示 */}
+                {activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled && (
+                  <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                    <p className="text-[11px] text-claude-accent dark:text-claude-accent">
+                      <span className="font-medium">Coding Plan:</span> {i18nService.t('volcengineCodingPlanEndpointHint')}
+                    </p>
+                  </div>
+                )}
+                {/* Moonshot Coding Plan 提示 */}
+                {activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled && (
+                  <div className="mt-1.5 p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                    <p className="text-[11px] text-claude-accent dark:text-claude-accent">
+                      <span className="font-medium">Coding Plan:</span> {i18nService.t('moonshotCodingPlanEndpointHint')}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* API 格式选择器 */}
@@ -2187,6 +2643,117 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   </p>
                 </div>
               )}
+              {/* GLM Coding Plan 开关 (仅 Zhipu) */}
+              {activeProvider === 'zhipu' && (
+                <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                        GLM Coding Plan
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                        Beta
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('zhipuCodingPlanHint')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-3">
+                    <input
+                      type="checkbox"
+                      checked={providers.zhipu.codingPlanEnabled ?? false}
+                      onChange={(e) => handleProviderConfigChange('zhipu', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
+                  </label>
+                </div>
+              )}
+
+              {/* Qwen Coding Plan 开关 (仅 Qwen) */}
+              {activeProvider === 'qwen' && (
+                <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                        Coding Plan
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                        订阅套餐
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('qwenCodingPlanHint')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-3">
+                    <input
+                      type="checkbox"
+                      checked={providers.qwen.codingPlanEnabled ?? false}
+                      onChange={(e) => handleProviderConfigChange('qwen', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
+                  </label>
+                </div>
+              )}
+
+              {/* Volcengine Coding Plan 开关 (仅 Volcengine) */}
+              {activeProvider === 'volcengine' && (
+                <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                        Coding Plan
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                        Beta
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('volcengineCodingPlanHint')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-3">
+                    <input
+                      type="checkbox"
+                      checked={providers.volcengine.codingPlanEnabled ?? false}
+                      onChange={(e) => handleProviderConfigChange('volcengine', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
+                  </label>
+                </div>
+              )}
+
+              {/* Moonshot Coding Plan 开关 (仅 Moonshot) */}
+              {activeProvider === 'moonshot' && (
+                <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                        Coding Plan
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                        Beta
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('moonshotCodingPlanHint')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer ml-3">
+                    <input
+                      type="checkbox"
+                      checked={providers.moonshot.codingPlanEnabled ?? false}
+                      onChange={(e) => handleProviderConfigChange('moonshot', 'codingPlanEnabled', e.target.checked ? 'true' : 'false')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-claude-accent/50 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-claude-accent"></div>
+                  </label>
+                </div>
+              )}
 
               {/* 测试连接按钮 */}
               <div className="flex items-center space-x-3">
@@ -2199,16 +2766,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
                   {isTesting ? i18nService.t('testing') : i18nService.t('testConnection')}
                 </button>
-                {testResult && (
-                  <div className={`flex items-center text-xs ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {testResult.success ? (
-                      <CheckCircleIcon className="h-4 w-4 mr-1" />
-                    ) : (
-                      <XCircleIcon className="h-4 w-4 mr-1" />
-                    )}
-                    <span className="truncate max-w-[200px]">{testResult.message}</span>
-                  </div>
-                )}
               </div>
 
               <div>
@@ -2227,7 +2784,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 </div>
 
                 {/* Models List */}
-                <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
                   {providers[activeProvider].models?.map(model => (
                     <div
                       key={model.id}
@@ -2250,14 +2807,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                             onClick={() => handleEditModel(model.id, model.name, model.supportsImage)}
                             className="p-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent opacity-0 group-hover:opacity-100 transition-opacity"
                           >
-                            <PencilIcon className="h-3 w-3" />
+                            <PencilIcon className="h-3.5 w-3.5" />
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDeleteModel(model.id)}
                             className="p-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                           >
-                            <TrashIcon className="h-3 w-3" />
+                            <TrashIcon className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>
@@ -2329,6 +2886,140 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       case 'im':
         return <IMSettings />;
 
+      case 'about':
+        return (
+          <div className="flex min-h-full flex-col items-center pt-6 pb-3">
+            {/* Logo & App Name */}
+            <img
+              src="logo.png"
+              alt="LobsterAI"
+              className="w-16 h-16 mb-3 cursor-pointer select-none"
+              onClick={() => {
+                const next = logoClickCount + 1;
+                setLogoClickCount(next);
+                if (next >= 10 && !testModeUnlocked) {
+                  setTestModeUnlocked(true);
+                }
+              }}
+            />
+            <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
+            <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
+
+            {/* Info Card */}
+            <div className="w-full mt-8 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
+                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutVersion')}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{appVersion}</span>
+                  <button
+                    type="button"
+                    disabled={updateCheckStatus === 'checking'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCheckUpdate();
+                    }}
+                    className="text-xs px-2 py-0.5 rounded-md border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent hover:border-claude-accent dark:hover:border-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {updateCheckStatus === 'checking' && i18nService.t('updateChecking')}
+                    {updateCheckStatus === 'upToDate' && i18nService.t('updateUpToDate')}
+                    {updateCheckStatus === 'error' && i18nService.t('updateCheckFailed')}
+                    {updateCheckStatus === 'idle' && i18nService.t('checkForUpdate')}
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
+                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutContactEmail')}</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCopyContactEmail();
+                    }}
+                    title={i18nService.t('copyToClipboard')}
+                    className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary bg-transparent border-none appearance-none p-0 m-0 cursor-pointer focus:outline-none"
+                  >
+                    {ABOUT_CONTACT_EMAIL}
+                  </button>
+                  {emailCopied && (
+                    <span className="text-[11px] leading-4 text-emerald-600 dark:text-emerald-400">
+                      {language === 'zh' ? '已复制' : 'Copied'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className={`flex items-center justify-between px-4 py-3${testModeUnlocked ? ' border-b border-claude-border dark:border-claude-darkBorder' : ''}`}>
+                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutUserManual')}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenUserManual();
+                  }}
+                  className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                >
+                  {ABOUT_USER_MANUAL_URL}
+                </button>
+              </div>
+              {testModeUnlocked && (
+                <div className="flex items-center justify-between px-4 py-3">
+                  <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('testMode')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={testMode}
+                    onClick={() => setTestMode((prev) => !prev)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                      testMode ? 'bg-claude-accent' : 'bg-gray-300 dark:bg-gray-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        testMode ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="mt-auto w-full pt-14 pb-2 flex flex-col items-center">
+              <div className="flex items-center justify-center text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenServiceTerms();
+                  }}
+                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
+                >
+                  {i18nService.t('aboutServiceTerms')}
+                </button>
+                <span className="mx-3 text-xs opacity-40">|</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleExportLogs();
+                  }}
+                  disabled={isExportingLogs}
+                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-claude-accent dark:hover:text-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isExportingLogs ? i18nService.t('aboutExportingLogs') : i18nService.t('aboutExportLogs')}
+                </button>
+              </div>
+
+              <p className="mt-5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {language === 'zh' ? '网易有道 版权所有' : 'NetEase Youdao. All rights reserved.'}
+              </p>
+              <p className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Copyright &copy; {new Date().getFullYear()} NetEase Youdao. All Rights Reserved.
+              </p>
+            </div>
+          </div>
+        );
+
       default:
         return null;
     }
@@ -2340,7 +3031,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       onClick={onClose}
     >
       <div
-        className="flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
+        className="relative flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
         {/* Left sidebar */}
@@ -2402,6 +3093,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             <div
               ref={contentRef}
               className="px-6 py-4 flex-1 overflow-y-auto"
+              style={{ scrollbarGutter: 'stable' }}
             >
               {renderTabContent()}
             </div>
@@ -2425,11 +3117,68 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             </div>
           </form>
 
-          {(isAddingModel || isEditingModel) && (
+        </div>
+
+        {isTestResultModalOpen && testResult && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={() => setIsTestResultModalOpen(false)}
+          >
             <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4"
-              onClick={handleCancelModelEdit}
+              role="dialog"
+              aria-modal="true"
+              aria-label={i18nService.t('connectionTestResult')}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-2xl dark:bg-claude-darkSurface bg-claude-bg dark:border-claude-darkBorder border-claude-border border shadow-modal p-4"
             >
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('connectionTestResult')}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setIsTestResultModalOpen(false)}
+                  className="p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
+                <span className="text-[11px]">•</span>
+                <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {testResult.success ? (
+                    <CheckCircleIcon className="h-4 w-4" />
+                  ) : (
+                    <XCircleIcon className="h-4 w-4" />
+                  )}
+                  {testResult.success ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}
+                </span>
+              </div>
+
+              <p className="mt-3 text-xs leading-5 dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
+                {testResult.message}
+              </p>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsTestResultModalOpen(false)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors active:scale-[0.98]"
+                >
+                  {i18nService.t('close')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {(isAddingModel || isEditingModel) && (
+          <div
+            className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={handleCancelModelEdit}
+          >
               <div
                 role="dialog"
                 aria-modal="true"
@@ -2458,41 +3207,92 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 )}
 
                 <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                      {i18nService.t('modelName')}
-                    </label>
-                    <input
-                      autoFocus
-                      type="text"
-                      value={newModelName}
-                      onChange={(e) => {
-                        setNewModelName(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                      placeholder="GPT-4"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                      {i18nService.t('modelId')}
-                    </label>
-                    <input
-                      type="text"
-                      value={newModelId}
-                      onChange={(e) => {
-                        setNewModelId(e.target.value);
-                        if (modelFormError) {
-                          setModelFormError(null);
-                        }
-                      }}
-                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                      placeholder="gpt-4"
-                    />
-                  </div>
+                  {activeProvider === 'ollama' ? (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('ollamaModelName')}
+                        </label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={newModelId}
+                          onChange={(e) => {
+                            setNewModelId(e.target.value);
+                            if (!newModelName || newModelName === newModelId) {
+                              setNewModelName(e.target.value);
+                            }
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder={i18nService.t('ollamaModelNamePlaceholder')}
+                        />
+                        <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
+                          {i18nService.t('ollamaModelNameHint')}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('ollamaDisplayName')}
+                        </label>
+                        <input
+                          type="text"
+                          value={newModelName === newModelId ? '' : newModelName}
+                          onChange={(e) => {
+                            setNewModelName(e.target.value || newModelId);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder={i18nService.t('ollamaDisplayNamePlaceholder')}
+                        />
+                        <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
+                          {i18nService.t('ollamaDisplayNameHint')}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('modelName')}
+                        </label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={newModelName}
+                          onChange={(e) => {
+                            setNewModelName(e.target.value);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder="GPT-4"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                          {i18nService.t('modelId')}
+                        </label>
+                        <input
+                          type="text"
+                          value={newModelId}
+                          onChange={(e) => {
+                            setNewModelId(e.target.value);
+                            if (modelFormError) {
+                              setModelFormError(null);
+                            }
+                          }}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                          placeholder="gpt-4"
+                        />
+                      </div>
+                    </>
+                  )}
                   <div className="flex items-center space-x-2">
                     <input
                       id={`${activeProvider}-supportsImage`}
@@ -2533,7 +3333,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
           {/* Memory Modal */}
           {showMemoryModal && (
             <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4"
+              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
               onClick={resetCoworkMemoryEditor}
             >
               <div
@@ -2581,7 +3381,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
               </div>
             </div>
           )}
-        </div>
       </div>
     </div>
   );

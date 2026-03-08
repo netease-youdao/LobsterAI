@@ -6,6 +6,9 @@ import { execSync, spawn, spawnSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
+import { cpRecursiveSync } from './fsCompat';
+import { getElectronNodeRuntimePath } from './libs/coworkUtil';
+import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -17,8 +20,8 @@ function resolveUserShellPath(): string | null {
 
   try {
     const shell = process.env.SHELL || '/bin/bash';
-    // Use login-interactive shell to source profile, then print PATH
-    const result = execSync(`${shell} -ilc 'echo __PATH__=$PATH'`, {
+    // Use non-interactive login shell to avoid side effects in interactive startup scripts.
+    const result = execSync(`${shell} -lc 'echo __PATH__=$PATH'`, {
       encoding: 'utf-8',
       timeout: 5000,
       env: { ...process.env },
@@ -37,6 +40,7 @@ function resolveUserShellPath(): string | null {
  */
 function buildSkillServiceEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
+  const electronNodeRuntimePath = getElectronNodeRuntimePath();
 
   if (app.isPackaged) {
     if (!env.HOME) {
@@ -63,7 +67,8 @@ function buildSkillServiceEnv(): Record<string, string | undefined> {
 
   // Expose Electron executable so skill scripts can run JS with ELECTRON_RUN_AS_NODE
   // even when system Node.js is not installed.
-  env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+  env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+  appendPythonRuntimeToEnv(env);
 
   return env;
 }
@@ -93,6 +98,74 @@ export class SkillServiceManager {
     }
   }
 
+  private hasLegacyWebSearchEncodingHeuristic(serverEntry: string): boolean {
+    try {
+      const content = fs.readFileSync(serverEntry, 'utf-8');
+      return content.includes('scoreDecodedJsonText')
+        && content.includes('Request body decoded using gb18030 (score');
+    } catch {
+      return true;
+    }
+  }
+
+  private isWebSearchDistOutdated(skillPath: string): boolean {
+    const serverEntry = path.join(skillPath, 'dist', 'server', 'index.js');
+    if (!fs.existsSync(serverEntry)) {
+      return true;
+    }
+
+    if (this.hasLegacyWebSearchEncodingHeuristic(serverEntry)) {
+      return true;
+    }
+
+    const sourceDir = path.join(skillPath, 'server');
+    if (!fs.existsSync(sourceDir)) {
+      return false;
+    }
+
+    let distMtimeMs = 0;
+    try {
+      distMtimeMs = fs.statSync(serverEntry).mtimeMs;
+    } catch {
+      return true;
+    }
+
+    const queue: string[] = [sourceDir];
+    while (queue.length > 0) {
+      const current = queue.pop();
+      if (!current) continue;
+
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch {
+        return true;
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          queue.push(fullPath);
+          continue;
+        }
+
+        if (!entry.isFile() || !entry.name.endsWith('.ts')) {
+          continue;
+        }
+
+        try {
+          if (fs.statSync(fullPath).mtimeMs > distMtimeMs) {
+            return true;
+          }
+        } catch {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   private isWebSearchRuntimeHealthy(skillPath: string): boolean {
     const requiredPaths = [
       path.join(skillPath, 'scripts', 'start-server.sh'),
@@ -101,12 +174,17 @@ export class SkillServiceManager {
       path.join(skillPath, 'node_modules', 'iconv-lite', 'encodings', 'index.js'),
     ];
     return requiredPaths.every(requiredPath => fs.existsSync(requiredPath))
-      && this.hasWebSearchRuntimeScriptSupport(skillPath);
+      && this.hasWebSearchRuntimeScriptSupport(skillPath)
+      && !this.isWebSearchDistOutdated(skillPath);
   }
 
   private hasCommand(command: string, env: NodeJS.ProcessEnv): boolean {
     const checker = process.platform === 'win32' ? 'where' : 'which';
-    const result = spawnSync(checker, [command], { stdio: 'ignore', env });
+    const result = spawnSync(checker, [command], {
+      stdio: 'ignore',
+      env,
+      windowsHide: process.platform === 'win32',
+    });
     return result.status === 0;
   }
 
@@ -124,11 +202,8 @@ export class SkillServiceManager {
     }
 
     try {
-      fs.cpSync(bundledPath, skillPath, {
-        recursive: true,
-        dereference: true,
+      cpRecursiveSync(bundledPath, skillPath, {
         force: true,
-        errorOnExist: false,
       });
       console.log('[SkillServices] Repaired web-search runtime from bundled resources');
     } catch (error) {
@@ -139,12 +214,12 @@ export class SkillServiceManager {
   private resolveNodeRuntime(
     env: NodeJS.ProcessEnv
   ): { command: string; args: string[]; extraEnv?: NodeJS.ProcessEnv } {
-    if (!app.isPackaged && this.hasCommand('node', env)) {
+    if (this.hasCommand('node', env)) {
       return { command: 'node', args: [] };
     }
 
     return {
-      command: process.execPath,
+      command: getElectronNodeRuntimePath(),
       args: [],
       extraEnv: { ELECTRON_RUN_AS_NODE: '1' },
     };
@@ -174,9 +249,10 @@ export class SkillServiceManager {
       execSync('npm install', { cwd: skillPath, stdio: 'ignore', env });
     }
 
-    if (!fs.existsSync(distDir)) {
+    const shouldCompileDist = !fs.existsSync(distDir) || this.isWebSearchDistOutdated(skillPath);
+    if (shouldCompileDist) {
       if (!npmAvailable) {
-        throw new Error('Web-search dist files are missing and npm is not available to rebuild them');
+        throw new Error('Web-search dist files are missing/outdated and npm is not available to rebuild them');
       }
       console.log('[SkillServices] Compiling web-search TypeScript...');
       execSync('npm run build', { cwd: skillPath, stdio: 'ignore', env });
@@ -261,10 +337,11 @@ export class SkillServiceManager {
     this.ensureWebSearchRuntimeReady(skillPath);
     const baseEnv = this.skillEnv as NodeJS.ProcessEnv ?? process.env;
     const runtime = this.resolveNodeRuntime(baseEnv);
+    const electronNodeRuntimePath = getElectronNodeRuntimePath();
     const env = {
       ...baseEnv,
       ...(runtime.extraEnv ?? {}),
-      LOBSTERAI_ELECTRON_PATH: process.execPath,
+      LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
     };
 
     // Node/Electron validates stdio streams synchronously. Use fd to avoid
@@ -277,6 +354,7 @@ export class SkillServiceManager {
         detached: true,
         stdio: ['ignore', logFd, logFd],
         env,
+        windowsHide: process.platform === 'win32',
       });
     } finally {
       fs.closeSync(logFd);
@@ -285,7 +363,7 @@ export class SkillServiceManager {
     fs.writeFileSync(pidFile, child.pid!.toString());
     child.unref();
 
-    const runtimeLabel = runtime.command === process.execPath ? 'electron-node' : 'node';
+    const runtimeLabel = runtime.command === 'node' ? 'node' : 'electron-node';
     console.log(`[SkillServices] Web Search Bridge Server starting (PID: ${child.pid}, runtime: ${runtimeLabel})`);
     console.log(`[SkillServices] Logs: ${logFile}`);
   }

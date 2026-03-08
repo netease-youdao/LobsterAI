@@ -2,6 +2,18 @@ import { store } from '../store';
 import { configService } from './config';
 import { ChatMessagePayload, ChatUserMessageInput, ImageAttachment } from '../types/chat';
 
+const ZHIPU_CODING_PLAN_OPENAI_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
+const ZHIPU_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://open.bigmodel.cn/api/anthropic';
+// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
+const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
+// Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
+const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
+// Moonshot Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
+const MOONSHOT_CODING_PLAN_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1';
+const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
+
 export interface ApiConfig {
   apiKey: string;
   baseUrl: string;
@@ -77,7 +89,8 @@ class ApiService {
       return `${normalized}/v1beta/openai/chat/completions`;
     }
 
-    if (normalized.endsWith('/v1')) {
+    // Handle /v1, /v4 etc. versioned paths
+    if (/\/v\d+$/.test(normalized)) {
       return `${normalized}/chat/completions`;
     }
     return `${normalized}/v1/chat/completions`;
@@ -269,7 +282,7 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'ollama'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -292,6 +305,10 @@ class ApiService {
       return 'qwen';
     } else if (normalizedModelId.startsWith('mimo') || normalizedModelId.includes('xiaomi')) {
       return 'xiaomi';
+    } else if (normalizedModelId.startsWith('step-')) {
+      return 'stepfun';
+    } else if (normalizedModelId.startsWith('doubao') || normalizedModelId.includes('volcengine') || normalizedModelId.includes('ep-') || normalizedModelId.startsWith('ark-')) {
+      return 'volcengine';
     }
     return 'openai'; // 默认使用 OpenAI 兼容格式
   }
@@ -303,11 +320,58 @@ class ApiService {
     if (appConfig?.providers?.[provider]) {
       const providerConfig = appConfig.providers[provider];
       if (providerConfig.enabled && (providerConfig.apiKey || !this.providerRequiresApiKey(provider))) {
+        let baseUrl = providerConfig.baseUrl;
+        let apiFormat = this.normalizeApiFormat(providerConfig.apiFormat);
+        
+        // Handle Zhipu GLM Coding Plan endpoint switch
+        // Coding Plan supports both OpenAI and Anthropic compatible formats
+        if (provider === 'zhipu' && providerConfig.codingPlanEnabled) {
+          if (apiFormat === 'anthropic') {
+            baseUrl = ZHIPU_CODING_PLAN_ANTHROPIC_BASE_URL;
+          } else {
+            baseUrl = ZHIPU_CODING_PLAN_OPENAI_BASE_URL;
+            apiFormat = 'openai';
+          }
+        }
+
+        // Handle Qwen Coding Plan endpoint switch
+        // Coding Plan supports both OpenAI and Anthropic compatible formats
+        if (provider === 'qwen' && providerConfig.codingPlanEnabled) {
+          if (apiFormat === 'anthropic') {
+            baseUrl = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
+          } else {
+            baseUrl = QWEN_CODING_PLAN_OPENAI_BASE_URL;
+            apiFormat = 'openai';
+          }
+        }
+
+        // Handle Volcengine Coding Plan endpoint switch
+        // Coding Plan supports both OpenAI and Anthropic compatible formats
+        if (provider === 'volcengine' && providerConfig.codingPlanEnabled) {
+          if (apiFormat === 'anthropic') {
+            baseUrl = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
+          } else {
+            baseUrl = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
+            apiFormat = 'openai';
+          }
+        }
+
+        // Handle Moonshot Coding Plan endpoint switch
+        // Coding Plan supports both OpenAI and Anthropic compatible formats
+        if (provider === 'moonshot' && providerConfig.codingPlanEnabled) {
+          if (apiFormat === 'anthropic') {
+            baseUrl = MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL;
+          } else {
+            baseUrl = MOONSHOT_CODING_PLAN_OPENAI_BASE_URL;
+            apiFormat = 'openai';
+          }
+        }
+        
         return {
           apiKey: providerConfig.apiKey,
-          baseUrl: providerConfig.baseUrl,
+          baseUrl,
           provider: provider,
-          apiFormat: this.normalizeApiFormat(providerConfig.apiFormat),
+          apiFormat,
           openaiApiType: this.normalizeOpenAIApiType(providerConfig.openaiApiType),
         };
       }
@@ -326,7 +390,10 @@ class ApiService {
     }
 
     const selectedModel = store.getState().model.selectedModel;
-    const provider = this.detectProvider(selectedModel.id, selectedModel.provider);
+    const provider = this.detectProvider(
+      selectedModel.id,
+      selectedModel.providerKey ?? selectedModel.provider
+    );
     const supportsImages = !!selectedModel.supportsImage;
     const userMessage: ChatUserMessageInput = typeof message === 'string'
       ? { content: message }

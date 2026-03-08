@@ -2,7 +2,7 @@ import React from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../store';
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
-import { setSelectedModel } from '../store/slices/modelSlice';
+import { setSelectedModel, isSameModelIdentity, getModelIdentityKey } from '../store/slices/modelSlice';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down';
@@ -65,10 +65,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
           <div className="max-h-64 overflow-y-auto">
           {availableModels.map((model) => (
             <button
-              key={model.id}
+              key={getModelIdentityKey(model)}
               onClick={() => handleModelSelect(model)}
               className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
-                model.id === selectedModel.id ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+                isSameModelIdentity(model, selectedModel) ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
               }`}
             >
               <div className="flex flex-col">
@@ -77,7 +77,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
                   <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
                 )}
               </div>
-              {model.id === selectedModel.id && (
+              {isSameModelIdentity(model, selectedModel) && (
                 <CheckIcon className="h-4 w-4 text-claude-accent" />
               )}
             </button>

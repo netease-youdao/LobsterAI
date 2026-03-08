@@ -1,9 +1,10 @@
 'use strict';
 
 const path = require('path');
-const { existsSync } = require('fs');
+const { existsSync, mkdirSync, readdirSync, statSync } = require('fs');
 const { spawnSync } = require('child_process');
 const { ensurePortableGit } = require('./setup-mingit.js');
+const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -17,6 +18,55 @@ function findPackagedBash(appOutDir) {
   const candidates = [
     path.join(appOutDir, 'resources', 'mingit', 'bin', 'bash.exe'),
     path.join(appOutDir, 'resources', 'mingit', 'usr', 'bin', 'bash.exe'),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function verifyPackagedPortableGitRuntimeDirs(appOutDir) {
+  const requiredDirs = [
+    path.join(appOutDir, 'resources', 'mingit', 'dev', 'shm'),
+    path.join(appOutDir, 'resources', 'mingit', 'dev', 'mqueue'),
+  ];
+  const createdDirs = [];
+
+  for (const dir of requiredDirs) {
+    if (existsSync(dir)) continue;
+    mkdirSync(dir, { recursive: true });
+    createdDirs.push(dir);
+  }
+
+  const missingDirs = requiredDirs.filter((dir) => !existsSync(dir));
+  if (missingDirs.length > 0) {
+    throw new Error(
+      'Windows package is missing required PortableGit runtime directories. '
+      + `Missing: ${missingDirs.join(', ')}`
+    );
+  }
+
+  if (createdDirs.length > 0) {
+    console.log(
+      '[electron-builder-hooks] Created missing PortableGit runtime directories: '
+      + createdDirs.join(', ')
+    );
+  }
+
+  console.log(
+    '[electron-builder-hooks] Verified PortableGit runtime directories: '
+    + requiredDirs.join(', ')
+  );
+}
+
+function findPackagedPythonExecutable(appOutDir) {
+  const candidates = [
+    path.join(appOutDir, 'resources', 'python-win', 'python.exe'),
+    path.join(appOutDir, 'resources', 'python-win', 'python3.exe'),
   ];
 
   for (const candidate of candidates) {
@@ -76,13 +126,108 @@ function applyMacIconFix(appPath) {
   console.log('[electron-builder-hooks] ✓ macOS icon fix applied');
 }
 
+/**
+ * Check if a command exists in the system PATH.
+ */
+function hasCommand(command) {
+  const checker = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(checker, [command], { stdio: 'ignore' });
+  return result.status === 0;
+}
+
+/**
+ * Install dependencies for all skills in the SKILLs directory.
+ * This ensures bundled skills include node_modules for users without npm.
+ */
+function installSkillDependencies() {
+  // Check if npm is available (should be available during build)
+  if (!hasCommand('npm')) {
+    console.warn('[electron-builder-hooks] npm not found in PATH, skipping skill dependency installation');
+    console.warn('[electron-builder-hooks]   (This is only a warning - skills will be installed at runtime if needed)');
+    return;
+  }
+
+  const skillsDir = path.join(__dirname, '..', 'SKILLs');
+  if (!existsSync(skillsDir)) {
+    console.log('[electron-builder-hooks] SKILLs directory not found, skipping skill dependency installation');
+    return;
+  }
+
+  console.log('[electron-builder-hooks] Installing skill dependencies...');
+
+  const entries = readdirSync(skillsDir);
+  let installedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  for (const entry of entries) {
+    const skillPath = path.join(skillsDir, entry);
+    const stat = statSync(skillPath);
+    if (!stat.isDirectory()) continue;
+
+    const packageJsonPath = path.join(skillPath, 'package.json');
+    const nodeModulesPath = path.join(skillPath, 'node_modules');
+
+    if (!existsSync(packageJsonPath)) {
+      continue; // No package.json, skip
+    }
+
+    if (existsSync(nodeModulesPath)) {
+      console.log(`[electron-builder-hooks]   ${entry}: node_modules exists, skipping`);
+      skippedCount++;
+      continue;
+    }
+
+    console.log(`[electron-builder-hooks]   ${entry}: installing dependencies...`);
+    // On Windows, use shell: true so cmd.exe resolves npm.cmd correctly
+    const isWin = process.platform === 'win32';
+    const result = spawnSync('npm', ['install'], {
+      cwd: skillPath,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 5 * 60 * 1000, // 5 minute timeout
+      shell: isWin,
+    });
+
+    if (result.status === 0) {
+      console.log(`[electron-builder-hooks]   ${entry}: ✓ installed`);
+      installedCount++;
+    } else {
+      console.error(`[electron-builder-hooks]   ${entry}: ✗ failed`);
+      if (result.error) {
+        console.error(`[electron-builder-hooks]     Error: ${result.error.message}`);
+      }
+      if (result.stderr) {
+        console.error(`[electron-builder-hooks]     ${result.stderr.substring(0, 200)}`);
+      }
+      failedCount++;
+    }
+  }
+
+  console.log(`[electron-builder-hooks] Skill dependencies: ${installedCount} installed, ${skippedCount} skipped, ${failedCount} failed`);
+}
+
 async function beforePack(context) {
+  // Install skill dependencies first (for all platforms)
+  installSkillDependencies();
+
   if (!isWindowsTarget(context)) {
     return;
   }
 
   console.log('[electron-builder-hooks] Windows target detected, ensuring PortableGit is prepared...');
   await ensurePortableGit({ required: true });
+  console.log('[electron-builder-hooks] Windows target detected, ensuring portable Python runtime is prepared...');
+  await ensurePortablePythonRuntime({ required: true });
+  const runtimeRoot = path.join(__dirname, '..', 'resources', 'python-win');
+  const runtimeHealth = checkRuntimeHealth(runtimeRoot, { requirePip: true });
+  if (!runtimeHealth.ok) {
+    throw new Error(
+      'Portable Python runtime health check failed before pack. Missing files: '
+      + runtimeHealth.missing.join(', ')
+    );
+  }
+
 }
 
 async function afterPack(context) {
@@ -98,6 +243,26 @@ async function afterPack(context) {
     }
 
     console.log(`[electron-builder-hooks] Verified bundled PortableGit: ${bashPath}`);
+    verifyPackagedPortableGitRuntimeDirs(context.appOutDir);
+
+    const pythonExe = findPackagedPythonExecutable(context.appOutDir);
+    if (!pythonExe) {
+      throw new Error(
+        'Windows package is missing bundled python runtime executable. '
+        + 'Expected one of: '
+        + `${path.join(context.appOutDir, 'resources', 'python-win', 'python.exe')} or `
+        + `${path.join(context.appOutDir, 'resources', 'python-win', 'python3.exe')}`
+      );
+    }
+    const packagedRuntimeRoot = path.join(context.appOutDir, 'resources', 'python-win');
+    const packagedRuntimeHealth = checkRuntimeHealth(packagedRuntimeRoot, { requirePip: true });
+    if (!packagedRuntimeHealth.ok) {
+      throw new Error(
+        'Windows package bundled python runtime is unhealthy. Missing files: '
+        + packagedRuntimeHealth.missing.join(', ')
+      );
+    }
+    console.log(`[electron-builder-hooks] Verified bundled Python runtime: ${pythonExe}`);
   }
 
   if (isMacTarget(context)) {
