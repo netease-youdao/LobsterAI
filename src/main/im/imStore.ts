@@ -8,6 +8,7 @@ import {
   IMGatewayConfig,
   DingTalkConfig,
   FeishuConfig,
+  QQConfig,
   TelegramConfig,
   DiscordConfig,
   NimConfig,
@@ -18,6 +19,7 @@ import {
   IMSessionMapping,
   DEFAULT_DINGTALK_CONFIG,
   DEFAULT_FEISHU_CONFIG,
+  DEFAULT_QQ_CONFIG,
   DEFAULT_TELEGRAM_CONFIG,
   DEFAULT_DISCORD_CONFIG,
   DEFAULT_NIM_CONFIG,
@@ -65,7 +67,7 @@ export class IMStore {
    * Migrate existing IM configs to ensure stable defaults.
    */
   private migrateDefaults(): void {
-    const platforms = ['dingtalk', 'feishu', 'telegram', 'discord', 'nim', 'xiaomifeng', 'wecom'] as const;
+    const platforms = ['dingtalk', 'feishu', 'telegram', 'discord', 'nim', 'xiaomifeng', 'qq', 'wecom'] as const;
     let changed = false;
 
     for (const platform of platforms) {
@@ -167,6 +169,7 @@ export class IMStore {
     const discord = this.getConfigValue<DiscordConfig>('discord') ?? DEFAULT_DISCORD_CONFIG;
     const nim = this.getConfigValue<NimConfig>('nim') ?? DEFAULT_NIM_CONFIG;
     const xiaomifeng = this.getConfigValue<XiaomifengConfig>('xiaomifeng') ?? DEFAULT_XIAOMIFENG_CONFIG;
+    const qq = this.getConfigValue<QQConfig>('qq') ?? DEFAULT_QQ_CONFIG;
     const wecom = this.getConfigValue<WecomConfig>('wecom') ?? DEFAULT_WECOM_CONFIG;
     const settings = this.getConfigValue<IMSettings>('settings') ?? DEFAULT_IM_SETTINGS;
 
@@ -188,6 +191,7 @@ export class IMStore {
       discord: resolveEnabled(discord, DEFAULT_DISCORD_CONFIG),
       nim: resolveEnabled(nim, DEFAULT_NIM_CONFIG),
       xiaomifeng: resolveEnabled(xiaomifeng, DEFAULT_XIAOMIFENG_CONFIG),
+      qq: resolveEnabled(qq, DEFAULT_QQ_CONFIG),
       wecom: resolveEnabled(wecom, DEFAULT_WECOM_CONFIG),
       settings: { ...DEFAULT_IM_SETTINGS, ...settings },
     };
@@ -211,6 +215,9 @@ export class IMStore {
     }
     if (config.xiaomifeng) {
       this.setXiaomifengConfig(config.xiaomifeng);
+    }
+    if (config.qq) {
+      this.setQQConfig(config.qq);
     }
     if (config.wecom) {
       this.setWecomConfig(config.wecom);
@@ -292,6 +299,18 @@ export class IMStore {
     this.setConfigValue('xiaomifeng', { ...current, ...config });
   }
 
+  // ==================== QQ Config ====================
+
+  getQQConfig(): QQConfig {
+    const stored = this.getConfigValue<QQConfig>('qq');
+    return { ...DEFAULT_QQ_CONFIG, ...stored };
+  }
+
+  setQQConfig(config: Partial<QQConfig>): void {
+    const current = this.getQQConfig();
+    this.setConfigValue('qq', { ...current, ...config });
+  }
+
   // ==================== WeCom Config ====================
 
   getWecomConfig(): WecomConfig {
@@ -337,8 +356,9 @@ export class IMStore {
     const hasDiscord = !!config.discord.botToken;
     const hasNim = !!(config.nim.appKey && config.nim.account && config.nim.token);
     const hasXiaomifeng = !!(config.xiaomifeng?.clientId && config.xiaomifeng?.secret);
+    const hasQQ = !!(config.qq?.appId && config.qq?.appSecret);
     const hasWecom = !!(config.wecom?.botId && config.wecom?.secret);
-    return hasDingTalk || hasFeishu || hasTelegram || hasDiscord || hasNim || hasXiaomifeng || hasWecom;
+    return hasDingTalk || hasFeishu || hasTelegram || hasDiscord || hasNim || hasXiaomifeng || hasQQ || hasWecom;
   }
 
   // ==================== Notification Target Persistence ====================

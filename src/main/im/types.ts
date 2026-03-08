@@ -169,6 +169,23 @@ export interface XiaomifengGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+// ==================== QQ Types ====================
+
+export interface QQConfig {
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  debug?: boolean;
+}
+
+export interface QQGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
 // ==================== WeCom (企业微信) Types ====================
 
 export interface WecomConfig {
@@ -189,11 +206,12 @@ export interface WecomGatewayStatus {
 
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom';
+export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom';
 
 export interface IMGatewayConfig {
   dingtalk: DingTalkConfig;
   feishu: FeishuConfig;
+  qq: QQConfig;
   telegram: TelegramConfig;
   discord: DiscordConfig;
   nim: NimConfig;
@@ -210,6 +228,7 @@ export interface IMSettings {
 export interface IMGatewayStatus {
   dingtalk: DingTalkGatewayStatus;
   feishu: FeishuGatewayStatus;
+  qq: QQGatewayStatus;
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
   nim: NimGatewayStatus;
@@ -305,7 +324,8 @@ export type IMConnectivityCheckCode =
   | 'discord_group_requires_mention'
   | 'telegram_privacy_mode_hint'
   | 'dingtalk_bot_membership_hint'
-  | 'nim_p2p_only_hint';
+  | 'nim_p2p_only_hint'
+  | 'qq_guild_mention_hint';
 
 export interface IMConnectivityCheck {
   code: IMConnectivityCheckCode;
@@ -379,6 +399,13 @@ export const DEFAULT_XIAOMIFENG_CONFIG: XiaomifengConfig = {
   debug: true,
 };
 
+export const DEFAULT_QQ_CONFIG: QQConfig = {
+  enabled: false,
+  appId: '',
+  appSecret: '',
+  debug: true,
+};
+
 export const DEFAULT_WECOM_CONFIG: WecomConfig = {
   enabled: false,
   botId: '',
@@ -394,6 +421,7 @@ export const DEFAULT_IM_SETTINGS: IMSettings = {
 export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   dingtalk: DEFAULT_DINGTALK_CONFIG,
   feishu: DEFAULT_FEISHU_CONFIG,
+  qq: DEFAULT_QQ_CONFIG,
   telegram: DEFAULT_TELEGRAM_CONFIG,
   discord: DEFAULT_DISCORD_CONFIG,
   nim: DEFAULT_NIM_CONFIG,
@@ -456,6 +484,14 @@ export const DEFAULT_XIAOMIFENG_STATUS: XiaomifengGatewayStatus = {
   lastOutboundAt: null,
 };
 
+export const DEFAULT_QQ_STATUS: QQGatewayStatus = {
+  connected: false,
+  startedAt: null,
+  lastError: null,
+  lastInboundAt: null,
+  lastOutboundAt: null,
+};
+
 export const DEFAULT_WECOM_STATUS: WecomGatewayStatus = {
   connected: false,
   startedAt: null,
@@ -468,6 +504,7 @@ export const DEFAULT_WECOM_STATUS: WecomGatewayStatus = {
 export const DEFAULT_IM_STATUS: IMGatewayStatus = {
   dingtalk: DEFAULT_DINGTALK_STATUS,
   feishu: DEFAULT_FEISHU_STATUS,
+  qq: DEFAULT_QQ_STATUS,
   telegram: DEFAULT_TELEGRAM_STATUS,
   discord: DEFAULT_DISCORD_STATUS,
   nim: DEFAULT_NIM_STATUS,

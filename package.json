@@ -68,6 +68,7 @@
     "mermaid": "^10.9.5",
     "nim-web-sdk-ng": "10.9.77-alpha.4",
     "npm": "^11.11.0",
+    "qq-official-bot": "^1.0.12",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.0.0",

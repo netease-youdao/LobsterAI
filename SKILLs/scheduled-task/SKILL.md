@@ -31,6 +31,7 @@ official: true
 > |---------|----------------------|
 > | 发到钉钉/钉钉群/DingTalk | `"dingtalk"` |
 > | 发到飞书/Lark | `"feishu"` |
+> | 发到QQ/QQ群/QQ机器人 | `"qq"` |
 > | 发到 Telegram/TG/电报 | `"telegram"` |
 > | 发到 Discord | `"discord"` |
 > | 发到云信/网易云信/NIM | `"nim"` |
@@ -260,7 +261,7 @@ bash "$SKILLS_ROOT/scheduled-task/scripts/create-task.sh" @/tmp/scheduled-task.j
 | `systemPrompt` | ❌ | 自定义系统提示词（默认空） |
 | `executionMode` | ❌ | `"auto"` / `"local"` / `"sandbox"`（默认 `"local"`） |
 | `expiresAt` | ❌ | 过期日期 `"YYYY-MM-DD"`（默认 null，不过期） |
-| `notifyPlatforms` | ❌ | 任务完成后自动发送结果的 IM 平台：`["dingtalk","feishu","telegram","discord","nim"]`（默认 `[]`）。用户说"发到钉钉/飞书/TG"时设置此字段，**不要**写进 prompt |
+| `notifyPlatforms` | ❌ | 任务完成后自动发送结果的 IM 平台：`["dingtalk","feishu","qq","telegram","discord","nim"]`（默认 `[]`）。用户说"发到钉钉/飞书/QQ/TG"时设置此字段，**不要**写进 prompt |
 | `enabled` | ❌ | 是否立即启用（默认 `true`） |
 
 ### Step 3: 确认结果
