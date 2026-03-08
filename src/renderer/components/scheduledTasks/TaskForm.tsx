@@ -1,8 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
+import { imService } from '../../services/im';
+import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import type { ScheduledTask, Schedule, ScheduledTaskInput, NotifyPlatform } from '../../types/scheduledTask';
 
 interface TaskFormProps {
@@ -14,7 +16,6 @@ interface TaskFormProps {
 
 type ScheduleMode = 'once' | 'daily' | 'weekly' | 'monthly';
 
-const NOTIFY_PLATFORMS: NotifyPlatform[] = ['dingtalk', 'feishu', 'telegram', 'discord', 'nim'];
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6] as const; // 0=Sunday
 
 // Parse existing schedule into UI state
@@ -65,7 +66,15 @@ function parseScheduleToUI(schedule: Schedule): {
 
 const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
+  const imConfig = useSelector((state: RootState) => state.im.config);
   const defaultWorkingDirectory = coworkConfig?.workingDirectory ?? '';
+
+  // Language tracking for region-based platform filtering
+  const [language, setLanguage] = useState<'zh' | 'en'>(i18nService.getLanguage());
+
+  const visiblePlatforms = useMemo<NotifyPlatform[]>(() => {
+    return getVisibleIMPlatforms(language) as unknown as NotifyPlatform[];
+  }, [language]);
 
   // Parse existing schedule for edit mode
   const parsed = task ? parseScheduleToUI(task.schedule) : null;
@@ -96,6 +105,29 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Subscribe to language changes
+  useEffect(() => {
+    const unsubscribe = i18nService.subscribe(() => {
+      setLanguage(i18nService.getLanguage());
+    });
+    return unsubscribe;
+  }, []);
+
+  // Load IM config on mount
+  useEffect(() => {
+    void imService.init();
+  }, []);
+
+  // Clean up selected platforms when visible list changes
+  useEffect(() => {
+    setNotifyPlatforms(prev => prev.filter(p => visiblePlatforms.includes(p)));
+  }, [visiblePlatforms]);
+
+  const isPlatformConfigured = (platform: NotifyPlatform): boolean => {
+    const platformConfig = imConfig[platform];
+    return platformConfig?.enabled ?? false;
+  };
 
   const buildSchedule = (): Schedule => {
     const [hour, min] = scheduleTime.split(':').map(Number);
@@ -242,6 +274,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               type="date"
               value={scheduleDate}
               onChange={(e) => setScheduleDate(e.target.value)}
+              onClick={(e) => (e.target as HTMLInputElement).showPicker()}
               className={inputClass}
               min={new Date().toISOString().slice(0, 10)}
             />
@@ -274,6 +307,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               type="time"
               value={scheduleTime}
               onChange={(e) => setScheduleTime(e.target.value)}
+              onClick={(e) => (e.target as HTMLInputElement).showPicker()}
               className={inputClass}
             />
           )}
@@ -286,6 +320,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               type="time"
               value={scheduleTime}
               onChange={(e) => setScheduleTime(e.target.value)}
+              onClick={(e) => (e.target as HTMLInputElement).showPicker()}
               className={inputClass}
             />
           )}
@@ -328,6 +363,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
             type="date"
             value={expiresAt}
             onChange={(e) => setExpiresAt(e.target.value)}
+            onClick={(e) => (e.target as HTMLInputElement).showPicker()}
             className={inputClass + ' flex-1'}
             min={new Date().toISOString().slice(0, 10)}
           />
@@ -369,29 +405,39 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
             </svg>
           </button>
           {notifyDropdownOpen && (
-            <div className="absolute z-10 mt-1 w-full rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white shadow-lg py-1">
-              {NOTIFY_PLATFORMS.map((platform) => {
+            <div className="absolute z-10 bottom-full mb-1 w-full rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white shadow-lg py-1">
+              {visiblePlatforms.map((platform) => {
                 const checked = notifyPlatforms.includes(platform);
+                const configured = isPlatformConfigured(platform);
                 return (
                   <label
                     key={platform}
-                    className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                    className={`flex items-center gap-2 px-3 py-2 transition-colors ${
+                      configured ? 'cursor-pointer hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover' : 'opacity-60 cursor-not-allowed'
+                    }`}
                   >
                     <input
                       type="checkbox"
                       checked={checked}
+                      disabled={!configured}
                       onChange={() => {
+                        if (!configured) return;
                         setNotifyPlatforms(
                           checked
                             ? notifyPlatforms.filter((p) => p !== platform)
                             : [...notifyPlatforms, platform]
                         );
                       }}
-                      className="text-claude-accent focus:ring-claude-accent rounded"
+                      className="text-claude-accent focus:ring-claude-accent rounded disabled:cursor-not-allowed"
                     />
                     <span className="text-sm dark:text-claude-darkText text-claude-text">
                       {i18nService.t(`scheduledTasksFormNotify${platform.charAt(0).toUpperCase() + platform.slice(1)}`)}
                     </span>
+                    {!configured && (
+                      <span className="text-xs text-yellow-600 dark:text-yellow-400 ml-auto">
+                        {i18nService.t('scheduledTasksFormNotifyNotConfigured')}
+                      </span>
+                    )}
                   </label>
                 );
               })}

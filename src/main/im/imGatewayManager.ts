@@ -972,6 +972,8 @@ export class IMGatewayManager extends EventEmitter {
         await this.nimGateway.sendNotification(text);
       } else if (platform === 'wecom') {
         await this.wecomGateway.sendNotification(text);
+      } else if (platform === 'xiaomifeng') {
+        await this.xiaomifengGateway.sendNotification(text);
       }
       return true;
     } catch (error: any) {
@@ -999,6 +1001,8 @@ export class IMGatewayManager extends EventEmitter {
         await this.nimGateway.sendNotificationWithMedia(text);
       } else if (platform === 'wecom') {
         await this.wecomGateway.sendNotificationWithMedia(text);
+      } else if (platform === 'xiaomifeng') {
+        await this.xiaomifengGateway.sendNotificationWithMedia(text);
       }
       return true;
     } catch (error: any) {
