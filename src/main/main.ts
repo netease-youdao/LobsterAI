@@ -2408,6 +2408,9 @@ if (!gotTheLock) {
       clearTimeout(loadTimeout);
     });
     mainWindow.webContents.on('did-finish-load', () => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible() && (isDev || !isAutoLaunched())) {
+        mainWindow.show();
+      }
       emitWindowState();
     });
 
