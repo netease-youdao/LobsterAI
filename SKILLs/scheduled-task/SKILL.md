@@ -15,7 +15,7 @@ official: true
 
 ### 原则二：IM 发送 = 通知平台，不是 prompt
 
-> 当用户说"发到钉钉/飞书/Telegram/Discord"时，这是**通知投递需求**，应设置 `notifyPlatforms` 字段，**不要**写进 `prompt`。
+> 当用户说"发到钉钉/飞书/企业微信/Telegram/Discord"时，这是**通知投递需求**，应设置 `notifyPlatforms` 字段，**不要**写进 `prompt`。
 >
 > 任务完成后，系统会**自动**将 Claude 的执行结果发送到指定 IM 平台，无需在 prompt 中额外指示"发送到 XX"。
 >
@@ -34,7 +34,9 @@ official: true
 > | 发到QQ/QQ群/QQ机器人 | `"qq"` |
 > | 发到 Telegram/TG/电报 | `"telegram"` |
 > | 发到 Discord | `"discord"` |
+> | 发到企业微信/WeCom | `"wecom"` |
 > | 发到云信/网易云信/NIM | `"nim"` |
+> | 发到小蜜蜂/Xiaomifeng | `"xiaomifeng"` |
 
 ### 原则三：从用户自然语言中正确提取各字段
 
@@ -261,7 +263,7 @@ bash "$SKILLS_ROOT/scheduled-task/scripts/create-task.sh" @/tmp/scheduled-task.j
 | `systemPrompt` | ❌ | 自定义系统提示词（默认空） |
 | `executionMode` | ❌ | `"auto"` / `"local"` / `"sandbox"`（默认 `"local"`） |
 | `expiresAt` | ❌ | 过期日期 `"YYYY-MM-DD"`（默认 null，不过期） |
-| `notifyPlatforms` | ❌ | 任务完成后自动发送结果的 IM 平台：`["dingtalk","feishu","qq","telegram","discord","nim"]`（默认 `[]`）。用户说"发到钉钉/飞书/QQ/TG"时设置此字段，**不要**写进 prompt |
+| `notifyPlatforms` | ❌ | 任务完成后自动发送结果的 IM 平台：`["dingtalk","feishu","wecom","qq","telegram","discord","nim","xiaomifeng"]`（默认 `[]`）。用户说"发到钉钉/飞书/企业微信/QQ/TG"时设置此字段，**不要**写进 prompt |
 | `enabled` | ❌ | 是否立即启用（默认 `true`） |
 
 ### Step 3: 确认结果
@@ -278,7 +280,7 @@ bash "$SKILLS_ROOT/scheduled-task/scripts/create-task.sh" @/tmp/scheduled-task.j
 
 ## 重要注意事项
 
-- **IM 通知分离**：用户提到"发到钉钉/飞书/TG/Discord"等 IM 平台时，设置 `notifyPlatforms` 字段即可，系统会自动将任务执行结果推送到对应平台。**不要**把"发送到 XX"写进 `prompt`，`prompt` 只描述任务本身要做的事
+- **IM 通知分离**：用户提到"发到钉钉/飞书/企业微信/TG/Discord"等 IM 平台时，设置 `notifyPlatforms` 字段即可，系统会自动将任务执行结果推送到对应平台。**不要**把"发送到 XX"写进 `prompt`，`prompt` 只描述任务本身要做的事
 - **优先修改**：用户说"改一下 XX 任务的时间/内容"时，先 list 找到任务 id，再 update 修改，**不要 create 新任务**
 - **编码安全（Windows 必看）**：含中文 payload 必须优先使用 `@file` 方式，避免命令行参数编码导致标题/提示词乱码
 - **相对时间（Windows 必看）**：当用户说"X 分钟后 / 明早 9 点 / 今天下午"等相对时间时，先用本机命令获取当前本地时间，再换算目标时间。不要直接猜测当前时间，也不要使用 UTC 时间。
