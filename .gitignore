@@ -39,5 +39,8 @@ nul
 .playwright-mcp/
 .cowork-temp/
 
+# Git worktrees
+.worktrees/
+
 # editorconfig files
 .vscode/
