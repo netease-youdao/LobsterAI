@@ -110,7 +110,7 @@ export class QQGateway extends EventEmitter {
         ],
         sandbox: false,
         removeAt: true,
-        logLevel: config.debug ? 'debug' : 'warn',
+        logLevel: 'warn',
         maxRetry: 10,
         mode: ReceiverMode.WEBSOCKET,
       });
