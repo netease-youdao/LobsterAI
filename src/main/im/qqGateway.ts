@@ -10,8 +10,10 @@ import {
   QQConfig,
   QQGatewayStatus,
   IMMessage,
+  IMMediaAttachment,
   DEFAULT_QQ_STATUS,
 } from './types';
+import { downloadQQAttachment, mapQQMediaType } from './qqMediaDownload';
 
 export class QQGateway extends EventEmitter {
   private bot: any = null;
@@ -173,6 +175,87 @@ export class QQGateway extends EventEmitter {
   }
 
   /**
+   * Media type labels for friendly display
+   */
+  private static readonly MEDIA_TYPE_LABELS: Record<string, string> = {
+    image: '[图片]',
+    video: '[视频]',
+    audio: '[语音]',
+  };
+
+  /**
+   * Media element types recognized from event.message array
+   */
+  private static readonly MEDIA_TYPES = new Set(['image', 'video', 'audio', 'file']);
+
+  /**
+   * Extract friendly content text and media attachments from QQ event.
+   * Uses structured event.message array when available, falls back to raw_message.
+   */
+  private async extractContentAndMedia(
+    event: any,
+    log: (...args: any[]) => void
+  ): Promise<{ content: string; attachments: IMMediaAttachment[] }> {
+    const attachments: IMMediaAttachment[] = [];
+    const messageElements: any[] = event.message;
+
+    // Fallback: if event.message is unavailable, use raw_message as-is
+    if (!Array.isArray(messageElements) || messageElements.length === 0) {
+      return { content: event.raw_message || event.content || '', attachments };
+    }
+
+    const textParts: string[] = [];
+    const mediaElements: any[] = [];
+
+    for (const elem of messageElements) {
+      if (QQGateway.MEDIA_TYPES.has(elem.type)) {
+        const label = QQGateway.MEDIA_TYPE_LABELS[elem.type] || '[文件]';
+        textParts.push(label);
+        mediaElements.push(elem);
+      } else if (elem.type === 'text') {
+        textParts.push(elem.data?.text || '');
+      }
+      // Skip other types like 'at', 'face', 'reply' etc. — already removed by SDK
+    }
+
+    const content = textParts.join('').trim();
+
+    // Download media files in parallel
+    if (mediaElements.length > 0) {
+      const downloadResults = await Promise.allSettled(
+        mediaElements.map(async (elem) => {
+          const url = elem.url || elem.data?.url;
+          if (!url) return null;
+          const fileName = elem.name || elem.data?.name;
+          const result = await downloadQQAttachment(url, elem.type, fileName);
+          if (!result) return null;
+          const sizeNum = parseInt(elem.size || elem.data?.size, 10);
+          return {
+            type: mapQQMediaType(elem.type),
+            localPath: result.localPath,
+            mimeType: result.mimeType,
+            fileName,
+            fileSize: result.fileSize || (isNaN(sizeNum) ? undefined : sizeNum),
+          } as IMMediaAttachment;
+        })
+      );
+
+      for (const result of downloadResults) {
+        if (result.status === 'fulfilled' && result.value) {
+          attachments.push(result.value);
+        }
+      }
+
+      log('[QQ Gateway] Media extracted:', JSON.stringify({
+        total: mediaElements.length,
+        downloaded: attachments.length,
+      }));
+    }
+
+    return { content, attachments };
+  }
+
+  /**
    * Handle guild channel message
    */
   private async handleGuildMessage(event: any, log: (...args: any[]) => void): Promise<void> {
@@ -182,7 +265,7 @@ export class QQGateway extends EventEmitter {
       const messageId = event.message_id || event.id;
       const senderId = event.sender?.user_id || event.user_id || 'unknown';
       const senderName = event.sender?.user_name || event.author?.username || 'Unknown';
-      const content = event.raw_message || event.content || '';
+      const { content, attachments } = await this.extractContentAndMedia(event, log);
 
       if (!content.trim()) return;
 
@@ -203,6 +286,7 @@ export class QQGateway extends EventEmitter {
         content,
         chatType: 'group',
         timestamp: event.timestamp ? event.timestamp * 1000 : Date.now(),
+        ...(attachments.length > 0 ? { attachments } : {}),
       };
 
       this.status.lastInboundAt = Date.now();
@@ -241,7 +325,7 @@ export class QQGateway extends EventEmitter {
       const messageId = event.message_id || event.id;
       const senderId = event.sender?.user_id || event.user_id || 'unknown';
       const senderName = event.sender?.user_name || 'Unknown';
-      const content = event.raw_message || event.content || '';
+      const { content, attachments } = await this.extractContentAndMedia(event, log);
 
       if (!content.trim()) return;
 
@@ -260,6 +344,7 @@ export class QQGateway extends EventEmitter {
         content,
         chatType: 'group',
         timestamp: event.timestamp ? event.timestamp * 1000 : Date.now(),
+        ...(attachments.length > 0 ? { attachments } : {}),
       };
 
       this.status.lastInboundAt = Date.now();
@@ -296,7 +381,7 @@ export class QQGateway extends EventEmitter {
       const messageId = event.message_id || event.id;
       const senderId = event.sender?.user_id || event.user_id || 'unknown';
       const senderName = event.sender?.user_name || event.author?.username || 'Unknown';
-      const content = event.raw_message || event.content || '';
+      const { content, attachments } = await this.extractContentAndMedia(event, log);
       const subType = event.sub_type; // 'friend' or 'direct'
 
       if (!content.trim()) return;
@@ -319,6 +404,7 @@ export class QQGateway extends EventEmitter {
         content,
         chatType: 'direct',
         timestamp: event.timestamp ? event.timestamp * 1000 : Date.now(),
+        ...(attachments.length > 0 ? { attachments } : {}),
       };
 
       this.status.lastInboundAt = Date.now();
