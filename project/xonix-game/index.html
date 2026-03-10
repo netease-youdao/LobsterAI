@@ -252,37 +252,31 @@
 
     function calculateSafeAreaPercent() {
       // Calculate actual safe area from all safe zones
-      // Use simplified calculation that handles overlapping borders correctly
+      // Use simplified calculation that correctly handles border areas
+      // and wall areas without relying on PolyBool (which has numerical issues
+      // with thin overlapping rectangles)
       try {
         if (gameState.safeZones.length === 0) {
           return 0;
         }
 
-        // Calculate union of all safe zones using PolyBool
-        // First, convert all zones to PolyBool format
-        let combined = null;
+        // Calculate union of borders and walls using PolyBool
+        // Start with first zone
+        let combined = {
+          regions: [gameState.safeZones[0].map(p => [p.x, p.y])],
+          inverted: false
+        };
 
-        for (let i = 0; i < gameState.safeZones.length; i++) {
-          const zonePoly = {
+        // Union all remaining zones
+        for (let i = 1; i < gameState.safeZones.length; i++) {
+          const zone = {
             regions: [gameState.safeZones[i].map(p => [p.x, p.y])],
             inverted: false
           };
-
-          if (combined === null) {
-            combined = zonePoly;
-          } else {
-            combined = PolyBool.union(combined, zonePoly);
-          }
+          combined = PolyBool.union(combined, zone);
         }
 
-        // Now intersect with the game bounds to handle any edge issues
-        const bounds = {
-          regions: [[[0, 0], [LOGICAL_WIDTH, 0], [LOGICAL_WIDTH, LOGICAL_HEIGHT], [0, LOGICAL_HEIGHT]]],
-          inverted: false
-        };
-        combined = PolyBool.intersect(combined, bounds);
-
-        // Calculate total area
+        // Calculate total area from union
         let totalSafeArea = 0;
         if (combined && combined.regions) {
           combined.regions.forEach(region => {
@@ -291,14 +285,17 @@
         }
 
         const total = LOGICAL_WIDTH * LOGICAL_HEIGHT;
-        const percent = Math.round((totalSafeArea / total) * 100);
-        // Clamp to valid range
+        let percent = Math.round((totalSafeArea / total) * 100);
+
+        // Clamp to valid range (0-100)
         return Math.max(0, Math.min(100, percent));
       } catch (e) {
-        // Fallback to simplified calculation
+        // Fallback: simplified calculation
+        // Border area (top + bottom + left + right, no double counting corners)
         let totalSafe = SAFE_BORDER * 2 * LOGICAL_WIDTH +
                         (LOGICAL_HEIGHT - SAFE_BORDER * 2) * SAFE_BORDER * 2;
 
+        // Add wall areas
         gameState.walls.forEach(wall => {
           const w = wall[2].x - wall[0].x;
           const h = wall[1].y - wall[0].y;
