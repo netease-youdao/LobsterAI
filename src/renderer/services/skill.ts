@@ -1,4 +1,13 @@
-import { Skill } from '../types/skill';
+import { Skill, MarketplaceSkill, MarketTag, LocalSkillInfo, LocalizedText } from '../types/skill';
+import { getSkillStoreUrl } from './endpoints';
+import { i18nService } from './i18n';
+
+export function resolveLocalizedText(text: string | LocalizedText): string {
+  if (!text) return '';
+  if (typeof text === 'string') return text;
+  const lang = i18nService.getLanguage();
+  return text[lang] || text.en || '';
+}
 
 type EmailConnectivityCheck = {
   code: 'imap_connection' | 'smtp_connection';
@@ -16,6 +25,8 @@ type EmailConnectivityTestResult = {
 class SkillService {
   private skills: Skill[] = [];
   private initialized = false;
+  private localSkillDescriptions: Map<string, string | LocalizedText> = new Map();
+  private marketplaceSkillDescriptions: Map<string, string | LocalizedText> = new Map();
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -157,6 +168,43 @@ class SkillService {
       console.error('Failed to get auto-routing prompt:', error);
       return null;
     }
+  }
+  async fetchMarketplaceSkills(): Promise<{ skills: MarketplaceSkill[]; tags: MarketTag[] }> {
+    try {
+      const response = await fetch(getSkillStoreUrl());
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const json = await response.json();
+      const value = json?.data?.value;
+      // Store local skill descriptions for i18n lookup
+      const localSkills: LocalSkillInfo[] = Array.isArray(value?.localSkill) ? value.localSkill : [];
+      this.localSkillDescriptions.clear();
+      for (const ls of localSkills) {
+        this.localSkillDescriptions.set(ls.name, ls.description);
+      }
+      const skills: MarketplaceSkill[] = Array.isArray(value?.marketplace) ? value.marketplace : [];
+      const tags: MarketTag[] = Array.isArray(value?.marketTags) ? value.marketTags : [];
+      // Also store marketplace skill descriptions for i18n lookup (keyed by id)
+      this.marketplaceSkillDescriptions.clear();
+      for (const ms of skills) {
+        if (typeof ms.description === 'object') {
+          this.marketplaceSkillDescriptions.set(ms.id, ms.description);
+        }
+      }
+      return { skills, tags };
+    } catch (error) {
+      console.error('Failed to fetch marketplace skills:', error);
+      return { skills: [], tags: [] };
+    }
+  }
+
+  getLocalizedSkillDescription(skillId: string, skillName: string, fallback: string): string {
+    const localDesc = this.localSkillDescriptions.get(skillName);
+    if (localDesc != null) return resolveLocalizedText(localDesc);
+    const marketDesc = this.marketplaceSkillDescriptions.get(skillId);
+    if (marketDesc != null) return resolveLocalizedText(marketDesc);
+    return fallback;
   }
 }
 

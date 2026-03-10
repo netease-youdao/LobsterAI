@@ -1,0 +1,44 @@
+# .npmignore - Used by electron-builder instead of .gitignore
+# This file intentionally does NOT exclude dist/ and dist-electron/
+# so that build outputs are included in the asar archive.
+
+src/
+tests/
+scripts/
+build/*
+!build/entitlements.mac.plist
+!build/icons/
+!build/icons/**
+release/
+.DS_Store
+.env
+.claude/
+__pycache__/
+.codebuddy/
+sandbox/image/out/
+sandbox/image/publish/
+sandbox/image/.work/
+sandbox/runtime/out/
+sandbox/runtime-darwin-*/
+resources/mingit/
+resources/MinGit-*.zip
+resources/PortableGit-*.7z.exe
+resources/python-win/
+resources/python-*.zip
+SKILLs/**/.connection
+SKILLs/**/.server.log
+SKILLs/**/.server.pid
+SKILLs/**/.venv/
+nul
+.work.env
+.playwright-mcp/
+.cowork-temp/
+*.ts
+!*.d.ts
+tsconfig.json
+electron-tsconfig.json
+vite.config.ts
+tailwind.config.js
+postcss.config.js
+.eslintrc.cjs
+CLAUDE.md

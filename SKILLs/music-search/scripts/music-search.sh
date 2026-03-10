@@ -29,13 +29,6 @@ if [ -f "$SKILL_DIR/.env" ]; then
   set +a
 fi
 
-# ---- Python env pre-check (for deep search engine) ----
-if [ -d "$SKILL_DIR/.venv" ] && [ -f "$SKILL_DIR/.venv/bin/python3" ]; then
-  export MUSIC_SEARCH_PYTHON_PATH="$SKILL_DIR/.venv/bin/python3"
-elif command -v python3 > /dev/null 2>&1; then
-  export MUSIC_SEARCH_PYTHON_PATH="python3"
-fi
-
 # ---- Handle @file syntax for non-ASCII keywords ----
 args=()
 if [ $# -gt 0 ]; then

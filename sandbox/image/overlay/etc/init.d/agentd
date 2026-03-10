@@ -15,8 +15,10 @@ output_log=/var/log/agentd.log
 error_log=/var/log/agentd.log
 
 depend() {
-    after localmount networking
-    need net
+    # Start as early as possible — only need /dev populated and kernel modules loaded.
+    # Networking is started concurrently; agent-runner handles network unavailability.
+    after modules
+    use net
 }
 
 start_pre() {

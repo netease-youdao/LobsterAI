@@ -90,6 +90,7 @@ export interface NimConfig {
   appKey: string;
   account: string;
   token: string;
+  accountWhitelist: string;
   debug?: boolean;
 }
 
@@ -102,9 +103,27 @@ export interface NimGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+// ==================== Xiaomifeng Types ====================
+
+export interface XiaomifengConfig {
+  enabled: boolean;
+  clientId: string;    // 小蜜蜂平台的 NIM 账号 ID
+  secret: string;      // 用于 token 中继的密钥
+  debug?: boolean;
+}
+
+export interface XiaomifengGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  botAccount: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim';
+export type IMPlatform = 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng';
 
 export interface IMGatewayConfig {
   dingtalk: DingTalkConfig;
@@ -112,6 +131,7 @@ export interface IMGatewayConfig {
   telegram: TelegramConfig;
   discord: DiscordConfig;
   nim: NimConfig;
+  xiaomifeng: XiaomifengConfig;
   settings: IMSettings;
 }
 
@@ -126,6 +146,7 @@ export interface IMGatewayStatus {
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
   nim: NimGatewayStatus;
+  xiaomifeng: XiaomifengGatewayStatus;
 }
 
 // ==================== Media Attachment Types ====================
@@ -252,6 +273,14 @@ export const DEFAULT_NIM_CONFIG: NimConfig = {
   appKey: '',
   account: '',
   token: '',
+  accountWhitelist: '',
+  debug: true,
+};
+
+export const DEFAULT_XIAOMIFENG_CONFIG: XiaomifengConfig = {
+  enabled: false,
+  clientId: '',
+  secret: '',
   debug: true,
 };
 
@@ -266,6 +295,7 @@ export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   telegram: DEFAULT_TELEGRAM_CONFIG,
   discord: DEFAULT_DISCORD_CONFIG,
   nim: DEFAULT_NIM_CONFIG,
+  xiaomifeng: DEFAULT_XIAOMIFENG_CONFIG,
   settings: DEFAULT_IM_SETTINGS,
 };
 
@@ -303,6 +333,14 @@ export const DEFAULT_IM_STATUS: IMGatewayStatus = {
     lastOutboundAt: null,
   },
   nim: {
+    connected: false,
+    startedAt: null,
+    lastError: null,
+    botAccount: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
+  },
+  xiaomifeng: {
     connected: false,
     startedAt: null,
     lastError: null,

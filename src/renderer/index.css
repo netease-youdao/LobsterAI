@@ -10,6 +10,14 @@
   margin: 1em 0;
 }
 
+.katex {
+  color: inherit;
+}
+
+.dark .katex {
+  color: #E4E5E9;
+}
+
 /* Improve code block styles */
 pre {
   @apply dark:bg-claude-darkSurface bg-claude-surfaceHover;

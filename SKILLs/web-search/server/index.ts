@@ -139,6 +139,7 @@ export class BridgeServer {
     this.app.post('/api/browser/launch', this.handleBrowserLaunch.bind(this));
     this.app.post('/api/browser/connect', this.handleBrowserConnect.bind(this));
     this.app.post('/api/browser/disconnect', this.handleBrowserDisconnect.bind(this));
+    this.app.post('/api/browser/close', this.handleBrowserClose.bind(this));
     this.app.get('/api/browser/status', this.handleBrowserStatus.bind(this));
 
     // Search operations
@@ -305,6 +306,23 @@ export class BridgeServer {
       res.json({
         success: true,
         data: { message: 'Disconnected successfully' }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  // Close browser and disconnect all connections
+  private async handleBrowserClose(req: Request, res: Response): Promise<void> {
+    try {
+      await this.resetBrowserState();
+
+      res.json({
+        success: true,
+        data: { message: 'Browser closed successfully' }
       });
     } catch (error) {
       res.status(500).json({

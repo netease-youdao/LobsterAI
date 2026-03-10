@@ -11,11 +11,13 @@ import type { CoworkRunner, PermissionRequest } from '../libs/coworkRunner';
 import type { CoworkStore, CoworkMessage } from '../coworkStore';
 import type { IMStore } from './imStore';
 import type { IMMessage, IMPlatform, IMMediaAttachment } from './types';
+import { buildIMMediaInstruction } from './imMediaInstruction';
 
 interface MessageAccumulator {
   messages: CoworkMessage[];
   resolve: (text: string) => void;
   reject: (error: Error) => void;
+  timeoutId?: NodeJS.Timeout;
 }
 
 interface PendingIMPermission {
@@ -29,6 +31,7 @@ interface PendingIMPermission {
 }
 
 const PERMISSION_CONFIRM_TIMEOUT_MS = 60_000;
+const ACCUMULATOR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const IM_ALLOW_RESPONSE_RE = /^(允许|同意|yes|y)$/i;
 const IM_DENY_RESPONSE_RE = /^(拒绝|不同意|no|n)$/i;
 const IM_ALLOW_OPTION_LABEL = '允许本次操作';
@@ -108,7 +111,8 @@ export class IMCoworkHandler extends EventEmitter {
     const coworkSessionId = await this.getOrCreateCoworkSession(
       message.conversationId,
       message.platform,
-      forceNewSession
+      forceNewSession,
+      message.senderId
     );
     this.sessionConversationMap.set(coworkSessionId, {
       conversationId: message.conversationId,
@@ -178,7 +182,8 @@ export class IMCoworkHandler extends EventEmitter {
   private async getOrCreateCoworkSession(
     imConversationId: string,
     platform: IMPlatform,
-    forceNewSession: boolean = false
+    forceNewSession: boolean = false,
+    senderId?: string
   ): Promise<string> {
     if (forceNewSession) {
       const stale = this.imStore.getSessionMapping(imConversationId, platform);
@@ -216,16 +221,17 @@ export class IMCoworkHandler extends EventEmitter {
     }
 
     // Create new Cowork session
-    return this.createCoworkSessionForConversation(imConversationId, platform);
+    return this.createCoworkSessionForConversation(imConversationId, platform, senderId);
   }
 
   private async createCoworkSessionForConversation(
     imConversationId: string,
-    platform: IMPlatform
+    platform: IMPlatform,
+    senderId?: string
   ): Promise<string> {
     // Create new Cowork session
     const config = this.coworkStore.getConfig();
-    const title = `IM-${platform}-${Date.now()}`;
+    const title = this.buildSessionTitle(platform, imConversationId, senderId);
     const systemPrompt = await this.buildSystemPromptWithSkills();
 
     const selectedWorkspaceRoot = (config.workingDirectory || '').trim();
@@ -255,23 +261,44 @@ export class IMCoworkHandler extends EventEmitter {
     return session.id;
   }
 
+  /**
+   * Build a human-readable session title based on platform and sender identity.
+   * NIM uses "云信NIM-{accid}" format; other platforms keep the original "IM-{platform}-{timestamp}" style.
+   */
+  private buildSessionTitle(platform: IMPlatform, _imConversationId: string, senderId?: string): string {
+    if (platform === 'nim' && senderId) {
+      return `IM-云信-${senderId}`;
+    }
+    return `IM-${platform}-${Date.now()}`;
+  }
+
   private async buildSystemPromptWithSkills(): Promise<string> {
     const config = this.coworkStore.getConfig();
     const imSettings = this.imStore.getIMSettings();
     const systemPrompt = config.systemPrompt || '';
 
-    if (!imSettings.skillsEnabled || !this.getSkillsPrompt) {
-      return systemPrompt;
+    // Build media instruction for IM media sending capability
+    const mediaInstruction = buildIMMediaInstruction(imSettings);
+
+    let combinedPrompt = systemPrompt;
+
+    if (imSettings.skillsEnabled && this.getSkillsPrompt) {
+      const skillsPrompt = await this.getSkillsPrompt();
+      if (skillsPrompt) {
+        combinedPrompt = combinedPrompt
+          ? `${skillsPrompt}\n\n${combinedPrompt}`
+          : skillsPrompt;
+      }
     }
 
-    const skillsPrompt = await this.getSkillsPrompt();
-    if (!skillsPrompt) {
-      return systemPrompt;
+    // Append media instruction at the end so it's always present
+    if (mediaInstruction) {
+      combinedPrompt = combinedPrompt
+        ? `${combinedPrompt}\n\n${mediaInstruction}`
+        : mediaInstruction;
     }
 
-    return systemPrompt
-      ? `${skillsPrompt}\n\n${systemPrompt}`
-      : skillsPrompt;
+    return combinedPrompt;
   }
 
   private isSessionNotFoundError(error: unknown): boolean {
@@ -345,15 +372,32 @@ export class IMCoworkHandler extends EventEmitter {
     return new Promise((resolve, reject) => {
       const existingAccumulator = this.messageAccumulators.get(sessionId);
       if (existingAccumulator) {
+        if (existingAccumulator.timeoutId) {
+          clearTimeout(existingAccumulator.timeoutId);
+        }
         this.messageAccumulators.delete(sessionId);
         existingAccumulator.reject(new Error('Replaced by a newer IM request'));
       }
+
+      const timeoutId = setTimeout(() => {
+        const accumulator = this.messageAccumulators.get(sessionId);
+        if (accumulator && accumulator.timeoutId === timeoutId) {
+          const partialReply = this.formatReply(accumulator.messages);
+          this.cleanupAccumulator(sessionId);
+          if (partialReply && partialReply !== '处理完成，但没有生成回复。') {
+            accumulator.resolve(partialReply + '\n\n[处理超时，以上为部分结果]');
+          } else {
+            accumulator.reject(new Error('处理超时，请稍后重试'));
+          }
+        }
+      }, ACCUMULATOR_TIMEOUT_MS);
 
       // Set up message accumulator
       this.messageAccumulators.set(sessionId, {
         messages: [],
         resolve,
         reject,
+        timeoutId,
       });
     });
   }
@@ -377,10 +421,13 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   private clearPendingPermissionsBySessionId(sessionId: string): void {
-    for (const [key, pending] of this.pendingPermissionByConversation.entries()) {
-      if (pending.sessionId !== sessionId) continue;
-      this.clearPendingPermissionByKey(key);
-    }
+    const keysToRemove: string[] = [];
+    this.pendingPermissionByConversation.forEach((pending, key) => {
+      if (pending.sessionId === sessionId) {
+        keysToRemove.push(key);
+      }
+    });
+    keysToRemove.forEach((key) => this.clearPendingPermissionByKey(key));
   }
 
   private buildIMPermissionPrompt(request: PermissionRequest): string {
@@ -578,6 +625,10 @@ export class IMCoworkHandler extends EventEmitter {
    * Clean up accumulator
    */
   private cleanupAccumulator(sessionId: string): void {
+    const accumulator = this.messageAccumulators.get(sessionId);
+    if (accumulator?.timeoutId) {
+      clearTimeout(accumulator.timeoutId);
+    }
     this.messageAccumulators.delete(sessionId);
   }
 
@@ -631,19 +682,22 @@ export class IMCoworkHandler extends EventEmitter {
    */
   destroy(): void {
     // Clear all pending accumulators
-    for (const [_sessionId, accumulator] of this.messageAccumulators) {
+    this.messageAccumulators.forEach((accumulator) => {
+      if (accumulator.timeoutId) {
+        clearTimeout(accumulator.timeoutId);
+      }
       accumulator.reject(new Error('Handler destroyed'));
-    }
+    });
     this.messageAccumulators.clear();
     this.imSessionIds.clear();
     this.sessionConversationMap.clear();
 
-    for (const [key, pending] of this.pendingPermissionByConversation.entries()) {
+    this.pendingPermissionByConversation.forEach((pending) => {
       if (pending.timeoutId) {
         clearTimeout(pending.timeoutId);
       }
-      this.pendingPermissionByConversation.delete(key);
-    }
+    });
+    this.pendingPermissionByConversation.clear();
 
     // Remove event listeners
     this.coworkRunner.removeListener('message', this.handleMessage.bind(this));

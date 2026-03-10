@@ -200,9 +200,14 @@ export class FeishuGateway extends EventEmitter {
             }
 
             const ctx = this.parseMessageEvent(event);
-            await this.handleInboundMessage(ctx);
+            // Fire-and-forget: do not await so the Lark SDK can send the ack
+            // to Feishu server immediately. Replies are sent via replyFn/sendWithMedia,
+            // not through the event handler return value.
+            this.handleInboundMessage(ctx).catch((err) => {
+              console.error(`[Feishu Gateway] Error handling message ${ctx.messageId}: ${err.message}`);
+            });
           } catch (err: any) {
-            console.error(`[Feishu Gateway] Error handling message: ${err.message}`);
+            console.error(`[Feishu Gateway] Error parsing message event: ${err.message}`);
           }
         },
         'im.message.message_read_v1': async () => {
@@ -308,6 +313,25 @@ export class FeishuGateway extends EventEmitter {
       };
     } catch (err: any) {
       return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Add a reaction emoji to a message (best-effort, non-blocking)
+   */
+  private async addReaction(messageId: string, emojiType: string): Promise<void> {
+    if (!this.restClient) return;
+    try {
+      const response: any = await this.restClient.request({
+        method: 'POST',
+        url: `/open-apis/im/v1/messages/${messageId}/reactions`,
+        data: { reaction_type: { emoji_type: emojiType } },
+      });
+      if (response.code !== 0) {
+        this.log(`[Feishu Gateway] Failed to add reaction: ${response.msg || response.code}`);
+      }
+    } catch (err: any) {
+      this.log(`[Feishu Gateway] Failed to add reaction: ${err.message}`);
     }
   }
 
@@ -862,6 +886,9 @@ export class FeishuGateway extends EventEmitter {
 
     // Emit message event
     this.emit('message', message);
+
+    // Add processing reaction (fire-and-forget)
+    this.addReaction(ctx.messageId, 'OnIt').catch(() => {});
 
     // Call message callback if set
     if (this.onMessageCallback) {

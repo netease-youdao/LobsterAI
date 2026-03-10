@@ -5,6 +5,7 @@ export { default as AnthropicIcon } from './AnthropicIcon';
 export { default as MoonshotIcon } from './MoonshotIcon';
 export { default as ZhipuIcon } from './ZhipuIcon';
 export { default as MiniMaxIcon } from './MiniMaxIcon';
+export { default as YouDaoZhiYunIcon } from './YouDaoZhiYunIcon';
 export { default as QwenIcon } from './QwenIcon';
 export { default as XiaomiIcon } from './XiaomiIcon';
 export { default as OpenRouterIcon } from './OpenRouterIcon';

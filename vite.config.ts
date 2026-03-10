@@ -6,8 +6,13 @@ import path from 'path';
 
 // https://vitejs.dev/config/
 const devPort = 5175;
+const katexVersion = process.env.npm_package_dependencies_katex?.replace(/^[~^]/, '') || '0.16.0';
 
 export default defineConfig({
+  define: {
+    // KaTeX ESM bundle references this compile-time constant.
+    __VERSION__: JSON.stringify(katexVersion),
+  },
   plugins: [
     react(),
     electron([
@@ -20,7 +25,7 @@ export default defineConfig({
             outDir: 'dist-electron',
             minify: false,
             rollupOptions: {
-              external: ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim'],
+              external: ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'],
               output: {
                 // Keep CJS format (default), but load via ESM loader.mjs
                 inlineDynamicImports: true,
@@ -70,6 +75,11 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['electron'],
+    esbuildOptions: {
+      define: {
+        __VERSION__: JSON.stringify(katexVersion),
+      },
+    },
   },
   clearScreen: false,
 }); 

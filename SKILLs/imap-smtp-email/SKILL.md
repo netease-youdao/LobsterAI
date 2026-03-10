@@ -2,13 +2,20 @@
 name: imap-smtp-email
 description: Read and send email via IMAP/SMTP. Check for new/unread messages, fetch content, search mailboxes, mark as read/unread, and send emails with attachments. Works with any IMAP/SMTP server including Gmail, Outlook, 163.com, vip.163.com, 126.com, vip.126.com, 188.com, and vip.188.com.
 official: true
+version: 1.0.1
 ---
 
 # IMAP/SMTP Email Tool
 
 Read, search, and manage email via IMAP protocol. Send email via SMTP. Supports Gmail, Outlook, 163.com, vip.163.com, 126.com, vip.126.com, 188.com, vip.188.com, and any standard IMAP/SMTP server.
 
-## Configuration
+## Important: Configuration is Pre-configured
+
+The `.env` configuration file is automatically managed by LobsterAI Settings (邮箱设置). **Do NOT ask the user to create or edit `.env` — just run the commands directly.** If credentials are wrong, the scripts will return a clear error message; only then should you inform the user to check their email settings.
+
+The `.env` file is located in this skill's directory (same folder as this SKILL.md file). The scripts load it automatically via an absolute path, regardless of the current working directory.
+
+## Configuration Reference
 
 Create `.env` in the skill folder or set environment variables:
 
