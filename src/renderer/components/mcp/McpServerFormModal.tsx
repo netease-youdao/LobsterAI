@@ -204,6 +204,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const readOnlyInputClass = inputClass + ' opacity-60 cursor-not-allowed';
   const labelClass = 'text-xs font-semibold tracking-wide dark:text-claude-darkTextSecondary text-claude-textSecondary';
   const kvInputClass = 'flex-1 px-2 py-1.5 text-sm rounded-lg dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-1 focus:ring-claude-accent';
+  const hintClass = 'text-xs leading-5 dark:text-claude-darkTextSecondary text-claude-textSecondary';
 
   // Title
   const modalTitle = isEdit
@@ -216,6 +217,12 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const saveText = isRegistry && !isEdit
     ? i18nService.t('mcpInstall')
     : i18nService.t('saveMcpServer');
+
+  const transportHint = transportType === 'stdio'
+    ? i18nService.t('mcpTransportStdioHint')
+    : transportType === 'sse'
+      ? i18nService.t('mcpTransportSseHint')
+      : i18nService.t('mcpTransportHttpHint');
 
   return (
     <div
@@ -272,6 +279,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
               <option value="sse">{i18nService.t('mcpTransportSse')}</option>
               <option value="http">{i18nService.t('mcpTransportHttp')}</option>
             </select>
+            <p className={hintClass}>{transportHint}</p>
           </div>
 
           {/* stdio fields */}
