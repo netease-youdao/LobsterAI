@@ -13,6 +13,7 @@ import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle } from './libs/coworkUtil';
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setScheduledTaskDeps } from './libs/coworkOpenAICompatProxy';
+import { createAgentApiServer, getAgentApiServer } from './libs/agentApiServer';
 import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
 import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
@@ -2231,6 +2232,14 @@ if (!gotTheLock) {
       console.error('Failed to stop OpenAI compatibility proxy:', error);
     });
 
+    // Stop Agent API Server
+    const agentServer = getAgentApiServer();
+    if (agentServer) {
+      await agentServer.stop().catch((error) => {
+        console.error('Failed to stop Agent API Server:', error);
+      });
+    }
+
     // Stop skill services.
     const skillServices = getSkillServiceManager();
     await skillServices.stopAll();
@@ -2356,6 +2365,22 @@ if (!gotTheLock) {
 
     await startCoworkOpenAICompatProxy().catch((error) => {
       console.error('Failed to start OpenAI compatibility proxy:', error);
+    });
+
+    // Start Agent API Server
+    const agentApiKey = process.env.LOBSTER_AGENT_API_KEY || 'lobsterai-agent-default-key';
+    const agentServer = createAgentApiServer(agentApiKey);
+    agentServer.setCoworkRunnerGetter(getCoworkRunner);
+    agentServer.setStateChangedPublisher((event) => {
+      const windows = BrowserWindow.getAllWindows();
+      windows.forEach((win) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('agent:state:changed', event);
+        }
+      });
+    });
+    await agentServer.start().catch((error) => {
+      console.error('Failed to start Agent API Server:', error);
     });
 
     // Inject scheduled task dependencies into the proxy server
