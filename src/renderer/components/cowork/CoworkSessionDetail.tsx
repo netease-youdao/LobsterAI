@@ -39,6 +39,7 @@ interface CoworkSessionDetailProps {
 const AUTO_SCROLL_THRESHOLD = 120;
 const NAV_HIDE_DELAY = 3000;
 const NAV_SCROLL_LOCK_DURATION = 500;
+const NAV_BOTTOM_SNAP_THRESHOLD = 20;
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 
 const sanitizeExportFileName = (value: string): string => {
@@ -1190,6 +1191,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isNavigatingRef = useRef(false);
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
+  const [isScrollable, setIsScrollable] = useState(false);
 
   // Menu and action states
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -1236,6 +1238,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // Reset nav state when session changes
   useEffect(() => {
     setShowTurnNav(false);
+    setIsScrollable(false);
     setCurrentTurnIndex(0);
     currentTurnIndexRef.current = 0;
     isNavigatingRef.current = false;
@@ -1552,6 +1555,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const isNearBottom = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
     setShouldAutoScroll((prev) => (prev === isNearBottom ? prev : isNearBottom));
 
+    // Check if content overflows the container (use functional updater to avoid redundant re-renders)
+    const scrollable = container.scrollHeight > container.clientHeight;
+    setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
+    if (!scrollable) return;
+
     // Show turn nav and reset hide timer
     setShowTurnNav(true);
     if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
@@ -1563,6 +1571,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     // Update current turn index based on cached turn elements
     const turnEls = turnElsCacheRef.current;
     if (turnEls.length === 0) return;
+
+    // If at very bottom, snap to last turn (use smaller threshold than auto-scroll)
+    if (distanceToBottom <= NAV_BOTTOM_SNAP_THRESHOLD) {
+      const lastIndex = turnEls.length - 1;
+      currentTurnIndexRef.current = lastIndex;
+      setCurrentTurnIndex(lastIndex);
+      return;
+    }
+
     const scrollTop = container.scrollTop;
     let visibleIndex = 0;
     for (let i = 0; i < turnEls.length; i++) {
@@ -1658,17 +1675,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return mapSandboxGuestPathsInText(value, currentSession?.cwd);
   }, [currentSession?.cwd, currentSession?.executionMode]);
 
-  // Auto scroll to bottom when new messages arrive or content updates (streaming)
-  useEffect(() => {
-    if (!shouldAutoScroll) {
-      return;
-    }
-    const container = scrollContainerRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll]);
-
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
@@ -1677,14 +1683,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) { turnElsCacheRef.current = []; return; }
-    // Use requestAnimationFrame to ensure DOM is updated after render
-    const raf = requestAnimationFrame(() => {
-      turnElsCacheRef.current = Array.from(
-        container.querySelectorAll<HTMLElement>('[data-turn-index]')
-      );
-    });
-    return () => cancelAnimationFrame(raf);
+    // DOM is already committed when useEffect runs, query synchronously
+    turnElsCacheRef.current = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-turn-index]')
+    );
   }, [turns]);
+
+  // Auto scroll to bottom when new messages arrive or content updates (streaming)
+  useEffect(() => {
+    if (!shouldAutoScroll) {
+      return;
+    }
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+      setIsScrollable(container.scrollHeight > container.clientHeight);
+    }
+    // Sync turn index to last when auto-scrolled to bottom
+    if (turns.length > 0) {
+      const lastIndex = turns.length - 1;
+      currentTurnIndexRef.current = lastIndex;
+      setCurrentTurnIndex(lastIndex);
+    }
+  }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
 
   if (!currentSession) {
     return null;
@@ -1930,7 +1951,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         </div>
 
         {/* Turn Navigation Buttons */}
-        {turns.length > 1 && (
+        {turns.length > 1 && isScrollable && (
           <div
             className={`absolute right-4 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
               dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
