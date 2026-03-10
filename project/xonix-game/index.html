@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Xonix - 画线圈地</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1a1a2e;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #game-container {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #gameCanvas {
+      background: #0f0f1a;
+      border: 2px solid #4a4a6a;
+      border-radius: 4px;
+    }
+
+    #ui-overlay {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #fff;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      text-shadow: 1px 1px 2px #000;
+      pointer-events: none;
+    }
+
+    #start-screen {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: #fff;
+      font-family: 'Courier New', monospace;
+      z-index: 10;
+    }
+
+    #start-screen h1 {
+      font-size: 48px;
+      margin-bottom: 20px;
+      color: #00d4ff;
+      text-shadow: 0 0 20px #00d4ff;
+    }
+
+    #start-screen .subtitle {
+      font-size: 18px;
+      margin-bottom: 40px;
+      color: #aaa;
+    }
+
+    #start-screen .controls {
+      margin-bottom: 30px;
+      text-align: center;
+      line-height: 1.8;
+      color: #888;
+    }
+
+    #start-screen .controls span {
+      color: #00d4ff;
+    }
+
+    #start-btn {
+      padding: 15px 50px;
+      font-size: 20px;
+      background: linear-gradient(135deg, #00d4ff, #0066cc);
+      border: none;
+      border-radius: 30px;
+      color: #fff;
+      cursor: pointer;
+      font-family: 'Courier New', monospace;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    #start-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 30px rgba(0, 212, 255, 0.5);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui-overlay">
+      <div>生命: <span id="lives">3</span></div>
+      <div>进度: <span id="progress">0</span>%</div>
+      <div>分数: <span id="score">0</span></div>
+    </div>
+    <div id="start-screen">
+      <h1>XONIX</h1>
+      <div class="subtitle">画线圈地</div>
+      <div class="controls">
+        <span>方向键</span> 或 <span>滑动</span> 控制移动<br>
+        <span>空格键</span> 刹车 (安全区域内)<br>
+        连接安全区边界完成圈地
+      </div>
+      <button id="start-btn">开始游戏</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/polybool@1.2.1/build/polybool.min.js"></script>
+  <script>
+    // ==================== CONFIG ====================
+    const LOGICAL_WIDTH = 800;
+    const LOGICAL_HEIGHT = 600;
+    const PLAYER_RADIUS = 2;
+    const PLAYER_SPEED = 3;
+    const ENEMY_RADIUS = 6;
+    const SAFE_BORDER = 10;
+    const SWIPE_THRESHOLD = 15;
+
+    // ==================== GAME STATE ====================
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let gameState = {
+      mode: 'menu', // menu, playing, paused, gameover, win
+      lives: 3,
+      score: 0,
+      safeAreaPercent: 0,
+      player: {
+        x: SAFE_BORDER + 5,
+        y: LOGICAL_HEIGHT / 2,
+        vx: 0,
+        vy: 0,
+        state: 'IDLE', // IDLE, MOVING_SAFE, DRAWING_DANGER
+        trail: [], // [{x, y}, ...]
+        lastDir: 'right'
+      },
+      enemies: [],
+      safeZones: [], // Array of polygons
+      dangerZone: null,
+      walls: [], // Internal walls
+      lastTime: 0,
+      scale: 1
+    };
+
+    // ==================== INITIALIZATION ====================
+    function initCanvas() {
+      canvas.width = LOGICAL_WIDTH;
+      canvas.height = LOGICAL_HEIGHT;
+      resizeCanvas();
+    }
+
+    function resizeCanvas() {
+      const containerWidth = window.innerWidth - 40;
+      const containerHeight = window.innerHeight - 40;
+
+      const scaleX = containerWidth / LOGICAL_WIDTH;
+      const scaleY = containerHeight / LOGICAL_HEIGHT;
+      const scale = Math.min(scaleX, scaleY, 1);
+
+      gameState.scale = scale;
+
+      canvas.style.width = `${LOGICAL_WIDTH * scale}px`;
+      canvas.style.height = `${LOGICAL_HEIGHT * scale}px`;
+    }
+
+    function initGame() {
+      // Initialize safe zones (border)
+      gameState.safeZones = [
+        // Top border
+        [{ x: 0, y: 0 }, { x: LOGICAL_WIDTH, y: 0 }, { x: LOGICAL_WIDTH, y: SAFE_BORDER }, { x: 0, y: SAFE_BORDER }],
+        // Bottom border
+        [{ x: 0, y: LOGICAL_HEIGHT - SAFE_BORDER }, { x: LOGICAL_WIDTH, y: LOGICAL_HEIGHT - SAFE_BORDER }, { x: LOGICAL_WIDTH, y: LOGICAL_HEIGHT }, { x: 0, y: LOGICAL_HEIGHT }],
+        // Left border
+        [{ x: 0, y: 0 }, { x: SAFE_BORDER, y: 0 }, { x: SAFE_BORDER, y: LOGICAL_HEIGHT }, { x: 0, y: LOGICAL_HEIGHT }],
+        // Right border
+        [{ x: LOGICAL_WIDTH - SAFE_BORDER, y: 0 }, { x: LOGICAL_WIDTH, y: 0 }, { x: LOGICAL_WIDTH, y: LOGICAL_HEIGHT }, { x: LOGICAL_WIDTH - SAFE_BORDER, y: LOGICAL_HEIGHT }]
+      ];
+
+      // Generate walls based on level
+      gameState.walls = generateWalls(1);
+
+      // Add walls to safe zones
+      gameState.walls.forEach(wall => {
+        gameState.safeZones.push(wall);
+      });
+
+      // Initialize enemies
+      gameState.enemies = [
+        { x: 400, y: 300, vx: 2, vy: 1.5 },
+        { x: 200, y: 150, vx: -1.5, vy: 2 }
+      ];
+
+      // Reset player
+      gameState.player = {
+        x: SAFE_BORDER + 5,
+        y: LOGICAL_HEIGHT / 2,
+        vx: 0,
+        vy: 0,
+        state: 'IDLE',
+        trail: [],
+        lastDir: 'right'
+      };
+
+      gameState.lives = 3;
+      gameState.score = 0;
+      gameState.safeAreaPercent = calculateSafeAreaPercent();
+
+      updateUI();
+    }
+
+    function generateWalls(level) {
+      const walls = [];
+      if (level === 1) {
+        // Level 1: Simple walls - easy to use as safe islands
+        walls.push([
+          { x: 200, y: 200 }, { x: 280, y: 200 }, { x: 280, y: 240 }, { x: 200, y: 240 }
+        ]);
+        walls.push([
+          { x: 500, y: 350 }, { x: 600, y: 350 }, { x: 600, y: 420 }, { x: 500, y: 420 }
+        ]);
+        walls.push([
+          { x: 350, y: 450 }, { x: 450, y: 450 }, { x: 450, y: 480 }, { x: 350, y: 480 }
+        ]);
+      }
+      return walls;
+    }
+
+    function calculateSafeAreaPercent() {
+      // Calculate actual safe area from all safe zones
+      // Use simplified calculation that handles overlapping borders correctly
+      try {
+        if (gameState.safeZones.length === 0) {
+          return 0;
+        }
+
+        // Calculate union of all safe zones using PolyBool
+        // First, convert all zones to PolyBool format
+        let combined = null;
+
+        for (let i = 0; i < gameState.safeZones.length; i++) {
+          const zonePoly = {
+            regions: [gameState.safeZones[i].map(p => [p.x, p.y])],
+            inverted: false
+          };
+
+          if (combined === null) {
+            combined = zonePoly;
+          } else {
+            combined = PolyBool.union(combined, zonePoly);
+          }
+        }
+
+        // Now intersect with the game bounds to handle any edge issues
+        const bounds = {
+          regions: [[[0, 0], [LOGICAL_WIDTH, 0], [LOGICAL_WIDTH, LOGICAL_HEIGHT], [0, LOGICAL_HEIGHT]]],
+          inverted: false
+        };
+        combined = PolyBool.intersect(combined, bounds);
+
+        // Calculate total area
+        let totalSafeArea = 0;
+        if (combined && combined.regions) {
+          combined.regions.forEach(region => {
+            totalSafeArea += calculatePolygonArea(region.map(p => ({ x: p[0], y: p[1] })));
+          });
+        }
+
+        const total = LOGICAL_WIDTH * LOGICAL_HEIGHT;
+        const percent = Math.round((totalSafeArea / total) * 100);
+        // Clamp to valid range
+        return Math.max(0, Math.min(100, percent));
+      } catch (e) {
+        // Fallback to simplified calculation
+        let totalSafe = SAFE_BORDER * 2 * LOGICAL_WIDTH +
+                        (LOGICAL_HEIGHT - SAFE_BORDER * 2) * SAFE_BORDER * 2;
+
+        gameState.walls.forEach(wall => {
+          const w = wall[2].x - wall[0].x;
+          const h = wall[1].y - wall[0].y;
+          totalSafe += w * h;
+        });
+
+        const total = LOGICAL_WIDTH * LOGICAL_HEIGHT;
+        return Math.round((totalSafe / total) * 100);
+      }
+    }
+
+    // ==================== INPUT HANDLING ====================
+    function setupInput() {
+      // Keyboard
+      window.addEventListener('keydown', handleKeyDown);
+
+      // Touch
+      let touchStartX = 0;
+      let touchStartY = 0;
+
+      canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const touch = e.touches[0];
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+      }, { passive: false });
+
+      canvas.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - touchStartX;
+        const dy = touch.clientY - touchStartY;
+
+        if (Math.abs(dx) > SWIPE_THRESHOLD || Math.abs(dy) > SWIPE_THRESHOLD) {
+          if (Math.abs(dx) > Math.abs(dy)) {
+            handleDirection(dx > 0 ? 'right' : 'left');
+          } else {
+            handleDirection(dy > 0 ? 'down' : 'up');
+          }
+        }
+      }, { passive: false });
+    }
+
+    function handleKeyDown(e) {
+      if (gameState.mode !== 'playing') return;
+
+      switch(e.key) {
+        case 'ArrowUp':
+        case 'w':
+        case 'W':
+          handleDirection('up');
+          break;
+        case 'ArrowDown':
+        case 's':
+        case 'S':
+          handleDirection('down');
+          break;
+        case 'ArrowLeft':
+        case 'a':
+        case 'A':
+          handleDirection('left');
+          break;
+        case 'ArrowRight':
+        case 'd':
+        case 'D':
+          handleDirection('right');
+          break;
+        case ' ':
+          handleBrake();
+          break;
+      }
+    }
+
+    function handleDirection(dir) {
+      const p = gameState.player;
+
+      // 180 degree turn prevention
+      if (p.state === 'MOVING_SAFE' || p.state === 'DRAWING_DANGER') {
+        if (p.lastDir === 'right' && dir === 'left') return;
+        if (p.lastDir === 'left' && dir === 'right') return;
+        if (p.lastDir === 'up' && dir === 'down') return;
+        if (p.lastDir === 'down' && dir === 'up') return;
+      }
+
+      p.vx = 0;
+      p.vy = 0;
+
+      switch(dir) {
+        case 'up': p.vy = -PLAYER_SPEED; break;
+        case 'down': p.vy = PLAYER_SPEED; break;
+        case 'left': p.vx = -PLAYER_SPEED; break;
+        case 'right': p.vx = PLAYER_SPEED; break;
+      }
+
+      p.lastDir = dir;
+
+      // If in IDLE, start moving
+      if (p.state === 'IDLE') {
+        p.state = 'MOVING_SAFE';
+      }
+    }
+
+    function handleBrake() {
+      const p = gameState.player;
+      // Only allow brake in safe zone
+      if (p.state === 'MOVING_SAFE' && isInSafeZone(p.x, p.y)) {
+        p.state = 'IDLE';
+        p.vx = 0;
+        p.vy = 0;
+      }
+    }
+
+    // ==================== COLLISION DETECTION ====================
+    function isInSafeZone(x, y) {
+      // Check safe zones
+      for (const zone of gameState.safeZones) {
+        if (pointInPolygon(x, y, zone)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function pointInPolygon(x, y, polygon) {
+      // Ray casting algorithm
+      let inside = false;
+      const n = polygon.length;
+
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const xi = polygon[i].x, yi = polygon[i].y;
+        const xj = polygon[j].x, yj = polygon[j].y;
+
+        if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+          inside = !inside;
+        }
+      }
+
+      return inside;
+    }
+
+    function distanceToSegment(px, py, ax, ay, bx, by) {
+      const dx = bx - ax;
+      const dy = by - ay;
+      const lenSq = dx * dx + dy * dy;
+
+      if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+
+      let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+
+      const projX = ax + t * dx;
+      const projY = ay + t * dy;
+
+      return Math.hypot(px - projX, py - projY);
+    }
+
+    // ==================== GAME LOOP ====================
+    function update(deltaTime) {
+      if (gameState.mode !== 'playing') return;
+
+      const p = gameState.player;
+
+      if (p.state !== 'IDLE') {
+        // Save trail point before moving
+        if (p.state === 'DRAWING_DANGER') {
+          p.trail.push({ x: p.x, y: p.y });
+        }
+
+        // Move player
+        p.x += p.vx;
+        p.y += p.vy;
+
+        // Keep in bounds
+        p.x = Math.max(PLAYER_RADIUS, Math.min(LOGICAL_WIDTH - PLAYER_RADIUS, p.x));
+        p.y = Math.max(PLAYER_RADIUS, Math.min(LOGICAL_HEIGHT - PLAYER_RADIUS, p.y));
+
+        // Check zone transition
+        const nowInSafe = isInSafeZone(p.x, p.y);
+
+        if (p.state === 'MOVING_SAFE' && !nowInSafe) {
+          // Entered danger zone
+          p.state = 'DRAWING_DANGER';
+          p.trail = [{ x: p.x, y: p.y }];
+        } else if (p.state === 'DRAWING_DANGER' && nowInSafe) {
+          // Returned to safe zone - trail complete!
+          p.trail.push({ x: p.x, y: p.y });
+          processTrailCompletion();
+        }
+      }
+
+      // Update enemies
+      updateEnemies();
+
+      // Check collisions
+      checkPlayerCollisions();
+
+      // Update UI
+      gameState.safeAreaPercent = calculateSafeAreaPercent();
+      updateUI();
+
+      // Check win condition
+      if (gameState.safeAreaPercent >= 80) {
+        gameState.mode = 'win';
+        showGameOver(true);
+      }
+    }
+
+    function updateEnemies() {
+      gameState.enemies.forEach(enemy => {
+        enemy.x += enemy.vx;
+        enemy.y += enemy.vy;
+
+        // Bounce off boundaries
+        if (enemy.x - ENEMY_RADIUS < 0 || enemy.x + ENEMY_RADIUS > LOGICAL_WIDTH) {
+          enemy.vx = -enemy.vx;
+          enemy.x = Math.max(ENEMY_RADIUS, Math.min(LOGICAL_WIDTH - ENEMY_RADIUS, enemy.x));
+        }
+        if (enemy.y - ENEMY_RADIUS < 0 || enemy.y + ENEMY_RADIUS > LOGICAL_HEIGHT) {
+          enemy.vy = -enemy.vy;
+          enemy.y = Math.max(ENEMY_RADIUS, Math.min(LOGICAL_HEIGHT - ENEMY_RADIUS, enemy.y));
+        }
+
+        // Bounce off safe zones (simplified - just check if inside safe zone and reverse)
+        // For now, simple boundary bounce
+      });
+    }
+
+    function checkPlayerCollisions() {
+      const p = gameState.player;
+
+      // Check enemy-player collision (body collision)
+      for (const enemy of gameState.enemies) {
+        const dist = Math.hypot(p.x - enemy.x, p.y - enemy.y);
+        if (dist < PLAYER_RADIUS + ENEMY_RADIUS) {
+          playerDie('collision');
+          return;
+        }
+
+        // Check enemy-trail collision (line collision)
+        if (p.state === 'DRAWING_DANGER') {
+          for (let i = 0; i < p.trail.length - 1; i++) {
+            const dist = distanceToSegment(enemy.x, enemy.y, p.trail[i].x, p.trail[i].y, p.trail[i+1].x, p.trail[i+1].y);
+            if (dist < ENEMY_RADIUS) {
+              playerDie('line');
+              return;
+            }
+          }
+        }
+      }
+
+      // Check self-collision (trail intersection)
+      if (p.state === 'DRAWING_DANGER' && p.trail.length > 2) {
+        for (let i = 0; i < p.trail.length - 3; i++) {
+          const dist = distanceToSegment(p.x, p.y, p.trail[i].x, p.trail[i].y, p.trail[i+1].x, p.trail[i+1].y);
+          if (dist < PLAYER_RADIUS * 2) {
+            playerDie('self');
+            return;
+          }
+        }
+      }
+    }
+
+    function playerDie(reason) {
+      gameState.lives--;
+      gameState.score = Math.max(0, gameState.score - 100);
+
+      // Reset player position
+      gameState.player.x = SAFE_BORDER + 5;
+      gameState.player.y = LOGICAL_HEIGHT / 2;
+      gameState.player.vx = 0;
+      gameState.player.vy = 0;
+      gameState.player.state = 'IDLE';
+      gameState.player.trail = [];
+
+      updateUI();
+
+      if (gameState.lives <= 0) {
+        gameState.mode = 'gameover';
+        showGameOver(false);
+      }
+    }
+
+    function processTrailCompletion() {
+      // Build the closed polygon from trail + entry/exit points on safe zone boundary
+      const trail = gameState.player.trail;
+      if (trail.length < 3) {
+        // Trail too short, just clear it
+        gameState.player.trail = [];
+        gameState.player.state = 'MOVING_SAFE';
+        gameState.score += 10;
+        return;
+      }
+
+      // Find entry and exit points on safe zone boundary
+      // The trail already has entry point at start and exit point at end (player current position)
+      // We need to close the polygon by connecting back to start through the safe zone
+
+      // For simplicity, create polygon: start from first trail point, follow trail to end,
+      // then find shortest path back to start through safe zone (or use entry/exit edges)
+
+      // Create the captured polygon from trail
+      const capturedPolygon = [...trail];
+
+      // Add player current position
+      capturedPolygon.push({ x: gameState.player.x, y: gameState.player.y });
+
+      // Use PolyBool to calculate the captured area
+      try {
+        // Convert all safe zones to PolyBool format
+        const safePolygons = gameState.safeZones.map(zone => ({
+          regions: [zone.map(p => [p.x, p.y])],
+          inverted: false
+        }));
+
+        // Create the polygon from trail (convert to [x,y] format)
+        const trailPolygon = {
+          regions: [capturedPolygon.map(p => [p.x, p.y])],
+          inverted: false
+        };
+
+        // Combine all existing safe zones into one polygon
+        let combinedSafe = safePolygons[0];
+        for (let i = 1; i < safePolygons.length; i++) {
+          combinedSafe = PolyBool.union(combinedSafe, safePolygons[i]);
+        }
+
+        // Subtract trail from safe zones (the trail cuts through safe zone)
+        // Actually we want to ADD the captured area to safe zones
+
+        // The captured area is the polygon defined by trail + safe zone edges it connected to
+        // For simplicity, treat the trail as-is and add it to safe zones
+        const newSafeRegion = PolyBool.union(combinedSafe, trailPolygon);
+
+        // Check if the new polygon is valid
+        if (newSafeRegion && newSafeRegion.regions && newSafeRegion.regions.length > 0) {
+          // Convert back to our format and add as new safe zone
+          const newZones = newSafeRegion.regions.map(region =>
+            region.map(point => ({ x: point[0], y: point[1] }))
+          );
+
+          // Add new captured zones to safe zones (filter out very small ones)
+          newZones.forEach(zone => {
+            const area = calculatePolygonArea(zone);
+            if (area > 1000) { // Minimum area threshold
+              gameState.safeZones.push(zone);
+            }
+          });
+
+          // Calculate captured area and update score
+          const capturedArea = calculatePolygonArea(capturedPolygon);
+          const totalArea = LOGICAL_WIDTH * LOGICAL_HEIGHT;
+          const percentCaptured = (capturedArea / totalArea) * 100;
+
+          // Award points based on captured area
+          gameState.score += Math.floor(percentCaptured * 10);
+
+          // Check for enemies in the newly captured area and kill them
+          killEnemiesInPolygon(capturedPolygon);
+        }
+      } catch (e) {
+        console.warn('PolyBool error:', e);
+      }
+
+      // Clear trail and reset player state
+      gameState.player.trail = [];
+      gameState.player.state = 'MOVING_SAFE';
+
+      // Recalculate safe area percentage
+      gameState.safeAreaPercent = calculateSafeAreaPercent();
+    }
+
+    // ==================== POLYGON OPERATIONS ====================
+    function calculatePolygonArea(polygon) {
+      // Shoelace formula
+      let area = 0;
+      const n = polygon.length;
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        area += polygon[i].x * polygon[j].y;
+        area -= polygon[j].x * polygon[i].y;
+      }
+      return Math.abs(area / 2);
+    }
+
+    function killEnemiesInPolygon(polygon) {
+      // Use ray casting to check if each enemy is inside the polygon
+      const enemiesToRemove = [];
+
+      gameState.enemies.forEach((enemy, index) => {
+        if (pointInPolygon(enemy.x, enemy.y, polygon)) {
+          enemiesToRemove.push(index);
+          // Bonus points for killing enemy
+          gameState.score += 500;
+        }
+      });
+
+      // Remove killed enemies (in reverse order to maintain indices)
+      enemiesToRemove.sort((a, b) => b - a).forEach(index => {
+        gameState.enemies.splice(index, 1);
+      });
+
+      // Spawn new enemy if all killed
+      if (gameState.enemies.length === 0) {
+        spawnNewEnemy();
+      }
+    }
+
+    function spawnNewEnemy() {
+      // Spawn a new enemy in the danger zone
+      let x, y;
+      let attempts = 0;
+      do {
+        x = SAFE_BORDER + 20 + Math.random() * (LOGICAL_WIDTH - SAFE_BORDER * 2 - 40);
+        y = SAFE_BORDER + 20 + Math.random() * (LOGICAL_HEIGHT - SAFE_BORDER * 2 - 40);
+        attempts++;
+      } while (isInSafeZone(x, y) && attempts < 100);
+
+      const speed = 1.5 + Math.random() * 2;
+      const angle = Math.random() * Math.PI * 2;
+
+      gameState.enemies.push({
+        x: x,
+        y: y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed
+      });
+    }
+
+    // ==================== RENDERING ====================
+    function render() {
+      // Clear canvas
+      ctx.fillStyle = '#0f0f1a';
+      ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+      // Draw safe zones
+      ctx.fillStyle = '#1e3a5f';
+      gameState.safeZones.forEach(zone => {
+        ctx.beginPath();
+        ctx.moveTo(zone[0].x, zone[0].y);
+        for (let i = 1; i < zone.length; i++) {
+          ctx.lineTo(zone[i].x, zone[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+      });
+
+      // Draw walls
+      ctx.fillStyle = '#2d5a87';
+      gameState.walls.forEach(wall => {
+        ctx.beginPath();
+        ctx.moveTo(wall[0].x, wall[0].y);
+        for (let i = 1; i < wall.length; i++) {
+          ctx.lineTo(wall[i].x, wall[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+      });
+
+      // Draw danger zone (remaining area)
+      ctx.fillStyle = '#16213e';
+      ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+      // Draw player trail
+      const p = gameState.player;
+      if (p.trail.length > 0) {
+        ctx.strokeStyle = '#ff6b6b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p.trail[0].x, p.trail[0].y);
+        for (let i = 1; i < p.trail.length; i++) {
+          ctx.lineTo(p.trail[i].x, p.trail[i].y);
+        }
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+
+      // Draw player
+      ctx.fillStyle = '#00d4ff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw player glow
+      ctx.shadowColor = '#00d4ff';
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Draw enemies
+      gameState.enemies.forEach(enemy => {
+        ctx.fillStyle = '#ff4757';
+        ctx.beginPath();
+        ctx.arc(enemy.x, enemy.y, ENEMY_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Enemy glow
+        ctx.shadowColor = '#ff4757';
+        ctx.shadowBlur = 8;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+    }
+
+    function updateUI() {
+      document.getElementById('lives').textContent = gameState.lives;
+      document.getElementById('progress').textContent = gameState.safeAreaPercent;
+      document.getElementById('score').textContent = gameState.score;
+    }
+
+    function showGameOver(win) {
+      const overlay = document.getElementById('start-screen');
+      overlay.classList.remove('hidden');
+
+      const h1 = overlay.querySelector('h1');
+      const subtitle = overlay.querySelector('.subtitle');
+      const controls = overlay.querySelector('.controls');
+      const btn = document.getElementById('start-btn');
+
+      if (win) {
+        h1.textContent = '胜利!';
+        h1.style.color = '#00ff88';
+        subtitle.textContent = `最终得分: ${gameState.score}`;
+      } else {
+        h1.textContent = '游戏结束';
+        h1.style.color = '#ff4757';
+        subtitle.textContent = `最终得分: ${gameState.score}`;
+      }
+
+      controls.innerHTML = `安全区域: ${gameState.safeAreaPercent}%`;
+      btn.textContent = '再玩一次';
+    }
+
+    // ==================== GAME LOOP ====================
+    function gameLoop(timestamp) {
+      const deltaTime = timestamp - gameState.lastTime;
+      gameState.lastTime = timestamp;
+
+      update(deltaTime);
+      render();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    // ==================== TIME CONTROL FOR TESTING ====================
+    window.advanceTime = function(ms) {
+      const steps = Math.max(1, Math.round(ms / (1000 / 60)));
+      for (let i = 0; i < steps; i++) {
+        update(1000 / 60);
+      }
+      render();
+    };
+
+    // ==================== TEXT STATE OUTPUT ====================
+    function renderGameToText() {
+      const payload = {
+        mode: gameState.mode,
+        lives: gameState.lives,
+        score: gameState.score,
+        progress: gameState.safeAreaPercent,
+        player: {
+          x: Math.round(gameState.player.x),
+          y: Math.round(gameState.player.y),
+          state: gameState.player.state,
+          trailLength: gameState.player.trail.length
+        },
+        enemies: gameState.enemies.map(e => ({
+          x: Math.round(e.x),
+          y: Math.round(e.y),
+          vx: e.vx,
+          vy: e.vy
+        }))
+      };
+      return JSON.stringify(payload);
+    }
+    window.render_game_to_text = renderGameToText;
+
+    // ==================== STARTUP ====================
+    function start() {
+      document.getElementById('start-screen').classList.add('hidden');
+      gameState.mode = 'playing';
+      initGame();
+    }
+
+    document.getElementById('start-btn').addEventListener('click', start);
+
+    // Initialize
+    initCanvas();
+    setupInput();
+    requestAnimationFrame(gameLoop);
+
+    // Handle resize
+    window.addEventListener('resize', resizeCanvas);
+  </script>
+</body>
+</html>
