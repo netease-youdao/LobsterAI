@@ -1068,6 +1068,13 @@ if (!gotTheLock) {
     activeSkillIds?: string[];
   }) => {
     try {
+      // Temp session IDs only exist in the renderer (Redux), never in the main process store.
+      // If the renderer sends a continue request with a stale temp ID (e.g. during HMR restart),
+      // silently discard it to avoid noisy "Session not found" errors.
+      if (options.sessionId.startsWith('temp-')) {
+        return { success: false, error: 'Temporary session ID is not valid for continuation' };
+      }
+
       const runner = getCoworkRunner();
       runner.continueSession(options.sessionId, options.prompt, { systemPrompt: options.systemPrompt, skillIds: options.activeSkillIds }).catch(error => {
         console.error('Cowork continue error:', error);

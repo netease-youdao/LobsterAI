@@ -42,6 +42,9 @@ type StreamState = {
   hasMessageStart: boolean;
   hasMessageStop: boolean;
   toolCalls: Record<number, ToolCallState>;
+  // <think>...</think> tag state machine
+  insideThinkTag: boolean;
+  thinkTagBuffer: string;
 };
 
 const LOCAL_HOST = '127.0.0.1';
@@ -464,6 +467,8 @@ function createStreamState(): StreamState {
     hasMessageStart: false,
     hasMessageStop: false,
     toolCalls: {},
+    insideThinkTag: false,
+    thinkTagBuffer: '',
   };
 }
 
@@ -609,6 +614,123 @@ function emitMessageDelta(
   });
 }
 
+const THINK_OPEN_TAG = '<think>';
+const THINK_CLOSE_TAG = '</think>';
+
+/**
+ * Returns the length of the longest suffix of `text` that could be the start
+ * of `tag`. Used to detect cross-chunk partial tag boundaries.
+ */
+function partialTagSuffixLength(text: string, tag: string): number {
+  const maxLen = Math.min(tag.length - 1, text.length);
+  for (let len = maxLen; len > 0; len--) {
+    if (tag.startsWith(text.slice(-len))) {
+      return len;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Processes `delta.content` text, routing segments to thinking or text blocks
+ * based on <think>...</think> tags. Handles partial tags across chunk boundaries
+ * via `state.thinkTagBuffer`, and the orphan-</think> case (model was already
+ * thinking before the first visible chunk arrived).
+ */
+function processContentWithThinkTags(
+  res: http.ServerResponse,
+  state: StreamState,
+  rawText: string
+): void {
+  let text = state.thinkTagBuffer + rawText;
+  state.thinkTagBuffer = '';
+
+  while (text.length > 0) {
+    if (state.insideThinkTag) {
+      const closeIdx = text.indexOf(THINK_CLOSE_TAG);
+      if (closeIdx !== -1) {
+        // Emit thinking content before the close tag.
+        const thinkingChunk = text.slice(0, closeIdx);
+        if (thinkingChunk) {
+          ensureThinkingBlock(res, state);
+          emitSSE(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: state.contentIndex,
+            delta: { type: 'thinking_delta', thinking: thinkingChunk },
+          });
+        }
+        state.insideThinkTag = false;
+        text = text.slice(closeIdx + THINK_CLOSE_TAG.length);
+      } else {
+        // No close tag yet. Check for a partial close tag at the end.
+        const partialLen = partialTagSuffixLength(text, THINK_CLOSE_TAG);
+        const emitChunk = partialLen > 0 ? text.slice(0, -partialLen) : text;
+        if (emitChunk) {
+          ensureThinkingBlock(res, state);
+          emitSSE(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: state.contentIndex,
+            delta: { type: 'thinking_delta', thinking: emitChunk },
+          });
+        }
+        if (partialLen > 0) {
+          state.thinkTagBuffer = text.slice(-partialLen);
+        }
+        text = '';
+      }
+    } else {
+      // Check for orphan </think> (model was already thinking before the first
+      // visible chunk). Treat everything before </think> as thinking content.
+      const orphanClose = text.indexOf(THINK_CLOSE_TAG);
+      if (orphanClose !== -1 && state.currentBlockType === null && state.contentIndex === 0) {
+        const thinkingChunk = text.slice(0, orphanClose);
+        if (thinkingChunk) {
+          ensureThinkingBlock(res, state);
+          emitSSE(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: state.contentIndex,
+            delta: { type: 'thinking_delta', thinking: thinkingChunk },
+          });
+        }
+        text = text.slice(orphanClose + THINK_CLOSE_TAG.length);
+        continue;
+      }
+
+      const openIdx = text.indexOf(THINK_OPEN_TAG);
+      if (openIdx !== -1) {
+        // Emit text content before the open tag.
+        const textChunk = text.slice(0, openIdx);
+        if (textChunk) {
+          ensureTextBlock(res, state);
+          emitSSE(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: state.contentIndex,
+            delta: { type: 'text_delta', text: textChunk },
+          });
+        }
+        state.insideThinkTag = true;
+        text = text.slice(openIdx + THINK_OPEN_TAG.length);
+      } else {
+        // No open tag. Check for a partial open tag at the end.
+        const partialLen = partialTagSuffixLength(text, THINK_OPEN_TAG);
+        const emitChunk = partialLen > 0 ? text.slice(0, -partialLen) : text;
+        if (emitChunk) {
+          ensureTextBlock(res, state);
+          emitSSE(res, 'content_block_delta', {
+            type: 'content_block_delta',
+            index: state.contentIndex,
+            delta: { type: 'text_delta', text: emitChunk },
+          });
+        }
+        if (partialLen > 0) {
+          state.thinkTagBuffer = text.slice(-partialLen);
+        }
+        text = '';
+      }
+    }
+  }
+}
+
 function processOpenAIChunk(
   res: http.ServerResponse,
   state: StreamState,
@@ -637,15 +759,7 @@ function processOpenAIChunk(
   }
 
   if (delta?.content) {
-    ensureTextBlock(res, state);
-    emitSSE(res, 'content_block_delta', {
-      type: 'content_block_delta',
-      index: state.contentIndex,
-      delta: {
-        type: 'text_delta',
-        text: delta.content,
-      },
-    });
+    processContentWithThinkTags(res, state, delta.content);
   }
 
   if (Array.isArray(delta?.tool_calls)) {
@@ -718,6 +832,26 @@ async function handleStreamResponse(
   const flushDone = () => {
     if (!state.hasMessageStart) {
       return;
+    }
+    // Flush any partial tag buffer that wasn't completed before the stream ended.
+    if (state.thinkTagBuffer) {
+      const remaining = state.thinkTagBuffer;
+      state.thinkTagBuffer = '';
+      if (state.insideThinkTag) {
+        ensureThinkingBlock(res, state);
+        emitSSE(res, 'content_block_delta', {
+          type: 'content_block_delta',
+          index: state.contentIndex,
+          delta: { type: 'thinking_delta', thinking: remaining },
+        });
+      } else {
+        ensureTextBlock(res, state);
+        emitSSE(res, 'content_block_delta', {
+          type: 'content_block_delta',
+          index: state.contentIndex,
+          delta: { type: 'text_delta', text: remaining },
+        });
+      }
     }
     if (!state.hasMessageStop) {
       closeCurrentBlockIfNeeded(res, state);
