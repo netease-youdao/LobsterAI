@@ -150,6 +150,17 @@ const coworkSlice = createSlice({
       }
     },
 
+    deleteSessions(state, action: PayloadAction<string[]>) {
+      const sessionIds = new Set(action.payload);
+      state.sessions = state.sessions.filter(s => !sessionIds.has(s.id));
+      state.unreadSessionIds = state.unreadSessionIds.filter((id) => !sessionIds.has(id));
+
+      if (state.currentSessionId && sessionIds.has(state.currentSessionId)) {
+        state.currentSessionId = null;
+        state.currentSession = null;
+      }
+    },
+
     addMessage(state, action: PayloadAction<{ sessionId: string; message: CoworkMessage }>) {
       const { sessionId, message } = action.payload;
 
@@ -259,6 +270,7 @@ export const {
   addSession,
   updateSessionStatus,
   deleteSession,
+  deleteSessions,
   addMessage,
   updateMessageContent,
   setStreaming,

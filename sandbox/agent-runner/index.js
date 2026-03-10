@@ -22,6 +22,12 @@ const CONSOLE_PATHS = ['/dev/console', '/dev/ttyAMA0', '/dev/ttyS0'];
 
 // Virtio-serial device paths (checked in order)
 const SERIAL_DEVICE_PATHS = ['/dev/virtio-ports/ipc.0', '/dev/vport0p1'];
+const serialDiscoveryTimeoutRaw = Number.parseInt(process.env.COWORK_SANDBOX_SERIAL_DISCOVERY_TIMEOUT_MS || '', 10);
+const SERIAL_DISCOVERY_TIMEOUT_MS = Number.isFinite(serialDiscoveryTimeoutRaw) && serialDiscoveryTimeoutRaw > 0
+  ? serialDiscoveryTimeoutRaw
+  : 120000;
+const SERIAL_DISCOVERY_INTERVAL_MS = 500;
+const SERIAL_DISCOVERY_LOG_INTERVAL_MS = 10000;
 
 // ---------------------------------------------------------------------------
 // File sync constants (guest -> host file transfer over virtio-serial)
@@ -875,6 +881,7 @@ function updateHeartbeat() {
     timestamp: Date.now(),
     pid: process.pid,
     uptime: process.uptime(),
+    ipcMode,
     ipcMounted: ipcMode === 'file' ? isMounted(IPC_ROOT) : true,
   };
 
@@ -1497,12 +1504,78 @@ function serialWrite(data) {
 }
 
 function findSerialDevice() {
+  const candidates = [];
+  const seen = new Set();
+  const pushCandidate = (candidatePath) => {
+    if (!candidatePath || seen.has(candidatePath)) return;
+    seen.add(candidatePath);
+    candidates.push(candidatePath);
+  };
+
   for (const devPath of SERIAL_DEVICE_PATHS) {
+    pushCandidate(devPath);
+  }
+
+  try {
+    const virtioPorts = fs.readdirSync('/dev/virtio-ports');
+    for (const entry of virtioPorts) {
+      pushCandidate(path.join('/dev/virtio-ports', entry));
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const devEntries = fs.readdirSync('/dev');
+    for (const entry of devEntries) {
+      if (/^vport\d+p\d+$/.test(entry)) {
+        pushCandidate(path.join('/dev', entry));
+      }
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const virtioPortEntries = fs.readdirSync('/sys/class/virtio-ports');
+    for (const entry of virtioPortEntries) {
+      pushCandidate(path.join('/dev', entry));
+      try {
+        const portName = fs.readFileSync(path.join('/sys/class/virtio-ports', entry, 'name'), 'utf8').trim();
+        if (portName) {
+          pushCandidate(path.join('/dev/virtio-ports', portName));
+        }
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+
+  for (const devPath of candidates) {
     try {
-      if (fs.existsSync(devPath)) {
+      if (!fs.existsSync(devPath)) {
+        continue;
+      }
+      const stat = fs.statSync(devPath);
+      if (stat.isCharacterDevice()) {
         return devPath;
       }
     } catch { /* ignore */ }
+  }
+  return null;
+}
+
+async function waitForSerialDevice(timeoutMs = SERIAL_DISCOVERY_TIMEOUT_MS) {
+  const start = Date.now();
+  let lastLogAt = 0;
+  while (Date.now() - start < timeoutMs) {
+    const serialPath = findSerialDevice();
+    if (serialPath) {
+      appendLog(`Virtio-serial device found: ${serialPath}`);
+      return serialPath;
+    }
+
+    if (Date.now() - lastLogAt >= SERIAL_DISCOVERY_LOG_INTERVAL_MS) {
+      const elapsed = Date.now() - start;
+      appendLog(`Waiting for virtio-serial device... elapsed=${elapsed}ms`);
+      lastLogAt = Date.now();
+    }
+
+    await sleep(SERIAL_DISCOVERY_INTERVAL_MS);
   }
   return null;
 }
@@ -1842,19 +1915,15 @@ async function main() {
   appendLog('9p mount failed, checking for virtio-serial device...');
   tryModprobe(['virtio_console']);
 
-  // Wait briefly for the device to appear after module load
-  for (let i = 0; i < 10; i++) {
-    const serialPath = findSerialDevice();
-    if (serialPath) {
-      await serialIpcMode(serialPath);
-      return;
-    }
-    await sleep(500);
+  const serialPath = await waitForSerialDevice();
+  if (serialPath) {
+    await serialIpcMode(serialPath);
+    return;
   }
 
   // Neither IPC mechanism available — fall back to file polling anyway
   // (the heartbeat will report ipcMounted=false)
-  appendLog('No virtio-serial device found, falling back to file-based IPC');
+  appendLog(`No virtio-serial device found within ${SERIAL_DISCOVERY_TIMEOUT_MS}ms, falling back to file-based IPC`);
   await pollRequests();
 }
 

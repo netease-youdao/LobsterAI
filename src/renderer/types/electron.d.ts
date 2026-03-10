@@ -195,6 +195,30 @@ interface McpServerConfigIPC {
   updatedAt: number;
 }
 
+interface McpMarketplaceServer {
+  id: string;
+  name: string;
+  description_zh: string;
+  description_en: string;
+  category: string;
+  transportType: 'stdio' | 'sse' | 'http';
+  command: string;
+  defaultArgs: string[];
+  requiredEnvKeys?: string[];
+  optionalEnvKeys?: string[];
+}
+
+interface McpMarketplaceCategory {
+  id: string;
+  name_zh: string;
+  name_en: string;
+}
+
+interface McpMarketplaceData {
+  categories: McpMarketplaceCategory[];
+  servers: McpMarketplaceServer[];
+}
+
 interface IElectronAPI {
   platform: string;
   arch: string;
@@ -224,6 +248,7 @@ interface IElectronAPI {
     update: (id: string, data: any) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
     delete: (id: string) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
     setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    fetchMarketplace: () => Promise<{ success: boolean; data?: McpMarketplaceData; error?: string }>;
   };
   api: {
     fetch: (options: {
@@ -246,7 +271,7 @@ interface IElectronAPI {
     onStreamAbort: (requestId: string, callback: () => void) => () => void;
   };
   getApiConfig: () => Promise<CoworkApiConfig | null>;
-  checkApiConfig: () => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
+  checkApiConfig: (options?: { probeModel?: boolean }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
   saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
   generateSessionTitle: (userInput: string | null) => Promise<string>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
@@ -267,6 +292,7 @@ interface IElectronAPI {
     continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
+    deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) => Promise<{ success: boolean; error?: string }>;
     renameSession: (options: { sessionId: string; title: string }) => Promise<{ success: boolean; error?: string }>;
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
@@ -354,10 +380,10 @@ interface IElectronAPI {
   im: {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
     setConfig: (config: Partial<IMGatewayConfig>) => Promise<{ success: boolean; error?: string }>;
-    startGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng') => Promise<{ success: boolean; error?: string }>;
-    stopGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng') => Promise<{ success: boolean; error?: string }>;
+    startGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom') => Promise<{ success: boolean; error?: string }>;
+    stopGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom') => Promise<{ success: boolean; error?: string }>;
     testGateway: (
-      platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng',
+      platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom',
       configOverride?: Partial<IMGatewayConfig>
     ) => Promise<{ success: boolean; result?: IMConnectivityTestResult; error?: string }>;
     getStatus: () => Promise<{ success: boolean; status?: IMGatewayStatus; error?: string }>;
@@ -392,10 +418,12 @@ interface IElectronAPI {
 interface IMGatewayConfig {
   dingtalk: DingTalkConfig;
   feishu: FeishuConfig;
+  qq: QQConfig;
   telegram: TelegramConfig;
   discord: DiscordConfig;
   nim: NimConfig;
   xiaomifeng: XiaomifengConfig;
+  wecom: WecomConfig;
   settings: IMSettings;
 }
 
@@ -441,11 +469,31 @@ interface NimConfig {
   token: string;
   accountWhitelist: string;
   debug?: boolean;
+  // 群组消息配置
+  teamPolicy?: 'open' | 'allowlist' | 'disabled';
+  teamAllowlist?: string;
+  // QChat 圈组配置
+  qchatEnabled?: boolean;
+  qchatServerIds?: string;
 }
 
 interface XiaomifengConfig {
   enabled: boolean;
   clientId: string;
+  secret: string;
+  debug?: boolean;
+}
+
+interface QQConfig {
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  debug?: boolean;
+}
+
+interface WecomConfig {
+  enabled: boolean;
+  botId: string;
   secret: string;
   debug?: boolean;
 }
@@ -458,10 +506,12 @@ interface IMSettings {
 interface IMGatewayStatus {
   dingtalk: DingTalkGatewayStatus;
   feishu: FeishuGatewayStatus;
+  qq: QQGatewayStatus;
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
   nim: NimGatewayStatus;
   xiaomifeng: XiaomifengGatewayStatus;
+  wecom: WecomGatewayStatus;
 }
 
 type IMConnectivityVerdict = 'pass' | 'warn' | 'fail';
@@ -480,7 +530,8 @@ type IMConnectivityCheckCode =
   | 'discord_group_requires_mention'
   | 'telegram_privacy_mode_hint'
   | 'dingtalk_bot_membership_hint'
-  | 'nim_p2p_only_hint';
+  | 'nim_p2p_only_hint'
+  | 'qq_guild_mention_hint';
 
 interface IMConnectivityCheck {
   code: IMConnectivityCheckCode;
@@ -490,7 +541,7 @@ interface IMConnectivityCheck {
 }
 
 interface IMConnectivityTestResult {
-  platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng';
+  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom';
   testedAt: number;
   verdict: IMConnectivityVerdict;
   checks: IMConnectivityCheck[];
@@ -550,8 +601,25 @@ interface XiaomifengGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+interface QQGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
+interface WecomGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  botId: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
 interface IMMessage {
-  platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng';
+  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom';
   messageId: string;
   conversationId: string;
   senderId: string;

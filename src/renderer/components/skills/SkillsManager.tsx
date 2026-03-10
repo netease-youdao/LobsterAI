@@ -2,22 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import {
-  ArrowUpTrayIcon,
   ArrowDownTrayIcon,
   CheckCircleIcon,
-  FolderOpenIcon,
-  LinkIcon,
-  MagnifyingGlassIcon,
-  PlusCircleIcon,
-  PuzzlePieceIcon,
-  TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import SearchIcon from '../icons/SearchIcon';
+import PlusCircleIcon from '../icons/PlusCircleIcon';
+import UploadIcon from '../icons/UploadIcon';
+import FolderOpenIcon from '../icons/FolderOpenIcon';
+import LinkIcon from '../icons/LinkIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import TrashIcon from '../icons/TrashIcon';
 import { i18nService } from '../../services/i18n';
-import { skillService } from '../../services/skill';
+import { skillService, resolveLocalizedText } from '../../services/skill';
 import { setSkills } from '../../store/slices/skillSlice';
 import { RootState } from '../../store';
-import { Skill, MarketplaceSkill } from '../../types/skill';
+import { Skill, MarketplaceSkill, MarketTag } from '../../types/skill';
 import ErrorMessage from '../ErrorMessage';
 
 type SkillTab = 'installed' | 'marketplace';
@@ -34,6 +34,8 @@ const SkillsManager: React.FC = () => {
   const [isGithubImportOpen, setIsGithubImportOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<SkillTab>('installed');
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
+  const [marketTags, setMarketTags] = useState<MarketTag[]>([]);
+  const [activeMarketTag, setActiveMarketTag] = useState('all');
   const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(false);
   const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
   const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(null);
@@ -71,7 +73,8 @@ const SkillsManager: React.FC = () => {
     setIsLoadingMarketplace(true);
     skillService.fetchMarketplaceSkills().then((data) => {
       if (!isActive) return;
-      setMarketplaceSkills(data);
+      setMarketplaceSkills(data.skills);
+      setMarketTags(data.tags);
       setIsLoadingMarketplace(false);
     });
     return () => { isActive = false; };
@@ -140,18 +143,25 @@ const SkillsManager: React.FC = () => {
     const query = skillSearchQuery.toLowerCase();
     return skills.filter(skill => {
       const matchesSearch = skill.name.toLowerCase().includes(query)
-        || skill.description.toLowerCase().includes(query);
+        || skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description).toLowerCase().includes(query);
       return matchesSearch;
     });
   }, [skills, skillSearchQuery]);
 
   const filteredMarketplaceSkills = useMemo(() => {
     const query = skillSearchQuery.toLowerCase();
-    return marketplaceSkills.filter(skill => {
-      return skill.name.toLowerCase().includes(query)
-        || skill.description.toLowerCase().includes(query);
-    });
-  }, [marketplaceSkills, skillSearchQuery]);
+    let results = marketplaceSkills;
+    if (query) {
+      results = results.filter(skill => {
+        return skill.name.toLowerCase().includes(query)
+          || resolveLocalizedText(skill.description).toLowerCase().includes(query);
+      });
+    }
+    if (activeMarketTag !== 'all') {
+      results = results.filter(skill => skill.tags?.includes(activeMarketTag));
+    }
+    return results;
+  }, [marketplaceSkills, skillSearchQuery, activeMarketTag]);
 
   const formatSkillDate = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -292,7 +302,7 @@ const SkillsManager: React.FC = () => {
 
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
           <input
             type="text"
             placeholder={i18nService.t('searchSkills')}
@@ -323,7 +333,7 @@ const SkillsManager: React.FC = () => {
                 disabled={isDownloadingSkill}
                 className="w-full flex items-center gap-3 px-3 py-2.5 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors disabled:opacity-50"
               >
-                <ArrowUpTrayIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <UploadIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 <span>{i18nService.t('uploadSkillZip')}</span>
               </button>
               <button
@@ -400,7 +410,7 @@ const SkillsManager: React.FC = () => {
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
-                    <PuzzlePieceIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                    <PuzzleIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                   </div>
                   <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
                     {skill.name}
@@ -433,7 +443,7 @@ const SkillsManager: React.FC = () => {
               </div>
 
               <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                {skill.description}
+                {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
               </p>
 
               <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -466,13 +476,44 @@ const SkillsManager: React.FC = () => {
           <div className="text-center py-12 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
             {i18nService.t('downloadingSkill')}
           </div>
-        ) : filteredMarketplaceSkills.length === 0 ? (
-          <div className="text-center py-12 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-            {i18nService.t('skillMarketplaceEmpty')}
-          </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {filteredMarketplaceSkills.map((skill) => (
+          <>
+            {marketTags.length > 0 && (
+              <div className="flex items-center gap-1.5 mb-4 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setActiveMarketTag('all')}
+                  className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                    activeMarketTag === 'all'
+                      ? 'bg-claude-accent text-white'
+                      : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border'
+                  }`}
+                >
+                  {i18nService.t('skillCategoryAll')}
+                </button>
+                {marketTags.map((tag) => (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    onClick={() => setActiveMarketTag(tag.id)}
+                    className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                      activeMarketTag === tag.id
+                        ? 'bg-claude-accent text-white'
+                        : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border'
+                    }`}
+                  >
+                    {resolveLocalizedText(tag)}
+                  </button>
+                ))}
+              </div>
+            )}
+            {filteredMarketplaceSkills.length === 0 ? (
+              <div className="text-center py-12 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('skillMarketplaceEmpty')}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {filteredMarketplaceSkills.map((skill) => (
               <div
                 key={skill.id}
                 className="rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-3 transition-colors hover:border-claude-accent/50 cursor-pointer"
@@ -481,7 +522,7 @@ const SkillsManager: React.FC = () => {
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
-                      <PuzzlePieceIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                      <PuzzleIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                     </div>
                     <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
                       {skill.name}
@@ -508,7 +549,7 @@ const SkillsManager: React.FC = () => {
                 </div>
 
                 <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                  {skill.description}
+                  {resolveLocalizedText(skill.description)}
                 </p>
 
                 <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -531,6 +572,8 @@ const SkillsManager: React.FC = () => {
               </div>
             ))}
           </div>
+            )}
+          </>
         )
       )}
 
@@ -546,7 +589,7 @@ const SkillsManager: React.FC = () => {
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
-                  <PuzzlePieceIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                  <PuzzleIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 </div>
                 <div className="min-w-0">
                   <div className="text-base font-semibold dark:text-claude-darkText text-claude-text truncate">
@@ -564,7 +607,7 @@ const SkillsManager: React.FC = () => {
             </div>
 
             <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
-              {selectedMarketplaceSkill.description}
+              {resolveLocalizedText(selectedMarketplaceSkill.description)}
             </p>
 
             <div className="space-y-2 mb-5">
@@ -635,7 +678,7 @@ const SkillsManager: React.FC = () => {
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
-                  <PuzzlePieceIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                  <PuzzleIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 </div>
                 <div className="min-w-0">
                   <div className="text-base font-semibold dark:text-claude-darkText text-claude-text truncate">
@@ -653,7 +696,7 @@ const SkillsManager: React.FC = () => {
             </div>
 
             <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
-              {selectedSkill.description}
+              {skillService.getLocalizedSkillDescription(selectedSkill.id, selectedSkill.name, selectedSkill.description)}
             </p>
 
             <div className="space-y-2 mb-5">

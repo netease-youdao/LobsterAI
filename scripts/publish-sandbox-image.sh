@@ -80,4 +80,7 @@ Expected CDN layout:
 Environment variables:
   COWORK_SANDBOX_BASE_URL=<https://your.cdn/cowork/sandbox>
   COWORK_SANDBOX_IMAGE_VERSION=${VERSION}
+
+Next:
+  python scripts/upload-sandbox-image.py --arch all --version ${VERSION}
 EOF

@@ -200,9 +200,14 @@ export class FeishuGateway extends EventEmitter {
             }
 
             const ctx = this.parseMessageEvent(event);
-            await this.handleInboundMessage(ctx);
+            // Fire-and-forget: do not await so the Lark SDK can send the ack
+            // to Feishu server immediately. Replies are sent via replyFn/sendWithMedia,
+            // not through the event handler return value.
+            this.handleInboundMessage(ctx).catch((err) => {
+              console.error(`[Feishu Gateway] Error handling message ${ctx.messageId}: ${err.message}`);
+            });
           } catch (err: any) {
-            console.error(`[Feishu Gateway] Error handling message: ${err.message}`);
+            console.error(`[Feishu Gateway] Error parsing message event: ${err.message}`);
           }
         },
         'im.message.message_read_v1': async () => {

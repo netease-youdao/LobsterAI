@@ -638,6 +638,17 @@ export class CoworkStore {
     this.saveDb();
   }
 
+  deleteSessions(ids: string[]): void {
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      this.markMemorySourcesInactiveBySession(id);
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    this.db.run(`DELETE FROM cowork_sessions WHERE id IN (${placeholders})`, ids);
+    this.markOrphanImplicitMemoriesStale();
+    this.saveDb();
+  }
+
   setSessionPinned(id: string, pinned: boolean): void {
     this.db.run('UPDATE cowork_sessions SET pinned = ? WHERE id = ?', [pinned ? 1 : 0, id]);
     this.saveDb();

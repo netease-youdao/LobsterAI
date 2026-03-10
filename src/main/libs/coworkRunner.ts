@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { type ChildProcessByStdio } from 'child_process';
+import { type ChildProcessByStdio, spawn, spawnSync } from 'child_process';
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -10,7 +10,7 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkStore, CoworkMessage, CoworkExecutionMode } from '../coworkStore';
 import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
-import { getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
+import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { cpRecursiveSync } from '../fsCompat';
@@ -64,15 +64,36 @@ const LEGACY_SKILLS_ROOT_HINTS = [
   '/workspace/SKILLs',
 ];
 const INFERRED_FILE_SEARCH_IGNORE = new Set(['.git', 'node_modules', '.cowork-temp', '.idea', '.vscode']);
-const SANDBOX_HISTORY_MAX_MESSAGES = 24;
-const SANDBOX_HISTORY_MAX_TOTAL_CHARS = 32000;
-const SANDBOX_HISTORY_MAX_MESSAGE_CHARS = 4000;
+const SANDBOX_HISTORY_MAX_MESSAGES = 18;
+const SANDBOX_HISTORY_MAX_TOTAL_CHARS = 24000;
+const SANDBOX_HISTORY_MAX_MESSAGE_CHARS = 3000;
+const LOCAL_HISTORY_MAX_MESSAGES = 24;
+const LOCAL_HISTORY_MAX_TOTAL_CHARS = 32000;
+const LOCAL_HISTORY_MAX_MESSAGE_CHARS = 4000;
 const STREAM_UPDATE_THROTTLE_MS = 90;
 const STREAMING_TEXT_MAX_CHARS = 120_000;
 const STREAMING_THINKING_MAX_CHARS = 60_000;
 const TOOL_RESULT_MAX_CHARS = 120_000;
 const FINAL_RESULT_MAX_CHARS = 120_000;
 const STDERR_TAIL_MAX_CHARS = 24_000;
+const SDK_STARTUP_TIMEOUT_MS = 30_000;
+const SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS = 120_000;
+const STDERR_FATAL_PATTERNS = [
+  /authentication[_ ]error/i,
+  /invalid[_ ]api[_ ]key/i,
+  /unauthorized/i,
+  /model[_ ]not[_ ]found/i,
+  /connection[_ ]refused/i,
+  /ECONNREFUSED/,
+  /could not connect/i,
+  /api[_ ]key[_ ]not[_ ]valid/i,
+  /permission[_ ]denied/i,
+  /access[_ ]denied/i,
+  /rate[_ ]limit/i,
+  /quota[_ ]exceeded/i,
+  /billing/i,
+  /overloaded/i,
+];
 const CONTENT_TRUNCATED_HINT = '\n...[truncated to prevent memory pressure]';
 const TOOL_INPUT_PREVIEW_MAX_CHARS = 4000;
 const TOOL_INPUT_PREVIEW_MAX_DEPTH = 5;
@@ -82,7 +103,6 @@ const SKILLS_MARKER = '/skills/';
 const TASK_WORKSPACE_CONTAINER_DIR = '.lobsterai-tasks';
 const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
-const BLOCKED_BUILTIN_WEB_TOOLS = new Set(['websearch', 'webfetch']);
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
 const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
 const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item)\b/i;
@@ -93,6 +113,105 @@ const PYTHON_PIP_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\
 const MEMORY_REQUEST_TAIL_SPLIT_RE = /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
 const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
+const WINDOWS_HIDE_INIT_SCRIPT_NAME = 'windows_hide_init.cjs';
+const WINDOWS_HIDE_INIT_SCRIPT_CONTENT = [
+  '\'use strict\';',
+  '',
+  'if (process.platform === \'win32\') {',
+  '  const childProcess = require(\'child_process\');',
+  '',
+  '  const addWindowsHide = (options) => {',
+  '    if (options == null) return { windowsHide: true };',
+  '    if (typeof options !== \'object\') return options;',
+  '    if (Object.prototype.hasOwnProperty.call(options, \'windowsHide\')) return options;',
+  '    return { ...options, windowsHide: true };',
+  '  };',
+  '',
+  '  const patch = (name, buildWrapper) => {',
+  '    const original = childProcess[name];',
+  '    if (typeof original !== \'function\') return;',
+  '    childProcess[name] = buildWrapper(original);',
+  '  };',
+  '',
+  '  patch(\'spawn\', (original) => function patchedSpawn(command, args, options) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      return original.call(this, command, args, addWindowsHide(options));',
+  '    }',
+  '    return original.call(this, command, addWindowsHide(args));',
+  '  });',
+  '',
+  '  patch(\'spawnSync\', (original) => function patchedSpawnSync(command, args, options) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      return original.call(this, command, args, addWindowsHide(options));',
+  '    }',
+  '    return original.call(this, command, addWindowsHide(args));',
+  '  });',
+  '',
+  '  patch(\'fork\', (original) => function patchedFork(modulePath, args, options) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      return original.call(this, modulePath, args, addWindowsHide(options));',
+  '    }',
+  '    return original.call(this, modulePath, addWindowsHide(args));',
+  '  });',
+  '',
+  '  patch(\'exec\', (original) => function patchedExec(command, options, callback) {',
+  '    if (typeof options === \'function\' || options === undefined) {',
+  '      return original.call(this, command, addWindowsHide(undefined), options);',
+  '    }',
+  '    return original.call(this, command, addWindowsHide(options), callback);',
+  '  });',
+  '',
+  '  patch(\'execFile\', (original) => function patchedExecFile(file, args, options, callback) {',
+  '    if (Array.isArray(args) || args === undefined) {',
+  '      if (typeof options === \'function\' || options === undefined) {',
+  '        return original.call(this, file, args, addWindowsHide(undefined), options);',
+  '      }',
+  '      return original.call(this, file, args, addWindowsHide(options), callback);',
+  '    }',
+  '    if (typeof args === \'function\' || args === undefined) {',
+  '      return original.call(this, file, addWindowsHide(undefined), args);',
+  '    }',
+  '    return original.call(this, file, addWindowsHide(args), options);',
+  '  });',
+  '}',
+  '',
+].join('\n');
+
+function ensureWindowsChildProcessHideInitScript(): string | null {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  try {
+    const initDir = path.join(app.getPath('userData'), 'cowork', 'bin');
+    fs.mkdirSync(initDir, { recursive: true });
+    const initScriptPath = path.join(initDir, WINDOWS_HIDE_INIT_SCRIPT_NAME);
+
+    const existing = fs.existsSync(initScriptPath)
+      ? fs.readFileSync(initScriptPath, 'utf8')
+      : '';
+    if (existing !== WINDOWS_HIDE_INIT_SCRIPT_CONTENT) {
+      fs.writeFileSync(initScriptPath, WINDOWS_HIDE_INIT_SCRIPT_CONTENT, 'utf8');
+    }
+    return initScriptPath;
+  } catch (error) {
+    coworkLog(
+      'WARN',
+      'runClaudeCodeLocal',
+      `Failed to prepare Windows child-process hide init script: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
+  }
+}
+
+function prependNodeRequireArg(args: string[], scriptPath: string): string[] {
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === '--require' && args[i + 1] === scriptPath) {
+      return args;
+    }
+  }
+  return ['--require', scriptPath, ...args];
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -327,6 +446,7 @@ interface ActiveSession {
   ipcBridge?: VirtioSerialBridge;
   sandboxSkillsGuestPath?: string;
   sandboxSkillMounts?: Record<string, { tag: string; guestPath: string }>;
+  sandboxSkillRootMounts?: SandboxSkillRootMount[];
   /** Resolve callback for the current sandbox turn; called by the result event handler. */
   sandboxTurnResolve?: (result: { status: 'ok' } | { status: 'error'; message: string; hvfDenied: boolean; memoryFailed: boolean }) => void;
   /** When true, auto-approve all tool permissions (for scheduled tasks) */
@@ -365,12 +485,19 @@ type AttachmentEntry = {
 type SandboxSkillRewriteOptions = {
   guestSkillsRoot?: string | null;
   hostSkillsRoots?: string[];
+  hostSkillsRootMounts?: SandboxSkillRootMount[];
 };
 
 type SandboxSkillEntry = {
   skillId: string;
   hostPath: string;
   guestPath: string;
+  mountTag: string;
+};
+
+type SandboxSkillRootMount = {
+  hostRoot: string;
+  guestRoot: string;
   mountTag: string;
 };
 
@@ -536,8 +663,19 @@ export class CoworkRunner extends EventEmitter {
       return '<userMemories></userMemories>';
     }
 
-    const lines = memories
-      .map((memory) => `- ${this.escapeXml(memory.text)}`);
+    const MAX_ITEM_CHARS = 200;
+    const MAX_TOTAL_CHARS = 2000;
+    let totalChars = 0;
+    const lines: string[] = [];
+    for (const memory of memories) {
+      const text = memory.text.length > MAX_ITEM_CHARS
+        ? memory.text.slice(0, MAX_ITEM_CHARS) + '...'
+        : memory.text;
+      const line = `- ${this.escapeXml(text)}`;
+      if (totalChars + line.length > MAX_TOTAL_CHARS) break;
+      lines.push(line);
+      totalChars += line.length;
+    }
     return `<userMemories>\n${lines.join('\n')}\n</userMemories>`;
   }
 
@@ -957,6 +1095,7 @@ export class CoworkRunner extends EventEmitter {
     skillEntries: SandboxSkillEntry[];
     extraMounts: SandboxExtraMount[];
     skillMounts: Record<string, { tag: string; guestPath: string }>;
+    rootMounts: SandboxSkillRootMount[];
   } {
     const guestSkillsRoot = runtimePlatform === 'win32'
       ? SANDBOX_SKILLS_GUEST_PATH_WINDOWS
@@ -968,6 +1107,7 @@ export class CoworkRunner extends EventEmitter {
         skillEntries: [],
         extraMounts: [],
         skillMounts: {},
+        rootMounts: [],
       };
     }
 
@@ -978,14 +1118,51 @@ export class CoworkRunner extends EventEmitter {
         skillEntries,
         extraMounts: [],
         skillMounts: {},
+        rootMounts: [],
       };
     }
 
-    const extraMounts = skillEntries.map(({ hostPath, mountTag }) => ({ hostPath, mountTag }));
-    const skillMounts = skillEntries.reduce<Record<string, { tag: string; guestPath: string }>>((acc, entry, index) => {
-      acc[`skill${index}`] = {
+    const keyOf = (target: string): string => (
+      process.platform === 'win32' ? target.toLowerCase() : target
+    );
+    const entryRoots = new Set<string>();
+    for (const entry of skillEntries) {
+      entryRoots.add(path.resolve(path.dirname(entry.hostPath)));
+    }
+
+    const mountHostRoots: string[] = [];
+    const seenMountRoots = new Set<string>();
+    const pushMountRoot = (candidate: string) => {
+      const resolved = path.resolve(candidate);
+      if (!entryRoots.has(resolved) || !this.isDirectory(resolved)) {
+        return;
+      }
+      const key = keyOf(resolved);
+      if (seenMountRoots.has(key)) {
+        return;
+      }
+      seenMountRoots.add(key);
+      mountHostRoots.push(resolved);
+    };
+
+    for (const root of hostSkillsRoots) {
+      pushMountRoot(root);
+    }
+    for (const root of entryRoots) {
+      pushMountRoot(root);
+    }
+
+    const rootMounts = mountHostRoots.map<SandboxSkillRootMount>((hostRoot, index) => ({
+      hostRoot,
+      guestRoot: index === 0 ? guestSkillsRoot : `${guestSkillsRoot}-roots/${index}`,
+      mountTag: `${SANDBOX_SKILLS_MOUNT_TAG}${index}`,
+    }));
+
+    const extraMounts = rootMounts.map(({ hostRoot, mountTag }) => ({ hostPath: hostRoot, mountTag }));
+    const skillMounts = rootMounts.reduce<Record<string, { tag: string; guestPath: string }>>((acc, entry, index) => {
+      acc[`skillsRoot${index}`] = {
         tag: entry.mountTag,
-        guestPath: entry.guestPath,
+        guestPath: entry.guestRoot,
       };
       return acc;
     }, {});
@@ -995,6 +1172,7 @@ export class CoworkRunner extends EventEmitter {
       skillEntries,
       extraMounts,
       skillMounts,
+      rootMounts,
     };
   }
 
@@ -1484,7 +1662,11 @@ export class CoworkRunner extends EventEmitter {
     return `<message role="${role}">\n${content}\n</message>`;
   }
 
-  private buildSandboxHistoryBlocks(messages: CoworkMessage[], currentPrompt: string): string[] {
+  private buildHistoryBlocks(
+    messages: CoworkMessage[],
+    currentPrompt: string,
+    limits: { maxMessages: number; maxTotalChars: number; maxMessageChars: number }
+  ): string[] {
     if (messages.length === 0) {
       return [];
     }
@@ -1503,7 +1685,7 @@ export class CoworkRunner extends EventEmitter {
     const selectedFromNewest: string[] = [];
     let totalChars = 0;
     for (let i = history.length - 1; i >= 0; i -= 1) {
-      if (selectedFromNewest.length >= SANDBOX_HISTORY_MAX_MESSAGES) {
+      if (selectedFromNewest.length >= limits.maxMessages) {
         break;
       }
       const block = this.formatSandboxHistoryMessage(history[i]);
@@ -1512,9 +1694,9 @@ export class CoworkRunner extends EventEmitter {
       }
 
       const nextTotal = totalChars + block.length;
-      if (nextTotal > SANDBOX_HISTORY_MAX_TOTAL_CHARS) {
+      if (nextTotal > limits.maxTotalChars) {
         if (selectedFromNewest.length === 0) {
-          const truncated = this.truncateSandboxHistoryContent(block, SANDBOX_HISTORY_MAX_TOTAL_CHARS);
+          const truncated = this.truncateSandboxHistoryContent(block, limits.maxTotalChars);
           if (truncated) {
             selectedFromNewest.push(truncated);
           }
@@ -1527,6 +1709,14 @@ export class CoworkRunner extends EventEmitter {
     }
 
     return selectedFromNewest.reverse();
+  }
+
+  private buildSandboxHistoryBlocks(messages: CoworkMessage[], currentPrompt: string): string[] {
+    return this.buildHistoryBlocks(messages, currentPrompt, {
+      maxMessages: SANDBOX_HISTORY_MAX_MESSAGES,
+      maxTotalChars: SANDBOX_HISTORY_MAX_TOTAL_CHARS,
+      maxMessageChars: SANDBOX_HISTORY_MAX_MESSAGE_CHARS,
+    });
   }
 
   private injectSandboxHistoryPrompt(sessionId: string, currentPrompt: string, effectivePrompt: string): string {
@@ -1553,33 +1743,74 @@ export class CoworkRunner extends EventEmitter {
     ].join('\n');
   }
 
+  /**
+   * Inject conversation history into a local-mode prompt when the session is
+   * restarted after a stop (subprocess was killed, no SDK session to resume).
+   */
+  private injectLocalHistoryPrompt(sessionId: string, currentPrompt: string, effectivePrompt: string): string {
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      return effectivePrompt;
+    }
+
+    const historyBlocks = this.buildHistoryBlocks(session.messages, currentPrompt, {
+      maxMessages: LOCAL_HISTORY_MAX_MESSAGES,
+      maxTotalChars: LOCAL_HISTORY_MAX_TOTAL_CHARS,
+      maxMessageChars: LOCAL_HISTORY_MAX_MESSAGE_CHARS,
+    });
+    if (historyBlocks.length === 0) {
+      return effectivePrompt;
+    }
+
+    return [
+      'The session was interrupted and restarted. Continue using the conversation history below.',
+      'Use this context for continuity and do not quote it unless necessary.',
+      '<conversation_history>',
+      ...historyBlocks,
+      '</conversation_history>',
+      '',
+      '<current_user_request>',
+      effectivePrompt,
+      '</current_user_request>',
+    ].join('\n');
+  }
+
   private rewriteSkillPathsForSandbox(
     content: string,
     skillPath: string,
     options: SandboxSkillRewriteOptions
   ): string {
+    const mappings = this.buildSandboxSkillRootMappings(options);
     const guestSkillsRoot = options.guestSkillsRoot?.trim();
     if (!guestSkillsRoot) {
       return content;
     }
 
-    const replacementSources = new Set<string>(LEGACY_SKILLS_ROOT_HINTS);
-    replacementSources.add(path.resolve(path.dirname(path.dirname(skillPath))));
-    for (const root of options.hostSkillsRoots ?? []) {
-      if (!root) continue;
-      replacementSources.add(path.resolve(root));
-    }
-
     let rewritten = content;
-    for (const source of replacementSources) {
-      if (!source || source === guestSkillsRoot) continue;
-      const sourcePosix = source.replace(/\\/g, '/');
-      const sourceVariants = new Set<string>([source, sourcePosix]);
+    for (const mapping of mappings) {
+      const sourceVariants = new Set<string>([
+        mapping.hostRoot,
+        mapping.hostRoot.replace(/\\/g, '/'),
+      ]);
       for (const variant of sourceVariants) {
-        if (!variant || variant === guestSkillsRoot) continue;
-        rewritten = rewritten.replace(new RegExp(escapeRegExp(variant), 'gi'), guestSkillsRoot);
+        if (!variant || variant === mapping.guestRoot) continue;
+        rewritten = rewritten.replace(new RegExp(escapeRegExp(variant), 'gi'), mapping.guestRoot);
       }
     }
+
+    const skillRoot = path.resolve(path.dirname(path.dirname(skillPath)));
+    const mappedSkillRoot = this.mapHostSkillPathToSandboxPath(skillRoot, options) ?? guestSkillsRoot;
+    const skillRootVariants = new Set<string>([skillRoot, skillRoot.replace(/\\/g, '/')]);
+    for (const variant of skillRootVariants) {
+      if (!variant || variant === mappedSkillRoot) continue;
+      rewritten = rewritten.replace(new RegExp(escapeRegExp(variant), 'gi'), mappedSkillRoot);
+    }
+
+    for (const legacyRoot of LEGACY_SKILLS_ROOT_HINTS) {
+      const normalizedLegacyRoot = legacyRoot.replace(/\\/g, '/');
+      rewritten = rewritten.replace(new RegExp(escapeRegExp(normalizedLegacyRoot), 'gi'), guestSkillsRoot);
+    }
+
     return rewritten;
   }
 
@@ -1597,24 +1828,25 @@ export class CoworkRunner extends EventEmitter {
       return null;
     }
 
-    const hostRoots = new Set<string>();
-    for (const root of options.hostSkillsRoots ?? []) {
-      if (!root) continue;
-      hostRoots.add(path.resolve(root));
+    const normalizedRawLocation = rawLocation.replace(/\\/g, '/');
+    const guestRoots = new Set<string>([guestSkillsRoot]);
+    for (const mapping of options.hostSkillsRootMounts ?? []) {
+      if (!mapping.guestRoot) continue;
+      guestRoots.add(mapping.guestRoot.replace(/\\/g, '/').replace(/\/+$/, ''));
     }
-
-    const normalizedLocation = path.resolve(rawLocation);
-    for (const hostRoot of hostRoots) {
-      if (isPathWithin(hostRoot, normalizedLocation)) {
-        const relative = path.relative(hostRoot, normalizedLocation).split(path.sep).join('/');
-        if (!relative || relative.startsWith('..')) {
-          continue;
-        }
-        return `${guestSkillsRoot}/${relative}`.replace(/\/+/g, '/');
+    for (const guestRoot of guestRoots) {
+      if (!guestRoot) continue;
+      if (normalizedRawLocation === guestRoot || normalizedRawLocation.startsWith(`${guestRoot}/`)) {
+        return normalizedRawLocation;
       }
     }
 
-    const normalizedPosix = normalizedLocation.replace(/\\/g, '/');
+    const mappedHostLocation = this.mapHostSkillPathToSandboxPath(rawLocation, options);
+    if (mappedHostLocation) {
+      return mappedHostLocation;
+    }
+
+    const normalizedPosix = rawLocation.replace(/\\/g, '/');
     const markerIndex = findSkillsMarkerIndex(normalizedPosix);
     if (markerIndex >= 0) {
       const relative = normalizedPosix.slice(markerIndex + SKILLS_MARKER.length);
@@ -1665,17 +1897,25 @@ export class CoworkRunner extends EventEmitter {
       }
     );
 
-    const replacementSources = new Set<string>(LEGACY_SKILLS_ROOT_HINTS);
-    for (const root of options.hostSkillsRoots ?? []) {
-      if (!root) continue;
-      replacementSources.add(path.resolve(root));
+    for (const mapping of this.buildSandboxSkillRootMappings(options)) {
+      const variants = new Set<string>([
+        mapping.hostRoot,
+        mapping.hostRoot.replace(/\\/g, '/'),
+      ]);
+      let next = rewritten;
+      for (const variant of variants) {
+        if (!variant || variant === mapping.guestRoot) continue;
+        next = next.replace(new RegExp(escapeRegExp(variant), 'gi'), mapping.guestRoot);
+      }
+      if (next !== rewritten) {
+        hasRewrite = true;
+        rewritten = next;
+      }
     }
 
-    for (const source of replacementSources) {
-      if (!source || source === guestSkillsRoot) continue;
-      const sourcePosix = source.replace(/\\/g, '/');
-      if (!sourcePosix || sourcePosix === guestSkillsRoot) continue;
-      const next = rewritten.replace(new RegExp(escapeRegExp(sourcePosix), 'gi'), guestSkillsRoot);
+    for (const legacyRoot of LEGACY_SKILLS_ROOT_HINTS) {
+      const normalizedLegacyRoot = legacyRoot.replace(/\\/g, '/');
+      const next = rewritten.replace(new RegExp(escapeRegExp(normalizedLegacyRoot), 'gi'), guestSkillsRoot);
       if (next !== rewritten) {
         hasRewrite = true;
         rewritten = next;
@@ -1683,6 +1923,77 @@ export class CoworkRunner extends EventEmitter {
     }
 
     return { prompt: rewritten, hasRewrite };
+  }
+
+  private buildSandboxSkillRootMappings(
+    options: SandboxSkillRewriteOptions
+  ): Array<{ hostRoot: string; guestRoot: string }> {
+    const mappings: Array<{ hostRoot: string; guestRoot: string }> = [];
+    const seen = new Set<string>();
+    const keyOf = (target: string): string => (
+      process.platform === 'win32' ? target.toLowerCase() : target
+    );
+
+    const pushMapping = (hostRoot: string, guestRoot: string) => {
+      if (!hostRoot || !guestRoot) return;
+      const resolvedHostRoot = path.resolve(hostRoot);
+      const normalizedGuestRoot = guestRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (!normalizedGuestRoot) return;
+      const key = keyOf(resolvedHostRoot);
+      if (seen.has(key)) return;
+      seen.add(key);
+      mappings.push({
+        hostRoot: resolvedHostRoot,
+        guestRoot: normalizedGuestRoot,
+      });
+    };
+
+    for (const mount of options.hostSkillsRootMounts ?? []) {
+      if (!mount?.hostRoot || !mount?.guestRoot) continue;
+      pushMapping(mount.hostRoot, mount.guestRoot);
+    }
+
+    if (mappings.length === 0) {
+      const guestSkillsRoot = options.guestSkillsRoot?.trim();
+      if (!guestSkillsRoot) {
+        return mappings;
+      }
+      for (const root of options.hostSkillsRoots ?? []) {
+        if (!root) continue;
+        pushMapping(root, guestSkillsRoot);
+      }
+    }
+
+    return mappings.sort((a, b) => b.hostRoot.length - a.hostRoot.length);
+  }
+
+  private mapHostSkillPathToSandboxPath(
+    hostPath: string,
+    options: SandboxSkillRewriteOptions
+  ): string | null {
+    if (!hostPath || !path.isAbsolute(hostPath)) {
+      return null;
+    }
+
+    const resolvedHostPath = path.resolve(hostPath);
+    const mappings = this.buildSandboxSkillRootMappings(options);
+    for (const mapping of mappings) {
+      if (!isPathWithin(mapping.hostRoot, resolvedHostPath)) {
+        continue;
+      }
+
+      const relative = path.relative(mapping.hostRoot, resolvedHostPath).split(path.sep).join('/');
+      if (relative.startsWith('..')) {
+        continue;
+      }
+
+      if (!relative) {
+        return mapping.guestRoot;
+      }
+
+      return `${mapping.guestRoot}/${relative}`.replace(/\/+/g, '/');
+    }
+    return null;
   }
 
   private normalizeWorkspaceRoot(workspaceRoot: string, cwd: string): string {
@@ -1848,6 +2159,23 @@ export class CoworkRunner extends EventEmitter {
     ].join('\n');
   }
 
+  private buildWindowsBundledRuntimePrompt(): string {
+    if (process.platform !== 'win32') {
+      return '';
+    }
+
+    return [
+      '## Windows Bundled Runtime Environment',
+      '- This application ships with built-in Node.js and Python runtimes that are pre-configured in PATH.',
+      '- The following commands are available out of the box: `node`, `npm`, `npx`, `python`, `python3`, `pip`, `pip3`.',
+      '- Always use bare command names (e.g. `node`, `python`, `npm`, `pip`) — never use full absolute paths to system-installed runtimes.',
+      '- Do NOT tell the user to install Node.js, Python, npm, or pip. They are already bundled with this application.',
+      '- Do NOT suggest downloading Node.js or Python from external websites or using package managers like winget/chocolatey/scoop to install them.',
+      '- When a task requires Node.js or Python, proceed directly without checking whether they are installed.',
+      '- For project dependencies, run `npm install` or `pip install` directly — the bundled package managers handle it.',
+    ].join('\n');
+  }
+
   private buildWorkspaceSafetyPrompt(
     workspaceRoot: string,
     cwd: string,
@@ -1884,12 +2212,11 @@ export class CoworkRunner extends EventEmitter {
     workspaceRoot: string,
     cwd: string,
     confirmationMode: 'modal' | 'text',
-    userMemoriesXml: string,
     memoryEnabled: boolean
   ): string {
     const safetyPrompt = this.buildWorkspaceSafetyPrompt(workspaceRoot, cwd, confirmationMode);
-    const localTimePrompt = this.buildLocalTimeContextPrompt();
     const windowsEncodingPrompt = this.buildWindowsEncodingPrompt();
+    const windowsBundledRuntimePrompt = this.buildWindowsBundledRuntimePrompt();
     const memoryRecallPrompt = [
       '## Memory Strategy',
       '- Historical retrieval is tool-first: when the user references previous chats, earlier outputs, prior decisions, or says "还记得/之前/上次/刚才", call `conversation_search` or `recent_chats` before answering.',
@@ -1905,8 +2232,21 @@ export class CoworkRunner extends EventEmitter {
       );
     }
     const trimmedBasePrompt = baseSystemPrompt?.trim();
-    return [safetyPrompt, localTimePrompt, windowsEncodingPrompt, userMemoriesXml, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
+    return [safetyPrompt, windowsEncodingPrompt, windowsBundledRuntimePrompt, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
       .filter((section): section is string => Boolean(section?.trim()))
+      .join('\n\n');
+  }
+
+  /**
+   * Build a dynamic prompt prefix containing time context and user memories.
+   * These are prepended to the user message (not the system prompt) so that
+   * the system prompt stays stable across turns and can benefit from prompt caching.
+   */
+  private buildPromptPrefix(): string {
+    const localTimePrompt = this.buildLocalTimeContextPrompt();
+    const userMemoriesXml = this.buildUserMemoriesXml();
+    return [localTimePrompt, userMemoriesXml]
+      .filter((section) => section?.trim())
       .join('\n\n');
   }
 
@@ -1932,48 +2272,6 @@ export class CoworkRunner extends EventEmitter {
     return DELETE_COMMAND_RE.test(command)
       || FIND_DELETE_COMMAND_RE.test(command)
       || GIT_CLEAN_COMMAND_RE.test(command);
-  }
-
-  private isBlockedBuiltinWebTool(toolName: string): boolean {
-    const normalized = String(toolName ?? '').trim().toLowerCase();
-    if (!normalized) {
-      return false;
-    }
-
-    const compact = normalized.replace(/[^a-z0-9]/g, '');
-    if (BLOCKED_BUILTIN_WEB_TOOLS.has(compact)) {
-      return true;
-    }
-
-    const segments = normalized.split(/[^a-z0-9]+/).filter(Boolean);
-    if (segments.length >= 2) {
-      const tail = `${segments[segments.length - 2]}${segments[segments.length - 1]}`;
-      if (BLOCKED_BUILTIN_WEB_TOOLS.has(tail)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private denyBlockedBuiltinWebTool(
-    sessionId: string,
-    executionMode: 'local' | 'sandbox',
-    toolName: string
-  ): PermissionResult | null {
-    if (!this.isBlockedBuiltinWebTool(toolName)) {
-      return null;
-    }
-
-    coworkLog('WARN', 'toolPolicy', 'Blocked disabled built-in web tool', {
-      sessionId,
-      executionMode,
-      toolName,
-    });
-    return {
-      behavior: 'deny',
-      message: 'Tool blocked by app policy: WebSearch/WebFetch are disabled in this environment.',
-    };
   }
 
   private truncateCommandPreview(command: string, maxLength = 120): string {
@@ -2217,13 +2515,22 @@ export class CoworkRunner extends EventEmitter {
       this.normalizeWorkspaceRoot(activeSession.workspaceRoot, sessionCwd),
       sessionCwd,
       activeSession.confirmationMode,
-      this.buildUserMemoriesXml(),
       this.store.getConfig().memoryEnabled
     );
 
     // Run claude-code using the SDK
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      const promptPrefix = this.buildPromptPrefix();
+      let effectivePrompt = promptPrefix ? `${promptPrefix}\n\n---\n\n${prompt}` : prompt;
+
+      // If the session already has messages (restarted after stop), inject
+      // conversation history so the model retains context from prior turns.
+      const currentSession = this.store.getSession(sessionId);
+      if (currentSession && currentSession.messages.length > 0) {
+        effectivePrompt = this.injectLocalHistoryPrompt(sessionId, prompt, effectivePrompt);
+      }
+
+      await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork session error:', error);
     }
@@ -2286,18 +2593,29 @@ export class CoworkRunner extends EventEmitter {
 
     // Use provided systemPrompt (e.g. with updated skill routing) or fall back to session's stored one.
     // Always prepend workspace safety prompt so folder boundary rules are enforced at prompt level.
-    const baseSystemPrompt = options.systemPrompt ?? session.systemPrompt;
+    let baseSystemPrompt = options.systemPrompt ?? session.systemPrompt;
+
+    // On follow-up turns without new skill selection, strip the full available_skills
+    // block to reduce prompt size — the skill was already routed on the first turn.
+    if (!options.skillIds?.length && baseSystemPrompt?.includes('<available_skills>')) {
+      baseSystemPrompt = baseSystemPrompt.replace(
+        /## Skills \(mandatory\)[\s\S]*?<\/available_skills>/,
+        '## Skills\nSkill already loaded for this session. Continue following its instructions.'
+      );
+    }
+
     const effectiveSystemPrompt = this.composeEffectiveSystemPrompt(
       baseSystemPrompt,
       this.normalizeWorkspaceRoot(activeSession.workspaceRoot, sessionCwd),
       sessionCwd,
       activeSession.confirmationMode,
-      this.buildUserMemoriesXml(),
       this.store.getConfig().memoryEnabled
     );
 
     try {
-      await this.runClaudeCode(activeSession, prompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      const promptPrefix = this.buildPromptPrefix();
+      const effectivePrompt = promptPrefix ? `${promptPrefix}\n\n---\n\n${prompt}` : prompt;
+      await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
       console.error('Cowork continue error:', error);
     }
@@ -2520,7 +2838,25 @@ export class CoworkRunner extends EventEmitter {
 
     const claudeCodePath = getClaudeCodePath();
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
+    const electronNodeRuntimePath = getElectronNodeRuntimePath();
+    const windowsHideInitScript = ensureWindowsChildProcessHideInitScript();
     let stderrTail = '';
+
+    // Log MCP-relevant environment for debugging
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: isPackaged=${app.isPackaged}, platform=${process.platform}, arch=${process.arch}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_ELECTRON_PATH=${envVars.LOBSTERAI_ELECTRON_PATH || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: ELECTRON_RUN_AS_NODE=${envVars.ELECTRON_RUN_AS_NODE || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: NODE_PATH=${envVars.NODE_PATH || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: HOME=${envVars.HOME || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: TMPDIR=${envVars.TMPDIR || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_NPM_BIN_DIR=${envVars.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: claudeCodePath=${claudeCodePath}`);
+    // Log full PATH split by delimiter
+    const pathEntries = (envVars.PATH || '').split(path.delimiter);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: PATH has ${pathEntries.length} entries:`);
+    for (let i = 0; i < pathEntries.length; i++) {
+      coworkLog('INFO', 'runClaudeCodeLocal', `  PATH[${i}]: ${pathEntries[i]}`);
+    }
 
     // When packaged, process.execPath is the Electron binary.
     // child_process.fork() uses process.execPath by default, so without
@@ -2555,6 +2891,28 @@ export class CoworkRunner extends EventEmitter {
       });
     }
 
+    const handleSdkStderr = (message: string): void => {
+      stderrTail += message;
+      if (stderrTail.length > STDERR_TAIL_MAX_CHARS) {
+        stderrTail = stderrTail.slice(-STDERR_TAIL_MAX_CHARS);
+      }
+      coworkLog('WARN', 'ClaudeCodeProcess', 'stderr output', { stderr: message });
+
+      // Detect fatal errors early and abort the session
+      for (const pattern of STDERR_FATAL_PATTERNS) {
+        if (pattern.test(message)) {
+          coworkLog('ERROR', 'ClaudeCodeProcess', 'Fatal error detected in stderr, aborting', {
+            pattern: pattern.toString(),
+            stderr: message,
+          });
+          if (!abortController.signal.aborted) {
+            abortController.abort();
+          }
+          break;
+        }
+      }
+    };
+
     const options: Record<string, unknown> = {
       cwd,
       abortController,
@@ -2562,13 +2920,8 @@ export class CoworkRunner extends EventEmitter {
       pathToClaudeCodeExecutable: claudeCodePath,
       permissionMode: 'default',
       includePartialMessages: true,
-      stderr: (message: string) => {
-        stderrTail += message;
-        if (stderrTail.length > STDERR_TAIL_MAX_CHARS) {
-          stderrTail = stderrTail.slice(-STDERR_TAIL_MAX_CHARS);
-        }
-        coworkLog('WARN', 'ClaudeCodeProcess', 'stderr output', { stderr: message });
-      },
+      disallowedTools: ['WebSearch', 'WebFetch'],
+      stderr: handleSdkStderr,
       canUseTool: async (
         toolName: string,
         toolInput: unknown,
@@ -2583,11 +2936,6 @@ export class CoworkRunner extends EventEmitter {
           toolInput && typeof toolInput === 'object'
             ? (toolInput as Record<string, unknown>)
             : { value: toolInput };
-
-        const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'local', resolvedName);
-        if (blockedToolResult) {
-          return blockedToolResult;
-        }
 
         if (resolvedName === 'Bash') {
           const command = this.extractToolCommand(resolvedInput);
@@ -2654,13 +3002,108 @@ export class CoworkRunner extends EventEmitter {
       },
     };
 
-    if (activeSession.claudeSessionId) {
-      options.resume = activeSession.claudeSessionId;
+    if (app.isPackaged) {
+      // The SDK's default ProcessTransport uses child_process.fork() and may
+      // relaunch the Electron app binary on some macOS installs. Override the
+      // process spawner to force Node-mode execution via Electron directly.
+      options.spawnClaudeCodeProcess = (spawnOptions: {
+        command: string;
+        args: string[];
+        cwd?: string;
+        env?: NodeJS.ProcessEnv;
+        signal?: AbortSignal;
+      }) => {
+        const useElectronShim =
+          process.platform === 'win32'
+          || spawnOptions.env?.LOBSTERAI_NODE_SHIM_ACTIVE === '1';
+        const spawnEnv: NodeJS.ProcessEnv = {
+          ...(spawnOptions.env ?? {}),
+          ELECTRON_RUN_AS_NODE: '1',
+        };
+        if (useElectronShim) {
+          spawnEnv.LOBSTERAI_ELECTRON_PATH = spawnOptions.env?.LOBSTERAI_ELECTRON_PATH || electronNodeRuntimePath;
+        } else {
+          delete spawnEnv.LOBSTERAI_ELECTRON_PATH;
+        }
+
+        let command = spawnOptions.command || 'node';
+        if (process.platform === 'win32') {
+          const normalizedCommand = command.trim().toLowerCase();
+          const isNodeLikeCommand = normalizedCommand === 'node'
+            || normalizedCommand === 'node.exe'
+            || normalizedCommand.endsWith('\\node.cmd')
+            || normalizedCommand.endsWith('/node.cmd');
+          if (isNodeLikeCommand) {
+            command = electronNodeRuntimePath;
+            spawnEnv.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+            coworkLog('INFO', 'runClaudeCodeLocal', `Rewrote Windows SDK command "${spawnOptions.command || 'node'}" to Electron runtime: ${electronNodeRuntimePath}`);
+          }
+        }
+
+        if (app.isPackaged && process.platform === 'darwin' && command && path.isAbsolute(command)) {
+          const commandCandidates = new Set<string>([command, path.resolve(command)]);
+          const appExecCandidates = new Set<string>([process.execPath, path.resolve(process.execPath)]);
+          try {
+            commandCandidates.add(fs.realpathSync.native(command));
+          } catch {
+            // Ignore realpath resolution errors.
+          }
+          try {
+            appExecCandidates.add(fs.realpathSync.native(process.execPath));
+          } catch {
+            // Ignore realpath resolution errors.
+          }
+          const pointsToAppExecutable = Array.from(commandCandidates).some((candidate) => appExecCandidates.has(candidate));
+          if (pointsToAppExecutable) {
+            command = electronNodeRuntimePath;
+            spawnEnv.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+            coworkLog('WARN', 'runClaudeCodeLocal', 'SDK spawner command points to app executable; rewriting to Electron helper runtime');
+          }
+        }
+        coworkLog('INFO', 'runClaudeCodeLocal', 'Using packaged custom SDK spawner', {
+          command,
+          args: spawnOptions.args,
+        });
+
+        const shouldInjectWindowsHideRequire =
+          process.platform === 'win32'
+          && Boolean(windowsHideInitScript)
+          && spawnOptions.args.length > 0
+          && /\.m?js$/i.test(path.basename(spawnOptions.args[0]));
+        const effectiveSpawnArgs = shouldInjectWindowsHideRequire
+          ? prependNodeRequireArg(spawnOptions.args, windowsHideInitScript as string)
+          : spawnOptions.args;
+        if (shouldInjectWindowsHideRequire) {
+          coworkLog('INFO', 'runClaudeCodeLocal', `Injected Windows hidden-subprocess preload: ${windowsHideInitScript}`);
+        }
+
+        const child = spawn(command, effectiveSpawnArgs, {
+          cwd: spawnOptions.cwd,
+          env: spawnEnv,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: process.platform === 'win32',
+          signal: spawnOptions.signal,
+        });
+
+        child.stderr?.on('data', (chunk: Buffer | string) => {
+          handleSdkStderr(chunk.toString());
+        });
+
+        return child;
+      };
     }
+
+    // The SDK session state is bound to the subprocess and its project directory.
+    // After stop, the subprocess is killed and the session cannot be reliably
+    // resumed (cwd/model mismatch causes "No conversation found" errors).
+    // Instead, we inject conversation history into the prompt in startSession().
+    activeSession.claudeSessionId = null;
 
     if (systemPrompt) {
       options.systemPrompt = systemPrompt;
     }
+
+    let startupTimer: ReturnType<typeof setTimeout> | null = null;
 
     try {
       coworkLog('INFO', 'runClaudeCodeLocal', 'Starting local Claude Code session', {
@@ -2793,11 +3236,13 @@ export class CoworkRunner extends EventEmitter {
           tools: memoryTools,
         }),
       };
+      let userMcpServerCount = 0;
 
       // Inject user-configured MCP servers (local mode only)
       if (this.mcpServerProvider) {
         try {
           const enabledMcpServers = this.mcpServerProvider();
+          coworkLog('INFO', 'runClaudeCodeLocal', `MCP: ${enabledMcpServers.length} user-configured servers found`);
           for (const server of enabledMcpServers) {
             const serverKey = server.name;
             // Skip if name conflicts with existing MCP servers (e.g., memory server)
@@ -2808,13 +3253,143 @@ export class CoworkRunner extends EventEmitter {
             let serverConfig: Record<string, unknown>;
             switch (server.transportType) {
               case 'stdio':
+                {
+                  const stdioCommand = server.command || '';
+                  let effectiveStdioCommand = stdioCommand;
+                  const stdioArgs = server.args || [];
+                  let effectiveStdioArgs = [...stdioArgs];
+                  let shouldInjectWindowsHideRequire = false;
+                  let stdioEnv = server.env && Object.keys(server.env).length > 0
+                    ? { ...server.env }
+                    : undefined;
+
+                  if (process.platform === 'win32' && app.isPackaged && effectiveStdioCommand) {
+                    const normalizedCommand = effectiveStdioCommand.trim().toLowerCase();
+                    const npmBinDir = envVars.LOBSTERAI_NPM_BIN_DIR;
+                    const npxCliJs = npmBinDir ? path.join(npmBinDir, 'npx-cli.js') : '';
+                    const npmCliJs = npmBinDir ? path.join(npmBinDir, 'npm-cli.js') : '';
+
+                    const withElectronNodeEnv = (base: Record<string, string> | undefined): Record<string, string> => ({
+                      ...(base || {}),
+                      ELECTRON_RUN_AS_NODE: '1',
+                      LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
+                    });
+
+                    if (
+                      normalizedCommand === 'node'
+                      || normalizedCommand === 'node.exe'
+                      || normalizedCommand.endsWith('\\node.cmd')
+                      || normalizedCommand.endsWith('/node.cmd')
+                    ) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      stdioEnv = withElectronNodeEnv(stdioEnv);
+                      shouldInjectWindowsHideRequire = true;
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime`);
+                    } else if (
+                      (normalizedCommand === 'npx' || normalizedCommand === 'npx.cmd' || normalizedCommand.endsWith('\\npx.cmd') || normalizedCommand.endsWith('/npx.cmd'))
+                      && npxCliJs
+                      && fs.existsSync(npxCliJs)
+                    ) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      effectiveStdioArgs = [npxCliJs, ...stdioArgs];
+                      stdioEnv = withElectronNodeEnv(stdioEnv);
+                      shouldInjectWindowsHideRequire = true;
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npx-cli.js`);
+                    } else if (
+                      (normalizedCommand === 'npm' || normalizedCommand === 'npm.cmd' || normalizedCommand.endsWith('\\npm.cmd') || normalizedCommand.endsWith('/npm.cmd'))
+                      && npmCliJs
+                      && fs.existsSync(npmCliJs)
+                    ) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      effectiveStdioArgs = [npmCliJs, ...stdioArgs];
+                      stdioEnv = withElectronNodeEnv(stdioEnv);
+                      shouldInjectWindowsHideRequire = true;
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npm-cli.js`);
+                    }
+                  }
+
+                  if (process.platform === 'win32' && shouldInjectWindowsHideRequire && windowsHideInitScript) {
+                    effectiveStdioArgs = prependNodeRequireArg(effectiveStdioArgs, windowsHideInitScript);
+                    coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": injected Windows hidden-subprocess preload`);
+                  }
+
+                  if (app.isPackaged && process.platform === 'darwin' && stdioCommand && path.isAbsolute(stdioCommand)) {
+                    const commandCandidates = new Set<string>([stdioCommand, path.resolve(stdioCommand)]);
+                    const appExecCandidates = new Set<string>([
+                      process.execPath,
+                      path.resolve(process.execPath),
+                      electronNodeRuntimePath,
+                      path.resolve(electronNodeRuntimePath),
+                    ]);
+
+                    try {
+                      commandCandidates.add(fs.realpathSync.native(stdioCommand));
+                    } catch {
+                      // Ignore realpath resolution errors.
+                    }
+
+                    try {
+                      appExecCandidates.add(fs.realpathSync.native(process.execPath));
+                    } catch {
+                      // Ignore realpath resolution errors.
+                    }
+                    try {
+                      appExecCandidates.add(fs.realpathSync.native(electronNodeRuntimePath));
+                    } catch {
+                      // Ignore realpath resolution errors.
+                    }
+
+                    const pointsToAppExecutable = Array.from(commandCandidates).some((candidate) => appExecCandidates.has(candidate));
+                    if (pointsToAppExecutable) {
+                      effectiveStdioCommand = electronNodeRuntimePath;
+                      stdioEnv = {
+                        ...(stdioEnv || {}),
+                        ELECTRON_RUN_AS_NODE: '1',
+                        LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
+                      };
+                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command points to app executable; rewriting command to Electron helper runtime`);
+                    }
+                  }
+
                 serverConfig = {
                   type: 'stdio',
-                  command: server.command || '',
-                  args: server.args || [],
-                  env: server.env && Object.keys(server.env).length > 0 ? server.env : undefined,
+                  command: effectiveStdioCommand,
+                  args: effectiveStdioArgs,
+                  env: stdioEnv && Object.keys(stdioEnv).length > 0 ? stdioEnv : undefined,
                 };
+                coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": stdio command="${effectiveStdioCommand}", args=${JSON.stringify(effectiveStdioArgs)}`);
+                if (stdioEnv && Object.keys(stdioEnv).length > 0) {
+                  coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": custom env vars: ${JSON.stringify(stdioEnv)}`);
+                }
+                // Resolve command path to verify it's findable
+                if (effectiveStdioCommand) {
+                  if (path.isAbsolute(effectiveStdioCommand)) {
+                    coworkLog(
+                      fs.existsSync(effectiveStdioCommand) ? 'INFO' : 'WARN',
+                      'runClaudeCodeLocal',
+                      `MCP "${serverKey}": absolute command "${effectiveStdioCommand}" exists=${fs.existsSync(effectiveStdioCommand)}`
+                    );
+                  } else {
+                    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+                    try {
+                      const resolveResult = spawnSync(whichCmd, [effectiveStdioCommand], {
+                        env: { ...envVars, ...(stdioEnv || {}) } as NodeJS.ProcessEnv,
+                        encoding: 'utf-8',
+                        timeout: 5000,
+                        windowsHide: process.platform === 'win32',
+                      });
+                      if (resolveResult.status === 0 && resolveResult.stdout) {
+                        coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" resolves to: ${resolveResult.stdout.trim()}`);
+                      } else {
+                        coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
+                      }
+                    } catch (e) {
+                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${effectiveStdioCommand}": ${e instanceof Error ? e.message : String(e)}`);
+                    }
+                  }
+                }
                 break;
+                }
               case 'sse':
                 serverConfig = {
                   type: 'sse',
@@ -2837,10 +3412,41 @@ export class CoworkRunner extends EventEmitter {
               ...(options.mcpServers as Record<string, unknown>),
               [serverKey]: serverConfig,
             };
+            userMcpServerCount += 1;
             coworkLog('INFO', 'runClaudeCodeLocal', `Injected user MCP server: "${serverKey}" (${server.transportType})`);
           }
         } catch (error) {
           coworkLog('WARN', 'runClaudeCodeLocal', `Failed to load user MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      // Log final MCP server config summary
+      if (options.mcpServers) {
+        const mcpKeys = Object.keys(options.mcpServers as Record<string, unknown>);
+        coworkLog('INFO', 'runClaudeCodeLocal', `MCP final config: ${mcpKeys.length} servers: [${mcpKeys.join(', ')}]`);
+        for (const key of mcpKeys) {
+          const cfg = (options.mcpServers as Record<string, Record<string, unknown>>)[key];
+          if (cfg && typeof cfg === 'object' && 'type' in cfg) {
+            coworkLog('INFO', 'runClaudeCodeLocal', `MCP server "${key}": type=${cfg.type}, command=${cfg.command || 'N/A'}, args=${JSON.stringify(cfg.args || [])}`);
+          }
+        }
+        // Dump full MCP config as JSON for complete debugging
+        try {
+          const serializable: Record<string, unknown> = {};
+          for (const key of mcpKeys) {
+            const cfg = (options.mcpServers as Record<string, Record<string, unknown>>)[key];
+            if (cfg && typeof cfg === 'object') {
+              // Only serialize plain config objects; skip SDK server instances
+              if ('type' in cfg && typeof cfg.type === 'string') {
+                serializable[key] = cfg;
+              } else {
+                serializable[key] = { type: '(SDK server instance)' };
+              }
+            }
+          }
+          coworkLog('INFO', 'runClaudeCodeLocal', `MCP full config dump: ${JSON.stringify(serializable, null, 2)}`);
+        } catch (e) {
+          coworkLog('WARN', 'runClaudeCodeLocal', `MCP config dump failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
 
@@ -2886,10 +3492,33 @@ export class CoworkRunner extends EventEmitter {
         queryPrompt = prompt;
       }
 
+      // Set up a startup timeout BEFORE calling query(): if no events arrive
+      // within the timeout, abort. This covers both the query() call itself
+      // (which spawns the subprocess) and the initial event wait.
+      const startupTimeoutMs = userMcpServerCount > 0
+        ? SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS
+        : SDK_STARTUP_TIMEOUT_MS;
+      coworkLog('INFO', 'runClaudeCodeLocal', `Using SDK startup timeout: ${startupTimeoutMs}ms (userMcpServers=${userMcpServerCount})`);
+      startupTimer = setTimeout(() => {
+        coworkLog('ERROR', 'runClaudeCodeLocal', 'SDK startup timeout: no events received within timeout', {
+          timeoutMs: startupTimeoutMs,
+          userMcpServers: userMcpServerCount,
+        });
+        if (!abortController.signal.aborted) {
+          abortController.abort();
+        }
+      }, startupTimeoutMs);
+
       const result = await query({ prompt: queryPrompt, options } as any);
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');
       let eventCount = 0;
+
       for await (const event of result as AsyncIterable<unknown>) {
+        // Clear startup timeout on first event
+        if (startupTimer) {
+          clearTimeout(startupTimer);
+          startupTimer = null;
+        }
         if (this.isSessionStopRequested(sessionId, activeSession)) {
           break;
         }
@@ -2899,9 +3528,14 @@ export class CoworkRunner extends EventEmitter {
         coworkLog('INFO', 'runClaudeCodeLocal', `Event #${eventCount}: type=${eventType}`);
         this.handleClaudeEvent(sessionId, event);
       }
+      // Clean up timer if loop ended before first event (e.g. empty iterator)
+      if (startupTimer) {
+        clearTimeout(startupTimer);
+        startupTimer = null;
+      }
       coworkLog('INFO', 'runClaudeCodeLocal', `Event iteration completed, total events: ${eventCount}`);
 
-      if (this.isSessionStopRequested(sessionId, activeSession)) {
+      if (this.stoppedSessions.has(sessionId)) {
         this.store.updateSession(sessionId, { status: 'idle' });
         return;
       }
@@ -2916,7 +3550,13 @@ export class CoworkRunner extends EventEmitter {
         this.emit('complete', sessionId, activeSession.claudeSessionId);
       }
     } catch (error) {
-      if (this.isSessionStopRequested(sessionId, activeSession)) {
+      // Clean up startup timer if still pending
+      if (startupTimer) {
+        clearTimeout(startupTimer);
+        startupTimer = null;
+      }
+
+      if (this.stoppedSessions.has(sessionId)) {
         this.store.updateSession(sessionId, { status: 'idle' });
         return;
       }
@@ -3126,10 +3766,14 @@ export class CoworkRunner extends EventEmitter {
     const resolvedSystemPrompt = this.resolveAutoRoutingForSandbox(sandboxSystemPrompt, {
       guestSkillsRoot: sandboxSkills.guestSkillsRoot,
       hostSkillsRoots: hostSkillsRoots,
+      hostSkillsRootMounts: sandboxSkills.rootMounts,
     });
     activeSession.sandboxSkillsGuestPath = sandboxSkills.guestSkillsRoot ?? undefined;
     activeSession.sandboxSkillMounts = Object.keys(sandboxSkills.skillMounts).length > 0
       ? sandboxSkills.skillMounts
+      : undefined;
+    activeSession.sandboxSkillRootMounts = sandboxSkills.rootMounts.length > 0
+      ? sandboxSkills.rootMounts
       : undefined;
 
     const mounts: Record<string, { tag: string; guestPath: string }> = {
@@ -3311,11 +3955,6 @@ export class CoworkRunner extends EventEmitter {
               ? (toolInputRaw as Record<string, unknown>)
               : {};
 
-          const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'sandbox', toolName);
-          if (blockedToolResult) {
-            this.writeSandboxPermissionResponse(activeSession, paths.responsesDir, requestId, blockedToolResult);
-            return;
-          }
 
           const responsePath = path.join(paths.responsesDir, `${requestId}.json`);
           this.sandboxPermissions.set(requestId, { sessionId, responsePath });
@@ -3381,9 +4020,31 @@ export class CoworkRunner extends EventEmitter {
           }
         }
 
-        // Wait for the VM to be ready before sending requests
-        // Use longer timeout (180s) to allow for slower boot in TCG/software emulation mode
-        const vmReady = await this.waitForVmReady(paths.ipcDir, child, 180000);
+        // Wait for the VM to be ready before sending requests.
+        // Windows TCG can be significantly slower than hardware acceleration.
+        const vmReadyTimeoutOverride = Number.parseInt(
+          process.env.COWORK_SANDBOX_VM_READY_TIMEOUT_MS ?? '',
+          10
+        );
+        const defaultVmReadyTimeout =
+          runtimeInfo.platform === 'win32' && accelMode === 'tcg'
+            ? 300000
+            : 180000;
+        const vmReadyTimeoutMs =
+          Number.isFinite(vmReadyTimeoutOverride) && vmReadyTimeoutOverride > 0
+            ? vmReadyTimeoutOverride
+            : defaultVmReadyTimeout;
+
+        coworkLog('INFO', 'runSandbox', 'Waiting for VM heartbeat', {
+          timeoutMs: vmReadyTimeoutMs,
+          accelMode,
+          platform: runtimeInfo.platform,
+        });
+
+        const vmReady = await this.waitForVmReady(paths.ipcDir, child, vmReadyTimeoutMs, {
+          platform: runtimeInfo.platform,
+          accelMode,
+        });
         if (!vmReady) {
           const stderrSnippet = stderrBuffer.trim();
           let message = 'VM failed to become ready';
@@ -3647,6 +4308,10 @@ export class CoworkRunner extends EventEmitter {
             sessionId,
             'Hardware virtualization (WHPX/Hyper-V) is unavailable. Retrying with software emulation (TCG).'
           );
+          // TCG boots faster and more reliably with lower guest memory on typical Windows hosts.
+          if (!memoryMb || memoryMb > 2048) {
+            memoryMb = 2048;
+          }
           accelOverride = 'tcg';
           continue;
         }
@@ -3704,6 +4369,7 @@ export class CoworkRunner extends EventEmitter {
     const resolvedSystemPrompt = this.resolveAutoRoutingForSandbox(sandboxSystemPrompt, {
       guestSkillsRoot: activeSession.sandboxSkillsGuestPath ?? null,
       hostSkillsRoots: hostSkillsRoots,
+      hostSkillsRootMounts: activeSession.sandboxSkillRootMounts,
     });
     const sandboxEnv = this.buildSandboxEnv(env, activeSession.sandboxSkillsGuestPath ?? null);
     coworkLog('INFO', 'runSandbox', 'Resolved sandbox API endpoint (continue)', {
@@ -3809,11 +4475,6 @@ export class CoworkRunner extends EventEmitter {
             ? (toolInputRaw as Record<string, unknown>)
             : {};
 
-        const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'sandbox', toolName);
-        if (blockedToolResult) {
-          this.writeSandboxPermissionResponse(activeSession, paths.responsesDir, reqId, blockedToolResult);
-          return;
-        }
 
         const responsePath = path.join(paths.responsesDir, `${reqId}.json`);
         this.sandboxPermissions.set(reqId, { sessionId, responsePath });
@@ -3964,9 +4625,12 @@ export class CoworkRunner extends EventEmitter {
           const nameMatch = match[1].match(nameRe);
           const skillId = path.basename(path.dirname(resolvedSkillPath));
           const name = nameMatch?.[1] || skillId;
-          const sandboxSkillDir = guestSkillsRoot
-            ? `${guestSkillsRoot}/${skillId}`.replace(/\/+/g, '/')
-            : null;
+          const sandboxSkillLocation = this.rewriteSkillLocationForSandbox(resolvedSkillPath, options);
+          const sandboxSkillDir = sandboxSkillLocation
+            ? path.posix.dirname(sandboxSkillLocation.replace(/\\/g, '/'))
+            : guestSkillsRoot
+              ? `${guestSkillsRoot}/${skillId}`.replace(/\/+/g, '/')
+              : null;
           if (sandboxSkillDir) {
             rewrittenContent = rewrittenContent.replace(
               /\]\((?!https?:\/\/|#|\/)(\.\/)?([^)]+)\)/g,
@@ -4130,6 +4794,18 @@ export class CoworkRunner extends EventEmitter {
     }
 
     if (eventType === 'result') {
+      // Log token usage for observability
+      const usage = (payload.usage ?? (payload.result && typeof payload.result === 'object' ? (payload.result as Record<string, unknown>).usage : undefined)) as Record<string, unknown> | undefined;
+      if (usage) {
+        coworkLog('INFO', 'tokenUsage', 'Turn token usage', {
+          sessionId,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          cacheReadInputTokens: usage.cache_read_input_tokens,
+          cacheCreationInputTokens: usage.cache_creation_input_tokens,
+        });
+      }
+
       const subtype = String(payload.subtype ?? 'success');
       if (subtype !== 'success') {
         const errors = Array.isArray(payload.errors)
@@ -4657,14 +5333,37 @@ export class CoworkRunner extends EventEmitter {
   private async waitForVmReady(
     ipcDir: string,
     childProcess: ChildProcessByStdio<null, Readable, Readable>,
-    timeout: number = 60000
+    timeout: number = 60000,
+    options?: { platform?: string; accelMode?: string }
   ): Promise<boolean> {
     const heartbeatPath = path.join(ipcDir, 'heartbeat');
+    const serialLogPath = path.join(ipcDir, 'serial.log');
     const start = Date.now();
 
     // Use shorter polling interval for faster response
     const pollInterval = 100; // 100ms instead of 500ms
     let heartbeatSeen = false;
+
+    const maxTimeoutOverride = Number.parseInt(
+      process.env.COWORK_SANDBOX_VM_READY_MAX_TIMEOUT_MS ?? '',
+      10
+    );
+    const defaultMaxTimeout =
+      options?.platform === 'win32'
+        ? Math.max(timeout, options?.accelMode === 'tcg' ? 900000 : 420000)
+        : timeout;
+    const maxTimeoutMs =
+      Number.isFinite(maxTimeoutOverride) && maxTimeoutOverride > timeout
+        ? maxTimeoutOverride
+        : defaultMaxTimeout;
+    const shouldAutoExtend = options?.platform === 'win32' && maxTimeoutMs > timeout;
+    const extensionStepMs = 60000;
+    const serialActivityWindowMs = 20000;
+    let currentTimeoutMs = timeout;
+    let timeoutExtensionCount = 0;
+    let lastSerialActivityAt = 0;
+    let lastSerialSize = -1;
+    let lastSerialMtimeMs = -1;
 
     // Detect early VM exit so we fail fast instead of waiting the full timeout
     let processExited = false;
@@ -4674,37 +5373,84 @@ export class CoworkRunner extends EventEmitter {
       processExitCode = code;
     });
 
-    while (Date.now() - start < timeout) {
+    while (true) {
+      while (Date.now() - start < currentTimeoutMs) {
+        if (processExited) {
+          console.error(`Sandbox VM process exited prematurely (exit code: ${processExitCode})`);
+          return false;
+        }
+
+        if (shouldAutoExtend) {
+          try {
+            const serialStat = fs.statSync(serialLogPath);
+            if (serialStat.size !== lastSerialSize || serialStat.mtimeMs !== lastSerialMtimeMs) {
+              lastSerialSize = serialStat.size;
+              lastSerialMtimeMs = serialStat.mtimeMs;
+              lastSerialActivityAt = Date.now();
+            }
+          } catch {
+            // serial.log might not exist yet
+          }
+        }
+
+        try {
+          if (fs.existsSync(heartbeatPath)) {
+            const content = fs.readFileSync(heartbeatPath, 'utf8');
+            const data = JSON.parse(content) as { timestamp?: number | string; ipcMounted?: boolean };
+            const timestamp = typeof data.timestamp === 'number'
+              ? data.timestamp
+              : Number.parseInt(String(data.timestamp ?? ''), 10);
+            // Heartbeat is valid if fresh and IPC is mounted (or not explicitly false).
+            if (Number.isFinite(timestamp) && Date.now() - timestamp < 10000 && data.ipcMounted !== false) {
+              const elapsed = Date.now() - start;
+              console.log(`VM is ready, heartbeat received after ${elapsed}ms`);
+              return true;
+            }
+            // Log heartbeat validation failure details (once)
+            if (!heartbeatSeen) {
+              heartbeatSeen = true;
+              const clockDelta = Number.isFinite(timestamp) ? Date.now() - timestamp : null;
+              coworkLog('INFO', 'waitForVmReady', 'Heartbeat found but not yet valid', {
+                timestamp: Number.isFinite(timestamp) ? timestamp : null,
+                ipcMounted: data.ipcMounted ?? null,
+                clockDelta,
+                elapsed: Date.now() - start,
+              });
+            }
+          }
+        } catch {
+          // Not ready yet
+        }
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      }
+
       if (processExited) {
         console.error(`Sandbox VM process exited prematurely (exit code: ${processExitCode})`);
         return false;
       }
-      try {
-        if (fs.existsSync(heartbeatPath)) {
-          const content = fs.readFileSync(heartbeatPath, 'utf8');
-          const data = JSON.parse(content) as { timestamp?: number; ipcMounted?: boolean };
-          // Heartbeat is valid if within 10 seconds and IPC is mounted
-          if (data.timestamp && Date.now() - data.timestamp < 10000 && data.ipcMounted) {
-            const elapsed = Date.now() - start;
-            console.log(`VM is ready, heartbeat received after ${elapsed}ms`);
-            return true;
-          }
-          // Log heartbeat validation failure details (once)
-          if (!heartbeatSeen) {
-            heartbeatSeen = true;
-            const clockDelta = data.timestamp ? Date.now() - data.timestamp : null;
-            coworkLog('INFO', 'waitForVmReady', 'Heartbeat found but not yet valid', {
-              timestamp: data.timestamp ?? null,
-              ipcMounted: data.ipcMounted ?? null,
-              clockDelta,
-              elapsed: Date.now() - start,
+
+      if (shouldAutoExtend && lastSerialActivityAt > 0) {
+        const elapsed = Date.now() - start;
+        const serialIdleMs = Date.now() - lastSerialActivityAt;
+        const hasRecentBootActivity = serialIdleMs <= serialActivityWindowMs;
+        if (hasRecentBootActivity && elapsed < maxTimeoutMs) {
+          const nextTimeoutMs = Math.min(currentTimeoutMs + extensionStepMs, maxTimeoutMs);
+          if (nextTimeoutMs > currentTimeoutMs) {
+            timeoutExtensionCount += 1;
+            currentTimeoutMs = nextTimeoutMs;
+            coworkLog('INFO', 'waitForVmReady', 'Extending VM ready timeout due to active serial boot output', {
+              extensionCount: timeoutExtensionCount,
+              currentTimeoutMs,
+              maxTimeoutMs,
+              elapsed,
+              serialIdleMs,
             });
+            continue;
           }
         }
-      } catch {
-        // Not ready yet
       }
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+      break;
     }
 
     // Log final heartbeat state for diagnostics
@@ -4714,10 +5460,16 @@ export class CoworkRunner extends EventEmitter {
         coworkLog('WARN', 'waitForVmReady', 'Timeout reached with heartbeat file present', {
           heartbeatContent: content.slice(0, 500),
           elapsed: Date.now() - start,
+          timeoutMs: currentTimeoutMs,
+          timeoutExtensionCount,
         });
       } else {
         coworkLog('WARN', 'waitForVmReady', 'Timeout reached with no heartbeat file', {
           elapsed: Date.now() - start,
+          timeoutMs: currentTimeoutMs,
+          timeoutExtensionCount,
+          serialLogExists: fs.existsSync(serialLogPath),
+          lastSerialActivityAgoMs: lastSerialActivityAt > 0 ? Date.now() - lastSerialActivityAt : null,
         });
       }
     } catch { /* ignore */ }

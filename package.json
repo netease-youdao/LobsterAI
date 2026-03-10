@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "0.1.25",
+  "version": "0.2.2",
   "main": "dist-electron/main.js",
   "engines": {
     "node": ">=24 <25"
@@ -53,6 +53,7 @@
     "@larksuiteoapi/node-sdk": "^1.58.0",
     "@reduxjs/toolkit": "^2.2.1",
     "@types/uuid": "^10.0.0",
+    "@wecom/aibot-node-sdk": "^1.0.0",
     "bufferutil": "^4.1.0",
     "cron-parser": "^5.5.0",
     "dingtalk-stream": "^2.1.4",
@@ -65,7 +66,9 @@
     "js-yaml": "^4.1.1",
     "katex": "^0.16.21",
     "mermaid": "^10.9.5",
-    "node-nim": "^10.9.76",
+    "nim-web-sdk-ng": "10.9.77-alpha.4",
+    "npm": "^11.11.0",
+    "qq-official-bot": "^1.0.12",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.0.0",
