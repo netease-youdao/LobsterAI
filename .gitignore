@@ -38,3 +38,4 @@ nul
 
 .playwright-mcp/
 .cowork-temp/
+*.md

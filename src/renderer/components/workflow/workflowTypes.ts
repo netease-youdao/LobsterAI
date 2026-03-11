@@ -1,5 +1,28 @@
 // Workflow Types
 
+// Execution mode for agents
+export type ExecutionMode = 'single' | 'multi-round';
+
+// Condition for multi-round execution
+export type RoundCondition = 'untilComplete' | 'untilError' | 'fixed';
+
+// Connection type for parallel execution
+export type ConnectionType = 'sequential' | 'parallel';
+
+// Agent execution configuration
+export interface AgentExecutionConfig {
+  mode: ExecutionMode;
+  maxRounds?: number;           // Only used in multi-round mode
+  roundCondition?: RoundCondition;  // Only used in multi-round mode
+}
+
+// Default execution config
+export const DEFAULT_EXECUTION_CONFIG: AgentExecutionConfig = {
+  mode: 'single',
+  maxRounds: 3,
+  roundCondition: 'untilComplete',
+};
+
 export interface Skill {
   id: string;
   name: string;
@@ -28,6 +51,7 @@ export interface WorkflowAgentModel {
 export interface WorkflowAgent {
   id: string;
   name: string;
+  task?: string;              // Task description for this agent
   skills: Skill[];
   status: 'idle' | 'running' | 'completed' | 'error';
   position: { x: number; y: number };
@@ -37,12 +61,14 @@ export interface WorkflowAgent {
   inputFrom?: string | null; // Agent ID of upstream node (or null for entry point)
   outputRoutes: OutputRoute[]; // Ordered list of conditional output routes
   model?: WorkflowAgentModel; // Optional model override for this agent
+  execution?: AgentExecutionConfig; // Execution configuration (single/multi-round)
 }
 
 export interface WorkflowConnection {
   id: string;
   sourceAgentId: string;
   targetAgentId: string;
+  type?: ConnectionType; // Connection type: sequential or parallel
   condition: string; // Display label for the route condition
 }
 
@@ -147,7 +173,9 @@ export interface AgentTemplate {
   id: string;
   name: string;
   color: string;
+  task?: string;              // Task description for this template
   soulPrompt: string;
+  execution?: AgentExecutionConfig; // Default execution config
   suggestedSkills: string[];
 }
 
@@ -156,6 +184,10 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     id: 'fullstack-dev',
     name: 'Full Stack Developer',
     color: '#10B981',
+    task: 'Write production-quality code based on requirements',
+    execution: {
+      mode: 'single',
+    },
     soulPrompt: `You are an expert full-stack software developer. Your ONLY job is to write production-quality code.
 
 ## STRICT WORKFLOW RULES — READ CAREFULLY:
@@ -179,6 +211,28 @@ DO NOT JUST DUMP CODE OR MARKDOWN INTO THE CHAT. YOU MUST WRITE IT TO THE FILESY
 - Proper error handling and input validation
 - Comments for complex logic only (no over-commenting)`,
     suggestedSkills: ['code-writing', 'testing', 'documentation'],
+  },
+  {
+    id: 'docx-writer',
+    name: 'Docx Writer',
+    color: '#3B82F6',
+    task: 'Generate Word documents using docx skill',
+    execution: {
+      mode: 'multi-round',
+      maxRounds: 3,
+      roundCondition: 'untilComplete',
+    },
+    soulPrompt: `You are a Word document expert. Use the docx skill to generate .docx files.
+
+## YOUR TASK:
+1. Read the requirements from upstream agents
+2. Use the docx skill to create professional Word documents
+3. Ensure proper formatting, structure, and content
+
+## ROUTING REQUIREMENT:
+When your task is complete, output <PASS> on a new line.
+If you need to revise based on feedback, output <REJECT> and wait for corrections.`,
+    suggestedSkills: ['docx', 'technical-writing'],
   },
   {
     id: 'code-reviewer',
@@ -227,6 +281,12 @@ Your responsibilities include:
     id: 'qa-engineer',
     name: 'QA Engineer',
     color: '#EF4444',
+    task: 'Test code and report results',
+    execution: {
+      mode: 'multi-round',
+      maxRounds: 3,
+      roundCondition: 'untilComplete',
+    },
     soulPrompt: `You are a meticulous QA engineer. Your ONLY job is to test code and report results.
 
 ## STRICT WORKFLOW RULES — READ CAREFULLY:
@@ -259,6 +319,10 @@ Your responsibilities include:
     id: 'tech-writer',
     name: 'Technical Writer',
     color: '#3B82F6',
+    task: 'Write clear, complete requirements document',
+    execution: {
+      mode: 'single',
+    },
     soulPrompt: `You are a skilled technical writer and requirements analyst. Your ONLY job is to write a clear, complete requirements document.
 
 ## STRICT WORKFLOW RULES — READ CAREFULLY:
@@ -291,6 +355,10 @@ Do NOT output the full document in chat — just confirm the filename.`,
     id: 'devops-engineer',
     name: 'DevOps Engineer',
     color: '#EC4899',
+    task: 'Create CI/CD pipelines and deployment configurations',
+    execution: {
+      mode: 'single',
+    },
     soulPrompt: `You are an experienced DevOps engineer specializing in CI/CD, infrastructure, and deployment automation.
 
 CRITICAL MULTI-AGENT WORKFLOW INSTRUCTION:

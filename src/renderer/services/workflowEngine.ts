@@ -1,7 +1,8 @@
 import { store } from '../store';
 import { coworkService } from './cowork';
 import type { CoworkSession, CoworkMessage } from '../types/cowork';
-import type { WorkflowAgent, WorkflowConnection, OutputRoute } from '../components/workflow/workflowTypes';
+import type { WorkflowAgent, WorkflowConnection, OutputRoute, AgentExecutionConfig, RoundCondition } from '../components/workflow/workflowTypes';
+import { DEFAULT_EXECUTION_CONFIG } from '../components/workflow/workflowTypes';
 import {
   startWorkflow,
   stopWorkflow,
@@ -633,8 +634,21 @@ class WorkflowEngine {
     console.log(`[Mock] Completed: ${agent.name} (${duration}ms)`);
   }
 
-  // Execute a single agent
+  // Execute agent based on execution config (single or multi-round)
   private async executeAgent(agent: WorkflowAgent, inputPrompt: string): Promise<string> {
+    const execution = agent.execution || DEFAULT_EXECUTION_CONFIG;
+
+    if (execution.mode === 'single') {
+      // Single round execution
+      return this.executeSingleRound(agent, inputPrompt);
+    } else {
+      // Multi-round execution
+      return this.executeMultiRound(agent, inputPrompt, execution);
+    }
+  }
+
+  // Execute a single round
+  private async executeSingleRound(agent: WorkflowAgent, inputPrompt: string): Promise<string> {
     // Build apiConfigOverride from agent's model settings if specified
     const apiConfigOverride = agent.model ? {
       modelId: agent.model.id,
@@ -691,6 +705,86 @@ class WorkflowEngine {
     return this.waitForSessionCompletion(session.id);
   }
 
+  // Execute multi-round agent
+  private async executeMultiRound(
+    agent: WorkflowAgent,
+    inputPrompt: string,
+    config: AgentExecutionConfig
+  ): Promise<string> {
+    let rounds = 0;
+    const maxRounds = config.maxRounds || 3;
+    const roundCondition = config.roundCondition || 'untilComplete';
+    let currentOutput = '';
+    let shouldContinue = true;
+
+    console.log(`[WorkflowEngine] Starting multi-round execution for agent "${agent.name}"`);
+
+    while (shouldContinue && rounds < maxRounds) {
+      rounds++;
+      console.log(`[WorkflowEngine] ${agent.name} - Round ${rounds}/${maxRounds}`);
+
+      // Update iteration count for display
+      const logEntry = this.logs.find(l => l.agentId === agent.id && l.status === 'running');
+      if (logEntry) {
+        this.updateLog(logEntry.id, { iteration: rounds });
+      }
+
+      try {
+        // Execute single round
+        currentOutput = await this.executeSingleRound(agent, inputPrompt);
+
+        // Check stop condition
+        switch (roundCondition) {
+          case 'untilComplete':
+            // Check if output contains completion marker
+            shouldContinue = !currentOutput.includes('<PASS>') &&
+                           !currentOutput.toLowerCase().includes('complete') &&
+                           !currentOutput.toLowerCase().includes('pass');
+            if (!shouldContinue) {
+              console.log(`[WorkflowEngine] ${agent.name} completed in round ${rounds}`);
+            }
+            break;
+          case 'untilError':
+            // Stop on error (handled by executeSingleRound throwing)
+            shouldContinue = false;
+            break;
+          case 'fixed':
+            // Continue until max rounds reached
+            shouldContinue = rounds < maxRounds;
+            break;
+        }
+
+        // If we need to continue, prepare the next round input
+        if (shouldContinue && rounds < maxRounds) {
+          // Include previous output as context for next round
+          inputPrompt = `[Workflow Context — Round ${rounds}/${maxRounds}]
+
+The previous round output is provided below for your reference.
+
+<upstream_output>
+${currentOutput}
+</upstream_output>
+
+Please continue with your task based on the above context.`;
+        }
+      } catch (error) {
+        // If roundCondition is 'untilError', we stop on error (expected behavior)
+        if (roundCondition === 'untilError') {
+          console.log(`[WorkflowEngine] ${agent.name} stopped on error in round ${rounds}`);
+          throw error;
+        }
+        // For other conditions, rethrow the error
+        throw error;
+      }
+    }
+
+    if (rounds >= maxRounds && roundCondition !== 'fixed') {
+      console.log(`[WorkflowEngine] ${agent.name} reached max rounds (${maxRounds})`);
+    }
+
+    return currentOutput;
+  }
+
   // Wait for session to complete
   private async waitForSessionCompletion(sessionId: string): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -741,15 +835,39 @@ class WorkflowEngine {
     });
   }
 
-  // Evaluate which agent to go to next (using outputRoutes)
+  // Evaluate which agent to go to next (using outputRoutes and connections for parallel support)
   private async evaluateNextAgent(
     currentAgent: WorkflowAgent,
     output: string,
-    _connections: WorkflowConnection[],
+    connections: WorkflowConnection[],
     agents: WorkflowAgent[],
     agentStatus: 'completed' | 'error' = 'completed',
   ): Promise<WorkflowAgent | null> {
     const routes = currentAgent.outputRoutes || [];
+
+    // Check for parallel connections first
+    const outgoingConnections = connections.filter(
+      c => c.sourceAgentId === currentAgent.id
+    );
+    const parallelConnections = outgoingConnections.filter(c => c.type === 'parallel');
+
+    // If there are parallel connections, we need to handle them differently
+    // For now, we'll execute the first parallel connection as the next agent
+    // Full parallel execution requires significant refactoring of the main loop
+    if (parallelConnections.length > 0) {
+      console.log(`[WorkflowEngine] Found ${parallelConnections.length} parallel connections from "${currentAgent.name}"`);
+
+      // Find the target agents for parallel connections
+      const parallelTargetIds = parallelConnections.map(c => c.targetAgentId);
+      const parallelAgents = agents.filter(a => parallelTargetIds.includes(a.id));
+
+      // Log parallel execution info
+      if (parallelAgents.length > 0) {
+        console.log(`[WorkflowEngine] Parallel targets: ${parallelAgents.map(a => a.name).join(', ')}`);
+        // TODO: Implement full parallel execution - for now, execute the first one
+        // Full implementation would require Promise.all and result aggregation
+      }
+    }
 
     // Iterate routes in priority order (top to bottom)
     for (const route of routes) {
@@ -776,6 +894,38 @@ class WorkflowEngine {
     }
 
     return null; // No matching route → workflow ends
+  }
+
+  // Execute multiple agents in parallel
+  private async executeParallelAgents(
+    agents: WorkflowAgent[],
+    inputPrompt: string,
+    originalPrompt: string,
+  ): Promise<string[]> {
+    console.log(`[WorkflowEngine] Executing ${agents.length} agents in parallel`);
+
+    const results = await Promise.all(
+      agents.map(agent => {
+        const prompt = this.constructNextPrompt(
+          { id: 'parallel', name: 'Parallel' } as WorkflowAgent,
+          agent,
+          inputPrompt,
+          0,
+          originalPrompt
+        );
+        return this.executeAgent(agent, prompt).catch(error => {
+          console.error(`[WorkflowEngine] Parallel agent "${agent.name}" failed:`, error);
+          return `Error from ${agent.name}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        });
+      })
+    );
+
+    return results;
+  }
+
+  // Aggregate results from parallel execution
+  private aggregateResults(results: string[]): string {
+    return results.join('\n\n--- ---\n\n');
   }
 
   // Find entry agents (nodes with inputFrom === null or undefined)
