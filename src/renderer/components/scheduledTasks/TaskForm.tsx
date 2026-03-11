@@ -14,7 +14,7 @@ interface TaskFormProps {
   onSaved: () => void;
 }
 
-type ScheduleMode = 'once' | 'daily' | 'weekly' | 'monthly';
+type ScheduleMode = 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly';
 
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6] as const; // 0=Sunday
 
@@ -26,7 +26,7 @@ function parseScheduleToUI(schedule: Schedule): {
   weekday: number;
   monthDay: number;
 } {
-  const defaults = { mode: 'once' as ScheduleMode, date: '', time: '09:00', weekday: 1, monthDay: 1 };
+  const defaults = { mode: 'once' as ScheduleMode, date: '', time: '00:00', weekday: 1, monthDay: 1 };
 
   if (schedule.type === 'at') {
     const dt = schedule.datetime ?? '';
@@ -43,6 +43,10 @@ function parseScheduleToUI(schedule: Schedule): {
       const [min, hour, dom, , dow] = parts;
       const timeStr = `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`;
 
+      // Hourly: M * * * * (hour is *, all others are *)
+      if (hour === '*' && dom === '*' && dow === '*') {
+        return { ...defaults, mode: 'hourly', time: `00:${min.padStart(2, '0')}` };
+      }
       if (dow !== '*' && dom === '*') {
         // Weekly: M H * * DOW
         return { ...defaults, mode: 'weekly', time: timeStr, weekday: parseInt(dow) || 0 };
@@ -56,9 +60,9 @@ function parseScheduleToUI(schedule: Schedule): {
     }
   }
 
-  // Fallback for interval type - treat as daily
+  // Fallback for interval type - treat as hourly if unit is hours
   if (schedule.type === 'interval') {
-    return { ...defaults, mode: 'daily' };
+    return { ...defaults, mode: 'hourly' };
   }
 
   return defaults;
@@ -134,6 +138,8 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     switch (scheduleMode) {
       case 'once':
         return { type: 'at', datetime: `${scheduleDate}T${scheduleTime}` };
+      case 'hourly':
+        return { type: 'cron', expression: `${min} * * * *` };
       case 'daily':
         return { type: 'cron', expression: `${min} ${hour} * * *` };
       case 'weekly':
@@ -218,7 +224,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const labelClass = 'block text-sm font-medium dark:text-claude-darkText text-claude-text mb-1';
   const errorClass = 'text-xs text-red-500 mt-1';
 
-  const scheduleModes: ScheduleMode[] = ['once', 'daily', 'weekly', 'monthly'];
+  const scheduleModes: ScheduleMode[] = ['once', 'hourly', 'daily', 'weekly', 'monthly'];
 
   return (
     <div className="p-4 space-y-4 max-w-2xl mx-auto">
@@ -268,7 +274,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
             ))}
           </select>
 
-          {/* Second column: date/weekday/monthday or time (for daily) */}
+          {/* Second column: date/weekday/monthday or time (for daily/hourly) */}
           {scheduleMode === 'once' ? (
             <input
               type="date"
@@ -302,6 +308,17 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
                 </option>
               ))}
             </select>
+          ) : scheduleMode === 'hourly' ? (
+            <input
+              type="time"
+              value={`00:${scheduleTime.split(':')[1] || '00'}`}
+              onChange={(e) => {
+                const min = e.target.value.split(':')[1] || '00';
+                setScheduleTime(`00:${min}`);
+              }}
+              onClick={(e) => (e.target as HTMLInputElement).showPicker()}
+              className={inputClass}
+            />
           ) : (
             <input
               type="time"
@@ -312,8 +329,8 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
             />
           )}
 
-          {/* Third column: time picker (or empty for daily) */}
-          {scheduleMode === 'daily' ? (
+          {/* Third column: time picker (or empty for daily/hourly) */}
+          {scheduleMode === 'daily' || scheduleMode === 'hourly' ? (
             <div />
           ) : (
             <input

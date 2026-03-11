@@ -19,8 +19,15 @@ function formatScheduleLabel(schedule: Schedule): string {
         schedule.unit === 'hours' ? 'scheduledTasksFormIntervalHours' : 'scheduledTasksFormIntervalDays';
       return `${i18nService.t('scheduledTasksScheduleEvery')} ${schedule.value ?? 0} ${i18nService.t(unitKey)}`;
     }
-    case 'cron':
-      return `${i18nService.t('scheduledTasksScheduleCronLabel')}: ${schedule.expression ?? ''}`;
+    case 'cron': {
+      const expr = schedule.expression ?? '';
+      // 检测每小时模式: M * * * * (分钟固定，小时为*)
+      const parts = expr.trim().split(/\s+/);
+      if (parts.length >= 5 && parts[1] === '*' && parts[2] === '*' && parts[3] === '*' && parts[4] === '*') {
+        return `${i18nService.t('scheduledTasksScheduleEveryHour')}: ${parts[0]} ${i18nService.t('scheduledTasksFormIntervalMinutesSuffix')}`;
+      }
+      return `${i18nService.t('scheduledTasksScheduleCronLabel')}: ${expr}`;
+    }
     default:
       return '';
   }
