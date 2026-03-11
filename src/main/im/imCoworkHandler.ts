@@ -676,6 +676,31 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   /**
+   * Get current progress of message accumulation for a session
+   * Used for sending progress updates during long-running tasks
+   */
+  public getCurrentProgress(sessionId: string): string | null {
+    const accumulator = this.messageAccumulators.get(sessionId);
+    if (!accumulator || accumulator.messages.length === 0) {
+      return null;
+    }
+    return this.formatReply(accumulator.messages);
+  }
+
+  /**
+   * Get session ID by conversation ID and platform
+   * Used for tracking progress during async processing
+   */
+  public getSessionIdByConversation(conversationId: string, platform: string): string | null {
+    for (const [sessionId, info] of this.sessionConversationMap.entries()) {
+      if (info.conversationId === conversationId && info.platform === platform) {
+        return sessionId;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Format message content with media attachment information
    * Appends media metadata to content so AI can access the files
    */
