@@ -301,12 +301,18 @@ export class IMGatewayManager extends EventEmitter {
    * Set up message handlers for both gateways
    */
   private setupMessageHandlers(): void {
+    // Timeout for IM platform response (typically 60 seconds)
+    const IM_RESPONSE_TIMEOUT_MS = 55000; // 55 seconds to leave buffer
+
     const messageHandler = async (
       message: IMMessage,
       replyFn: (text: string) => Promise<void>
     ): Promise<void> => {
       // Persist notification target whenever we receive a message
       this.persistNotificationTarget(message.platform);
+
+      // Get notification target for async task result delivery
+      const notificationTarget = this.getNotificationTarget(message.platform);
 
       try {
         let response: string;
@@ -344,14 +350,358 @@ export class IMGatewayManager extends EventEmitter {
       }
     };
 
-    this.dingtalkGateway.setMessageCallback(messageHandler);
-    this.feishuGateway.setMessageCallback(messageHandler);
-    this.telegramGateway.setMessageCallback(messageHandler);
-    this.discordGateway.setMessageCallback(messageHandler);
-    this.nimGateway.setMessageCallback(messageHandler);
-    this.xiaomifengGateway.setMessageCallback(messageHandler);
-    this.qqGateway.setMessageCallback(messageHandler);
-    this.wecomGateway.setMessageCallback(messageHandler);
+    // Async message handler: responds immediately, processes in background, notifies on completion
+    // Only use async mode if the task takes longer than ASYNC_THRESHOLD_MS
+    const ASYNC_THRESHOLD_MS = 3000; // 3 seconds threshold to decide async mode
+    const PROGRESS_UPDATE_INTERVAL_MS = 30000; // Send progress update every 30 seconds
+    const asyncMessageHandler = async (
+      message: IMMessage,
+      replyFn: (text: string) => Promise<void>
+    ): Promise<void> => {
+      // Persist notification target whenever we receive a message
+      this.persistNotificationTarget(message.platform);
+
+      // Get notification target for async task result delivery
+      const notificationTarget = this.getNotificationTarget(message.platform);
+      const platform = message.platform;
+
+      // Check if we should use async mode based on message content
+      // Simple greetings and short queries use sync mode
+      const isSimpleQuery = this.isQuickQuery(message.content);
+
+      if (isSimpleQuery) {
+        // Use sync mode for quick responses - process immediately and reply directly
+        try {
+          let response: string;
+          if (this.coworkHandler) {
+            response = await this.coworkHandler.processMessage(message);
+          } else {
+            if (!this.chatHandler) {
+              this.updateChatHandler();
+            }
+            if (!this.chatHandler) {
+              throw new Error('Chat handler not available');
+            }
+            response = await this.chatHandler.processMessage(message);
+          }
+          await replyFn(response);
+        } catch (error: any) {
+          console.error(`[IMGatewayManager] Error processing message: ${error.message}`);
+          if (error.message !== 'Replaced by a newer IM request') {
+            try {
+              await replyFn(`处理消息时出错: ${error.message}`);
+            } catch (replyError) {
+              console.error(`[IMGatewayManager] Failed to send error reply: ${replyError}`);
+            }
+          }
+        }
+        return;
+      }
+
+      // For non-simple queries (long-running tasks), use async mode
+      // Process in background and send progress updates every 30 seconds
+      this.processMessageWithTimeout(message, notificationTarget, replyFn).catch((error) => {
+        console.error(`[IMGatewayManager] Async task failed:`, error);
+        // Send error notification to user
+        const errorMessage = `任务执行出错: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        this.sendNotification(platform, errorMessage).catch((notifyError) => {
+          console.error(`[IMGatewayManager] Failed to send error notification:`, notifyError);
+        });
+      });
+    };
+
+    // Use async handler: responds immediately, processes in background, notifies on completion
+    // This prevents IM platform timeout issues for long-running tasks
+    const activeMessageHandler = asyncMessageHandler;
+
+    this.dingtalkGateway.setMessageCallback(activeMessageHandler);
+    this.feishuGateway.setMessageCallback(activeMessageHandler);
+    this.telegramGateway.setMessageCallback(activeMessageHandler);
+    this.discordGateway.setMessageCallback(activeMessageHandler);
+    this.nimGateway.setMessageCallback(activeMessageHandler);
+    this.xiaomifengGateway.setMessageCallback(activeMessageHandler);
+    this.qqGateway.setMessageCallback(activeMessageHandler);
+    this.wecomGateway.setMessageCallback(activeMessageHandler);
+  }
+
+  /**
+   * Get notification target for a platform
+   */
+  private getNotificationTarget(platform: IMPlatform): any {
+    try {
+      if (platform === 'dingtalk') {
+        return this.dingtalkGateway.getNotificationTarget();
+      } else if (platform === 'feishu') {
+        return this.feishuGateway.getNotificationTarget();
+      } else if (platform === 'telegram') {
+        return this.telegramGateway.getNotificationTarget();
+      } else if (platform === 'discord') {
+        return this.discordGateway.getNotificationTarget();
+      } else if (platform === 'nim') {
+        return this.nimGateway.getNotificationTarget();
+      }
+    } catch (err: any) {
+      console.warn(`[IMGatewayManager] Failed to get notification target for ${platform}:`, err.message);
+    }
+    return null;
+  }
+
+  /**
+   * Process message with timeout: wait up to 30 seconds for result, then switch to progress mode
+   * If result comes within 30 seconds, reply directly
+   * If no result after 30 seconds, send progress updates every 30 seconds
+   */
+  private async processMessageWithTimeout(
+    message: IMMessage,
+    notificationTarget: any,
+    replyFn: (text: string) => Promise<void>
+  ): Promise<void> {
+    const TIMEOUT_MS = 30000; // 30 seconds timeout
+    const PROGRESS_UPDATE_INTERVAL_MS = 30000;
+    const platform = message.platform;
+
+    console.log(`[IMGatewayManager] Starting task with timeout for ${message.platform}:${message.conversationId}`);
+
+    // Create a promise that resolves when the task completes or rejects on timeout
+    const taskPromise = (async () => {
+      let response: string;
+
+      // Always use Cowork mode if handler is available
+      if (this.coworkHandler) {
+        console.log('[IMGatewayManager] Using Cowork mode for message processing');
+        response = await this.coworkHandler.processMessage(message);
+      } else {
+        // Fallback to regular chat handler
+        if (!this.chatHandler) {
+          this.updateChatHandler();
+        }
+
+        if (!this.chatHandler) {
+          throw new Error('Chat handler not available');
+        }
+
+        response = await this.chatHandler.processMessage(message);
+      }
+
+      return response;
+    })();
+
+    // Get session ID for progress tracking - must be obtained AFTER task starts
+    // because sessionConversationMap is updated inside processMessage
+    let coworkSessionId: string | null = null;
+    const getSessionId = () => {
+      if (this.coworkHandler) {
+        coworkSessionId = this.coworkHandler.getSessionIdByConversation(message.conversationId, message.platform);
+        console.log(`[IMGatewayManager] Tracking session ${coworkSessionId} for progress updates`);
+      }
+    };
+
+    // Get session ID immediately in case it's a continuation of existing session
+    getSessionId();
+
+    // Create a progress update interval
+    const progressInterval = setInterval(async () => {
+      // Refresh session ID each time - it may have been created after task started
+      getSessionId();
+
+      // Try to get actual progress from CoworkHandler
+      let progressContent = '任务仍在处理中...';
+
+      if (coworkSessionId && this.coworkHandler) {
+        try {
+          const currentProgress = this.coworkHandler.getCurrentProgress(coworkSessionId);
+          if (currentProgress && currentProgress.length > 0) {
+            // Truncate to first 200 characters
+            progressContent = currentProgress.length > 200
+              ? currentProgress.substring(0, 200) + '...'
+              : currentProgress;
+          }
+        } catch (e) {
+          console.log(`[IMGatewayManager] Failed to get progress:`, e);
+        }
+      }
+
+      const progressMessage = `⏳ ${progressContent}`;
+      await this.sendNotification(platform, progressMessage).catch((err) => {
+        console.error(`[IMGatewayManager] Failed to send progress notification:`, err);
+      });
+    }, PROGRESS_UPDATE_INTERVAL_MS);
+
+    try {
+      // Wait for either task completion or timeout
+      const response = await Promise.race([
+        taskPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('TIMEOUT')), TIMEOUT_MS)
+        )
+      ]);
+
+      // Task completed within 30 seconds - clear progress interval and reply directly
+      clearInterval(progressInterval);
+      await replyFn(response);
+
+    } catch (error: any) {
+      clearInterval(progressInterval);
+
+      // Check if it was a timeout
+      if (error.message === 'TIMEOUT') {
+        console.log(`[IMGatewayManager] Task timed out after 30 seconds, continuing in background`);
+        // Continue processing in background and send result when done
+        // Don't await here - let it run in the background
+        this.processMessageInBackground(message, coworkSessionId).catch((bgError) => {
+          console.error(`[IMGatewayManager] Background task failed:`, bgError);
+          const errorMessage = `任务执行出错: ${bgError instanceof Error ? bgError.message : 'Unknown error'}`;
+          this.sendNotification(platform, errorMessage).catch((notifyError) => {
+            console.error(`[IMGatewayManager] Failed to send error notification: ${notifyError}`);
+          });
+        });
+      } else {
+        // Actual error - throw it
+        console.error(`[IMGatewayManager] Task error:`, error);
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Process message in background after timeout and send notification when complete
+   */
+  private async processMessageInBackground(
+    message: IMMessage,
+    coworkSessionId: string | null
+  ): Promise<void> {
+    const platform = message.platform;
+
+    console.log(`[IMGatewayManager] Starting background task for ${message.platform}:${message.conversationId}`);
+
+    try {
+      let response: string;
+
+      // Always use Cowork mode if handler is available
+      if (this.coworkHandler) {
+        console.log('[IMGatewayManager] Using Cowork mode for background message processing');
+        response = await this.coworkHandler.processMessage(message);
+      } else {
+        // Fallback to regular chat handler
+        if (!this.chatHandler) {
+          this.updateChatHandler();
+        }
+
+        if (!this.chatHandler) {
+          throw new Error('Chat handler not available');
+        }
+
+        response = await this.chatHandler.processMessage(message);
+      }
+
+      // Send result notification to user
+      const prefix = '✅ 任务完成:\n\n';
+      const fullMessage = prefix + response;
+
+      const sent = await this.sendNotification(platform, fullMessage);
+      if (!sent) {
+        console.warn(`[IMGatewayManager] Failed to send background result notification for ${platform}`);
+      } else {
+        console.log(`[IMGatewayManager] Background result notification sent successfully for ${platform}:${message.conversationId}`);
+      }
+    } catch (error: any) {
+      console.error(`[IMGatewayManager] Background task error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if the message content is a quick query that doesn't need async processing
+   * Simple greetings and short messages use sync mode for immediate response
+   */
+  private isQuickQuery(content: string): boolean {
+    // Clean up the content
+    const cleaned = content.trim().toLowerCase();
+
+    // Empty content
+    if (!cleaned || cleaned.length === 0) {
+      return true;
+    }
+
+    // Check for greeting patterns
+    const greetingPatterns = [
+      /^你好/i,
+      /^hi/i,
+      /^hello/i,
+      /^hey/i,
+      /^您好/i,
+      /^嗨/i,
+      /^hey/i,
+      /^在吗/i,
+      /^在?$/i,
+      /^嗯$/i,
+      /^啊$/i,
+      /^哦$/i,
+      /^好$/i,
+      /^行$/i,
+      /^ok/i,
+      /^okay/i,
+      /^好哒/i,
+      /^收到/i,
+      /^知道了/i,
+      /^谢谢/i,
+      /^感谢/i,
+      /^拜拜/i,
+      /^再见/i,
+      /^晚安/i,
+      /^早安/i,
+      /^午安/i,
+    ];
+
+    for (const pattern of greetingPatterns) {
+      if (pattern.test(cleaned)) {
+        return true;
+      }
+    }
+
+    // Short messages (less than 10 characters) use sync mode
+    if (cleaned.length < 10) {
+      return true;
+    }
+
+    // Check for keywords that indicate long-running tasks
+    const asyncKeywords = [
+      '搜索',
+      '查找',
+      '下载',
+      '生成',
+      '创建',
+      '制作',
+      '分析',
+      '整理',
+      '写',
+      '翻译',
+      '帮我',
+      '请',
+      '查',
+      '找',
+      '开发',
+      '构建',
+      '修复',
+      'bug',
+      '错误',
+      '问题',
+      '帮助',
+      '学习',
+      '了解',
+      '解释',
+      '推荐',
+    ];
+
+    // Check if any async keyword is present
+    for (const keyword of asyncKeywords) {
+      if (cleaned.includes(keyword)) {
+        return false;
+      }
+    }
+
+    // Default: treat as quick query (sync mode)
+    return true;
   }
 
   /**
