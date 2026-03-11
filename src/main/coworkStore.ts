@@ -318,6 +318,13 @@ export interface CoworkMessage {
   metadata?: CoworkMessageMetadata;
 }
 
+// API config override for per-agent configuration
+export interface CoworkApiConfigOverride {
+  modelId: string;
+  providerKey?: string;
+  name?: string;
+}
+
 export interface CoworkSession {
   id: string;
   title: string;
@@ -331,6 +338,7 @@ export interface CoworkSession {
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
+  apiConfigOverride?: CoworkApiConfigOverride;
 }
 
 export interface CoworkSessionSummary {
@@ -510,15 +518,16 @@ export class CoworkStore {
     cwd: string,
     systemPrompt: string = '',
     executionMode: CoworkExecutionMode = 'local',
-    activeSkillIds: string[] = []
+    activeSkillIds: string[] = [],
+    apiConfigOverride?: CoworkApiConfigOverride
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
 
     this.db.run(`
-      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, pinned, created_at, updated_at)
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, 0, ?, ?)
-    `, [id, title, cwd, systemPrompt, executionMode, JSON.stringify(activeSkillIds), now, now]);
+      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, pinned, created_at, updated_at, api_config_override)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, 0, ?, ?, ?)
+    `, [id, title, cwd, systemPrompt, executionMode, JSON.stringify(activeSkillIds), now, now, apiConfigOverride ? JSON.stringify(apiConfigOverride) : null]);
 
     this.saveDb();
 
@@ -535,6 +544,7 @@ export class CoworkStore {
       messages: [],
       createdAt: now,
       updatedAt: now,
+      apiConfigOverride,
     };
   }
 
@@ -549,12 +559,13 @@ export class CoworkStore {
       system_prompt: string;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
+      api_config_override?: string | null;
       created_at: number;
       updated_at: number;
     }
 
     const row = this.getOne<SessionRow>(`
-      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, created_at, updated_at
+      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, api_config_override, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `, [id]);
@@ -572,6 +583,15 @@ export class CoworkStore {
       }
     }
 
+    let apiConfigOverride: CoworkApiConfigOverride | undefined;
+    if (row.api_config_override) {
+      try {
+        apiConfigOverride = JSON.parse(row.api_config_override);
+      } catch {
+        apiConfigOverride = undefined;
+      }
+    }
+
     return {
       id: row.id,
       title: row.title,
@@ -585,12 +605,13 @@ export class CoworkStore {
       messages,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      apiConfigOverride,
     };
   }
 
   updateSession(
     id: string,
-    updates: Partial<Pick<CoworkSession, 'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'executionMode'>>
+    updates: Partial<Pick<CoworkSession, 'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'executionMode' | 'apiConfigOverride'>>
   ): void {
     const now = Date.now();
     const setClauses: string[] = ['updated_at = ?'];
@@ -619,6 +640,10 @@ export class CoworkStore {
     if (updates.executionMode !== undefined) {
       setClauses.push('execution_mode = ?');
       values.push(updates.executionMode);
+    }
+    if (updates.apiConfigOverride !== undefined) {
+      setClauses.push('api_config_override = ?');
+      values.push(updates.apiConfigOverride ? JSON.stringify(updates.apiConfigOverride) : null);
     }
 
     values.push(id);

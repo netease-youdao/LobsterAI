@@ -165,17 +165,17 @@ interface EmailConnectivityTestResult {
 
 type CoworkPermissionResult =
   | {
-      behavior: 'allow';
-      updatedInput?: Record<string, unknown>;
-      updatedPermissions?: Record<string, unknown>[];
-      toolUseID?: string;
-    }
+    behavior: 'allow';
+    updatedInput?: Record<string, unknown>;
+    updatedPermissions?: Record<string, unknown>[];
+    toolUseID?: string;
+  }
   | {
-      behavior: 'deny';
-      message: string;
-      interrupt?: boolean;
-      toolUseID?: string;
-    };
+    behavior: 'deny';
+    message: string;
+    interrupt?: boolean;
+    toolUseID?: string;
+  };
 
 interface McpServerConfigIPC {
   id: string;
@@ -236,6 +236,7 @@ interface IElectronAPI {
     autoRoutingPrompt: () => Promise<{ success: boolean; prompt?: string | null; error?: string }>;
     getConfig: (skillId: string) => Promise<{ success: boolean; config?: Record<string, string>; error?: string }>;
     setConfig: (skillId: string, config: Record<string, string>) => Promise<{ success: boolean; error?: string }>;
+    setPrompt: (skillId: string, prompt: string) => Promise<{ success: boolean; error?: string; skills?: Skill[] }>;
     testEmailConnectivity: (
       skillId: string,
       config: Record<string, string>
@@ -288,8 +289,8 @@ interface IElectronAPI {
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
-    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; apiConfigOverride?: { modelId: string; providerKey?: string; name?: string } }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
+    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; apiConfigOverride?: { modelId: string; providerKey?: string; name?: string } }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
@@ -413,6 +414,38 @@ interface IElectronAPI {
   networkStatus: {
     send: (status: 'online' | 'offline') => void;
   };
+  workflow: {
+    createRunDirectory: (runId: string) => Promise<{
+      success: boolean;
+      directory?: string;
+      error?: string;
+    }>;
+    listDocuments: (workingDirectory: string) => Promise<{
+      success: boolean;
+      files?: DocumentInfo[];
+      error?: string;
+    }>;
+    readDocument: (filePath: string, workingDirectory: string) => Promise<{
+      success: boolean;
+      content?: string;
+      error?: string;
+    }>;
+    writeDocument: (filePath: string, content: string, workingDirectory?: string) => Promise<{ success: boolean; path?: string; error?: string }>;
+    copyToProject: (sourceDir: string, destDir: string) => Promise<{
+      success: boolean;
+      copiedCount?: number;
+      error?: string;
+    }>;
+  };
+}
+
+// Workflow Document types
+interface DocumentInfo {
+  name: string;
+  path: string;
+  size: number;
+  modifiedTime: number;
+  agentType: 'technical-writer' | 'developer' | 'qa' | 'unknown';
 }
 
 // IM Gateway types
@@ -636,4 +669,4 @@ declare global {
   }
 }
 
-export {}; 
+export { }; 

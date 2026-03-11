@@ -156,6 +156,15 @@ select::-ms-expand {
   app-region: drag;
 }
 
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 .non-draggable {
   -webkit-app-region: no-drag;
   app-region: no-drag;

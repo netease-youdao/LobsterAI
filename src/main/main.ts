@@ -371,8 +371,8 @@ const checkCalendarPermission = async (): Promise<string> => {
     } catch (error: any) {
       // Check if it's a permission error
       if (error.stderr?.includes('不能获取对象') ||
-          error.stderr?.includes('not authorized') ||
-          error.stderr?.includes('Permission denied')) {
+        error.stderr?.includes('not authorized') ||
+        error.stderr?.includes('Permission denied')) {
         console.log('[Permissions] macOS Calendar access: not-determined (needs permission)');
         return 'not-determined';
       }
@@ -764,7 +764,7 @@ const getScheduler = () => {
 };
 
 // 获取正确的预加载脚本路径
-const PRELOAD_PATH = app.isPackaged 
+const PRELOAD_PATH = app.isPackaged
   ? path.join(__dirname, 'preload.js')
   : path.join(__dirname, '../dist-electron/preload.js');
 
@@ -1117,12 +1117,207 @@ if (!gotTheLock) {
     return getSkillManager().setSkillConfig(skillId, config);
   });
 
+  ipcMain.handle('skills:setPrompt', (_event, skillId: string, prompt: string) => {
+    return getSkillManager().setSkillPrompt(skillId, prompt);
+  });
+
   ipcMain.handle('skills:testEmailConnectivity', async (
     _event,
     skillId: string,
     config: Record<string, string>
   ) => {
     return getSkillManager().testEmailConnectivity(skillId, config);
+  });
+
+  // Workflow Documents IPC handlers
+  ipcMain.handle('workflow:createRunDirectory', async (_event, runId: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const { app } = await import('electron');
+
+      const basePath = path.join(app.getPath('userData'), 'workflow-runs');
+      const runPath = path.join(basePath, runId);
+      await fs.mkdir(runPath, { recursive: true });
+      return { success: true, directory: runPath };
+    } catch (error) {
+      console.error('[workflow:createRunDirectory] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workflow:listDocuments', async (_event, workingDirectory: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      if (!workingDirectory) {
+        return { success: false, error: 'Working directory is required' };
+      }
+
+      const stats = await fs.stat(workingDirectory);
+      if (!stats.isDirectory()) {
+        return { success: false, error: 'Invalid working directory' };
+      }
+
+      const entries = await fs.readdir(workingDirectory, { withFileTypes: true });
+      const files = [];
+
+      for (const entry of entries) {
+        if (entry.isFile()) {
+          const filePath = path.join(workingDirectory, entry.name);
+          const fileStat = await fs.stat(filePath);
+
+          // Determine agent type from filename
+          let agentType = 'unknown';
+          const lowerName = entry.name.toLowerCase();
+
+          if (lowerName.includes('requirement')) {
+            agentType = 'technical-writer';
+          } else if (lowerName.includes('implementation') || lowerName.includes('design')) {
+            agentType = 'developer';
+          } else if (lowerName.includes('test') || lowerName.includes('review') || lowerName.includes('report') || lowerName.includes('audit')) {
+            agentType = 'qa';
+          } else if (entry.name.match(/\.(py|js|ts|jsx|tsx|go|java|rs|c|cpp|h)$/)) {
+            agentType = lowerName.includes('test') ? 'qa' : 'developer';
+          } else if (entry.name.endsWith('.md')) {
+            // Fallback for markdown files if they don't match the above
+            agentType = 'technical-writer';
+          }
+
+          files.push({
+            name: entry.name,
+            path: filePath,
+            size: fileStat.size,
+            modifiedTime: fileStat.mtimeMs,
+            agentType,
+          });
+        }
+      }
+
+      // Sort by modified time (newest first)
+      files.sort((a: { modifiedTime: number }, b: { modifiedTime: number }) => b.modifiedTime - a.modifiedTime);
+
+      return { success: true, files };
+    } catch (error) {
+      console.error('[workflow:listDocuments] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workflow:readDocument', async (_event, filePath: string, workingDirectory: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const pathModule = await import('path');
+
+      if (!filePath) {
+        return { success: false, error: 'File path is required' };
+      }
+
+      // Security: Validate path traversal attempts
+      const normalizedPath = pathModule.normalize(filePath);
+      if (normalizedPath.includes('..')) {
+        return { success: false, error: 'Invalid file path' };
+      }
+
+      // Security: Ensure the file is within the working directory (if provided)
+      if (workingDirectory) {
+        const resolvedPath = pathModule.resolve(filePath);
+        const resolvedDir = pathModule.resolve(workingDirectory);
+        if (!resolvedPath.startsWith(resolvedDir + pathModule.sep) && resolvedPath !== resolvedDir) {
+          return { success: false, error: 'Access denied: file outside working directory' };
+        }
+      }
+
+      // Allow reading any text file type for preview
+      const allowedExtensions = ['.md', '.py', '.js', '.ts', '.tsx', '.jsx', '.go', '.java', '.rs', '.c', '.cpp', '.h', '.json', '.yaml', '.yml', '.toml', '.txt', '.sh', '.bat', '.css', '.html', '.xml', '.sql'];
+      const ext = pathModule.extname(normalizedPath).toLowerCase();
+      if (!allowedExtensions.includes(ext)) {
+        return { success: false, error: `Unsupported file type: ${ext}` };
+      }
+
+      const content = await fs.readFile(filePath, 'utf-8');
+      return { success: true, content };
+    } catch (error) {
+      console.error('[workflow:readDocument] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workflow:writeDocument', async (_event, filePath: string, content: string, workingDirectory?: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const pathModule = await import('path');
+
+      if (!filePath) {
+        return { success: false, error: 'File path is required' };
+      }
+
+      // Security: Validate path traversal attempts
+      const normalizedPath = pathModule.normalize(filePath);
+      if (normalizedPath.includes('..') && !pathModule.isAbsolute(normalizedPath)) {
+        return { success: false, error: 'Invalid file path' };
+      }
+
+      let targetPath = filePath;
+      // If a working directory is provided and the file path is not absolute, resolve it against the working directory
+      if (workingDirectory && !pathModule.isAbsolute(filePath)) {
+        targetPath = pathModule.join(workingDirectory, filePath);
+        const resolvedPath = pathModule.resolve(targetPath);
+        const resolvedDir = pathModule.resolve(workingDirectory);
+        if (!resolvedPath.startsWith(resolvedDir + pathModule.sep) && resolvedPath !== resolvedDir) {
+          return { success: false, error: 'Access denied: file outside working directory' };
+        }
+      }
+
+      // Allow writing to allowed extensions or specific names
+      const allowedExtensions = ['.md', '.txt', '.json', '.yaml', '.yml', '.csv', '.csv', '.html', '.ts', '.js', '.py', '.java', '.go', '.rs', '.c', '.cpp', '.h'];
+      const ext = pathModule.extname(targetPath).toLowerCase();
+      if (ext && !allowedExtensions.includes(ext)) {
+        return { success: false, error: `Unsupported file type for writing: ${ext}` };
+      }
+
+      await fs.writeFile(targetPath, content, 'utf-8');
+      return { success: true, path: targetPath };
+    } catch (error) {
+      console.error('[workflow:writeDocument] Error:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  // Copy output files to project working directory
+  ipcMain.handle('workflow:copyToProject', async (_event, sourceDir: string, destDir: string) => {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      if (!sourceDir || !destDir) {
+        return { success: false, error: 'Source and destination directories are required' };
+      }
+
+      const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+      const EXCLUDED = new Set(['.cowork-temp', '__pycache__', '.DS_Store', 'node_modules']);
+      let copiedCount = 0;
+
+      await fs.mkdir(destDir, { recursive: true });
+
+      for (const entry of entries) {
+        if (EXCLUDED.has(entry.name)) continue;
+
+        const srcPath = path.join(sourceDir, entry.name);
+        const destPath = path.join(destDir, entry.name);
+
+        if (entry.isFile()) {
+          await fs.copyFile(srcPath, destPath);
+          copiedCount++;
+        }
+      }
+
+      return { success: true, copiedCount };
+    } catch (error) {
+      console.error('[workflow:copyToProject] Error:', error);
+      return { success: false, error: String(error) };
+    }
   });
 
   // MCP Server IPC handlers
@@ -1235,6 +1430,11 @@ if (!gotTheLock) {
     title?: string;
     activeSkillIds?: string[];
     imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    };
   }) => {
     try {
       const coworkStoreInstance = getCoworkStore();
@@ -1259,7 +1459,8 @@ if (!gotTheLock) {
         taskWorkingDirectory,
         systemPrompt,
         config.executionMode || 'local',
-        options.activeSkillIds || []
+        options.activeSkillIds || [],
+        options.apiConfigOverride
       );
       // Build metadata, include imageAttachments if present
       const messageMetadata: Record<string, unknown> = {};
@@ -1326,6 +1527,11 @@ if (!gotTheLock) {
     systemPrompt?: string;
     activeSkillIds?: string[];
     imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    apiConfigOverride?: {
+      modelId: string;
+      providerKey?: string;
+      name?: string;
+    };
   }) => {
     try {
       console.log('[main] cowork:session:continue handler', {
@@ -1339,6 +1545,7 @@ if (!gotTheLock) {
         systemPrompt: options.systemPrompt,
         skillIds: options.activeSkillIds,
         imageAttachments: options.imageAttachments,
+        apiConfigOverride: options.apiConfigOverride,
       }).catch(error => {
         console.error('Cowork continue error:', error);
       });
@@ -1694,7 +1901,7 @@ if (!gotTheLock) {
             MIN_MEMORY_USER_MEMORIES_MAX_ITEMS,
             Math.min(MAX_MEMORY_USER_MEMORIES_MAX_ITEMS, Math.floor(config.memoryUserMemoriesMaxItems))
           )
-        : undefined;
+          : undefined;
       const normalizedConfig = {
         ...config,
         executionMode: normalizedExecutionMode,
@@ -1851,7 +2058,7 @@ if (!gotTheLock) {
   ipcMain.handle('permissions:checkCalendar', async () => {
     try {
       const status = await checkCalendarPermission();
-      
+
       // Development mode: Auto-request permission if not determined
       // This provides a better dev experience without affecting production
       if (isDev && status === 'not-determined' && process.platform === 'darwin') {
@@ -1865,7 +2072,7 @@ if (!gotTheLock) {
           console.warn('[Permissions] Development mode: Auto-request failed:', requestError);
         }
       }
-      
+
       return { success: true, status };
     } catch (error) {
       console.error('[Main] Error checking calendar permission:', error);
@@ -2394,14 +2601,14 @@ if (!gotTheLock) {
       icon: getAppIconPath(),
       ...(isMac
         ? {
-            titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: { x: 12, y: 20 },
-          }
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 12, y: 20 },
+        }
         : isWindows
           ? {
-              frame: false,
-              titleBarStyle: 'hidden' as const,
-            }
+            frame: false,
+            titleBarStyle: 'hidden' as const,
+          }
           : {
             titleBarStyle: 'hidden' as const,
             titleBarOverlay: getTitleBarOverlayOptions(),
@@ -2481,7 +2688,7 @@ if (!gotTheLock) {
         mainWindow?.loadURL(DEV_SERVER_URL).catch((err) => {
           console.error('Failed to load URL:', err);
           retryCount++;
-          
+
           if (retryCount < maxRetries) {
             console.log(`Retrying to load URL (${retryCount}/${maxRetries})...`);
             setTimeout(tryLoadURL, 3000);
@@ -2495,7 +2702,7 @@ if (!gotTheLock) {
       };
 
       tryLoadURL();
-      
+
       // 打开开发者工具
       mainWindow.webContents.openDevTools();
     } else {

@@ -14,9 +14,12 @@ export function getModelIdentityKey(model: Pick<Model, 'id' | 'providerKey'>): s
 }
 
 export function isSameModelIdentity(
-  modelA: Pick<Model, 'id' | 'providerKey'>,
-  modelB: Pick<Model, 'id' | 'providerKey'>
+  modelA: Pick<Model, 'id' | 'providerKey'> | null | undefined,
+  modelB: Pick<Model, 'id' | 'providerKey'> | null | undefined
 ): boolean {
+  if (!modelA || !modelB) {
+    return false;
+  }
   if (modelA.id !== modelB.id) {
     return false;
   }

@@ -38,6 +38,13 @@ export interface CoworkMessage {
   metadata?: CoworkMessageMetadata;
 }
 
+// API config override for per-agent configuration
+export interface CoworkApiConfigOverride {
+  modelId: string;
+  providerKey?: string;
+  name?: string;
+}
+
 // Cowork session
 export interface CoworkSession {
   id: string;
@@ -52,6 +59,7 @@ export interface CoworkSession {
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
+  apiConfigOverride?: CoworkApiConfigOverride;
 }
 
 // Cowork configuration
@@ -170,6 +178,7 @@ export interface CoworkStartOptions {
   title?: string;
   activeSkillIds?: string[];
   imageAttachments?: CoworkImageAttachment[];
+  apiConfigOverride?: CoworkApiConfigOverride;
 }
 
 // Continue session options
@@ -179,6 +188,7 @@ export interface CoworkContinueOptions {
   systemPrompt?: string;
   activeSkillIds?: string[];
   imageAttachments?: CoworkImageAttachment[];
+  apiConfigOverride?: CoworkApiConfigOverride;
 }
 
 // IPC result types

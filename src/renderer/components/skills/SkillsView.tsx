@@ -4,7 +4,7 @@ import SkillsManager from './SkillsManager';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
-
+import { SparklesIcon } from '@heroicons/react/24/outline';
 interface SkillsViewProps {
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -14,6 +14,7 @@ interface SkillsViewProps {
 
 const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
   const isMac = window.electron.platform === 'darwin';
+
   return (
     <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
       <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
@@ -37,15 +38,19 @@ const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSid
               {updateBadge}
             </div>
           )}
-          <h1 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
-            {i18nService.t('skills')}
-          </h1>
+          {/* Header Title */}
+          <div className="flex items-center h-8">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg text-claude-text dark:text-claude-darkText border-0">
+              <SparklesIcon className="h-4 w-4" />
+              {i18nService.t('skills')}
+            </div>
+          </div>
         </div>
         <WindowTitleBar inline />
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
-        <div className="max-w-3xl mx-auto px-4 py-6">
+        <div className="max-w-3xl mx-auto px-4 py-6 h-full flex flex-col">
           <SkillsManager />
         </div>
       </div>

@@ -21,9 +21,9 @@ const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 function loadWasmBinary(): ArrayBuffer {
   const wasmPath = app.isPackaged
     ? path.join(
-        process.resourcesPath,
-        'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
-      )
+      process.resourcesPath,
+      'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
+    )
     : path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm');
   const buf = fs.readFileSync(wasmPath);
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
@@ -87,6 +87,8 @@ export class SqliteStore {
         cwd TEXT NOT NULL,
         system_prompt TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
+        active_skill_ids TEXT,
+        api_config_override TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -244,6 +246,11 @@ export class SqliteStore {
 
       if (!columns.includes('active_skill_ids')) {
         this.db.run('ALTER TABLE cowork_sessions ADD COLUMN active_skill_ids TEXT;');
+        this.save();
+      }
+
+      if (!columns.includes('api_config_override')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN api_config_override TEXT;');
         this.save();
       }
 

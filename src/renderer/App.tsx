@@ -8,6 +8,7 @@ import WindowTitleBar from './components/window/WindowTitleBar';
 import { CoworkView } from './components/cowork';
 import { SkillsView } from './components/skills';
 import { ScheduledTasksView } from './components/scheduledTasks';
+import { WorkflowView } from './components/workflow';
 import { McpView } from './components/mcp';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
@@ -31,7 +32,7 @@ import AppUpdateModal from './components/update/AppUpdateModal';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'agentWorkflow' | 'mcp'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -65,15 +66,15 @@ const App: React.FC = () => {
 
         // 初始化配置
         await configService.init();
-        
+
         // 初始化主题
         themeService.initialize();
 
         // 初始化语言
         await i18nService.initialize();
-        
+
         const config = await configService.getConfig();
-        
+
         const apiConfig: ApiConfig = {
           apiKey: config.api.key,
           baseUrl: config.api.baseUrl,
@@ -112,7 +113,7 @@ const App: React.FC = () => {
           ) ?? resolvedModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
-        
+
         // 初始化定时任务服务
         await scheduledTaskService.init();
 
@@ -193,6 +194,10 @@ const App: React.FC = () => {
 
   const handleShowScheduledTasks = useCallback(() => {
     setMainView('scheduledTasks');
+  }, []);
+
+  const handleShowWorkflow = useCallback(() => {
+    setMainView('agentWorkflow');
   }, []);
 
   const handleShowMcp = useCallback(() => {
@@ -423,6 +428,15 @@ const App: React.FC = () => {
     return () => window.removeEventListener('app:showToast', handler);
   }, [showToast]);
 
+  // Listen for navigation to workflow view
+  useEffect(() => {
+    const handler = () => {
+      setMainView('agentWorkflow');
+    };
+    window.addEventListener('app:showWorkflow', handler);
+    return () => window.removeEventListener('app:showWorkflow', handler);
+  }, []);
+
   // 监听托盘菜单打开设置的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {
@@ -593,6 +607,7 @@ const App: React.FC = () => {
           onShowSkills={handleShowSkills}
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
+          onShowWorkflow={handleShowWorkflow}
           onShowMcp={handleShowMcp}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
@@ -614,6 +629,17 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
+            ) : mainView === 'agentWorkflow' ? (
+              <WorkflowView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                onShowSkills={handleShowSkills}
+                onViewSession={async (sessionId: string) => {
+                  await coworkService.loadSession(sessionId);
+                  setMainView('cowork');
+                }}
               />
             ) : mainView === 'mcp' ? (
               <McpView

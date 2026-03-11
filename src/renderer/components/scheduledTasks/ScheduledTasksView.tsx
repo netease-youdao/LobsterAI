@@ -125,11 +125,10 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
             <button
               type="button"
               onClick={() => handleTabChange('tasks')}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-                activeTab === 'tasks'
-                  ? 'dark:text-claude-darkText text-claude-text'
-                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
-              }`}
+              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${activeTab === 'tasks'
+                ? 'dark:text-claude-darkText text-claude-text'
+                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                }`}
             >
               {i18nService.t('scheduledTasksTabTasks')}
               {activeTab === 'tasks' && (
@@ -139,11 +138,10 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
             <button
               type="button"
               onClick={() => handleTabChange('history')}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-                activeTab === 'history'
-                  ? 'dark:text-claude-darkText text-claude-text'
-                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
-              }`}
+              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${activeTab === 'history'
+                ? 'dark:text-claude-darkText text-claude-text'
+                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                }`}
             >
               {i18nService.t('scheduledTasksTabHistory')}
               {activeTab === 'history' && (

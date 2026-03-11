@@ -103,7 +103,11 @@ function providerRequiresApiKey(providerName: string): boolean {
   return providerName !== 'ollama';
 }
 
-function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvider | null; error?: string } {
+function resolveMatchedProvider(
+  appConfig: AppConfig,
+  overrideModelId?: string,
+  overrideProviderKey?: string
+): { matched: MatchedProvider | null; error?: string } {
   const providers = appConfig.providers ?? {};
 
   const resolveFallbackModel = (): string | undefined => {
@@ -116,23 +120,39 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return undefined;
   };
 
-  const modelId = appConfig.model?.defaultModel || resolveFallbackModel();
+  // Use override values if provided, otherwise use default from config
+  const modelId = overrideModelId || appConfig.model?.defaultModel || resolveFallbackModel();
   if (!modelId) {
     return { matched: null, error: 'No available model configured in enabled providers.' };
   }
 
   let providerEntry: [string, ProviderConfig] | undefined;
-  const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
-  if (preferredProviderName) {
-    const preferredProvider = providers[preferredProviderName];
+  // First priority: use overrideProviderKey if provided
+  if (overrideProviderKey) {
+    const overrideProvider = providers[overrideProviderKey];
     if (
-      preferredProvider?.enabled
-      && preferredProvider.models?.some((model) => model.id === modelId)
+      overrideProvider?.enabled
+      && overrideProvider.models?.some((model) => model.id === modelId)
     ) {
-      providerEntry = [preferredProviderName, preferredProvider];
+      providerEntry = [overrideProviderKey, overrideProvider];
     }
   }
 
+  // Second priority: use default provider from config
+  if (!providerEntry) {
+    const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
+    if (preferredProviderName) {
+      const preferredProvider = providers[preferredProviderName];
+      if (
+        preferredProvider?.enabled
+        && preferredProvider.models?.some((model) => model.id === modelId)
+      ) {
+        providerEntry = [preferredProviderName, preferredProvider];
+      }
+    }
+  }
+
+  // Third priority: find any provider that has the model
   if (!providerEntry) {
     providerEntry = Object.entries(providers).find(([, provider]) => {
       if (!provider?.enabled || !provider.models) {
@@ -208,7 +228,11 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   };
 }
 
-export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): ApiConfigResolution {
+export function resolveCurrentApiConfig(
+  target: OpenAICompatProxyTarget = 'local',
+  modelId?: string,
+  providerKey?: string
+): ApiConfigResolution {
   const sqliteStore = getStore();
   if (!sqliteStore) {
     return {
@@ -225,7 +249,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
     };
   }
 
-  const { matched, error } = resolveMatchedProvider(appConfig);
+  const { matched, error } = resolveMatchedProvider(appConfig, modelId, providerKey);
   if (!matched) {
     return {
       config: null,
@@ -285,8 +309,12 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
   };
 }
 
-export function getCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): CoworkApiConfig | null {
-  return resolveCurrentApiConfig(target).config;
+export function getCurrentApiConfig(
+  target: OpenAICompatProxyTarget = 'local',
+  modelId?: string,
+  providerKey?: string
+): CoworkApiConfig | null {
+  return resolveCurrentApiConfig(target, modelId, providerKey).config;
 }
 
 export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {

@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electron', {
     autoRoutingPrompt: () => ipcRenderer.invoke('skills:autoRoutingPrompt'),
     getConfig: (skillId: string) => ipcRenderer.invoke('skills:getConfig', skillId),
     setConfig: (skillId: string, config: Record<string, string>) => ipcRenderer.invoke('skills:setConfig', skillId, config),
+    setPrompt: (skillId: string, prompt: string) => ipcRenderer.invoke('skills:setPrompt', skillId, prompt),
     testEmailConnectivity: (skillId: string, config: Record<string, string>) =>
       ipcRenderer.invoke('skills:testEmailConnectivity', skillId, config),
     onChanged: (callback: () => void) => {
@@ -119,9 +120,9 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('get-recent-cwds', limit),
   cowork: {
     // Session management
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; apiConfigOverride?: { modelId: string; providerKey?: string; name?: string } }) =>
       ipcRenderer.invoke('cowork:session:start', options),
-    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
+    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; apiConfigOverride?: { modelId: string; providerKey?: string; name?: string } }) =>
       ipcRenderer.invoke('cowork:session:continue', options),
     stopSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:stop', sessionId),
@@ -322,6 +323,21 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('scheduledTask:runUpdate', handler);
     },
   },
+
+  // Workflow Documents API
+  workflow: {
+    createRunDirectory: (runId: string) =>
+      ipcRenderer.invoke('workflow:createRunDirectory', runId),
+    listDocuments: (workingDirectory: string) =>
+      ipcRenderer.invoke('workflow:listDocuments', workingDirectory),
+    readDocument: (filePath: string, workingDirectory: string) =>
+      ipcRenderer.invoke('workflow:readDocument', filePath, workingDirectory),
+    writeDocument: (filePath: string, content: string, workingDirectory?: string) =>
+      ipcRenderer.invoke('workflow:writeDocument', filePath, content, workingDirectory),
+    copyToProject: (sourceDir: string, destDir: string) =>
+      ipcRenderer.invoke('workflow:copyToProject', sourceDir, destDir),
+  },
+
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },

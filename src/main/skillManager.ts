@@ -948,7 +948,7 @@ export class SkillManager {
   private watchers: fs.FSWatcher[] = [];
   private notifyTimer: NodeJS.Timeout | null = null;
 
-  constructor(private getStore: () => SqliteStore) {}
+  constructor(private getStore: () => SqliteStore) { }
 
   getSkillsRoot(): string {
     return path.resolve(app.getPath('userData'), SKILLS_DIR_NAME);
@@ -1548,6 +1548,36 @@ export class SkillManager {
     }
   }
 
+  setSkillPrompt(skillId: string, newPrompt: string): { success: boolean; error?: string; skills?: SkillRecord[] } {
+    try {
+      const skillDir = this.resolveSkillDir(skillId);
+      const skillFile = path.join(skillDir, SKILL_FILE_NAME);
+      if (!fs.existsSync(skillFile)) {
+        return { success: false, error: 'SKILL.md does not exist' };
+      }
+
+      // Read existing to preserve frontmatter
+      const raw = fs.readFileSync(skillFile, 'utf8');
+      const { frontmatter } = parseFrontmatter(raw);
+
+      // Reconstruct with frontmatter
+      let newContent = '';
+      if (Object.keys(frontmatter).length > 0) {
+        newContent += '---\n';
+        newContent += yaml.dump(frontmatter);
+        newContent += '---\n\n';
+      }
+      newContent += newPrompt;
+
+      fs.writeFileSync(skillFile, newContent, 'utf8');
+      this.notifySkillsChanged();
+
+      return { success: true, skills: this.listSkills() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to write skill prompt' };
+    }
+  }
+
   private repairSkillFromBundled(skillId: string, skillPath: string): boolean {
     if (!app.isPackaged) return false;
 
@@ -1879,9 +1909,9 @@ export class SkillManager {
     const message = result.timedOut
       ? `${label} connectivity check timed out`
       : result.error
-        || this.getLastOutputLine(result.stderr)
-        || this.getLastOutputLine(result.stdout)
-        || `${label} connection failed`;
+      || this.getLastOutputLine(result.stderr)
+      || this.getLastOutputLine(result.stdout)
+      || `${label} connection failed`;
 
     return {
       code,
