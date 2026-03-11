@@ -2445,6 +2445,7 @@ export class CoworkRunner extends EventEmitter {
       workspaceRoot?: string;
       confirmationMode?: 'modal' | 'text';
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+      apiConfigOverride?: { modelId: string; providerKey?: string; name?: string };
     } = {}
   ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
@@ -2536,7 +2537,7 @@ export class CoworkRunner extends EventEmitter {
     }
   }
 
-  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
+  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; apiConfigOverride?: { modelId: string; providerKey?: string; name?: string } } = {}): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
@@ -2545,6 +2546,7 @@ export class CoworkRunner extends EventEmitter {
         skillIds: options.skillIds,
         systemPrompt: options.systemPrompt,
         imageAttachments: options.imageAttachments,
+        apiConfigOverride: options.apiConfigOverride,
       });
       return;
     }
