@@ -34,10 +34,12 @@ import {
   UserGroupIcon,
   MagnifyingGlassIcon,
   CubeIcon,
+  DocumentDuplicateIcon,
+  PlayIcon,
 } from '@heroicons/react/24/outline';
-import { renameAgent, updateAgentSoul, removeAgent } from '../../store/slices/workflowSlice';
-import type { WorkflowAgent, Skill } from './workflowTypes';
-import { PREDEFINED_SKILLS, AGENT_COLORS } from './workflowTypes';
+import { renameAgent, updateAgentSoul, updateAgent, removeAgent } from '../../store/slices/workflowSlice';
+import type { WorkflowAgent, Skill, ExecutionMode, RoundCondition, AgentExecutionConfig } from './workflowTypes';
+import { PREDEFINED_SKILLS, AGENT_COLORS, DEFAULT_EXECUTION_CONFIG } from './workflowTypes';
 import { i18nService } from '../../services/i18n';
 
 
@@ -72,6 +74,8 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   UserGroupIcon,
   MagnifyingGlassIcon,
   CubeIcon,
+  DocumentDuplicateIcon,
+  PlayIcon,
 };
 
 interface AgentConfigPanelProps {
@@ -91,13 +95,29 @@ const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
 }) => {
   const dispatch = useDispatch();
   const [name, setName] = useState(agent?.name || '');
+  const [task, setTask] = useState(agent?.task || '');
   const [soulPrompt, setSoulPrompt] = useState(agent?.soulPrompt || '');
   const [isEditingName, setIsEditingName] = useState(false);
+
+  // Execution config state
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>(
+    agent?.execution?.mode || DEFAULT_EXECUTION_CONFIG.mode
+  );
+  const [maxRounds, setMaxRounds] = useState<number>(
+    agent?.execution?.maxRounds || DEFAULT_EXECUTION_CONFIG.maxRounds || 3
+  );
+  const [roundCondition, setRoundCondition] = useState<RoundCondition>(
+    agent?.execution?.roundCondition || DEFAULT_EXECUTION_CONFIG.roundCondition || 'untilComplete'
+  );
 
   useEffect(() => {
     if (agent) {
       setName(agent.name);
+      setTask(agent.task || '');
       setSoulPrompt(agent.soulPrompt || '');
+      setExecutionMode(agent.execution?.mode || DEFAULT_EXECUTION_CONFIG.mode);
+      setMaxRounds(agent.execution?.maxRounds || DEFAULT_EXECUTION_CONFIG.maxRounds || 3);
+      setRoundCondition(agent.execution?.roundCondition || DEFAULT_EXECUTION_CONFIG.roundCondition || 'untilComplete');
     }
   }, [agent]);
 
@@ -110,9 +130,57 @@ const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
     setIsEditingName(false);
   };
 
+  const handleTaskChange = (value: string) => {
+    setTask(value);
+    dispatch(updateAgent({ id: agent.id, updates: { task: value } }));
+  };
+
   const handleSoulPromptChange = (value: string) => {
     setSoulPrompt(value);
     dispatch(updateAgentSoul({ id: agent.id, soulPrompt: value }));
+  };
+
+  const handleExecutionModeChange = (mode: ExecutionMode) => {
+    setExecutionMode(mode);
+    dispatch(updateAgent({
+      id: agent.id,
+      updates: {
+        execution: {
+          mode,
+          maxRounds: mode === 'multi-round' ? maxRounds : undefined,
+          roundCondition: mode === 'multi-round' ? roundCondition : undefined,
+        },
+      },
+    }));
+  };
+
+  const handleMaxRoundsChange = (value: number) => {
+    const clampedValue = Math.max(1, Math.min(10, value));
+    setMaxRounds(clampedValue);
+    dispatch(updateAgent({
+      id: agent.id,
+      updates: {
+        execution: {
+          mode: executionMode,
+          maxRounds: clampedValue,
+          roundCondition,
+        },
+      },
+    }));
+  };
+
+  const handleRoundConditionChange = (condition: RoundCondition) => {
+    setRoundCondition(condition);
+    dispatch(updateAgent({
+      id: agent.id,
+      updates: {
+        execution: {
+          mode: executionMode,
+          maxRounds,
+          roundCondition: condition,
+        },
+      },
+    }));
   };
 
   const handleAddSkill = (skill: Skill) => {
@@ -210,6 +278,93 @@ const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
           <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
             This prompt defines the agent's behavior and capabilities
           </p>
+        </div>
+
+        {/* Task Description */}
+        <div>
+          <label className="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+            <DocumentDuplicateIcon className="w-4 h-4" />
+            Task (任务描述)
+          </label>
+          <textarea
+            value={task}
+            onChange={(e) => handleTaskChange(e.target.value)}
+            placeholder="描述这个agent需要完成的具体任务... 例如：写一个Word文档"
+            className="w-full h-20 px-3 py-2 text-sm rounded-lg border dark:bg-claude-darkBg bg-claude-bg dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text placeholder-gray-400 focus:outline-none focus:border-claude-accent resize-none"
+          />
+          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+            简短描述这个agent需要完成的具体任务
+          </p>
+        </div>
+
+        {/* Execution Mode */}
+        <div>
+          <label className="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+            <PlayIcon className="w-4 h-4" />
+            Execution Mode (执行模式)
+          </label>
+
+          {/* Mode Selection */}
+          <div className="flex gap-2 mb-3">
+            <button
+              type="button"
+              onClick={() => handleExecutionModeChange('single')}
+              className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors ${
+                executionMode === 'single'
+                  ? 'border-claude-accent bg-claude-accent/10 text-claude-accent'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-claude-accent/50'
+              }`}
+            >
+              ○ Single (单轮)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExecutionModeChange('multi-round')}
+              className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors ${
+                executionMode === 'multi-round'
+                  ? 'border-claude-accent bg-claude-accent/10 text-claude-accent'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-claude-accent/50'
+              }`}
+            >
+              ⟳ Multi (多轮)
+            </button>
+          </div>
+
+          {/* Multi-round Config (only shown when multi-round is selected) */}
+          {executionMode === 'multi-round' && (
+            <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              {/* Round Condition */}
+              <div>
+                <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">
+                  停止条件 (Round Condition)
+                </label>
+                <select
+                  value={roundCondition}
+                  onChange={(e) => handleRoundConditionChange(e.target.value as RoundCondition)}
+                  className="w-full px-2 py-1.5 text-sm rounded border dark:bg-claude-darkBg bg-claude-bg dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text focus:outline-none focus:border-claude-accent"
+                >
+                  <option value="untilComplete">Until Complete (直到完成)</option>
+                  <option value="untilError">Until Error (直到出错)</option>
+                  <option value="fixed">Fixed (固定轮数)</option>
+                </select>
+              </div>
+
+              {/* Max Rounds */}
+              <div>
+                <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">
+                  最大轮数 (Max Rounds)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={maxRounds}
+                  onChange={(e) => handleMaxRoundsChange(parseInt(e.target.value) || 3)}
+                  className="w-full px-2 py-1.5 text-sm rounded border dark:bg-claude-darkBg bg-claude-bg dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text focus:outline-none focus:border-claude-accent"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Skills */}
