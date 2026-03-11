@@ -279,6 +279,15 @@ export async function sendNimMediaMessage(
     throw new Error(`File not found: ${filePath}`);
   }
 
+  /** 发送文件大小上限：100MB */
+  const MAX_SEND_FILE_SIZE = 100 * 1024 * 1024;
+  const fileSize = fs.statSync(filePath).size;
+  if (fileSize > MAX_SEND_FILE_SIZE) {
+    throw new Error(
+      `文件过大: ${(fileSize / 1024 / 1024).toFixed(1)}MB，超出 100MB 发送限制`,
+    );
+  }
+
   const mediaType = inferMediaType(filePath);
   const baseName = path.basename(filePath);
   let message: any;

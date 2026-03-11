@@ -26,6 +26,7 @@ class SkillService {
   private skills: Skill[] = [];
   private initialized = false;
   private localSkillDescriptions: Map<string, string | LocalizedText> = new Map();
+  private marketplaceSkillDescriptions: Map<string, string | LocalizedText> = new Map();
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -197,6 +198,13 @@ class SkillService {
       }
       const skills: MarketplaceSkill[] = Array.isArray(value?.marketplace) ? value.marketplace : [];
       const tags: MarketTag[] = Array.isArray(value?.marketTags) ? value.marketTags : [];
+      // Also store marketplace skill descriptions for i18n lookup (keyed by id)
+      this.marketplaceSkillDescriptions.clear();
+      for (const ms of skills) {
+        if (typeof ms.description === 'object') {
+          this.marketplaceSkillDescriptions.set(ms.id, ms.description);
+        }
+      }
       return { skills, tags };
     } catch (error) {
       console.error('Failed to fetch marketplace skills:', error);
@@ -204,10 +212,12 @@ class SkillService {
     }
   }
 
-  getLocalizedSkillDescription(skillName: string, fallback: string): string {
-    const desc = this.localSkillDescriptions.get(skillName);
-    if (desc == null) return fallback;
-    return resolveLocalizedText(desc);
+  getLocalizedSkillDescription(skillId: string, skillName: string, fallback: string): string {
+    const localDesc = this.localSkillDescriptions.get(skillName);
+    if (localDesc != null) return resolveLocalizedText(localDesc);
+    const marketDesc = this.marketplaceSkillDescriptions.get(skillId);
+    if (marketDesc != null) return resolveLocalizedText(marketDesc);
+    return fallback;
   }
 }
 

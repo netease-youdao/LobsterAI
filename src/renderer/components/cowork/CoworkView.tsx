@@ -123,7 +123,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         if (apiConfig && !apiConfig.hasConfig) {
           onRequestAppSettings?.({
             initialTab: 'model',
-            notice: buildApiConfigNotice(),
+            notice: buildApiConfigNotice(apiConfig.error),
           });
           isStartingRef.current = false;
           return;
@@ -187,31 +187,27 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         .filter(p => p?.trim())
         .join('\n\n') || undefined;
 
-      // Generate title in background while starting session
-      const [generatedTitle] = await Promise.all([
-        coworkService.generateSessionTitle(prompt).catch(error => {
-          console.error('Failed to generate cowork session title:', error);
-          return null;
-        }),
-        // Small delay to ensure UI updates before heavy operations
-        new Promise(resolve => setTimeout(resolve, 0)),
-      ]);
-
-      if (isPendingStartCancelled()) {
-        return;
-      }
-
-      const title = generatedTitle?.trim() || fallbackTitle;
-
-      // Start the actual session - this will replace the temp session via addSession
+      // Start the actual session immediately with fallback title
       const startedSession = await coworkService.startSession({
         prompt,
-        title,
+        title: fallbackTitle,
         cwd: config.workingDirectory || undefined,
         systemPrompt: combinedSystemPrompt,
         activeSkillIds: sessionSkillIds,
         imageAttachments,
       });
+
+      // Generate title in the background and update when ready
+      if (startedSession) {
+        coworkService.generateSessionTitle(prompt).then(generatedTitle => {
+          const betterTitle = generatedTitle?.trim();
+          if (betterTitle && betterTitle !== fallbackTitle) {
+            coworkService.renameSession(startedSession.id, betterTitle);
+          }
+        }).catch(error => {
+          console.error('Failed to generate cowork session title:', error);
+        });
+      }
 
       // Stop immediately if user cancelled while startup request was in flight.
       if (isPendingStartCancelled() && startedSession) {

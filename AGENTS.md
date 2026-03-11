@@ -14,6 +14,9 @@ npm run build
 # Lint with ESLint
 npm run lint
 
+# Run memory extractor tests (Node.js built-in test runner)
+npm run test:memory
+
 # Compile Electron main process only
 npm run compile:electron
 
@@ -22,6 +25,8 @@ npm run dist:mac        # macOS (.dmg)
 npm run dist:win        # Windows (.exe)
 npm run dist:linux      # Linux (.AppImage)
 ```
+
+**Requirements**: Node.js >=24 <25. Windows builds require PortableGit (see README.md for setup).
 
 ## Architecture Overview
 
@@ -56,9 +61,11 @@ src/main/
 ├── sqliteStore.ts       # SQLite database (kv + cowork tables)
 ├── coworkStore.ts       # Cowork session/message CRUD operations
 └── libs/
-    ├── coworkRunner.ts  # Claude Agent SDK execution engine
-    ├── coworkVmRunner.ts # Sandbox VM execution mode
-    └── claudeSdk.ts     # SDK loader utilities
+    ├── coworkRunner.ts          # Claude Agent SDK execution engine
+    ├── coworkVmRunner.ts        # Sandbox VM execution mode
+    ├── claudeSdk.ts             # SDK loader utilities
+    ├── coworkMemoryExtractor.ts # Extracts memory changes from conversations
+    └── coworkMemoryJudge.ts     # Validates memory candidates with scoring/LLM
 
 src/renderer/
 ├── types/cowork.ts      # Cowork type definitions
@@ -101,6 +108,10 @@ The Cowork feature provides AI-assisted coding sessions:
 - `local` - Run tools directly on the local machine
 - `sandbox` - Run tools in isolated VM environment
 
+**Memory System**: Automatically extracts and manages user memories from conversations:
+- `coworkMemoryExtractor.ts` - Detects explicit remember/forget commands (Chinese/English) and implicitly extracts personal facts using signal patterns (profile, preferences, ownership). Uses guard levels (`strict`/`standard`/`relaxed`) with confidence thresholds.
+- `coworkMemoryJudge.ts` - Validates memory candidates with rule-based scoring and optional LLM secondary judgment for borderline cases. Includes TTL-based caching for LLM results.
+
 **Stream Events** (IPC from main to renderer):
 - `message` - New message added to session
 - `messageUpdate` - Streaming content update for existing message
@@ -119,7 +130,8 @@ The Cowork feature provides AI-assisted coding sessions:
 - **Cowork streaming**: Uses IPC event listeners (`onStreamMessage`, `onStreamMessageUpdate`, etc.) for bidirectional communication
 - **Markdown rendering**: `react-markdown` with `remark-gfm`, `remark-math`, `rehype-katex` for GitHub markdown and LaTeX
 - **Theme system**: Class-based Tailwind dark mode, applies `dark` class to `<html>` element
-- **i18n**: Simple key-value translation in `services/i18n.ts`, supports Chinese (default) and English
+- **i18n**: Simple key-value translation in `services/i18n.ts`, supports Chinese (default) and English. Language auto-detected from system locale on first run.
+- **Path alias**: `@` maps to `src/renderer/` in Vite config for imports.
 - **Skills**: Custom skill definitions in `SKILLs/` directory, configured via `skills.config.json`
 
 ### Artifacts System
@@ -177,8 +189,10 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 
 ## Testing Guidelines
 
-- No automated test framework is currently configured.
-- Validate changes manually by running `npm run electron:dev` and exercising key flows:
+- Tests use Node.js built-in `node:test` module (no Jest/Mocha/Vitest).
+- Run tests: `npm run test:memory` (compiles Electron main process first, then runs `tests/coworkMemoryExtractor.test.mjs`).
+- Test files live in `tests/` directory and import compiled output from `dist-electron/`.
+- Validate UI changes manually by running `npm run electron:dev` and exercising key flows:
   - Cowork: start session, send prompts, approve/deny tool permissions, stop session
   - Artifacts: preview HTML, SVG, Mermaid diagrams, React components
   - Settings: theme switching, language switching

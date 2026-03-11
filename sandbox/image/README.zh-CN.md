@@ -79,17 +79,24 @@ ARCHS=arm64 ./scripts/build-sandbox-image-docker.sh
 
 ```bash
 cd <repo-root>
-./scripts/publish-sandbox-image.sh v0.1.0
+./scripts/publish-sandbox-image.sh v0.1.5
+python scripts/upload-sandbox-image.py --arch all --version v0.1.5
 ```
 
 会生成：
 
 ```
-sandbox/image/publish/v0.1.0/
+sandbox/image/publish/v0.1.5/
 image-linux-amd64.qcow2
 image-linux-arm64.qcow2
 SHA256SUMS
+upload-manifest.json
 ```
+
+`upload-sandbox-image.py` 会输出：
+
+- `src/main/libs/coworkSandboxRuntime.ts` 需要更新的 TypeScript 片段
+- 可选环境变量覆盖（`COWORK_SANDBOX_IMAGE_VERSION`、`COWORK_SANDBOX_IMAGE_URL_*`、`COWORK_SANDBOX_IMAGE_SHA256_*`）
 
 ## 可配置项
 

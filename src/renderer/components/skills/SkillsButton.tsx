@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { PuzzlePieceIcon } from '@heroicons/react/24/outline';
+import PuzzleIcon from '../icons/PuzzleIcon';
 import SkillsPopover from './SkillsPopover';
 import { Skill } from '../../types/skill';
 
@@ -34,7 +34,7 @@ const SkillsButton: React.FC<SkillsButtonProps> = ({
         className={`p-2 rounded-xl dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors ${className}`}
         title="Skills"
       >
-        <PuzzlePieceIcon className="h-5 w-5" />
+        <PuzzleIcon className="h-5 w-5" />
       </button>
       <SkillsPopover
         isOpen={isPopoverOpen}

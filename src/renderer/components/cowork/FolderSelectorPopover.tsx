@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { FolderPlusIcon, ClockIcon, ChevronRightIcon, FolderIcon } from '@heroicons/react/24/outline';
+import FolderPlusIcon from '../icons/FolderPlusIcon';
+import ClockIcon from '../icons/ClockIcon';
+import ChevronRightIcon from '../icons/ChevronRightIcon';
+import FolderIcon from '../icons/FolderIcon';
 import { i18nService } from '../../services/i18n';
 import { coworkService } from '../../services/cowork';
 import { getCompactFolderName } from '../../utils/path';

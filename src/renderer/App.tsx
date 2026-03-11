@@ -258,6 +258,14 @@ const App: React.FC = () => {
     setShowUpdateModal(true);
   }, [updateInfo]);
 
+  const handleUpdateFound = useCallback((info: AppUpdateInfo) => {
+    setUpdateInfo(info);
+    setUpdateModalState('info');
+    setUpdateError(null);
+    setDownloadProgress(null);
+    setShowUpdateModal(true);
+  }, []);
+
   const handleConfirmUpdate = useCallback(async () => {
     if (!updateInfo) return;
 
@@ -578,6 +586,7 @@ const App: React.FC = () => {
               onClose={handleCloseSettings}
               initialTab={settingsOptions.initialTab}
               notice={settingsOptions.notice}
+              onUpdateFound={handleUpdateFound}
             />
           )}
         </div>
@@ -606,7 +615,7 @@ const App: React.FC = () => {
           updateBadge={!isSidebarCollapsed ? updateBadge : null}
         />
         <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
-          <div className="h-full rounded-xl dark:bg-claude-darkBg bg-claude-bg overflow-hidden">
+          <div className="h-full min-h-0 rounded-xl dark:bg-claude-darkBg bg-claude-bg overflow-hidden">
             {mainView === 'skills' ? (
               <SkillsView
                 isSidebarCollapsed={isSidebarCollapsed}
@@ -659,6 +668,7 @@ const App: React.FC = () => {
           onClose={handleCloseSettings}
           initialTab={settingsOptions.initialTab}
           notice={settingsOptions.notice}
+          onUpdateFound={handleUpdateFound}
         />
       )}
       {showUpdateModal && updateInfo && (

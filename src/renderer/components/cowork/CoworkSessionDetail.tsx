@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
@@ -9,11 +9,7 @@ import MarkdownContent from '../MarkdownContent';
 import {
   CheckIcon,
   InformationCircleIcon,
-  PuzzlePieceIcon,
-  EllipsisHorizontalIcon,
-  PencilSquareIcon,
   ShareIcon,
-  TrashIcon,
   ExclamationTriangleIcon,
   ChevronRightIcon,
   PhotoIcon,
@@ -22,6 +18,10 @@ import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
+import PencilSquareIcon from '../icons/PencilSquareIcon';
+import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 
@@ -37,6 +37,9 @@ interface CoworkSessionDetailProps {
 }
 
 const AUTO_SCROLL_THRESHOLD = 120;
+const NAV_HIDE_DELAY = 3000;
+const NAV_SCROLL_LOCK_DURATION = 500;
+const NAV_BOTTOM_SNAP_THRESHOLD = 20;
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 
 const sanitizeExportFileName = (value: string): string => {
@@ -796,7 +799,7 @@ const CopyButton: React.FC<{
   );
 };
 
-const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = ({ message, skills }) => {
+const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
@@ -808,16 +811,6 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
 
   // Get image attachments from metadata
   const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
-
-  // Debug: log what we read from metadata for user messages
-  console.log('[UserMessageItem] render', {
-    messageId: message.id,
-    hasMetadata: !!message.metadata,
-    metadataKeys: message.metadata ? Object.keys(message.metadata) : [],
-    imageAttachmentsCount: imageAttachments.length,
-    imageAttachmentsNames: imageAttachments.map(a => a.name),
-    imageAttachmentsBase64Lengths: imageAttachments.map(a => a.base64Data?.length ?? 0),
-  });
 
   return (
     <div
@@ -863,7 +856,7 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
                     className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-claude-accent/5 dark:bg-claude-accent/10"
                     title={skill.description}
                   >
-                    <PuzzlePieceIcon className="h-2.5 w-2.5 text-claude-accent/70" />
+                    <PuzzleIcon className="h-2.5 w-2.5 text-claude-accent/70" />
                     <span className="text-[10px] font-medium text-claude-accent/70 max-w-[60px] truncate">
                       {skill.name}
                     </span>
@@ -894,7 +887,7 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
       )}
     </div>
   );
-};
+});
 
 const AssistantMessageItem: React.FC<{
   message: CoworkMessage;
@@ -1181,12 +1174,24 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   updateBadge,
 }) => {
   const isMac = window.electron.platform === 'darwin';
-  const { currentSession, isStreaming } = useSelector((state: RootState) => state.cowork);
+  const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
+  const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+
+  // Turn navigation states
+  // currentTurnIndex (state) drives UI rendering; currentTurnIndexRef (ref) provides
+  // up-to-date value inside callbacks (avoids stale closure). Both must be updated together.
+  const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
+  const currentTurnIndexRef = useRef(0);
+  const [showTurnNav, setShowTurnNav] = useState(false);
+  const hideNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isNavigatingRef = useRef(false);
+  const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const turnElsCacheRef = useRef<HTMLElement[]>([]);
+  const [isScrollable, setIsScrollable] = useState(false);
 
   // Menu and action states
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -1221,6 +1226,26 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       renameInputRef.current?.select();
     });
   }, [isRenaming]);
+
+  // Cleanup nav timers on unmount
+  useEffect(() => {
+    return () => {
+      if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
+      if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+    };
+  }, []);
+
+  // Reset nav state when session changes
+  useEffect(() => {
+    setShowTurnNav(false);
+    setIsScrollable(false);
+    setCurrentTurnIndex(0);
+    currentTurnIndexRef.current = 0;
+    isNavigatingRef.current = false;
+    turnElsCacheRef.current = [];
+    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
+    if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+  }, [currentSession?.id]);
 
   // Close menu on outside click
   useEffect(() => {
@@ -1529,6 +1554,64 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const isNearBottom = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
     setShouldAutoScroll((prev) => (prev === isNearBottom ? prev : isNearBottom));
+
+    // Check if content overflows the container (use functional updater to avoid redundant re-renders)
+    const scrollable = container.scrollHeight > container.clientHeight;
+    setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
+    if (!scrollable) return;
+
+    // Show turn nav and reset hide timer
+    setShowTurnNav(true);
+    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
+    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
+
+    // Skip index recalculation during programmatic navigation
+    if (isNavigatingRef.current) return;
+
+    // Update current turn index based on cached turn elements
+    const turnEls = turnElsCacheRef.current;
+    if (turnEls.length === 0) return;
+
+    // If at very bottom, snap to last turn (use smaller threshold than auto-scroll)
+    if (distanceToBottom <= NAV_BOTTOM_SNAP_THRESHOLD) {
+      const lastIndex = turnEls.length - 1;
+      currentTurnIndexRef.current = lastIndex;
+      setCurrentTurnIndex(lastIndex);
+      return;
+    }
+
+    const scrollTop = container.scrollTop;
+    let visibleIndex = 0;
+    for (let i = 0; i < turnEls.length; i++) {
+      if (turnEls[i].offsetTop <= scrollTop + 80) {
+        visibleIndex = i;
+      } else {
+        break;
+      }
+    }
+    currentTurnIndexRef.current = visibleIndex;
+    setCurrentTurnIndex(visibleIndex);
+  }, []);
+
+  const navigateToTurn = useCallback((direction: 'prev' | 'next') => {
+    const turnEls = turnElsCacheRef.current;
+    if (turnEls.length === 0) return;
+    const idx = currentTurnIndexRef.current;
+    const targetIndex = direction === 'prev' ? idx - 1 : idx + 1;
+    if (targetIndex < 0 || targetIndex >= turnEls.length) return;
+
+    // Block scroll handler from overriding index during smooth scroll
+    isNavigatingRef.current = true;
+    if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+    navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
+
+    turnEls[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    currentTurnIndexRef.current = targetIndex;
+    setCurrentTurnIndex(targetIndex);
+    // Reset hide timer
+    setShowTurnNav(true);
+    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
+    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
   }, []);
 
   // Get the last message content for auto-scroll on streaming updates
@@ -1592,22 +1675,41 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return mapSandboxGuestPathsInText(value, currentSession?.cwd);
   }, [currentSession?.cwd, currentSession?.executionMode]);
 
+  const messages = currentSession?.messages;
+  const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
+  const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+
+  // Cache turn DOM elements when turns change
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) { turnElsCacheRef.current = []; return; }
+    // DOM is already committed when useEffect runs, query synchronously
+    turnElsCacheRef.current = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-turn-index]')
+    );
+  }, [turns]);
+
   // Auto scroll to bottom when new messages arrive or content updates (streaming)
   useEffect(() => {
     if (!shouldAutoScroll) {
       return;
     }
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+      setIsScrollable(container.scrollHeight > container.clientHeight);
     }
-  }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll]);
+    // Sync turn index to last when auto-scrolled to bottom
+    if (turns.length > 0) {
+      const lastIndex = turns.length - 1;
+      currentTurnIndexRef.current = lastIndex;
+      setCurrentTurnIndex(lastIndex);
+    }
+  }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
 
   if (!currentSession) {
     return null;
   }
-
-  const displayItems = buildDisplayItems(currentSession.messages);
-  const turns = buildConversationTurns(displayItems);
 
   const renderConversationTurns = () => {
     if (turns.length === 0) {
@@ -1634,7 +1736,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
 
       return (
-        <React.Fragment key={turn.id}>
+        <div key={turn.id} data-turn-index={index}>
           {turn.userMessage && (
             <div data-export-role="user-message">
               <UserMessageItem message={turn.userMessage} skills={skills} />
@@ -1651,7 +1753,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               />
             </div>
           )}
-        </React.Fragment>
+        </div>
       );
     });
   };
@@ -1838,13 +1940,51 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       )}
 
       {/* Messages */}
-      <div
-        ref={scrollContainerRef}
-        onScroll={handleMessagesScroll}
-        className="flex-1 overflow-y-auto min-h-0 pt-3"
-      >
-        {renderConversationTurns()}
-        <div ref={messagesEndRef} className="h-20" />
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleMessagesScroll}
+          className="h-full min-h-0 overflow-y-auto pt-3"
+        >
+          {renderConversationTurns()}
+          <div className="h-20" />
+        </div>
+
+        {/* Turn Navigation Buttons */}
+        {turns.length > 1 && isScrollable && (
+          <div
+            className={`absolute right-4 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
+              dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
+              border dark:border-claude-darkBorder border-claude-border
+              ${showTurnNav ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+          >
+            <button
+              type="button"
+              onClick={() => currentTurnIndex > 0 && navigateToTurn('prev')}
+              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
+                ${currentTurnIndex <= 0
+                  ? 'opacity-30 cursor-default'
+                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+              </svg>
+            </button>
+            <div className="dark:border-claude-darkBorder border-claude-border border-t" />
+            <button
+              type="button"
+              onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurn('next')}
+              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
+                ${currentTurnIndex >= turns.length - 1
+                  ? 'opacity-30 cursor-default'
+                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Streaming Activity Bar */}

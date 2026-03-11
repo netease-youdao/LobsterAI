@@ -17,6 +17,7 @@ interface MessageAccumulator {
   messages: CoworkMessage[];
   resolve: (text: string) => void;
   reject: (error: Error) => void;
+  timeoutId?: NodeJS.Timeout;
 }
 
 interface PendingIMPermission {
@@ -30,6 +31,7 @@ interface PendingIMPermission {
 }
 
 const PERMISSION_CONFIRM_TIMEOUT_MS = 60_000;
+const ACCUMULATOR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const IM_ALLOW_RESPONSE_RE = /^(允许|同意|yes|y)$/i;
 const IM_DENY_RESPONSE_RE = /^(拒绝|不同意|no|n)$/i;
 const IM_ALLOW_OPTION_LABEL = '允许本次操作';
@@ -110,7 +112,8 @@ export class IMCoworkHandler extends EventEmitter {
       message.conversationId,
       message.platform,
       forceNewSession,
-      message.senderId
+      message.senderId,
+      message
     );
     this.sessionConversationMap.set(coworkSessionId, {
       conversationId: message.conversationId,
@@ -181,7 +184,8 @@ export class IMCoworkHandler extends EventEmitter {
     imConversationId: string,
     platform: IMPlatform,
     forceNewSession: boolean = false,
-    senderId?: string
+    senderId?: string,
+    message?: IMMessage
   ): Promise<string> {
     if (forceNewSession) {
       const stale = this.imStore.getSessionMapping(imConversationId, platform);
@@ -219,17 +223,18 @@ export class IMCoworkHandler extends EventEmitter {
     }
 
     // Create new Cowork session
-    return this.createCoworkSessionForConversation(imConversationId, platform, senderId);
+    return this.createCoworkSessionForConversation(imConversationId, platform, senderId, message);
   }
 
   private async createCoworkSessionForConversation(
     imConversationId: string,
     platform: IMPlatform,
-    senderId?: string
+    senderId?: string,
+    message?: IMMessage
   ): Promise<string> {
     // Create new Cowork session
     const config = this.coworkStore.getConfig();
-    const title = this.buildSessionTitle(platform, imConversationId, senderId);
+    const title = this.buildSessionTitle(platform, imConversationId, senderId, message);
     const systemPrompt = await this.buildSystemPromptWithSkills();
 
     const selectedWorkspaceRoot = (config.workingDirectory || '').trim();
@@ -261,11 +266,32 @@ export class IMCoworkHandler extends EventEmitter {
 
   /**
    * Build a human-readable session title based on platform and sender identity.
-   * NIM uses "云信NIM-{accid}" format; other platforms keep the original "IM-{platform}-{timestamp}" style.
+   *
+   * NIM title rules:
+   *   - P2P direct:  "云信-P2P-{senderName|senderId}"
+   *   - Team group:  "云信-群聊-{groupName|teamId}"
+   *   - QChat:       "云信-圈组-{groupName|channelId}"
+   *
+   * Other platforms use the original "IM-{platform}-{timestamp}" style.
    */
-  private buildSessionTitle(platform: IMPlatform, _imConversationId: string, senderId?: string): string {
-    if (platform === 'nim' && senderId) {
-      return `IM-云信-${senderId}`;
+  private buildSessionTitle(
+    platform: IMPlatform,
+    _imConversationId: string,
+    senderId?: string,
+    message?: IMMessage
+  ): string {
+    if (platform === 'nim') {
+      if (message?.chatSubType === 'qchat') {
+        const channelLabel = message.groupName || _imConversationId;
+        return `云信-圈组-${channelLabel}`;
+      }
+      if (message?.chatType === 'group') {
+        const groupLabel = message.groupName || senderId || _imConversationId;
+        return `云信-群聊-${groupLabel}`;
+      }
+      // P2P direct message
+      const peerLabel = message?.senderName || senderId || _imConversationId;
+      return `云信-P2P-${peerLabel}`;
     }
     return `IM-${platform}-${Date.now()}`;
   }
@@ -370,15 +396,32 @@ export class IMCoworkHandler extends EventEmitter {
     return new Promise((resolve, reject) => {
       const existingAccumulator = this.messageAccumulators.get(sessionId);
       if (existingAccumulator) {
+        if (existingAccumulator.timeoutId) {
+          clearTimeout(existingAccumulator.timeoutId);
+        }
         this.messageAccumulators.delete(sessionId);
         existingAccumulator.reject(new Error('Replaced by a newer IM request'));
       }
+
+      const timeoutId = setTimeout(() => {
+        const accumulator = this.messageAccumulators.get(sessionId);
+        if (accumulator && accumulator.timeoutId === timeoutId) {
+          const partialReply = this.formatReply(accumulator.messages);
+          this.cleanupAccumulator(sessionId);
+          if (partialReply && partialReply !== '处理完成，但没有生成回复。') {
+            accumulator.resolve(partialReply + '\n\n[处理超时，以上为部分结果]');
+          } else {
+            accumulator.reject(new Error('处理超时，请稍后重试'));
+          }
+        }
+      }, ACCUMULATOR_TIMEOUT_MS);
 
       // Set up message accumulator
       this.messageAccumulators.set(sessionId, {
         messages: [],
         resolve,
         reject,
+        timeoutId,
       });
     });
   }
@@ -606,6 +649,10 @@ export class IMCoworkHandler extends EventEmitter {
    * Clean up accumulator
    */
   private cleanupAccumulator(sessionId: string): void {
+    const accumulator = this.messageAccumulators.get(sessionId);
+    if (accumulator?.timeoutId) {
+      clearTimeout(accumulator.timeoutId);
+    }
     this.messageAccumulators.delete(sessionId);
   }
 
@@ -660,6 +707,9 @@ export class IMCoworkHandler extends EventEmitter {
   destroy(): void {
     // Clear all pending accumulators
     this.messageAccumulators.forEach((accumulator) => {
+      if (accumulator.timeoutId) {
+        clearTimeout(accumulator.timeoutId);
+      }
       accumulator.reject(new Error('Handler destroyed'));
     });
     this.messageAccumulators.clear();

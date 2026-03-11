@@ -1,0 +1,165 @@
+{
+  "categories": [
+    { "id": "all", "name_zh": "全部", "name_en": "All" },
+    { "id": "search", "name_zh": "搜索", "name_en": "Search" },
+    { "id": "developer", "name_zh": "开发工具", "name_en": "Dev Tools" },
+    { "id": "productivity", "name_zh": "效率工具", "name_en": "Productivity" },
+    { "id": "browser", "name_zh": "浏览器", "name_en": "Browser" },
+    { "id": "design", "name_zh": "设计", "name_en": "Design" },
+    { "id": "data-api", "name_zh": "数据 & API", "name_en": "Data & API" }
+  ],
+  "servers": [
+    {
+      "id": "tavily",
+      "name": "Tavily",
+      "description_zh": "实时网页搜索、智能数据提取和网站爬取",
+      "description_en": "Real-time web search, intelligent data extraction and web crawling",
+      "category": "search",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "tavily-mcp@latest"],
+      "requiredEnvKeys": ["TAVILY_API_KEY"]
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description_zh": "GitHub 平台集成：仓库、Issues、PR、Actions 管理",
+      "description_en": "GitHub platform integration: repos, issues, PRs, Actions management",
+      "category": "developer",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@modelcontextprotocol/server-github"],
+      "requiredEnvKeys": ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "description_zh": "GitLab API 集成：项目管理、合并请求、流水线",
+      "description_en": "GitLab API integration: project management, merge requests, pipelines",
+      "category": "developer",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@modelcontextprotocol/server-gitlab"],
+      "requiredEnvKeys": ["GITLAB_PERSONAL_ACCESS_TOKEN"],
+      "optionalEnvKeys": ["GITLAB_API_URL"]
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "description_zh": "为 AI 编程提供最新的库文档和代码示例",
+      "description_en": "Up-to-date library documentation and code examples for AI coding",
+      "category": "developer",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@upstash/context7-mcp@latest"]
+    },
+    {
+      "id": "google-drive",
+      "name": "Google Drive",
+      "description_zh": "Google Drive 文件访问和搜索，自动导出 Workspace 文件",
+      "description_en": "Google Drive file access and search with auto-export for Workspace files",
+      "category": "productivity",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@modelcontextprotocol/server-gdrive"],
+      "optionalEnvKeys": ["GDRIVE_CREDENTIALS_PATH"]
+    },
+    {
+      "id": "gmail",
+      "name": "Gmail",
+      "description_zh": "Gmail 邮件管理：读取、发送、搜索邮件，支持自动认证",
+      "description_en": "Gmail management: read, send, search emails with auto authentication",
+      "category": "productivity",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+      "requiredEnvKeys": ["GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REDIRECT_URI"]
+    },
+    {
+      "id": "google-calendar",
+      "name": "Google Calendar",
+      "description_zh": "Google Calendar 日程管理：创建、查询、更新日历事件",
+      "description_en": "Google Calendar management: create, query, update calendar events",
+      "category": "productivity",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@cocal/google-calendar-mcp"],
+      "requiredEnvKeys": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI"]
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "description_zh": "Notion API：搜索、创建/更新页面、管理数据库",
+      "description_en": "Notion API: search, create/update pages, manage databases",
+      "category": "productivity",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@notionhq/notion-mcp-server"],
+      "requiredEnvKeys": ["OPENAPI_MCP_HEADERS"]
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "description_zh": "Slack 工作区：频道管理、消息发送、用户查询",
+      "description_en": "Slack workspace: channel management, messaging, user queries",
+      "category": "productivity",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@modelcontextprotocol/server-slack"],
+      "requiredEnvKeys": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"]
+    },
+    {
+      "id": "todoist",
+      "name": "TodoList",
+      "description_zh": "任务管理：创建、更新、完成和组织待办事项",
+      "description_en": "Task management: create, update, complete and organize to-do items",
+      "category": "productivity",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "todoist-mcp@latest"],
+      "requiredEnvKeys": ["TODOIST_API_TOKEN"]
+    },
+    {
+      "id": "playwright",
+      "name": "Playwright",
+      "description_zh": "高级浏览器自动化，支持 Chromium/Firefox/WebKit",
+      "description_en": "Advanced browser automation supporting Chromium/Firefox/WebKit",
+      "category": "browser",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@executeautomation/playwright-mcp-server"]
+    },
+    {
+      "id": "canva",
+      "name": "Canva",
+      "description_zh": "Canva 设计平台：创建和管理设计、模板操作",
+      "description_en": "Canva design platform: create and manage designs, template operations",
+      "category": "design",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@iflow-mcp/mattcoatsworth-canva-mcp-server"],
+      "requiredEnvKeys": ["CANVA_API_KEY"]
+    },
+    {
+      "id": "firecrawl",
+      "name": "Firecrawl",
+      "description_zh": "网页抓取与数据提取：支持批处理、结构化提取和内容分析",
+      "description_en": "Web scraping and data extraction: batch processing, structured extraction and content analysis",
+      "category": "data-api",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "firecrawl-mcp@latest"],
+      "requiredEnvKeys": ["FIRECRAWL_API_KEY"]
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch",
+      "description_zh": "网页内容抓取和 HTML 转 Markdown，适合 LLM 消费",
+      "description_en": "Web content fetching and HTML-to-markdown conversion for LLM consumption",
+      "category": "data-api",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "@modelcontextprotocol/server-fetch"]
+    }
+  ]
+}
