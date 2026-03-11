@@ -24,6 +24,183 @@ const SYNTAX_HIGHLIGHTER_STYLE = {
 };
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file']);
 
+// Custom URI protocols that should be handled by the system (e.g., obsidian://, vscode://)
+// These are treated as external links and opened via shell.openExternal
+const CUSTOM_URI_PROTOCOLS = new Set([
+  'obsidian',
+  'vscode',
+  'vscode-insiders',
+  'cursor',
+  'sublime',
+  'atom',
+  'idea',
+  'webstorm',
+  'pycharm',
+  'goland',
+  'clion',
+  'rider',
+  'datagrip',
+  'phpstorm',
+  'rubymine',
+  'appcode',
+  'fleet',
+  'android-studio',
+  'xcode',
+  'iterm2',
+  'terminal',
+  'warp',
+  'fig',
+  'slack',
+  'discord',
+  'telegram',
+  'whatsapp',
+  'zoom',
+  'teams',
+  'meet',
+  'notion',
+  'bear',
+  'things',
+  'omnifocus',
+  'todoist',
+  'linear',
+  'jira',
+  'asana',
+  'trello',
+  'monday',
+  'clickup',
+  'height',
+  'shortcut',
+  'github',
+  'gitlab',
+  'bitbucket',
+  'source-tree',
+  'tower',
+  'fork',
+  'sourcetree',
+  'kraken',
+  'postman',
+  'insomnia',
+  'httpie',
+  'tableplus',
+  'sequel-pro',
+  'sequel-ace',
+  'datagrip',
+  'pgadmin',
+  'mysqlworkbench',
+  'robo-3t',
+  'studio-3t',
+  'mongo-compass',
+  'redisinsight',
+  'docker',
+  'kitematic',
+  'figma',
+  'sketch',
+  'adobe-xd',
+  'invision',
+  'zeplin',
+  'abstract',
+  'framer',
+  'principle',
+  'protoio',
+  'marvel',
+  'axure',
+  'balsamiq',
+  'mockplus',
+  '墨刀',
+  'mastergo',
+  '即时设计',
+  'pixso',
+  'sketch-measure',
+  'lanhu',
+  'xiaopiu',
+  'modao',
+  '磨刀',
+  'spotify',
+  'music',
+  'itunes',
+  'podcasts',
+  'overcast',
+  'pocket-casts',
+  ' Castro',
+  'downcast',
+  'breaker',
+  'snipd',
+  'airr',
+  'fountain',
+  'logseq',
+  'remnote',
+  'notion',
+  'craft',
+  'anytype',
+  'capacities',
+  'reflect',
+  'mem',
+  'amplenote',
+  'standard-notes',
+  'joplin',
+  'trilium',
+  'zettlr',
+  'typora',
+  'marktext',
+  'ia-writer',
+  'ulysses',
+  'scrivener',
+  'pages',
+  'numbers',
+  'keynote',
+  'word',
+  'excel',
+  'powerpoint',
+  'outlook',
+  'thunderbird',
+  'spark',
+  'airmail',
+  'newton',
+  'superhuman',
+  'hey',
+  'gmail',
+  'google-chrome',
+  'firefox',
+  'safari',
+  'edge',
+  'brave',
+  'arc',
+  'sigmaos',
+  'orion',
+  'vivaldi',
+  'opera',
+  'tor-browser',
+  'lynx',
+  'w3m',
+  'chrome-devtools',
+  'devtools',
+  'raycast',
+  'alfred',
+  'launchbar',
+  'quicksilver',
+  'spotlight',
+  'ueli',
+  'wox',
+  'hain',
+  'zazu',
+  ' cerebro',
+  'devdocs',
+  'dash',
+  'zeal',
+  'velocity',
+  'kapeli',
+  'cheatsheet',
+  'shortcuts',
+  'workflow',
+  'scriptable',
+  'pythonista',
+  'playgrounds',
+  'swift-playgrounds',
+  'xcode',
+  'simulator',
+  'instruments',
+]);
+
 const encodeFileUrl = (url: string): string => {
   const encoded = encodeURI(url);
   return encoded.replace(/\(/g, '%28').replace(/\)/g, '%29');
@@ -129,7 +306,8 @@ const safeUrlTransform = (url: string): string => {
   }
 
   const protocol = match[1].toLowerCase();
-  if (SAFE_URL_PROTOCOLS.has(protocol)) {
+  // Allow standard safe protocols and custom URI protocols
+  if (SAFE_URL_PROTOCOLS.has(protocol) || CUSTOM_URI_PROTOCOLS.has(protocol)) {
     return trimmed;
   }
 
@@ -207,410 +385,194 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
       if (copyTimeoutRef.current != null) {
         window.clearTimeout(copyTimeoutRef.current);
       }
-      copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 1500);
-    } catch (error) {
-      console.error('Failed to copy code block: ', error);
+      copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 2000);
+    } catch {
+      // ignore
     }
   }, [trimmedCodeText]);
 
-  if (!isInline) {
-    // Simple code block without language - minimal styling
-    if (!match) {
-      return (
-        <div className="my-2 relative group">
-          <div className="overflow-x-auto rounded-lg bg-[#282c34] text-[13px] leading-6">
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="absolute top-2 right-2 z-10 p-1.5 rounded-md bg-gray-700/80 text-gray-300 hover:bg-gray-600 transition-colors opacity-0 group-hover:opacity-100"
-              title={i18nService.t('copyToClipboard')}
-              aria-label={i18nService.t('copyToClipboard')}
-            >
-              {isCopied ? (
-                <CheckIcon className="h-4 w-4 text-green-500" />
-              ) : (
-                <ClipboardDocumentIcon className="h-4 w-4" />
-              )}
-            </button>
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
-              {trimmedCodeText}
-            </code>
-          </div>
-        </div>
-      );
-    }
+  const languageDisplay = match ? match[1] : '';
 
-    // Code block with language - show header with language name
+  if (shouldHighlight) {
     return (
-      <div className="my-3 rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border relative shadow-subtle">
-        <div className="dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted px-4 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary font-medium flex items-center justify-between">
-          <span>{match[1]}</span>
+      <div className="code-block-wrapper">
+        <div className="code-block-header">
+          <span className="code-language">{languageDisplay}</span>
           <button
             type="button"
             onClick={handleCopy}
-            className="p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
-            title={i18nService.t('copyToClipboard')}
-            aria-label={i18nService.t('copyToClipboard')}
+            className="copy-code-button"
+            aria-label={isCopied ? i18nService.t('common:copied') : i18nService.t('common:copy')}
+            title={isCopied ? i18nService.t('common:copied') : i18nService.t('common:copy')}
           >
             {isCopied ? (
-              <CheckIcon className="h-4 w-4 text-green-500" />
+              <CheckIcon className="w-4 h-4 text-green-500" />
             ) : (
-              <ClipboardDocumentIcon className="h-4 w-4" />
+              <ClipboardDocumentIcon className="w-4 h-4" />
             )}
           </button>
         </div>
-        {shouldHighlight ? (
-          <SyntaxHighlighter
-            style={oneDark}
-            language={match[1]}
-            PreTag="div"
-            customStyle={SYNTAX_HIGHLIGHTER_STYLE}
-          >
-            {trimmedCodeText}
-          </SyntaxHighlighter>
-        ) : (
-          <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
-              {trimmedCodeText}
-            </code>
-          </div>
-        )}
+        <SyntaxHighlighter
+          style={oneDark}
+          language={match[1]}
+          PreTag="div"
+          {...props}
+        >
+          {trimmedCodeText}
+        </SyntaxHighlighter>
       </div>
     );
   }
 
-  const inlineClassName = [
-    'inline bg-transparent px-0.5 text-[0.92em] font-mono font-medium dark:text-claude-darkText text-claude-text',
-    normalizedClassName,
-  ].filter(Boolean).join(' ');
-
-  return (
-    <code
-      className={inlineClassName}
-      {...props}
-    >
+  return isInline ? (
+    <code className={normalizedClassName} {...props}>
       {children}
     </code>
+  ) : (
+    <div className="code-block-wrapper">
+      <div className="code-block-header">
+        <span className="code-language">{languageDisplay}</span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="copy-code-button"
+          aria-label={isCopied ? i18nService.t('common:copied') : i18nService.t('common:copy')}
+          title={isCopied ? i18nService.t('common:copied') : i18nService.t('common:copy')}
+        >
+          {isCopied ? (
+            <CheckIcon className="w-4 h-4 text-green-500" />
+          ) : (
+            <ClipboardDocumentIcon className="w-4 h-4" />
+          )}
+        </button>
+      </div>
+      <pre style={SYNTAX_HIGHLIGHTER_STYLE}>
+        <code className={normalizedClassName} {...props}>
+          {trimmedCodeText}
+        </code>
+      </pre>
+    </div>
   );
 };
 
-const safeDecodeURIComponent = (value: string): string => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
+interface FileLinkProps {
+  href: string;
+  children: React.ReactNode;
+}
 
-const stripHashAndQuery = (value: string): string => value.split('#')[0].split('?')[0];
+const FileLink: React.FC<FileLinkProps> = ({ href, children }) => {
+  const [isHovered, setIsHovered] = useState(false);
 
-const stripFileProtocol = (value: string): string => {
-  let cleaned = value.replace(/^file:\/\//i, '');
-  if (/^\/[A-Za-z]:/.test(cleaned)) {
-    cleaned = cleaned.slice(1);
-  }
-  return cleaned;
-};
+  const handleClick = useCallback(async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
 
-const hasFileExtension = (value: string): boolean => /\.[A-Za-z0-9]{1,6}$/.test(value);
-
-const looksLikeDirectory = (value: string): boolean => {
-  if (!value) return false;
-  if (value.endsWith('/') || value.endsWith('\\')) return true;
-  return !hasFileExtension(value);
-};
-
-const isLikelyLocalFilePath = (href: string): boolean => {
-  if (!href) return false;
-  if (/^file:\/\//i.test(href)) return true;
-  if (/^[A-Za-z]:[\\/]/.test(href)) return true;
-  if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) return true;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
-
-  const base = stripHashAndQuery(href);
-  if (base.includes('/') || base.includes('\\')) return true;
-
-  const extMatch = base.match(/\.([A-Za-z0-9]{1,6})$/);
-  if (!extMatch) return false;
-  const ext = extMatch[1].toLowerCase();
-  const commonTlds = new Set(['com', 'net', 'org', 'io', 'cn', 'co', 'ai', 'app', 'dev', 'gov', 'edu']);
-  return !commonTlds.has(ext);
-};
-
-const toFileHref = (filePath: string): string => {
-  const normalized = filePath.replace(/\\/g, '/');
-  if (/^[A-Za-z]:/.test(filePath)) {
-    return `file:///${normalized}`;
-  }
-  if (normalized.startsWith('/')) {
-    return `file://${normalized}`;
-  }
-  return `file://${normalized}`;
-};
-
-const getLocalPathFromLink = (
-  href: string | null,
-  text: string,
-  resolveLocalFilePath?: (href: string, text: string) => string | null
-): string | null => {
-  if (!href) return null;
-  const resolved = resolveLocalFilePath ? resolveLocalFilePath(href, text) : null;
-  if (resolved) return resolved;
-  if (!isLikelyLocalFilePath(href)) return null;
-  const rawPath = stripFileProtocol(stripHashAndQuery(href));
-  const decoded = safeDecodeURIComponent(rawPath);
-  return decoded || rawPath || null;
-};
-
-const findFallbackPathFromContext = (
-  anchor: HTMLAnchorElement | null,
-  fileName: string,
-  resolveLocalFilePath?: (href: string, text: string) => string | null
-): string | null => {
-  const trimmedName = fileName.trim();
-  if (!trimmedName || trimmedName.includes('/') || trimmedName.includes('\\')) {
-    return null;
-  }
-
-  if (!anchor || typeof anchor.closest !== 'function') return null;
-  const container = anchor.closest('.markdown-content');
-  if (!container) return null;
-
-  const anchors = Array.from(container.querySelectorAll('a'));
-  const index = anchors.indexOf(anchor);
-  if (index <= 0) return null;
-
-  for (let i = index - 1; i >= 0; i -= 1) {
-    const candidate = anchors[i] as HTMLAnchorElement;
-    const candidateHref = candidate.getAttribute('href');
-    const candidateText = candidate.textContent ?? '';
-    const basePath = getLocalPathFromLink(candidateHref, candidateText, resolveLocalFilePath);
-    if (!basePath || !looksLikeDirectory(basePath)) {
-      continue;
+    const openPath = (window as any)?.electron?.shell?.openPath;
+    if (typeof openPath !== 'function') {
+      return;
     }
 
-    const normalizedBase = basePath.replace(/[\\/]+$/, '');
-    return `${normalizedBase}/${trimmedName}`;
-  }
+    try {
+      const filePath = href.replace(/^file:\/\//, '');
+      await openPath(decodeURI(filePath));
+    } catch (error) {
+      console.error('Failed to open file:', href, error);
+    }
+  }, [href]);
 
-  return null;
+  const isFolder = href.endsWith('/');
+
+  return (
+    <a
+      href={href}
+      onClick={handleClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className="file-link"
+      title={href}
+    >
+      {isFolder ? (
+        <FolderIcon className={`file-link-icon ${isHovered ? 'hovered' : ''}`} />
+      ) : (
+        <DocumentIcon className={`file-link-icon ${isHovered ? 'hovered' : ''}`} />
+      )}
+      <span className="file-link-text">{children}</span>
+    </a>
+  );
 };
 
-const createMarkdownComponents = (
-  resolveLocalFilePath?: (href: string, text: string) => string | null
-) => ({
-  p: ({ node, className, children, ...props }: any) => (
-    <p className="my-1 first:mt-0 last:mb-0 leading-6 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </p>
-  ),
-  strong: ({ node, className, children, ...props }: any) => (
-    <strong className="font-semibold dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </strong>
-  ),
-  h1: ({ node, className, children, ...props }: any) => (
-    <h1 className="text-2xl font-semibold mt-6 mb-3 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </h1>
-  ),
-  h2: ({ node, className, children, ...props }: any) => (
-    <h2 className="text-xl font-semibold mt-5 mb-2 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </h2>
-  ),
-  h3: ({ node, className, children, ...props }: any) => (
-    <h3 className="text-lg font-semibold mt-4 mb-2 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </h3>
-  ),
-  ul: ({ node, className, children, ...props }: any) => (
-    <ul className="list-disc pl-5 my-1.5 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </ul>
-  ),
-  ol: ({ node, className, children, ...props }: any) => (
-    <ol className="list-decimal pl-6 my-1.5 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </ol>
-  ),
-  li: ({ node, className, children, ...props }: any) => (
-    <li className="my-0.5 leading-6 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </li>
-  ),
-  blockquote: ({ node, className, children, ...props }: any) => (
-    <blockquote className="border-l-4 border-claude-accent pl-4 py-1 my-2 dark:bg-claude-darkSurface/30 bg-claude-surfaceHover/30 rounded-r-lg dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </blockquote>
-  ),
-  code: CodeBlock,
-  table: ({ node, className, children, ...props }: any) => (
-    <div className="my-4 overflow-x-auto rounded-xl border dark:border-claude-darkBorder border-claude-border">
-      <table className="border-collapse w-full" {...props}>
-        {children}
-      </table>
-    </div>
-  ),
-  thead: ({ node, className, children, ...props }: any) => (
-    <thead className="dark:bg-claude-darkSurface bg-claude-surfaceHover" {...props}>
-      {children}
-    </thead>
-  ),
-  tbody: ({ node, className, children, ...props }: any) => (
-    <tbody className="divide-y dark:divide-claude-darkBorder divide-claude-border" {...props}>
-      {children}
-    </tbody>
-  ),
-  tr: ({ node, className, children, ...props }: any) => (
-    <tr className="divide-x dark:divide-claude-darkBorder divide-claude-border" {...props}>
-      {children}
-    </tr>
-  ),
-  th: ({ node, className, children, ...props }: any) => (
-    <th className="px-4 py-2 text-left font-semibold dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </th>
-  ),
-  td: ({ node, className, children, ...props }: any) => (
-    <td className="px-4 py-2 dark:text-claude-darkText text-claude-text" {...props}>
-      {children}
-    </td>
-  ),
-  img: ({ node, className, ...props }: any) => (
-    <img className="max-w-full h-auto rounded-xl my-4" {...props} />
-  ),
-  hr: ({ node, ...props }: any) => (
-    <hr className="my-5 dark:border-claude-darkBorder border-claude-border" {...props} />
-  ),
-  a: ({ node, href, className, children, ...props }: any) => {
-    if (typeof href === 'string' && href.startsWith('#artifact-')) {
-      return null;
+interface AnchorProps {
+  href?: string;
+  children?: React.ReactNode;
+}
+
+const Anchor: React.FC<AnchorProps> = ({ href, children }) => {
+  const handleClick = useCallback(async (e: React.MouseEvent) => {
+    if (!href) return;
+
+    const protocol = getHrefProtocol(href);
+    if (!protocol) return;
+
+    if (protocol === 'file') {
+      return;
     }
 
-    const hrefValue = typeof href === 'string' ? href.trim() : '';
-    const isExternalLink = !!hrefValue && isExternalHref(hrefValue);
-    const linkText = Array.isArray(children) ? children.join('') : String(children ?? '');
-    const resolvedPath = hrefValue && !isExternalLink && resolveLocalFilePath
-      ? resolveLocalFilePath(hrefValue, linkText)
-      : null;
-    const isLocalFilePath = !!hrefValue && !isExternalLink && (resolvedPath || isLikelyLocalFilePath(hrefValue));
+    e.preventDefault();
+    e.stopPropagation();
 
-    if (isLocalFilePath) {
-      const rawPath = resolvedPath
-        ?? stripFileProtocol(stripHashAndQuery(hrefValue));
-      const decodedPath = safeDecodeURIComponent(rawPath);
-      const filePath = decodedPath || rawPath;
-
-      const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-        e.preventDefault();
-        const anchor = e.currentTarget;
-        try {
-          const result = await window.electron.shell.openPath(filePath);
-          if (result?.success) {
-            return;
-          }
-
-          const fallbackPath = findFallbackPathFromContext(
-            anchor,
-            linkText,
-            resolveLocalFilePath
-          );
-          if (fallbackPath) {
-            const fallbackResult = await window.electron.shell.openPath(fallbackPath);
-            if (!fallbackResult?.success) {
-              console.error('Failed to open file (fallback):', fallbackPath, fallbackResult?.error);
-            }
-          } else {
-            console.error('Failed to open file:', filePath, result?.error);
-          }
-        } catch (error) {
-          console.error('Failed to open file:', filePath, error);
-        }
-      };
-
-      return (
-        <a
-          href={toFileHref(filePath)}
-          onClick={handleClick}
-          className="text-claude-accent hover:text-claude-accentHover underline decoration-claude-accent/50 hover:decoration-claude-accent transition-colors cursor-pointer inline-flex items-center gap-1"
-          title={filePath}
-          {...props}
-        >
-          {children}
-          {looksLikeDirectory(filePath) ? (
-            <FolderIcon className="h-3.5 w-3.5 inline" />
-          ) : (
-            <DocumentIcon className="h-3.5 w-3.5 inline" />
-          )}
-        </a>
-      );
+    const opened = await openExternalViaDefaultBrowser(href);
+    if (!opened) {
+      openExternalViaAnchorFallback(href);
     }
+  }, [href]);
 
-    if (isExternalLink) {
-      const handleExternalClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-        const openExternal = (window as any)?.electron?.shell?.openExternal;
-        if (typeof openExternal !== 'function') {
-          return;
-        }
+  if (!href) {
+    return <a>{children}</a>;
+  }
 
-        e.preventDefault();
-        const opened = await openExternalViaDefaultBrowser(hrefValue);
-        if (!opened) {
-          openExternalViaAnchorFallback(hrefValue);
-        }
-      };
+  const protocol = getHrefProtocol(href);
+  if (protocol === 'file') {
+    return <FileLink href={href}>{children}</FileLink>;
+  }
 
-      return (
-        <a
-          href={hrefValue}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={handleExternalClick}
-          className="text-claude-accent hover:text-claude-accentHover underline decoration-claude-accent/50 hover:decoration-claude-accent transition-colors"
-          {...props}
-        >
-          {children}
-        </a>
-      );
-    }
+  const isExternal = isExternalHref(href);
 
-    return (
-      <a
-        href={hrefValue}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-claude-accent hover:text-claude-accentHover underline decoration-claude-accent/50 hover:decoration-claude-accent transition-colors"
-        {...props}
-      >
-        {children}
-      </a>
-    );
-  },
-});
+  return (
+    <a
+      href={href}
+      onClick={isExternal ? handleClick : undefined}
+      target={isExternal ? '_blank' : undefined}
+      rel={isExternal ? 'noopener noreferrer' : undefined}
+      className={isExternal ? 'external-link' : ''}
+    >
+      {children}
+    </a>
+  );
+};
 
 interface MarkdownContentProps {
   content: string;
   className?: string;
-  resolveLocalFilePath?: (href: string, text: string) => string | null;
 }
 
-const MarkdownContent: React.FC<MarkdownContentProps> = ({
-  content,
-  className = '',
-  resolveLocalFilePath,
-}) => {
-  const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath]);
-  const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
+const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className = '' }) => {
+  const processedContent = useMemo(() => {
+    const withEncodedFiles = encodeFileUrlsInMarkdown(content);
+    return normalizeDisplayMath(withEncodedFiles);
+  }, [content]);
+
   return (
-    <div className={`markdown-content text-[15px] leading-6 ${className}`}>
+    <div className={`markdown-content ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         urlTransform={safeUrlTransform}
-        components={components}
+        components={{
+          code: CodeBlock,
+          a: Anchor,
+        }}
       >
-        {normalizedContent}
+        {processedContent}
       </ReactMarkdown>
     </div>
   );
