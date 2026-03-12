@@ -676,37 +676,8 @@ const getIMGatewayManager = () => {
       }
     );
 
-    // Initialize with LLM config provider
+    // Initialize IM gateway manager
     imGatewayManager.initialize({
-      getLLMConfig: async () => {
-        const appConfig = sqliteStore.get<any>('app_config');
-        if (!appConfig) return null;
-
-        // Find first enabled provider
-        const providers = appConfig.providers || {};
-        for (const [providerName, providerConfig] of Object.entries(providers) as [string, any][]) {
-          if (providerConfig.enabled && providerConfig.apiKey) {
-            const model = providerConfig.models?.[0]?.id;
-            return {
-              apiKey: providerConfig.apiKey,
-              baseUrl: providerConfig.baseUrl,
-              model: model,
-              provider: providerName,
-            };
-          }
-        }
-
-        // Fallback to legacy api config
-        if (appConfig.api?.key) {
-          return {
-            apiKey: appConfig.api.key,
-            baseUrl: appConfig.api.baseUrl,
-            model: appConfig.model?.defaultModel,
-          };
-        }
-
-        return null;
-      },
       getSkillsPrompt: async () => {
         return getSkillManager().buildAutoRoutingPrompt();
       },
@@ -2453,6 +2424,9 @@ if (!gotTheLock) {
       clearTimeout(loadTimeout);
     });
     mainWindow.webContents.on('did-finish-load', () => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible() && (isDev || !isAutoLaunched())) {
+        mainWindow.show();
+      }
       emitWindowState();
     });
 

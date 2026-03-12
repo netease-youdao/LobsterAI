@@ -16,6 +16,7 @@ interface LLMConfig {
   baseUrl: string;
   model?: string;
   provider?: string;
+  openaiApiType?: 'auto' | 'chat_completions' | 'responses';
 }
 
 export interface IMChatHandlerOptions {
@@ -140,7 +141,17 @@ export class IMChatHandler {
   }
 
   private shouldUseOpenAIResponsesApi(config: LLMConfig): boolean {
-    return config.provider?.toLowerCase() === 'openai';
+    if (config.provider?.toLowerCase() !== 'openai') {
+      return false;
+    }
+    return this.normalizeOpenAIApiType(config.openaiApiType) !== 'chat_completions';
+  }
+
+  private normalizeOpenAIApiType(value: unknown): 'auto' | 'chat_completions' | 'responses' {
+    if (value === 'chat_completions' || value === 'responses' || value === 'auto') {
+      return value;
+    }
+    return 'auto';
   }
 
   private shouldUseMaxCompletionTokens(config: LLMConfig): boolean {

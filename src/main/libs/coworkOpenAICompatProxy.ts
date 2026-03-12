@@ -519,7 +519,6 @@ function convertChatCompletionsRequestToResponsesRequest(
 ): Record<string, unknown> {
   const request: Record<string, unknown> = {};
   const input: Array<Record<string, unknown>> = [];
-  const instructions: string[] = [];
   const unresolvedFunctionCalls = new Map<string, { name: string; hasOutput: boolean }>();
 
   if (chatRequest.model !== undefined) {
@@ -556,10 +555,13 @@ function convertChatCompletionsRequestToResponsesRequest(
     }
 
     const role = toString(messageObj.role);
-    if (role === 'system') {
-      const text = extractTextFromChatContent(messageObj.content);
-      if (text) {
-        instructions.push(text);
+    if (role === 'system' || role === 'developer') {
+      const promptParts = convertUserChatContentToResponsesInput(messageObj.content);
+      if (promptParts.length > 0) {
+        input.push({
+          role,
+          content: promptParts,
+        });
       }
       continue;
     }
@@ -625,10 +627,6 @@ function convertChatCompletionsRequestToResponsesRequest(
         content: userParts,
       });
     }
-  }
-
-  if (instructions.length > 0) {
-    request.instructions = instructions.join('\n\n');
   }
 
   for (const messageItem of input) {

@@ -23,6 +23,7 @@ export interface AppConfig {
       baseUrl: string;
       // API 协议格式：anthropic 为 Anthropic 兼容，openai 为 OpenAI 兼容
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -34,6 +35,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -45,6 +47,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       /** 是否启用 Moonshot Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -58,6 +61,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       /** 是否启用 GLM Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -71,6 +75,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -82,6 +87,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -93,6 +99,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       /** 是否启用 Qwen Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -106,6 +113,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -117,6 +125,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -128,6 +137,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -139,6 +149,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       /** 是否启用 Volcengine Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -152,6 +163,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -163,6 +175,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -174,6 +187,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -185,6 +199,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       models?: Array<{
         id: string;
         name: string;
@@ -196,6 +211,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      openaiApiType?: 'auto' | 'chat_completions' | 'responses';
       codingPlanEnabled?: boolean;
       models?: Array<{
         id: string;

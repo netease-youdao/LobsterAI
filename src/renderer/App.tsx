@@ -27,6 +27,7 @@ import { i18nService } from './services/i18n';
 import { matchesShortcut } from './services/shortcuts';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
+import { isWebMode } from './services/electronShim';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -49,7 +50,8 @@ const App: React.FC = () => {
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
   const pendingPermissions = useSelector((state: RootState) => state.cowork.pendingPermissions);
   const pendingPermission = pendingPermissions[0] ?? null;
-  const isWindows = window.electron.platform === 'win32';
+  const electronApi = window.electron;
+  const isWindows = !isWebMode && electronApi?.platform === 'win32';
 
   // 初始化应用
   useEffect(() => {
@@ -73,10 +75,15 @@ const App: React.FC = () => {
         await i18nService.initialize();
         
         const config = await configService.getConfig();
+        const enabledProviders = Object.entries(config.providers ?? {}).filter(([, providerConfig]) => providerConfig.enabled);
+        const primaryProviderEntry = enabledProviders[0];
         
         const apiConfig: ApiConfig = {
           apiKey: config.api.key,
           baseUrl: config.api.baseUrl,
+          openaiApiType: primaryProviderEntry?.[0] === 'openai'
+            ? primaryProviderEntry[1].openaiApiType
+            : undefined,
         };
         apiService.setConfig(apiConfig);
 
@@ -125,7 +132,7 @@ const App: React.FC = () => {
     };
 
     initializeApp();
-  }, []);
+  }, [electronApi]);
 
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {
@@ -138,14 +145,18 @@ const App: React.FC = () => {
 
   // Network status monitoring
   useEffect(() => {
+    if (!electronApi || isWebMode) {
+      return;
+    }
+
     const handleOnline = () => {
       console.log('[Renderer] Network online');
-      window.electron.networkStatus.send('online');
+      electronApi.networkStatus.send('online');
     };
 
     const handleOffline = () => {
       console.log('[Renderer] Network offline');
-      window.electron.networkStatus.send('offline');
+      electronApi.networkStatus.send('offline');
     };
 
     window.addEventListener('online', handleOnline);
@@ -155,7 +166,7 @@ const App: React.FC = () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [electronApi]);
 
   useEffect(() => {
     if (!isInitialized || !selectedModel?.id) return;
@@ -231,8 +242,10 @@ const App: React.FC = () => {
   }, [showToast]);
 
   const runUpdateCheck = useCallback(async () => {
+    if (!electronApi || isWebMode) return;
+
     try {
-      const currentVersion = await window.electron.appInfo.getVersion();
+      const currentVersion = await electronApi.appInfo.getVersion();
       const nextUpdate = await checkForAppUpdate(currentVersion);
       setUpdateInfo(nextUpdate);
       if (!nextUpdate) {
@@ -243,7 +256,7 @@ const App: React.FC = () => {
       setUpdateInfo(null);
       setShowUpdateModal(false);
     }
-  }, []);
+  }, [electronApi]);
 
   const handleOpenUpdateModal = useCallback(() => {
     if (!updateInfo) return;
@@ -262,13 +275,13 @@ const App: React.FC = () => {
   }, []);
 
   const handleConfirmUpdate = useCallback(async () => {
-    if (!updateInfo) return;
+    if (!updateInfo || !electronApi || isWebMode) return;
 
     // If the URL is a fallback page (not a direct file download), open in browser
     if (updateInfo.url.includes('#') || updateInfo.url.endsWith('/download-list')) {
       setShowUpdateModal(false);
       try {
-        const result = await window.electron.shell.openExternal(updateInfo.url);
+        const result = await electronApi.shell.openExternal(updateInfo.url);
         if (!result.success) {
           showToast(i18nService.t('updateOpenFailed'));
         }
@@ -283,12 +296,12 @@ const App: React.FC = () => {
     setDownloadProgress(null);
     setUpdateError(null);
 
-    const unsubscribe = window.electron.appUpdate.onDownloadProgress((progress) => {
+    const unsubscribe = electronApi.appUpdate.onDownloadProgress((progress) => {
       setDownloadProgress(progress);
     });
 
     try {
-      const downloadResult = await window.electron.appUpdate.download(updateInfo.url);
+      const downloadResult = await electronApi.appUpdate.download(updateInfo.url);
       unsubscribe();
 
       if (!downloadResult.success) {
@@ -302,7 +315,7 @@ const App: React.FC = () => {
       }
 
       setUpdateModalState('installing');
-      const installResult = await window.electron.appUpdate.install(downloadResult.filePath!);
+      const installResult = await electronApi.appUpdate.install(downloadResult.filePath!);
 
       if (!installResult.success) {
         setUpdateModalState('error');
@@ -319,13 +332,15 @@ const App: React.FC = () => {
       setUpdateModalState('error');
       setUpdateError(msg || i18nService.t('updateDownloadFailed'));
     }
-  }, [updateInfo, showToast]);
+  }, [electronApi, updateInfo, showToast]);
 
   const handleCancelDownload = useCallback(async () => {
-    await window.electron.appUpdate.cancelDownload();
+    if (!electronApi || isWebMode) return;
+
+    await electronApi.appUpdate.cancelDownload();
     setUpdateModalState('info');
     setDownloadProgress(null);
-  }, []);
+  }, [electronApi]);
 
   const handleRetryUpdate = useCallback(() => {
     setUpdateModalState('info');
@@ -341,9 +356,14 @@ const App: React.FC = () => {
   const handleCloseSettings = () => {
     setShowSettings(false);
     const config = configService.getConfig();
+    const enabledProviders = Object.entries(config.providers ?? {}).filter(([, providerConfig]) => providerConfig.enabled);
+    const primaryProviderEntry = enabledProviders[0];
     apiService.setConfig({
       apiKey: config.api.key,
       baseUrl: config.api.baseUrl,
+      openaiApiType: primaryProviderEntry?.[0] === 'openai'
+        ? primaryProviderEntry[1].openaiApiType
+        : undefined,
     });
 
     if (config.providers) {
@@ -425,19 +445,27 @@ const App: React.FC = () => {
 
   // 监听托盘菜单打开设置的 IPC 事件
   useEffect(() => {
-    const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {
+    if (!electronApi || isWebMode) {
+      return;
+    }
+
+    const unsubscribe = electronApi.ipcRenderer.on('app:openSettings', () => {
       handleShowSettings();
     });
     return unsubscribe;
-  }, [handleShowSettings]);
+  }, [electronApi, handleShowSettings]);
 
   // 监听托盘菜单新建任务的 IPC 事件
   useEffect(() => {
-    const unsubscribe = window.electron.ipcRenderer.on('app:newTask', () => {
+    if (!electronApi || isWebMode) {
+      return;
+    }
+
+    const unsubscribe = electronApi.ipcRenderer.on('app:newTask', () => {
       handleNewChat();
     });
     return unsubscribe;
-  }, [handleNewChat]);
+  }, [electronApi, handleNewChat]);
 
   // 监听定时任务查看会话事件
   useEffect(() => {
@@ -669,4 +697,5 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+export default App;
+

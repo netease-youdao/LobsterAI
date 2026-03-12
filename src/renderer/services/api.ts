@@ -19,6 +19,7 @@ export interface ApiConfig {
   baseUrl: string;
   provider?: string;
   apiFormat?: 'anthropic' | 'openai';
+  openaiApiType?: 'auto' | 'chat_completions' | 'responses';
 }
 
 export class ApiError extends Error {
@@ -109,8 +110,18 @@ class ApiService {
     return `${normalized}/v1/responses`;
   }
 
-  private shouldUseOpenAIResponsesApi(provider: string): boolean {
-    return provider === 'openai';
+  private shouldUseOpenAIResponsesApi(provider: string, openaiApiType?: unknown): boolean {
+    if (provider !== 'openai') {
+      return false;
+    }
+    return this.normalizeOpenAIApiType(openaiApiType) !== 'chat_completions';
+  }
+
+  private normalizeOpenAIApiType(apiType: unknown): 'auto' | 'chat_completions' | 'responses' {
+    if (apiType === 'chat_completions' || apiType === 'responses' || apiType === 'auto') {
+      return apiType;
+    }
+    return 'auto';
   }
 
   private buildImageHint(images?: ImageAttachment[]): string {
@@ -361,6 +372,7 @@ class ApiService {
           baseUrl,
           provider: provider,
           apiFormat,
+          openaiApiType: this.normalizeOpenAIApiType(providerConfig.openaiApiType),
         };
       }
     }
@@ -400,7 +412,7 @@ class ApiService {
 
     // 根据 API 协议格式决定调用方式：
     // - anthropic: Anthropic 兼容协议 (/v1/messages)
-    // - openai: OpenAI 兼容协议 (OpenAI provider uses /v1/responses)
+    // - openai: OpenAI 兼容协议 (可在 Chat Completions / Responses 之间切换)
     const normalizedApiFormat = this.normalizeApiFormat(effectiveConfig.apiFormat);
     const useOpenAIFormat = normalizedApiFormat === 'openai';
 
@@ -592,7 +604,7 @@ class ApiService {
       this.cancelOngoingRequest();
       const requestId = generateRequestId();
       this.currentRequestId = requestId;
-      const useResponsesApi = this.shouldUseOpenAIResponsesApi(provider);
+      const useResponsesApi = this.shouldUseOpenAIResponsesApi(provider, config.openaiApiType);
 
       const userMessage: ChatMessagePayload = {
         role: 'user',

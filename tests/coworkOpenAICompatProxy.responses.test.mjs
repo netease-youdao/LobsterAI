@@ -569,7 +569,28 @@ test('G: convertChatCompletionsRequestToResponsesRequest auto-injects missing fu
   assert.equal(typeof autoInjected.output, 'string');
 });
 
-test('H: filterOpenAIToolsForProvider removes Skill tool and normalizes tool_choice', () => {
+test('H: convertChatCompletionsRequestToResponsesRequest preserves system/developer roles in input', () => {
+  const request = testUtils.convertChatCompletionsRequestToResponsesRequest({
+    model: 'gpt-5.2',
+    stream: true,
+    messages: [
+      { role: 'system', content: 'You are LobsterAI assistant.' },
+      { role: 'developer', content: 'Use available tools before saying cannot do.' },
+      { role: 'user', content: 'Hi there' },
+    ],
+  });
+
+  assert.equal(request.instructions, undefined);
+  assert.ok(Array.isArray(request.input));
+  assert.equal(request.input.length, 3);
+  assert.equal(request.input[0].role, 'system');
+  assert.equal(request.input[1].role, 'developer');
+  assert.equal(request.input[2].role, 'user');
+  assert.equal(request.input[0].content[0].type, 'input_text');
+  assert.equal(request.input[1].content[0].type, 'input_text');
+});
+
+test('I: filterOpenAIToolsForProvider removes Skill tool and normalizes tool_choice', () => {
   const openAIRequest = {
     tools: [
       {

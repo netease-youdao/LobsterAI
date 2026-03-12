@@ -92,6 +92,7 @@ interface ProviderExportEntry {
   apiKey: PasswordEncryptedPayload;
   baseUrl: string;
   apiFormat?: 'anthropic' | 'openai';
+  openaiApiType?: 'auto' | 'chat_completions' | 'responses';
   codingPlanEnabled?: boolean;
   models?: Model[];
 }
@@ -115,6 +116,7 @@ interface ProvidersImportEntry {
   apiKeyIv?: string;
   baseUrl?: string;
   apiFormat?: 'anthropic' | 'openai' | 'native';
+  openaiApiType?: 'auto' | 'chat_completions' | 'responses';
   codingPlanEnabled?: boolean;
   models?: Model[];
 }
@@ -196,6 +198,11 @@ const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
 );
+const normalizeOpenAIApiType = (value: unknown): 'auto' | 'chat_completions' | 'responses' => (
+  value === 'chat_completions' || value === 'responses' || value === 'auto'
+    ? value
+    : 'auto'
+);
 const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
 const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
 const ABOUT_SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
@@ -233,7 +240,6 @@ const copyTextToClipboard = async (text: string): Promise<boolean> => {
     return false;
   }
 };
-
 const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
   if (provider === 'openai' || provider === 'gemini' || provider === 'stepfun') {
     return 'openai';
@@ -248,6 +254,12 @@ const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' 
 };
 const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' => (
   getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value)
+);
+const getEffectiveOpenAIApiType = (
+  provider: string,
+  value: unknown
+): 'auto' | 'chat_completions' | 'responses' | undefined => (
+  provider === 'openai' ? normalizeOpenAIApiType(value) : undefined
 );
 const shouldShowApiFormatSelector = (provider: string): boolean => (
   getFixedApiFormatForProvider(provider) === null
@@ -323,8 +335,11 @@ const buildOpenAIResponsesUrl = (baseUrl: string): string => {
   }
   return `${normalized}/v1/responses`;
 };
-const shouldUseOpenAIResponsesForProvider = (provider: string): boolean => (
-  provider === 'openai'
+const shouldUseOpenAIResponsesForProvider = (
+  provider: string,
+  openaiApiType: unknown
+): boolean => (
+  provider === 'openai' && getEffectiveOpenAIApiType(provider, openaiApiType) !== 'chat_completions'
 );
 const shouldUseMaxCompletionTokensForOpenAI = (provider: string, modelId?: string): boolean => {
   if (provider !== 'openai') {
@@ -349,6 +364,7 @@ const getDefaultProviders = (): ProvidersConfig => {
       providerKey,
       {
         ...providerConfig,
+        openaiApiType: getEffectiveOpenAIApiType(providerKey, providerConfig.openaiApiType),
         models: providerConfig.models?.map(model => ({
           ...model,
           supportsImage: model.supportsImage ?? false,
@@ -774,6 +790,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 {
                   ...providerConfig,
                   apiFormat: getEffectiveApiFormat(providerKey, (providerConfig as ProviderConfig).apiFormat),
+                  openaiApiType: getEffectiveOpenAIApiType(providerKey, (providerConfig as ProviderConfig).openaiApiType),
                   models,
                 },
               ];
@@ -1148,6 +1165,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               ...providerConfig,
               apiFormat,
               baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+              openaiApiType: getEffectiveOpenAIApiType(providerKey, providerConfig.openaiApiType),
             },
           ];
         })
@@ -1161,6 +1179,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       const primaryProvider = firstEnabledProvider
         ? firstEnabledProvider[1]
         : normalizedProviders[activeProvider];
+      const primaryProviderKey = firstEnabledProvider
+        ? firstEnabledProvider[0]
+        : activeProvider;
 
       await configService.updateConfig({
         api: {
@@ -1188,6 +1209,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       apiService.setConfig({
         apiKey: primaryProvider.apiKey,
         baseUrl: primaryProvider.baseUrl,
+        openaiApiType: getEffectiveOpenAIApiType(primaryProviderKey, primaryProvider.openaiApiType),
       });
 
       // 更新 Redux store 中的可用模型列表
@@ -1446,7 +1468,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       const normalizedBaseUrl = effectiveBaseUrl.replace(/\/+$/, '');
       // 统一为两种协议格式：
       // - anthropic: /v1/messages
-      // - openai provider: /v1/responses
+      // - openai provider: 根据 OpenAI 接口类型在 /v1/responses 与 /v1/chat/completions 间切换
       // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = effectiveApiFormat === 'anthropic';
 
@@ -1469,7 +1491,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           }),
         });
       } else {
-        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider);
+        const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider, providerConfig.openaiApiType);
         const openaiUrl = useResponsesApi
           ? buildOpenAIResponsesUrl(normalizedBaseUrl)
           : buildOpenAICompatibleChatCompletionsUrl(normalizedBaseUrl, testingProvider);
@@ -1540,6 +1562,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             apiKey,
             baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
             apiFormat,
+            openaiApiType: getEffectiveOpenAIApiType(providerKey, providerConfig.openaiApiType),
             codingPlanEnabled: (providerConfig as ProviderConfig).codingPlanEnabled,
             models: providerConfig.models,
           },
@@ -1677,8 +1700,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           apiKey: apiKey ?? providers[providerKey].apiKey,
           baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
           apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          openaiApiType: getEffectiveOpenAIApiType(providerKey, providerData.openaiApiType ?? providers[providerKey].openaiApiType),          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,          models: models ?? providers[providerKey].models,
         };
       }
 
@@ -1755,8 +1777,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           apiKey: apiKey ?? providers[providerKey].apiKey,
           baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
           apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          openaiApiType: getEffectiveOpenAIApiType(providerKey, providerData.openaiApiType ?? providers[providerKey].openaiApiType),          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,          models: models ?? providers[providerKey].models,
         };
       }
 
@@ -2571,6 +2592,57 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               )}
 
+              {activeProvider === 'openai' && getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) === 'openai' && (
+                <div>
+                  <label htmlFor={`${activeProvider}-openaiApiType`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
+                    {i18nService.t('openaiApiType')}
+                  </label>
+                  <div className="flex items-center space-x-4">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name={`${activeProvider}-openaiApiType`}
+                        value="auto"
+                        checked={getEffectiveOpenAIApiType(activeProvider, providers[activeProvider].openaiApiType) === 'auto'}
+                        onChange={() => handleProviderConfigChange(activeProvider, 'openaiApiType', 'auto')}
+                        className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface"
+                      />
+                      <span className="ml-2 text-xs dark:text-claude-darkText text-claude-text">
+                        {i18nService.t('openaiApiTypeAuto')}
+                      </span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name={`${activeProvider}-openaiApiType`}
+                        value="responses"
+                        checked={getEffectiveOpenAIApiType(activeProvider, providers[activeProvider].openaiApiType) === 'responses'}
+                        onChange={() => handleProviderConfigChange(activeProvider, 'openaiApiType', 'responses')}
+                        className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface"
+                      />
+                      <span className="ml-2 text-xs dark:text-claude-darkText text-claude-text">
+                        {i18nService.t('openaiApiTypeResponses')}
+                      </span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name={`${activeProvider}-openaiApiType`}
+                        value="chat_completions"
+                        checked={getEffectiveOpenAIApiType(activeProvider, providers[activeProvider].openaiApiType) === 'chat_completions'}
+                        onChange={() => handleProviderConfigChange(activeProvider, 'openaiApiType', 'chat_completions')}
+                        className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface"
+                      />
+                      <span className="ml-2 text-xs dark:text-claude-darkText text-claude-text">
+                        {i18nService.t('openaiApiTypeChatCompletions')}
+                      </span>
+                    </label>
+                  </div>
+                  <p className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('openaiApiTypeHint')}
+                  </p>
+                </div>
+              )}
               {/* GLM Coding Plan 开关 (仅 Zhipu) */}
               {activeProvider === 'zhipu' && (
                 <div className="flex items-center justify-between p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">

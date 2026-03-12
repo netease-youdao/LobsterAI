@@ -1,0 +1,103 @@
+
+> lobsterai@0.1.17 web:dev
+> rimraf dist-electron && npm run compile:electron && concurrently "vite --port 5175" "wait-on -v -t 120000 -d 10000 http://localhost:5175 && cross-env LOBSTERAI_UI_MODE=web LOBSTERAI_WEB_ORIGIN=http://localhost:5175 node scripts/launch-electron.js"
+
+
+> lobsterai@0.1.17 compile:electron
+> tsc --project electron-tsconfig.json
+
+(node:54584) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[0] [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+[1] waiting for 1 resources: http://localhost:5175
+[0] Re-optimizing dependencies because vite config has changed
+[0] 
+[0]   [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m399[22m[2m[0m ms[22m
+[0] 
+[0]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5175[22m/[39m
+[0]   [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.1.11:[1m5175[22m/[39m
+[0] [36mvite v5.4.21 [32mbuilding for development...[36m[39m
+[0] [36m
+[0] watching for file changes...[39m
+[0] [36mvite v5.4.21 [32mbuilding for development...[36m[39m
+[0] [36m
+[0] watching for file changes...[39m
+[0] [36m
+[0] build started...[39m
+[0] [36m
+[0] build started...[39m
+[0] transforming...
+[0] [32m✓[39m 1 modules transformed.
+[0] rendering chunks...
+[0] transforming...
+[0] computing gzip size...
+[0] [2mdist-electron/[22m[36mpreload.js  [39m[1m[2m12.04 kB[22m[1m[22m[2m │ gzip: 2.18 kB[22m[2m │ map: 23.18 kB[22m
+[0] [36mbuilt in 91ms.[39m
+[0] [32m✓[39m 630 modules transformed.
+[0] rendering chunks...
+[0] computing gzip size...
+[0] [2mdist-electron/[22m[36mmain.js                       [39m[1m[2m    0.18 kB[22m[1m[22m[2m │ gzip:   0.13 kB[22m[2m │ map:     0.10 kB[22m
+[0] [2mdist-electron/[22m[36mindex-C2f-WD-5.js             [39m[1m[2m   10.06 kB[22m[1m[22m[2m │ gzip:   3.11 kB[22m[2m │ map:    15.69 kB[22m
+[0] [2mdist-electron/[22m[36mwebsocket-server-99BUK76R.js  [39m[1m[2m   90.96 kB[22m[1m[22m[2m │ gzip:  18.08 kB[22m[2m │ map:   189.84 kB[22m
+[0] [2mdist-electron/[22m[36mmain-BASIN6Vl.js              [39m[1m[33m2,842.31 kB[39m[22m[2m │ gzip: 508.34 kB[22m[2m │ map: 3,790.53 kB[22m
+[0] [2mdist-electron/[22m[36mindex-ZBcl5cpw.js             [39m[1m[33m3,626.89 kB[39m[22m[2m │ gzip: 232.29 kB[22m[2m │ map: 6,640.94 kB[22m
+[0] [36mbuilt in 4361ms.[39m
+[1] making HTTP(S) head request to  url:http://localhost:5175 ...
+[1]   HTTP(S) result for http://localhost:5175: {
+[1]   status: 200,
+[1]   statusText: 'OK',
+[1]   headers: Object [AxiosHeaders] {
+[1]     connection: 'close',
+[1]     'cache-control': 'no-cache',
+[1]     'content-type': 'text/html',
+[1]     date: 'Mon, 23 Feb 2026 10:42:41 GMT',
+[1]     etag: 'W/"778-FYjZsSoFEPQpHbjWAD3oQt3csoM"',
+[1]     vary: 'Origin'
+[1]   },
+[1]   data: ''
+[1] }
+[1] wait-on(62888) complete
+[1] 
+[1] (node:63736) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+[1] (Use `electron --trace-deprecation ...` to show where the warning was created)
+[1] [SkillServices] Starting skill services...
+[1] [SkillServices] Using fallback PATH for skill services
+[1] [SkillServices] Starting Web Search Bridge Server...
+[1] [SkillServices] Web Search Bridge Server starting (PID: 65508, runtime: electron-node)
+[1] [SkillServices] Logs: C:\Users\youdo\AppData\Roaming\LobsterAI\SKILLs\web-search\.server.log
+[1] [SkillServices] Web Search Bridge Server started (PID: 65508)
+[1] 已设置为跟随系统代理
+[1] [Web] UI mode enabled. Open http://localhost:5175 in your browser.
+[1] [Scheduler] Started
+[1] [Web] RPC server listening on http://127.0.0.1:5680
+[1] Failed to generate session title: Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'd:\Project\LobserClaw\LobsterAI\node_modules\electron\dist\resources\app.asar.unpacked\node_modules\@anthropic-ai\claude-agent-sdk\sdk.mjs' imported from d:\Project\LobserClaw\LobsterAI\dist-electron\main-BASIN6Vl.js
+[1]     at finalizeResolution (node:internal/modules/esm/resolve:278:11)
+[1]     at moduleResolve (node:internal/modules/esm/resolve:876:10)
+[1]     at defaultResolve (node:internal/modules/esm/resolve:1002:11)
+[1]     at #cachedDefaultResolve (node:internal/modules/esm/loader:737:20)
+[1]     at ModuleLoader.resolve (node:internal/modules/esm/loader:714:38)
+[1]     at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:293:38)
+[1]     at onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:36)
+[1]     at TracingChannel.tracePromise (node:diagnostics_channel:350:14)
+[1]     at ModuleLoader.import (node:internal/modules/esm/loader:664:21)
+[1]     at defaultImportModuleDynamicallyForScript (node:internal/modules/esm/utils:238:31) {
+[1]   code: 'ERR_MODULE_NOT_FOUND',
+[1]   url: 'file:///d:/Project/LobserClaw/LobsterAI/node_modules/electron/dist/resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs'
+[1] }
+[1] Claude Code path: d:\Project\LobserClaw\LobsterAI\node_modules\electron\dist\resources\app.asar.unpacked\node_modules\@anthropic-ai\claude-agent-sdk\cli.js
+[1] Is packaged: true
+[1] Resources path: d:\Project\LobserClaw\LobsterAI\node_modules\electron\dist\resources
+[1] Cowork session error: Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'd:\Project\LobserClaw\LobsterAI\node_modules\electron\dist\resources\app.asar.unpacked\node_modules\@anthropic-ai\claude-agent-sdk\sdk.mjs' imported from d:\Project\LobserClaw\LobsterAI\dist-electron\main-BASIN6Vl.js
+[1]     at finalizeResolution (node:internal/modules/esm/resolve:278:11)
+[1]     at moduleResolve (node:internal/modules/esm/resolve:876:10)
+[1]     at defaultResolve (node:internal/modules/esm/resolve:1002:11)
+[1]     at #cachedDefaultResolve (node:internal/modules/esm/loader:737:20)
+[1]     at ModuleLoader.resolve (node:internal/modules/esm/loader:714:38)
+[1]     at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:293:38)
+[1]     at onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:36)
+[1]     at TracingChannel.tracePromise (node:diagnostics_channel:350:14)
+[1]     at ModuleLoader.import (node:internal/modules/esm/loader:664:21)
+[1]     at defaultImportModuleDynamicallyForScript (node:internal/modules/esm/utils:238:31) {
+[1]   code: 'ERR_MODULE_NOT_FOUND',
+[1]   url: 'file:///d:/Project/LobserClaw/LobsterAI/node_modules/electron/dist/resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs'
+[1] }
