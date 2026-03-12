@@ -261,6 +261,13 @@ export class XiaomifengGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the native SDK instance is instantiated.
+   */
+  isRunning(): boolean {
+    return this.v2Client !== null;
+  }
+
+  /**
    * Check if gateway has a pending reconnection timer
    */
   isReconnecting(): boolean {

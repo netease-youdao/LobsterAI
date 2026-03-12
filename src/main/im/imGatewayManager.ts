@@ -473,7 +473,26 @@ export class IMGatewayManager extends EventEmitter {
 
     // Hot-update Telegram config on running gateway
     if (config.telegram && this.telegramGateway) {
+      const oldTg = previousConfig.telegram;
+      const newTg = { ...oldTg, ...config.telegram };
+      const credentialsChanged = newTg.botToken !== oldTg.botToken;
+      const gatewayShouldBeActive = Boolean(newTg.enabled && newTg.botToken);
+
       this.telegramGateway.updateConfig(config.telegram);
+
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (this.telegramGateway.isRunning()) {
+          console.log('[IMGatewayManager] Telegram credentials changed, restarting gateway...');
+          this.restartGateway('telegram').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart Telegram after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] Telegram credentials changed, starting gateway...');
+          this.startGateway('telegram').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start Telegram after config change:', err.message);
+          });
+        }
+      }
     }
 
     // Hot-update NIM config: if credential fields changed while gateway is connected,
@@ -485,12 +504,21 @@ export class IMGatewayManager extends EventEmitter {
         newNim.appKey !== oldNim.appKey ||
         newNim.account !== oldNim.account ||
         newNim.token !== oldNim.token;
+      const gatewayShouldBeActive =
+        Boolean(newNim.enabled && newNim.appKey && newNim.account && newNim.token);
 
-      if (credentialsChanged && this.nimGateway.isConnected()) {
-        console.log('[IMGatewayManager] NIM credentials changed, restarting gateway...');
-        this.restartGateway('nim').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart NIM after config change:', err.message);
-        });
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (this.nimGateway.isRunning() || this.nimGateway.isReconnecting()) {
+          console.log('[IMGatewayManager] NIM credentials changed, restarting gateway...');
+          this.restartGateway('nim').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart NIM after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] NIM credentials changed, starting gateway...');
+          this.startGateway('nim').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start NIM after config change:', err.message);
+          });
+        }
       } else {
         // Hot-update non-credential fields (e.g. accountWhitelist) without restart
         const nonCredentialChanged =
@@ -509,12 +537,21 @@ export class IMGatewayManager extends EventEmitter {
       const credentialsChanged =
         newDt.clientId !== oldDt.clientId ||
         newDt.clientSecret !== oldDt.clientSecret;
+      const gatewayShouldBeActive =
+        Boolean(newDt.enabled && newDt.clientId && newDt.clientSecret);
 
-      if (credentialsChanged && this.dingtalkGateway.isConnected()) {
-        console.log('[IMGatewayManager] DingTalk credentials changed, restarting gateway...');
-        this.restartGateway('dingtalk').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart DingTalk after config change:', err.message);
-        });
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (this.dingtalkGateway.isRunning() || this.dingtalkGateway.isReconnectingNow()) {
+          console.log('[IMGatewayManager] DingTalk credentials changed, restarting gateway...');
+          this.restartGateway('dingtalk').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart DingTalk after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] DingTalk credentials changed, starting gateway...');
+          this.startGateway('dingtalk').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start DingTalk after config change:', err.message);
+          });
+        }
       }
     }
 
@@ -525,12 +562,21 @@ export class IMGatewayManager extends EventEmitter {
       const credentialsChanged =
         newFs.appId !== oldFs.appId ||
         newFs.appSecret !== oldFs.appSecret;
+      const gatewayShouldBeActive =
+        Boolean(newFs.enabled && newFs.appId && newFs.appSecret);
 
-      if (credentialsChanged && this.feishuGateway.isConnected()) {
-        console.log('[IMGatewayManager] Feishu credentials changed, restarting gateway...');
-        this.restartGateway('feishu').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart Feishu after config change:', err.message);
-        });
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (this.feishuGateway.isRunning()) {
+          console.log('[IMGatewayManager] Feishu credentials changed, restarting gateway...');
+          this.restartGateway('feishu').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart Feishu after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] Feishu credentials changed, starting gateway...');
+          this.startGateway('feishu').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start Feishu after config change:', err.message);
+          });
+        }
       }
     }
 
@@ -539,12 +585,20 @@ export class IMGatewayManager extends EventEmitter {
       const oldDc = previousConfig.discord;
       const newDc = { ...oldDc, ...config.discord };
       const credentialsChanged = newDc.botToken !== oldDc.botToken;
+      const gatewayShouldBeActive = Boolean(newDc.enabled && newDc.botToken);
 
-      if (credentialsChanged && this.discordGateway.isConnected()) {
-        console.log('[IMGatewayManager] Discord credentials changed, restarting gateway...');
-        this.restartGateway('discord').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart Discord after config change:', err.message);
-        });
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (this.discordGateway.isRunning()) {
+          console.log('[IMGatewayManager] Discord credentials changed, restarting gateway...');
+          this.restartGateway('discord').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart Discord after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] Discord credentials changed, starting gateway...');
+          this.startGateway('discord').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start Discord after config change:', err.message);
+          });
+        }
       }
     }
 
@@ -555,14 +609,23 @@ export class IMGatewayManager extends EventEmitter {
       const credentialsChanged =
         newXmf.clientId !== oldXmf.clientId ||
         newXmf.secret !== oldXmf.secret;
+      const gatewayShouldBeActive =
+        Boolean(newXmf.enabled && newXmf.clientId && newXmf.secret);
 
       // Check if gateway is connected OR actively reconnecting (has pending timer)
-      const isActiveOrReconnecting = this.xiaomifengGateway.isConnected() || this.xiaomifengGateway.isReconnecting();
-      if (credentialsChanged && isActiveOrReconnecting) {
-        console.log('[IMGatewayManager] Xiaomifeng credentials changed, restarting gateway...');
-        this.restartGateway('xiaomifeng').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart Xiaomifeng after config change:', err.message);
-        });
+      const isActiveOrReconnecting = this.xiaomifengGateway.isRunning() || this.xiaomifengGateway.isReconnecting();
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (isActiveOrReconnecting) {
+          console.log('[IMGatewayManager] Xiaomifeng credentials changed, restarting gateway...');
+          this.restartGateway('xiaomifeng').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart Xiaomifeng after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] Xiaomifeng credentials changed, starting gateway...');
+          this.startGateway('xiaomifeng').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start Xiaomifeng after config change:', err.message);
+          });
+        }
       }
     }
 
@@ -573,12 +636,21 @@ export class IMGatewayManager extends EventEmitter {
       const credentialsChanged =
         newQQ.appId !== oldQQ.appId ||
         newQQ.appSecret !== oldQQ.appSecret;
+      const gatewayShouldBeActive =
+        Boolean(newQQ.enabled && newQQ.appId && newQQ.appSecret);
 
-      if (credentialsChanged && this.qqGateway.isConnected()) {
-        console.log('[IMGatewayManager] QQ credentials changed, restarting gateway...');
-        this.restartGateway('qq').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart QQ after config change:', err.message);
-        });
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (this.qqGateway.isRunning()) {
+          console.log('[IMGatewayManager] QQ credentials changed, restarting gateway...');
+          this.restartGateway('qq').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart QQ after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] QQ credentials changed, starting gateway...');
+          this.startGateway('qq').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start QQ after config change:', err.message);
+          });
+        }
       }
     }
 
@@ -589,12 +661,21 @@ export class IMGatewayManager extends EventEmitter {
       const credentialsChanged =
         newWc.botId !== oldWc.botId ||
         newWc.secret !== oldWc.secret;
+      const gatewayShouldBeActive =
+        Boolean(newWc.enabled && newWc.botId && newWc.secret);
 
-      if (credentialsChanged && this.wecomGateway.isConnected()) {
-        console.log('[IMGatewayManager] WeCom credentials changed, restarting gateway...');
-        this.restartGateway('wecom').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart WeCom after config change:', err.message);
-        });
+      if (credentialsChanged && gatewayShouldBeActive) {
+        if (this.wecomGateway.isRunning()) {
+          console.log('[IMGatewayManager] WeCom credentials changed, restarting gateway...');
+          this.restartGateway('wecom').catch((err) => {
+            console.error('[IMGatewayManager] Failed to restart WeCom after config change:', err.message);
+          });
+        } else {
+          console.log('[IMGatewayManager] WeCom credentials changed, starting gateway...');
+          this.startGateway('wecom').catch((err) => {
+            console.error('[IMGatewayManager] Failed to start WeCom after config change:', err.message);
+          });
+        }
       }
     }
   }
@@ -1208,6 +1289,16 @@ export class IMGatewayManager extends EventEmitter {
       if (!botId || !secret) {
         throw new Error('配置不完整');
       }
+      const currentWecomConfig = this.getConfig().wecom;
+      const matchesActiveConfig =
+        currentWecomConfig.botId === botId &&
+        currentWecomConfig.secret === secret;
+
+      if (currentWecomConfig.enabled && matchesActiveConfig && this.wecomGateway.isRunning()) {
+        await this.wecomGateway.waitForConnection(CONNECTIVITY_TIMEOUT_MS);
+        return `企业微信网关已连接（Bot ID: ${botId}）。`;
+      }
+
       // Create a temporary WSClient to verify authentication
       const { WSClient } = await import('@wecom/aibot-node-sdk');
       const tmpClient = new WSClient({ botId, secret, maxReconnectAttempts: 0 });

@@ -51,6 +51,28 @@ const App: React.FC = () => {
   const pendingPermission = pendingPermissions[0] ?? null;
   const isWindows = window.electron.platform === 'win32';
 
+  const waitWithTimeout = useCallback(
+    async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+      return await new Promise<T>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        promise.then(
+          (value) => {
+            window.clearTimeout(timer);
+            resolve(value);
+          },
+          (error) => {
+            window.clearTimeout(timer);
+            reject(error);
+          }
+        );
+      });
+    },
+    []
+  );
+
   // 初始化应用
   useEffect(() => {
     if (hasInitialized.current) {
@@ -60,18 +82,23 @@ const App: React.FC = () => {
 
     const initializeApp = async () => {
       try {
+        console.info('[App] initializeApp: start');
         // 标记平台，用于 CSS 条件样式（如 Windows 标题栏按钮区域留白）
         document.documentElement.classList.add(`platform-${window.electron.platform}`);
 
         // 初始化配置
-        await configService.init();
+        console.info('[App] initializeApp: configService.init');
+        await waitWithTimeout(configService.init(), 5000, 'configService.init');
         
         // 初始化主题
+        console.info('[App] initializeApp: themeService.initialize');
         themeService.initialize();
 
         // 初始化语言
-        await i18nService.initialize();
+        console.info('[App] initializeApp: i18nService.initialize');
+        await waitWithTimeout(i18nService.initialize(), 5000, 'i18nService.initialize');
         
+        console.info('[App] initializeApp: configService.getConfig');
         const config = await configService.getConfig();
         
         const apiConfig: ApiConfig = {
@@ -112,11 +139,15 @@ const App: React.FC = () => {
           ) ?? resolvedModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
-        
-        // 初始化定时任务服务
-        await scheduledTaskService.init();
 
         setIsInitialized(true);
+        console.info('[App] initializeApp: shell ready');
+
+        // 初始化定时任务服务，但不阻塞首屏
+        void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
+          console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
+        });
+
       } catch (error) {
         console.error('Failed to initialize app:', error);
         setInitError(i18nService.t('initializationError'));
@@ -124,8 +155,8 @@ const App: React.FC = () => {
       }
     };
 
-    initializeApp();
-  }, []);
+    void initializeApp();
+  }, [dispatch, waitWithTimeout]);
 
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {

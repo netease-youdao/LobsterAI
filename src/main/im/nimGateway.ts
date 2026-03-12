@@ -239,6 +239,20 @@ export class NimGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the native SDK instance is instantiated.
+   */
+  isRunning(): boolean {
+    return this.v2Client !== null;
+  }
+
+  /**
+   * Check whether a reconnect attempt is pending.
+   */
+  isReconnecting(): boolean {
+    return this.reconnectTimer !== null;
+  }
+
+  /**
    * Update runtime config without restarting the gateway.
    * Used for hot-updating non-credential fields like accountWhitelist.
    */

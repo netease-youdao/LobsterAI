@@ -52,6 +52,13 @@ export class DiscordGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the Discord client has been created.
+   */
+  isRunning(): boolean {
+    return this.client !== null;
+  }
+
+  /**
    * Public method for external reconnection triggers (e.g., network events)
    */
   reconnectIfNeeded(): void {

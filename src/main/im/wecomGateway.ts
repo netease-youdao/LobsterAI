@@ -49,6 +49,13 @@ export class WecomGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the underlying WS client is instantiated.
+   */
+  isRunning(): boolean {
+    return this.wsClient !== null;
+  }
+
+  /**
    * Check if gateway has a pending reconnection
    */
   isReconnecting(): boolean {
@@ -75,6 +82,51 @@ export class WecomGateway extends EventEmitter {
         console.error('[WeCom Gateway] Reconnection failed:', err.message);
       });
     }
+  }
+
+  /**
+   * Wait until the running gateway finishes authentication.
+   */
+  async waitForConnection(timeoutMs: number): Promise<void> {
+    if (this.status.connected) {
+      return;
+    }
+    if (!this.wsClient) {
+      throw new Error('WeCom gateway is not running');
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off('connected', handleConnected);
+        this.off('error', handleError);
+        this.off('disconnected', handleDisconnected);
+      };
+
+      const handleConnected = () => {
+        cleanup();
+        resolve();
+      };
+
+      const handleError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+
+      const handleDisconnected = () => {
+        cleanup();
+        reject(new Error(this.status.lastError || 'WeCom gateway disconnected'));
+      };
+
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`企业微信鉴权超时（${Math.ceil(timeoutMs / 1000)}s）`));
+      }, timeoutMs);
+
+      this.on('connected', handleConnected);
+      this.on('error', handleError);
+      this.on('disconnected', handleDisconnected);
+    });
   }
 
   /**

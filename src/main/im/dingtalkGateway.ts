@@ -226,6 +226,20 @@ export class DingTalkGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the underlying client is instantiated.
+   */
+  isRunning(): boolean {
+    return this.client !== null;
+  }
+
+  /**
+   * Check whether the gateway is reconnecting or waiting to reconnect.
+   */
+  isReconnectingNow(): boolean {
+    return this.isReconnecting || this.reconnectTimeout !== null;
+  }
+
+  /**
    * Set message callback
    */
   setMessageCallback(

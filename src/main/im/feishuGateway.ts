@@ -88,6 +88,13 @@ export class FeishuGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the WebSocket gateway is instantiated.
+   */
+  isRunning(): boolean {
+    return this.wsClient !== null;
+  }
+
+  /**
    * Public method for external reconnection triggers (e.g., network events)
    */
   reconnectIfNeeded(): void {

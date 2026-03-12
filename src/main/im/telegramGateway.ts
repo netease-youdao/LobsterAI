@@ -97,6 +97,13 @@ export class TelegramGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the Telegram bot runtime has been created.
+   */
+  isRunning(): boolean {
+    return this.bot !== null || this.runner !== null;
+  }
+
+  /**
    * Public method for external reconnection triggers (e.g., network events)
    */
   reconnectIfNeeded(): void {

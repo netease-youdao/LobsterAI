@@ -43,6 +43,13 @@ export class QQGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the QQ bot instance is instantiated.
+   */
+  isRunning(): boolean {
+    return this.bot !== null;
+  }
+
+  /**
    * Public method for external reconnection triggers
    */
   reconnectIfNeeded(): void {
