@@ -162,8 +162,8 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
     openai: 'https://open.bigmodel.cn/api/paas/v4',
   },
   minimax: {
-    anthropic: 'https://api.minimaxi.com/anthropic',
-    openai: 'https://api.minimaxi.com/v1',
+    anthropic: 'https://api.minimax.io/anthropic',
+    openai: 'https://api.minimax.io/v1',
   },
   qwen: {
     anthropic: 'https://dashscope.aliyuncs.com/apps/anthropic',
