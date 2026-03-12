@@ -308,11 +308,11 @@ export const defaultConfig: AppConfig = {
     minimax: {
       enabled: false,
       apiKey: '',
-      baseUrl: 'https://api.minimaxi.com/anthropic',
+      baseUrl: 'https://api.minimax.io/anthropic',
       apiFormat: 'anthropic',
       models: [
         { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false },
-        { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
+        { id: 'MiniMax-M2.5-highspeed', name: 'MiniMax M2.5 High Speed', supportsImage: false }
       ]
     },
     youdaozhiyun: {
