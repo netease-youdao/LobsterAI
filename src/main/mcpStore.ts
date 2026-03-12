@@ -15,8 +15,14 @@ export interface McpServerRecord {
   isBuiltIn: boolean;
   githubUrl?: string;
   registryId?: string;
+  source?: McpServerSource;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface McpServerSource {
+  kind: 'mcp-json';
+  filePath: string;
 }
 
 export interface McpServerFormData {
@@ -31,6 +37,7 @@ export interface McpServerFormData {
   isBuiltIn?: boolean;
   githubUrl?: string;
   registryId?: string;
+  source?: McpServerSource;
 }
 
 interface McpServerRow {
@@ -53,6 +60,7 @@ interface McpConfigJson {
   isBuiltIn?: boolean;
   githubUrl?: string;
   registryId?: string;
+  source?: McpServerSource;
 }
 
 export class McpStore {
@@ -97,6 +105,7 @@ export class McpStore {
       isBuiltIn: config.isBuiltIn === true,
       githubUrl: config.githubUrl,
       registryId: config.registryId,
+      source: config.source,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -112,6 +121,7 @@ export class McpStore {
     if (data.isBuiltIn) config.isBuiltIn = true;
     if (data.githubUrl) config.githubUrl = data.githubUrl;
     if (data.registryId) config.registryId = data.registryId;
+    if (data.source) config.source = data.source;
     return JSON.stringify(config);
   }
 
@@ -164,6 +174,7 @@ export class McpStore {
       isBuiltIn: data.isBuiltIn !== undefined ? data.isBuiltIn : existing.isBuiltIn,
       githubUrl: data.githubUrl !== undefined ? data.githubUrl : existing.githubUrl,
       registryId: data.registryId !== undefined ? data.registryId : existing.registryId,
+      source: data.source !== undefined ? data.source : existing.source,
     };
 
     const configJson = this.serializeConfig(merged);

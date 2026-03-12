@@ -19,6 +19,7 @@ import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
 import { McpStore } from './mcpStore';
+import { syncMcpJsonFile } from './mcpJsonSync';
 import { ScheduledTaskStore } from './scheduledTaskStore';
 import { Scheduler } from './libs/scheduler';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
@@ -2640,6 +2641,15 @@ if (!gotTheLock) {
     console.log('[Main] initApp: starting initStore()');
     store = await initStore();
     console.log('[Main] initApp: store initialized');
+
+    try {
+      const mcpJsonSyncResult = syncMcpJsonFile(getMcpStore(), {
+        userDataPath: app.getPath('userData'),
+      });
+      console.log('[Main] initApp: mcp.json sync result', mcpJsonSyncResult);
+    } catch (error) {
+      console.error('[Main] initApp: mcp.json sync failed:', error);
+    }
 
     // Defensive recovery: app may be force-closed during execution and leave
     // stale running flags in DB. Normalize them on startup.
