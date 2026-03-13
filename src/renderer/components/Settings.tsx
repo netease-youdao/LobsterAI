@@ -2109,11 +2109,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       case 'coworkMemory':
         return (
           <div className="space-y-6">
-            {coworkAgentEngine === 'openclaw' && (
-              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
-                {i18nService.t('coworkMemoryLegacyNotice')}
-              </div>
-            )}
             <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
               <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
                 {i18nService.t('coworkMemoryTitle')}
@@ -2132,28 +2127,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
                     {i18nService.t('coworkMemoryEnabledHint')}
                   </span>
-                  <span className="mt-1 block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {i18nService.t('coworkMemorySimpleHint')}
-                  </span>
                 </span>
               </label>
-              <label className={`flex items-start gap-3 ${coworkMemoryEnabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-                <input
-                  type="checkbox"
-                  checked={coworkMemoryLlmJudgeEnabled}
-                  onChange={(event) => setCoworkMemoryLlmJudgeEnabled(event.target.checked)}
-                  disabled={!coworkMemoryEnabled}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block text-sm dark:text-claude-darkText text-claude-text">
-                    {i18nService.t('coworkMemoryLlmJudgeEnabled')}
-                  </span>
-                  <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {i18nService.t('coworkMemoryLlmJudgeEnabledHint')}
-                  </span>
+              <div className="mt-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span className="font-medium">{i18nService.t('coworkMemoryFilePath')}:</span>{' '}
+                <span className="break-all font-mono opacity-80">
+                  {coworkConfig.workingDirectory
+                    ? `${coworkConfig.workingDirectory}/MEMORY.md`
+                    : '~/.openclaw/workspace/MEMORY.md'}
                 </span>
-              </label>
+              </div>
             </div>
 
             <div className="space-y-4 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
@@ -2178,7 +2161,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
               {coworkMemoryStats && (
                 <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.created + coworkMemoryStats.stale} · ${i18nService.t('coworkMemoryActiveLabel')}: ${coworkMemoryStats.created} · ${i18nService.t('coworkMemoryInactiveLabel')}: ${coworkMemoryStats.stale}`}
+                  {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
                 </div>
               )}
 
@@ -2204,17 +2187,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     {coworkMemoryEntries.map((entry) => (
                       <div key={entry.id} className="px-3 py-3 text-xs hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1 space-y-1 min-w-0">
+                          <div className="flex-1 min-w-0">
                             <div className="font-medium dark:text-claude-darkText text-claude-text break-words">
                               {entry.text}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                              <span className="rounded-full border px-2 py-0.5 dark:border-claude-darkBorder border-claude-border">
-                                {getMemoryStatusLabel(entry.status)}
-                              </span>
-                              <span>
-                                {`${i18nService.t('coworkMemoryUpdatedAt')}: ${formatMemoryUpdatedAt(entry.updatedAt)}`}
-                              </span>
                             </div>
                           </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
