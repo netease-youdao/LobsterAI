@@ -44,6 +44,7 @@ import {
   VolcengineIcon,
   OpenRouterIcon,
   OllamaIcon,
+  LMStudioIcon,
   CustomProviderIcon,
 } from './icons/providers';
 
@@ -74,6 +75,7 @@ const providerKeys = [
   'xiaomi',
   'openrouter',
   'ollama',
+  'lmstudio',
   'custom',
 ] as const;
 
@@ -145,6 +147,7 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
   openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
   ollama: { label: 'Ollama', icon: <OllamaIcon /> },
+  lmstudio: { label: 'LM Studio', icon: <LMStudioIcon /> },
   custom: { label: 'Custom', icon: <CustomProviderIcon /> },
 };
 
@@ -191,7 +194,7 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   },
 };
 
-const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
+const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'lmstudio';
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
@@ -728,6 +731,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             ...prev,
             anthropic: {
               ...prev.anthropic,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
+        } else if (normalizedApiBaseUrl.includes('lmstudio') || normalizedApiBaseUrl.includes(':1234')) {
+          setActiveProvider('lmstudio');
+          setProviders(prev => ({
+            ...prev,
+            lmstudio: {
+              ...prev.lmstudio,
               enabled: true,
               apiKey: config.api.key,
               baseUrl: config.api.baseUrl
@@ -1291,10 +1305,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const handleSaveNewModel = () => {
     const modelId = newModelId.trim();
 
-    if (activeProvider === 'ollama') {
-      // For Ollama, only the model name (stored as modelId) is required
+    if (activeProvider === 'ollama' || activeProvider === 'lmstudio') {
+      // For Ollama/LM Studio, only the model name (stored as modelId) is required
       if (!modelId) {
-        setModelFormError(i18nService.t('ollamaModelNameRequired'));
+        setModelFormError(i18nService.t(activeProvider === 'lmstudio' ? 'lmstudioModelNameRequired' : 'ollamaModelNameRequired'));
         return;
       }
     } else {
@@ -1305,8 +1319,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       }
     }
 
-    // For Ollama, auto-fill display name from modelId if not provided
-    const modelName = activeProvider === 'ollama'
+    // For Ollama/LM Studio, auto-fill display name from modelId if not provided
+    const modelName = activeProvider === 'ollama' || activeProvider === 'lmstudio'
       ? (newModelName.trim() && newModelName.trim() !== modelId ? newModelName.trim() : modelId)
       : newModelName.trim();
 
@@ -3135,11 +3149,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 )}
 
                 <div className="space-y-3">
-                  {activeProvider === 'ollama' ? (
+                  {(activeProvider === 'ollama' || activeProvider === 'lmstudio') ? (
                     <>
                       <div>
                         <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                          {i18nService.t('ollamaModelName')}
+                          {i18nService.t(activeProvider === 'lmstudio' ? 'lmstudioModelName' : 'ollamaModelName')}
                         </label>
                         <input
                           autoFocus
@@ -3155,15 +3169,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                             }
                           }}
                           className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                          placeholder={i18nService.t('ollamaModelNamePlaceholder')}
+                          placeholder={i18nService.t(activeProvider === 'lmstudio' ? 'lmstudioModelNamePlaceholder' : 'ollamaModelNamePlaceholder')}
                         />
                         <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
-                          {i18nService.t('ollamaModelNameHint')}
+                          {i18nService.t(activeProvider === 'lmstudio' ? 'lmstudioModelNameHint' : 'ollamaModelNameHint')}
                         </p>
                       </div>
                       <div>
                         <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-                          {i18nService.t('ollamaDisplayName')}
+                          {i18nService.t(activeProvider === 'lmstudio' ? 'lmstudioDisplayName' : 'ollamaDisplayName')}
                         </label>
                         <input
                           type="text"
@@ -3175,10 +3189,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                             }
                           }}
                           className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                          placeholder={i18nService.t('ollamaDisplayNamePlaceholder')}
+                          placeholder={i18nService.t(activeProvider === 'lmstudio' ? 'lmstudioDisplayNamePlaceholder' : 'ollamaDisplayNamePlaceholder')}
                         />
                         <p className="mt-1 text-[11px] dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70">
-                          {i18nService.t('ollamaDisplayNameHint')}
+                          {i18nService.t(activeProvider === 'lmstudio' ? 'lmstudioDisplayNameHint' : 'ollamaDisplayNameHint')}
                         </p>
                       </div>
                     </>
