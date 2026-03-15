@@ -180,6 +180,17 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    lmstudio: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     custom: {
       enabled: boolean;
       apiKey: string;
@@ -391,6 +402,13 @@ export const defaultConfig: AppConfig = {
         { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false }
       ]
     },
+    lmstudio: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'http://localhost:1234/v1',
+      apiFormat: 'openai',
+      models: []
+    },
     custom: {
       enabled: false,
       apiKey: '',
@@ -424,7 +442,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama', 'lmstudio', 'custom'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 
@@ -448,8 +466,8 @@ export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] =>
     ...GLOBAL_PROVIDERS,
   ];
   const uniqueProviders = [...new Set(orderedProviders)];
-  // Move ollama and custom to the end, with custom last
-  for (const key of ['ollama', 'custom'] as const) {
+  // Move ollama, lmstudio and custom to the end, with custom last
+  for (const key of ['ollama', 'lmstudio', 'custom'] as const) {
     const idx = uniqueProviders.indexOf(key);
     if (idx !== -1) {
       uniqueProviders.splice(idx, 1);
