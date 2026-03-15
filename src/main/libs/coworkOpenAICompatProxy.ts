@@ -917,13 +917,20 @@ function writeJSON(
 ): void {
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
-    'Content-Type': 'application/json',
+    'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
   });
   res.end(payload);
 }
 
 function readRequestBody(req: http.IncomingMessage): Promise<string> {
+  // Check if the Content-Type header explicitly declares a charset.
+  // If charset=utf-8 is declared, we trust it and skip codepage heuristics.
+  const contentType = (req.headers['content-type'] ?? '').toLowerCase();
+  const charsetMatch = contentType.match(/charset\s*=\s*([\w-]+)/);
+  const declaredCharset = charsetMatch ? charsetMatch[1].replace(/-/g, '').toLowerCase() : null;
+  const isUtf8Declared = declaredCharset === 'utf8';
+
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let totalBytes = 0;
@@ -990,6 +997,18 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
         utf8Decoded = null;
       }
 
+      // If the Content-Type header explicitly declares UTF-8, trust it and
+      // skip codepage heuristics entirely. This prevents the scoring function
+      // from incorrectly picking gb18030 when valid UTF-8 CJK text (3 bytes
+      // per char) is reinterpreted as gb18030 (2 bytes per char), producing
+      // more CJK characters and a misleadingly higher score.
+      if (isUtf8Declared) {
+        if (utf8Decoded) {
+          return utf8Decoded;
+        }
+        return new TextDecoder('utf-8', { fatal: false }).decode(raw);
+      }
+
       // On Windows local shells (especially Git Bash/curl paths), requests
       // may be emitted in system codepage instead of UTF-8.
       if (process.platform === 'win32') {
@@ -1000,10 +1019,18 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
           gbDecoded = null;
         }
 
+        // When both decodings succeed, prefer UTF-8 (the JSON default per
+        // RFC 8259) unless the UTF-8 result has clear signs of mojibake
+        // while gb18030 does not. The previous scoring could pick gb18030
+        // incorrectly because UTF-8 CJK characters use 3 bytes each, and
+        // reinterpreting those bytes as gb18030 (2 bytes per char) produces
+        // more CJK-range characters, inflating the gb18030 score.
         if (utf8Decoded && gbDecoded) {
           const utf8Score = scoreDecodedJsonText(utf8Decoded);
           const gbScore = scoreDecodedJsonText(gbDecoded);
-          if (gbScore > utf8Score) {
+          // Only prefer gb18030 if UTF-8 result has a negative score (i.e.
+          // significant mojibake/replacement chars) while gb18030 is positive.
+          if (utf8Score < 0 && gbScore > utf8Score) {
             console.warn(`[CoworkProxy] Decoded request body using gb18030 (score ${gbScore} > utf8 ${utf8Score})`);
             return gbDecoded;
           }
