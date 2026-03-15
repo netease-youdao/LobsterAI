@@ -519,7 +519,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly deletedChannelKeys = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
 
-  private static readonly CHANNEL_POLL_INTERVAL_MS = 30_000;
+  private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
   private static readonly FULL_HISTORY_SYNC_LIMIT = 50;
   private browserPrewarmAttempted = false;
 
@@ -713,8 +713,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
       // Incremental sync for already-known sessions: check if the gateway has messages
       // that weren't picked up during initial sync or real-time events.
-      // Only run when no new sessions were discovered (to avoid excessive RPC calls).
-      if (!hasNew && channelCount > 0) {
+      if (channelCount > 0) {
         for (const row of sessions) {
           const key = typeof row?.key === 'string' ? row.key : '';
           if (!key) continue;
@@ -2029,8 +2028,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     this.store.updateSession(sessionId, { status: 'completed' });
     this.emit('complete', sessionId, payload.runId ?? turn.runId);
+    const completedSessionKey = turn.sessionKey;
     this.cleanupSessionTurn(sessionId);
     this.resolveTurn(sessionId);
+    // Trigger immediate incremental sync for channel sessions so UI reflects
+    // the latest messages without waiting for the next polling cycle.
+    this.syncChannelAfterTurn(sessionId, completedSessionKey);
   }
 
   private handleChatAborted(sessionId: string, turn: ActiveTurn): void {
@@ -2038,8 +2041,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!turn.stopRequested) {
       this.emit('complete', sessionId, turn.runId);
     }
+    const abortedSessionKey = turn.sessionKey;
     this.cleanupSessionTurn(sessionId);
     this.resolveTurn(sessionId);
+    this.syncChannelAfterTurn(sessionId, abortedSessionKey);
   }
 
   private handleChatError(sessionId: string, _turn: ActiveTurn, payload: ChatEventPayload): void {
@@ -2764,6 +2769,20 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
       }
     }
+  }
+
+  /**
+   * Trigger an immediate incremental sync after a channel session turn completes,
+   * so that the renderer sees the latest messages without waiting for the next poll.
+   */
+  private syncChannelAfterTurn(sessionId: string, sessionKey: string): void {
+    if (!this.channelSessionSync || !sessionKey) return;
+    if (!this.channelSessionSync.isChannelSessionKey(sessionKey)) return;
+    if (!this.fullySyncedSessions.has(sessionId)) return;
+
+    void this.incrementalChannelSync(sessionId, sessionKey).catch((err) => {
+      console.warn('[ChannelSync] post-turn incremental sync failed for', sessionKey, err);
+    });
   }
 
   private clearPendingApprovalsBySession(sessionId: string): void {
