@@ -110,7 +110,7 @@ class ApiService {
   }
 
   private shouldUseOpenAIResponsesApi(provider: string): boolean {
-    return provider === 'openai';
+    return provider === 'openai' || provider === 'aihubmix';
   }
 
   private buildImageHint(images?: ImageAttachment[]): string {
