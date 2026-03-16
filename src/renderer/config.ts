@@ -169,6 +169,17 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    aihubmix: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     ollama: {
       enabled: boolean;
       apiKey: string;
@@ -381,6 +392,24 @@ export const defaultConfig: AppConfig = {
         { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true },
       ]
     },
+    aihubmix: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://aihubmix.com/v1',
+      apiFormat: 'openai',
+      models: [
+        { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', supportsImage: true },
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', supportsImage: true },
+        { id: 'gpt-5.4', name: 'GPT-5.4', supportsImage: true },
+        { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', supportsImage: true },
+        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true },
+        { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash Image', supportsImage: true },
+        { id: 'glm-5', name: 'GLM-5', supportsImage: false },
+        { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', supportsImage: false },
+        { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true },
+        { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true },
+      ]
+    },
     ollama: {
       enabled: false,
       apiKey: '',
@@ -424,7 +453,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'aihubmix', 'ollama', 'custom'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 
