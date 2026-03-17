@@ -396,3 +396,39 @@ test('sync disables legacy reminder skills so native IM sessions use built-in cr
   assert.equal(config.skills.entries['qqbot-cron'].enabled, false);
   assert.equal(config.skills.entries['feishu-cron-reminder'].enabled, false);
 });
+
+test('sync writes non-empty placeholder apiKey for providers that do not require auth (e.g. Ollama)', (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-config-sync-empty-key-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  setElectronPaths(tmpDir);
+
+  const ollamaAppConfig = {
+    model: {
+      defaultModel: 'llama3',
+      defaultModelProvider: 'ollama',
+    },
+    providers: {
+      ollama: {
+        enabled: true,
+        apiKey: '',
+        baseUrl: 'http://localhost:11434/v1',
+        apiFormat: 'openai',
+        models: [
+          { id: 'llama3' },
+        ],
+      },
+    },
+  };
+
+  const sync = createSync(tmpDir, ollamaAppConfig);
+  const result = sync.sync('test-empty-key');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+
+  const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
+  const providerConfig = config.models.providers.lobster;
+  assert.ok(providerConfig, 'lobster provider should exist in config');
+  assert.ok(providerConfig.apiKey, 'apiKey must be a non-empty string');
+  assert.equal(providerConfig.apiKey, 'sk-lobsterai-local');
+});

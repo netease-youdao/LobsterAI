@@ -268,11 +268,11 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
 
   const resolvedBaseURL = matched.baseURL;
   const resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
-  const effectiveApiKey = matched.providerName === 'ollama'
-    && matched.apiFormat === 'anthropic'
-    && !resolvedApiKey
-    ? 'sk-ollama-local'
-    : resolvedApiKey;
+  // Providers that don't require auth (e.g. Ollama) still need a non-empty
+  // placeholder so downstream components (OpenClaw gateway, compat proxy)
+  // don't reject the request with "No API key found for provider".
+  const effectiveApiKey = resolvedApiKey
+    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
 
   if (matched.apiFormat === 'anthropic') {
     return {
@@ -350,11 +350,15 @@ export function resolveRawApiConfig(): ApiConfigResolution {
     return { config: null, error };
   }
   const apiKey = matched.providerConfig.apiKey?.trim() || '';
+  // OpenClaw's gateway requires a non-empty apiKey for every provider — even
+  // local servers (Ollama, vLLM, etc.) that don't enforce auth.  When the user
+  // leaves the key blank we supply a placeholder so the gateway doesn't reject
+  // the request with "No API key found for provider".
+  const effectiveApiKey = apiKey
+    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
   return {
     config: {
-      apiKey: matched.providerName === 'ollama' && matched.apiFormat === 'anthropic' && !apiKey
-        ? 'sk-ollama-local'
-        : apiKey,
+      apiKey: effectiveApiKey,
       baseURL: matched.baseURL,
       model: matched.modelId,
       apiType: matched.apiFormat === 'anthropic' ? 'anthropic' : 'openai',
