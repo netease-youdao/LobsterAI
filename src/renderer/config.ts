@@ -311,6 +311,8 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.minimax.io/anthropic',
       apiFormat: 'anthropic',
       models: [
+        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
+        { id: 'MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 High Speed', supportsImage: false },
         { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false },
         { id: 'MiniMax-M2.5-highspeed', name: 'MiniMax M2.5 High Speed', supportsImage: false }
       ]
