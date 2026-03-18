@@ -16,7 +16,8 @@ import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { QuickActionBar, PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
-import type { CoworkSession, CoworkImageAttachment } from '../../types/cowork';
+import type { CoworkSession, CoworkImageAttachment, OpenClawEngineStatus } from '../../types/cowork';
+import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 
 export interface CoworkViewProps {
   onRequestAppSettings?: (options?: SettingsOpenOptions) => void;
@@ -31,6 +32,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const [isInitialized, setIsInitialized] = useState(false);
+  const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
   // Track if we're starting a session to prevent duplicate submissions
   const isStartingRef = useRef(false);
   // Track pending start request so stop can cancel delayed startup.
@@ -44,6 +46,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     isStreaming,
     config,
   } = useSelector((state: RootState) => state.cowork);
+  const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
@@ -65,9 +68,39 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     return `${baseNotice} (${error})`;
   };
 
+  const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
+    if (status.message?.trim()) {
+      return status.message.trim();
+    }
+    switch (status.phase) {
+      case 'not_installed':
+        return i18nService.t('coworkOpenClawNotInstalledNotice');
+      case 'installing':
+        return i18nService.t('coworkOpenClawInstalling');
+      case 'ready':
+        return i18nService.t('coworkOpenClawReadyNotice');
+      case 'starting':
+        return i18nService.t('coworkOpenClawStarting');
+      case 'error':
+        return i18nService.t('coworkOpenClawError');
+      case 'running':
+      default:
+        return i18nService.t('coworkOpenClawRunning');
+    }
+  };
+
+  const isOpenClawReadyForSession = (status: OpenClawEngineStatus | null): boolean => {
+    if (!status) return false;
+    return status.phase === 'running' || status.phase === 'ready';
+  };
+
   useEffect(() => {
     const init = async () => {
       await coworkService.init();
+      const initialEngineStatus = await coworkService.getOpenClawEngineStatus();
+      if (initialEngineStatus) {
+        setOpenClawStatus(initialEngineStatus);
+      }
       // Load quick actions with localization
       try {
         quickActionService.initialize();
@@ -91,6 +124,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     };
     init();
 
+    const unsubscribeOpenClawStatus = coworkService.onOpenClawEngineStatus((status) => {
+      setOpenClawStatus(status);
+    });
+
     // Subscribe to language changes to reload quick actions
     const unsubscribe = quickActionService.subscribe(async () => {
       try {
@@ -103,10 +140,14 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
     return () => {
       unsubscribe();
+      unsubscribeOpenClawStatus();
     };
   }, [dispatch]);
 
   const handleStartSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => {
+    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
+      return;
+    }
     // Prevent duplicate submissions
     if (isStartingRef.current) return;
     isStartingRef.current = true;
@@ -223,6 +264,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   const handleContinueSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => {
     if (!currentSession) return;
+    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) return;
 
     console.log('[CoworkView] handleContinueSession called', {
       hasImageAttachments: !!imageAttachments,
@@ -316,6 +358,21 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     };
   }, [dispatch]);
 
+  useEffect(() => {
+    if (!isOpenClawEngine) return;
+    if (!currentSession || currentSession.status !== 'running') return;
+
+    const runningSessionId = currentSession.id;
+    const handleWindowFocus = () => {
+      void coworkService.loadSession(runningSessionId);
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [currentSession?.id, currentSession?.status, isOpenClawEngine]);
+
   if (!isInitialized) {
     return (
       <div className="flex-1 h-full flex flex-col dark:bg-claude-darkBg bg-claude-bg">
@@ -330,6 +387,48 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       </div>
     );
   }
+
+  const shouldShowEngineStatus = Boolean(isOpenClawEngine && openClawStatus && openClawStatus.phase !== 'running');
+  const isEngineError = openClawStatus?.phase === 'error';
+  const shouldShowGoToSettingsInstall = openClawStatus
+    ? (openClawStatus.phase === 'not_installed'
+      || openClawStatus.phase === 'installing'
+      || openClawStatus.phase === 'error')
+    : false;
+  const isEngineReady = isOpenClawEngine
+    ? isOpenClawReadyForSession(openClawStatus)
+    : true;
+  const shouldShowGatewayStartupGate = Boolean(
+    isOpenClawEngine && openClawStatus?.phase === 'starting',
+  );
+
+  const homeHeader = (
+    <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
+      <div className="non-draggable h-8 flex items-center">
+        {isSidebarCollapsed && (
+          <div className={`flex items-center gap-1 mr-2 ${isMac ? 'pl-[68px]' : ''}`}>
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            >
+              <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
+            </button>
+            <button
+              type="button"
+              onClick={onNewChat}
+              className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            >
+              <ComposeIcon className="h-4 w-4" />
+            </button>
+            {updateBadge}
+          </div>
+        )}
+        <ModelSelector />
+      </div>
+      <WindowTitleBar inline />
+    </div>
+  );
 
   // When there's a current session, show the session detail view
   if (currentSession) {
@@ -349,35 +448,55 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     );
   }
 
+  if (shouldShowGatewayStartupGate && openClawStatus) {
+    const progressPercent = typeof openClawStatus.progressPercent === 'number'
+      ? Math.max(0, Math.min(100, Math.round(openClawStatus.progressPercent)))
+      : null;
+
+    return (
+      <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
+        {homeHeader}
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="w-full max-w-lg rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface p-6 shadow-card">
+            <div className="flex flex-col items-center text-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-claude-accent/15 text-claude-accent flex items-center justify-center animate-pulse">
+                <ChatBubbleLeftRightIcon className="h-5 w-5" />
+              </div>
+              <div className="text-sm dark:text-claude-darkText text-claude-text">
+                {resolveEngineStatusText(openClawStatus)}
+              </div>
+              {progressPercent !== null && (
+                <div className="w-full space-y-1">
+                  <div className="h-1.5 w-full rounded-full bg-claude-accent/15 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-claude-accent transition-all"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {progressPercent}%
+                  </div>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => onRequestAppSettings?.({ initialTab: 'coworkAgentEngine' })}
+                className="mt-1 rounded-lg px-3 py-1.5 text-xs font-medium bg-claude-accent text-white hover:bg-claude-accentHover transition-colors"
+              >
+                {i18nService.t('coworkOpenClawGoToSettingsInstall')}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Home view - no current session
   return (
     <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
       {/* Header */}
-      <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
-        <div className="non-draggable h-8 flex items-center">
-          {isSidebarCollapsed && (
-            <div className={`flex items-center gap-1 mr-2 ${isMac ? 'pl-[68px]' : ''}`}>
-              <button
-                type="button"
-                onClick={onToggleSidebar}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-              >
-                <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
-              </button>
-              <button
-                type="button"
-                onClick={onNewChat}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-              >
-                <ComposeIcon className="h-4 w-4" />
-              </button>
-              {updateBadge}
-            </div>
-          )}
-          <ModelSelector />
-        </div>
-        <WindowTitleBar inline />
-      </div>
+      {homeHeader}
 
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto min-h-0">
@@ -395,12 +514,41 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
           {/* Prompt Input Area - Large version with folder selector */}
           <div className="space-y-3">
+            {shouldShowEngineStatus && openClawStatus && (
+              <div className={`rounded-xl border px-4 py-3 ${isEngineError
+                ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
+                : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm">
+                    {resolveEngineStatusText(openClawStatus)}
+                    {typeof openClawStatus.progressPercent === 'number' && (
+                      <span className="ml-2 text-xs opacity-80">
+                        {Math.max(0, Math.min(100, Math.round(openClawStatus.progressPercent)))}%
+                      </span>
+                    )}
+                  </div>
+                  {shouldShowGoToSettingsInstall && (
+                    <button
+                      type="button"
+                      onClick={() => onRequestAppSettings?.({ initialTab: 'coworkAgentEngine' })}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${isEngineError
+                        ? 'bg-red-600 text-white hover:bg-red-700'
+                        : 'bg-amber-600 text-white hover:bg-amber-700'}`}
+                    >
+                      {i18nService.t('coworkOpenClawGoToSettingsInstall')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="shadow-glow-accent rounded-2xl">
               <CoworkPromptInput
                 ref={promptInputRef}
                 onSubmit={handleStartSession}
                 onStop={handleStopSession}
                 isStreaming={isStreaming}
+                disabled={!isEngineReady}
                 placeholder={i18nService.t('coworkPlaceholder')}
                 size="large"
                 workingDirectory={config.workingDirectory}

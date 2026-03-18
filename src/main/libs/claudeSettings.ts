@@ -23,6 +23,7 @@ const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
 
 type ProviderModel = {
   id: string;
+  supportsImage?: boolean;
 };
 
 type ProviderConfig = {
@@ -45,6 +46,11 @@ type AppConfig = {
 export type ApiConfigResolution = {
   config: CoworkApiConfig | null;
   error?: string;
+  providerMetadata?: {
+    providerName: string;
+    codingPlanEnabled: boolean;
+    supportsImage?: boolean;
+  };
 };
 
 // Store getter function injected from main.ts
@@ -87,10 +93,11 @@ type MatchedProvider = {
   modelId: string;
   apiFormat: AnthropicApiFormat;
   baseURL: string;
+  supportsImage?: boolean;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
-  if (providerName === 'openai' || providerName === 'gemini' || providerName === 'youdaozhiyun') {
+  if (providerName === 'openai' || providerName === 'gemini' || providerName === 'stepfun' || providerName === 'youdaozhiyun') {
     return 'openai';
   }
   if (providerName === 'anthropic') {
@@ -106,19 +113,36 @@ function providerRequiresApiKey(providerName: string): boolean {
 function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvider | null; error?: string } {
   const providers = appConfig.providers ?? {};
 
-  const resolveFallbackModel = (): string | undefined => {
-    for (const provider of Object.values(providers)) {
-      if (!provider?.enabled || !provider.models || provider.models.length === 0) {
+  const resolveFallbackModel = (): {
+    providerName: string;
+    providerConfig: ProviderConfig;
+    modelId: string;
+  } | null => {
+    for (const [providerName, providerConfig] of Object.entries(providers)) {
+      if (!providerConfig?.enabled || !providerConfig.models || providerConfig.models.length === 0) {
         continue;
       }
-      return provider.models[0].id;
+      const fallbackModel = providerConfig.models.find((model) => model.id?.trim());
+      if (!fallbackModel) {
+        continue;
+      }
+      return {
+        providerName,
+        providerConfig,
+        modelId: fallbackModel.id.trim(),
+      };
     }
-    return undefined;
+    return null;
   };
 
-  const modelId = appConfig.model?.defaultModel || resolveFallbackModel();
+  const configuredModelId = appConfig.model?.defaultModel?.trim();
+  let modelId = configuredModelId || '';
   if (!modelId) {
-    return { matched: null, error: 'No available model configured in enabled providers.' };
+    const fallback = resolveFallbackModel();
+    if (!fallback) {
+      return { matched: null, error: 'No available model configured in enabled providers.' };
+    }
+    modelId = fallback.modelId;
   }
 
   let providerEntry: [string, ProviderConfig] | undefined;
@@ -143,7 +167,13 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   }
 
   if (!providerEntry) {
-    return { matched: null, error: `No enabled provider found for model: ${modelId}` };
+    const fallback = resolveFallbackModel();
+    if (fallback) {
+      modelId = fallback.modelId;
+      providerEntry = [fallback.providerName, fallback.providerConfig];
+    } else {
+      return { matched: null, error: `No enabled provider found for model: ${modelId}` };
+    }
   }
 
   const [providerName, providerConfig] = providerEntry;
@@ -197,6 +227,8 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: `Provider ${providerName} requires API key for Anthropic-compatible mode.` };
   }
 
+  const matchedModel = providerConfig.models?.find((m) => m.id === modelId);
+
   return {
     matched: {
       providerName,
@@ -204,6 +236,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       modelId,
       apiFormat,
       baseURL,
+      supportsImage: matchedModel?.supportsImage,
     },
   };
 }
@@ -235,11 +268,11 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
 
   const resolvedBaseURL = matched.baseURL;
   const resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
-  const effectiveApiKey = matched.providerName === 'ollama'
-    && matched.apiFormat === 'anthropic'
-    && !resolvedApiKey
-    ? 'sk-ollama-local'
-    : resolvedApiKey;
+  // Providers that don't require auth (e.g. Ollama) still need a non-empty
+  // placeholder so downstream components (OpenClaw gateway, compat proxy)
+  // don't reject the request with "No API key found for provider".
+  const effectiveApiKey = resolvedApiKey
+    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
 
   if (matched.apiFormat === 'anthropic') {
     return {
@@ -248,6 +281,11 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
         baseURL: resolvedBaseURL,
         model: matched.modelId,
         apiType: 'anthropic',
+      },
+      providerMetadata: {
+        providerName: matched.providerName,
+        codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+        supportsImage: matched.supportsImage,
       },
     };
   }
@@ -282,11 +320,55 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
       model: matched.modelId,
       apiType: 'openai',
     },
+    providerMetadata: {
+      providerName: matched.providerName,
+      codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+    },
   };
 }
 
 export function getCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): CoworkApiConfig | null {
   return resolveCurrentApiConfig(target).config;
+}
+
+/**
+ * Resolve the raw API config directly from the app config,
+ * without requiring the OpenAI compatibility proxy.
+ * Used by OpenClaw config sync which has its own model routing.
+ */
+export function resolveRawApiConfig(): ApiConfigResolution {
+  const sqliteStore = getStore();
+  if (!sqliteStore) {
+    return { config: null, error: 'Store is not initialized.' };
+  }
+  const appConfig = sqliteStore.get<AppConfig>('app_config');
+  if (!appConfig) {
+    return { config: null, error: 'Application config not found.' };
+  }
+  const { matched, error } = resolveMatchedProvider(appConfig);
+  if (!matched) {
+    return { config: null, error };
+  }
+  const apiKey = matched.providerConfig.apiKey?.trim() || '';
+  // OpenClaw's gateway requires a non-empty apiKey for every provider — even
+  // local servers (Ollama, vLLM, etc.) that don't enforce auth.  When the user
+  // leaves the key blank we supply a placeholder so the gateway doesn't reject
+  // the request with "No API key found for provider".
+  const effectiveApiKey = apiKey
+    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
+  return {
+    config: {
+      apiKey: effectiveApiKey,
+      baseURL: matched.baseURL,
+      model: matched.modelId,
+      apiType: matched.apiFormat === 'anthropic' ? 'anthropic' : 'openai',
+    },
+    providerMetadata: {
+      providerName: matched.providerName,
+      codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+      supportsImage: matched.supportsImage,
+    },
+  };
 }
 
 export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {

@@ -1,9 +1,0 @@
-{
-  "name": "cowork-agent-runner",
-  "version": "0.1.0",
-  "private": true,
-  "type": "commonjs",
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.12"
-  }
-}

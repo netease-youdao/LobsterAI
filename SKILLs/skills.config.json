@@ -7,7 +7,6 @@
     "xlsx": { "order": 20, "enabled": true },
     "pptx": { "order": 30, "enabled": true },
     "pdf": { "order": 40, "enabled": true },
-    "scheduled-task": { "order": 45, "enabled": true },
     "remotion": { "order": 50, "enabled": true },
     "develop-web-game": { "order": 60, "enabled": true },
     "playwright": { "order": 70, "enabled": true },

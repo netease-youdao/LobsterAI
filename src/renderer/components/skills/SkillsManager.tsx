@@ -2,17 +2,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import {
-  ArrowUpTrayIcon,
   ArrowDownTrayIcon,
   CheckCircleIcon,
-  FolderOpenIcon,
-  LinkIcon,
-  MagnifyingGlassIcon,
-  PlusCircleIcon,
-  PuzzlePieceIcon,
-  TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import SearchIcon from '../icons/SearchIcon';
+import PlusCircleIcon from '../icons/PlusCircleIcon';
+import UploadIcon from '../icons/UploadIcon';
+import FolderOpenIcon from '../icons/FolderOpenIcon';
+import LinkIcon from '../icons/LinkIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import TrashIcon from '../icons/TrashIcon';
 import { i18nService } from '../../services/i18n';
 import { skillService, resolveLocalizedText } from '../../services/skill';
 import { setSkills } from '../../store/slices/skillSlice';
@@ -302,7 +302,7 @@ const SkillsManager: React.FC = () => {
 
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
           <input
             type="text"
             placeholder={i18nService.t('searchSkills')}
@@ -333,7 +333,7 @@ const SkillsManager: React.FC = () => {
                 disabled={isDownloadingSkill}
                 className="w-full flex items-center gap-3 px-3 py-2.5 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors disabled:opacity-50"
               >
-                <ArrowUpTrayIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <UploadIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 <span>{i18nService.t('uploadSkillZip')}</span>
               </button>
               <button
@@ -410,7 +410,7 @@ const SkillsManager: React.FC = () => {
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
-                    <PuzzlePieceIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                    <PuzzleIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                   </div>
                   <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
                     {skill.name}
@@ -522,7 +522,7 @@ const SkillsManager: React.FC = () => {
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded-lg dark:bg-claude-darkSurface bg-claude-surface flex items-center justify-center flex-shrink-0">
-                      <PuzzlePieceIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                      <PuzzleIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                     </div>
                     <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
                       {skill.name}
@@ -589,7 +589,7 @@ const SkillsManager: React.FC = () => {
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
-                  <PuzzlePieceIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                  <PuzzleIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 </div>
                 <div className="min-w-0">
                   <div className="text-base font-semibold dark:text-claude-darkText text-claude-text truncate">
@@ -678,7 +678,7 @@ const SkillsManager: React.FC = () => {
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
-                  <PuzzlePieceIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                  <PuzzleIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 </div>
                 <div className="min-w-0">
                   <div className="text-base font-semibold dark:text-claude-darkText text-claude-text truncate">

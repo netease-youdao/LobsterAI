@@ -1,8 +1,0 @@
-# Path to the agent runner entry file.
-AGENTD_ENTRY=/opt/agent-runner/index.js
-
-# Working directory for the agent runtime.
-AGENTD_WORKDIR=/workspace
-
-# Optional Node flags.
-AGENTD_NODE_OPTS=

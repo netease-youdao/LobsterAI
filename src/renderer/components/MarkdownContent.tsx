@@ -477,9 +477,12 @@ const createMarkdownComponents = (
       {children}
     </td>
   ),
-  img: ({ node, className, ...props }: any) => (
-    <img className="max-w-full h-auto rounded-xl my-4" {...props} />
-  ),
+  img: ({ node, className, src, alt, ...props }: any) => {
+    const resolvedSrc = typeof src === 'string' && src.startsWith('file://')
+      ? src.replace(/^file:\/\//, 'localfile://')
+      : src;
+    return <img className="max-w-full h-auto rounded-xl my-4" src={resolvedSrc} alt={alt} {...props} />;
+  },
   hr: ({ node, ...props }: any) => (
     <hr className="my-5 dark:border-claude-darkBorder border-claude-border" {...props} />
   ),

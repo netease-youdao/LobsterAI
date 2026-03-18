@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import path from 'path';
+import fs from 'fs';
 
 // https://vitejs.dev/config/
 const devPort = 5175;
@@ -33,7 +34,10 @@ export default defineConfig({
             },
           },
         },
-        onstart() {},
+        onstart() {
+          // Signal that the main process bundle is ready for electron to load
+          fs.writeFileSync('dist-electron/.electron-ready', '');
+        },
       },
       {
         // 预加载脚本入口文件

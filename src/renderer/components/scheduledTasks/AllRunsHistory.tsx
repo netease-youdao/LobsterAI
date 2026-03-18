@@ -1,26 +1,23 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTaskRunWithName } from '../../types/scheduledTask';
 import { ClockIcon } from '@heroicons/react/24/outline';
-
-function formatDuration(ms: number | null): string {
-  if (!ms) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.round(ms / 60000)}m`;
-}
+import RunSessionModal from './RunSessionModal';
+import { formatDuration } from './utils';
 
 const statusConfig: Record<string, { label: string; color: string }> = {
   success: { label: 'scheduledTasksStatusSuccess', color: 'text-green-500' },
   error: { label: 'scheduledTasksStatusError', color: 'text-red-500' },
+  skipped: { label: 'scheduledTasksStatusSkipped', color: 'text-yellow-500' },
   running: { label: 'scheduledTasksStatusRunning', color: 'text-blue-500' },
 };
 
 const AllRunsHistory: React.FC = () => {
   const allRuns = useSelector((state: RootState) => state.scheduledTask.allRuns);
+  const [viewingRun, setViewingRun] = useState<ScheduledTaskRunWithName | null>(null);
 
   useEffect(() => {
     scheduledTaskService.loadAllRuns(50);
@@ -31,10 +28,8 @@ const AllRunsHistory: React.FC = () => {
   };
 
   const handleViewSession = (run: ScheduledTaskRunWithName) => {
-    if (run.sessionId) {
-      window.dispatchEvent(new CustomEvent('scheduledTask:viewSession', {
-        detail: { sessionId: run.sessionId },
-      }));
+    if (run.sessionId || run.sessionKey) {
+      setViewingRun(run);
     }
   };
 
@@ -67,11 +62,12 @@ const AllRunsHistory: React.FC = () => {
       {/* Run rows */}
       {allRuns.map((run) => {
         const cfg = statusConfig[run.status] || { label: '', color: '' };
+        const hasSession = run.sessionId || run.sessionKey;
         return (
           <div
             key={run.id}
             className={`grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder/50 border-claude-border/50 transition-colors ${
-              run.sessionId
+              hasSession
                 ? 'hover:bg-claude-surfaceHover/50 dark:hover:bg-claude-darkSurfaceHover/50 cursor-pointer'
                 : ''
             }`}
@@ -113,6 +109,14 @@ const AllRunsHistory: React.FC = () => {
         >
           {i18nService.t('scheduledTasksLoadMore')}
         </button>
+      )}
+
+      {viewingRun && (
+        <RunSessionModal
+          sessionId={viewingRun.sessionId}
+          sessionKey={viewingRun.sessionKey}
+          onClose={() => setViewingRun(null)}
+        />
       )}
     </div>
   );

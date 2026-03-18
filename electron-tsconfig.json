@@ -15,5 +15,5 @@
       "*": ["node_modules/*"]
     }
   },
-  "include": ["src/main"]
+  "include": ["src/main", "src/common"]
 }

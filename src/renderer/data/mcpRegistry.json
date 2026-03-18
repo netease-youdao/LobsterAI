@@ -130,6 +130,17 @@
       "defaultArgs": ["-y", "@executeautomation/playwright-mcp-server"]
     },
     {
+      "id": "figma",
+      "name": "Figma",
+      "description_zh": "Figma 设计平台集成：读取文件、组件、样式，支持设计稿解析",
+      "description_en": "Figma design platform integration: read files, components, styles, and parse designs",
+      "category": "design",
+      "transportType": "stdio",
+      "command": "npx",
+      "defaultArgs": ["-y", "figma-developer-mcp@latest"],
+      "requiredEnvKeys": ["FIGMA_API_KEY"]
+    },
+    {
       "id": "canva",
       "name": "Canva",
       "description_zh": "Canva 设计平台：创建和管理设计、模板操作",

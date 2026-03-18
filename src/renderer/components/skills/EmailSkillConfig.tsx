@@ -6,6 +6,7 @@ import {
   CheckCircleIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline';
+import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 
@@ -143,6 +144,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
   const [smtpSecure, setSmtpSecure] = useState('false');
   const [imapTls, setImapTls] = useState('true');
   const [mailbox, setMailbox] = useState('INBOX');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isPersisting, setIsPersisting] = useState(false);
   const [showPersisting, setShowPersisting] = useState(false);
@@ -383,27 +385,63 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
       {/* Email */}
       <div>
         <label className={labelClassName}>{i18nService.t('emailAddress')}</label>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          onBlur={queuePersist}
-          className={inputClassName}
-          placeholder="your@email.com"
-        />
+        <div className="relative">
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onBlur={queuePersist}
+            className={`${inputClassName} pr-8`}
+            placeholder="your@email.com"
+          />
+          {email && (
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+              <button
+                type="button"
+                onClick={() => { setEmail(''); setTimeout(queuePersist, 0); }}
+                className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                title={i18nService.t('clear') || 'Clear'}
+              >
+                <XCircleIconSolid className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Password */}
       <div>
         <label className={labelClassName}>{i18nService.t('emailPassword')}</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onBlur={queuePersist}
-          className={inputClassName}
-          placeholder={i18nService.t('emailPasswordPlaceholder')}
-        />
+        <div className="relative">
+          <input
+            type={showPassword ? 'text' : 'password'}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onBlur={queuePersist}
+            className={`${inputClassName} pr-16`}
+            placeholder={i18nService.t('emailPasswordPlaceholder')}
+          />
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            {password && (
+              <button
+                type="button"
+                onClick={() => { setPassword(''); setTimeout(queuePersist, 0); }}
+                className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                title={i18nService.t('clear') || 'Clear'}
+              >
+                <XCircleIconSolid className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+              title={showPassword ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+            >
+              {showPassword ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Advanced Settings Toggle */}
@@ -426,50 +464,106 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelClassName}>IMAP Host</label>
-              <input
-                type="text"
-                value={imapHost}
-                onChange={(e) => setImapHost(e.target.value)}
-                onBlur={queuePersist}
-                className={inputClassName}
-                placeholder="imap.example.com"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={imapHost}
+                  onChange={(e) => setImapHost(e.target.value)}
+                  onBlur={queuePersist}
+                  className={`${inputClassName} pr-8`}
+                  placeholder="imap.example.com"
+                />
+                {imapHost && (
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => { setImapHost(''); setTimeout(queuePersist, 0); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             <div>
               <label className={labelClassName}>IMAP Port</label>
-              <input
-                type="text"
-                value={imapPort}
-                onChange={(e) => setImapPort(e.target.value)}
-                onBlur={queuePersist}
-                className={inputClassName}
-                placeholder="993"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={imapPort}
+                  onChange={(e) => setImapPort(e.target.value)}
+                  onBlur={queuePersist}
+                  className={`${inputClassName} pr-8`}
+                  placeholder="993"
+                />
+                {imapPort && (
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => { setImapPort(''); setTimeout(queuePersist, 0); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelClassName}>SMTP Host</label>
-              <input
-                type="text"
-                value={smtpHost}
-                onChange={(e) => setSmtpHost(e.target.value)}
-                onBlur={queuePersist}
-                className={inputClassName}
-                placeholder="smtp.example.com"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={smtpHost}
+                  onChange={(e) => setSmtpHost(e.target.value)}
+                  onBlur={queuePersist}
+                  className={`${inputClassName} pr-8`}
+                  placeholder="smtp.example.com"
+                />
+                {smtpHost && (
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => { setSmtpHost(''); setTimeout(queuePersist, 0); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             <div>
               <label className={labelClassName}>SMTP Port</label>
-              <input
-                type="text"
-                value={smtpPort}
-                onChange={(e) => setSmtpPort(e.target.value)}
-                onBlur={queuePersist}
-                className={inputClassName}
-                placeholder="587"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={smtpPort}
+                  onChange={(e) => setSmtpPort(e.target.value)}
+                  onBlur={queuePersist}
+                  className={`${inputClassName} pr-8`}
+                  placeholder="587"
+                />
+                {smtpPort && (
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => { setSmtpPort(''); setTimeout(queuePersist, 0); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -498,14 +592,28 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
 
           <div>
             <label className={labelClassName}>{i18nService.t('emailMailbox')}</label>
-            <input
-              type="text"
-              value={mailbox}
-              onChange={(e) => setMailbox(e.target.value)}
-              onBlur={queuePersist}
-              className={inputClassName}
-              placeholder="INBOX"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={mailbox}
+                onChange={(e) => setMailbox(e.target.value)}
+                onBlur={queuePersist}
+                className={`${inputClassName} pr-8`}
+                placeholder="INBOX"
+              />
+              {mailbox && (
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => { setMailbox(''); setTimeout(queuePersist, 0); }}
+                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    title={i18nService.t('clear') || 'Clear'}
+                  >
+                    <XCircleIconSolid className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

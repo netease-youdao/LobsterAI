@@ -160,16 +160,6 @@ export const mcpRegistry: McpRegistryEntry[] = [
     defaultArgs: ['-y', 'firecrawl-mcp@latest'],
     requiredEnvKeys: ['FIRECRAWL_API_KEY'],
   },
-  {
-    id: 'fetch',
-    name: 'Fetch',
-    descriptionKey: 'mcpDesc_fetch',
-    category: 'data-api',
-    categoryKey: 'mcpCategoryDataApi',
-    transportType: 'stdio',
-    command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-fetch'],
-  },
 ];
 
 /**

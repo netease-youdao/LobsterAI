@@ -296,6 +296,16 @@ function shouldAutoDeleteMemoryText(text: string): boolean {
 export type CoworkSessionStatus = 'idle' | 'running' | 'completed' | 'error';
 export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'system';
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
+export type CoworkAgentEngine = 'openclaw' | 'yd_cowork';
+
+const COWORK_AGENT_ENGINE = 'openclaw';
+
+function normalizeCoworkAgentEngineValue(value?: string | null): CoworkAgentEngine {
+  if (value === COWORK_AGENT_ENGINE || value === 'openclaw') {
+    return value;
+  }
+  return COWORK_AGENT_ENGINE;
+}
 
 export interface CoworkMessageMetadata {
   toolName?: string;
@@ -393,6 +403,7 @@ export interface CoworkConfig {
   workingDirectory: string;
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
+  agentEngine: CoworkAgentEngine;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -404,6 +415,7 @@ export type CoworkConfigUpdate = Partial<Pick<
   CoworkConfig,
   | 'workingDirectory'
   | 'executionMode'
+  | 'agentEngine'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'
@@ -438,15 +450,12 @@ const getDefaultSystemPrompt = (): string => {
   if (cachedDefaultSystemPrompt !== null) {
     return cachedDefaultSystemPrompt;
   }
-
   try {
-    const promptPath = path.join(app.getAppPath(), 'sandbox', 'agent-runner', 'AGENT_SYSTEM_PROMPT.md');
+    const promptPath = path.join(app.getAppPath(), 'resources', 'SYSTEM_PROMPT.md');
     cachedDefaultSystemPrompt = fs.readFileSync(promptPath, 'utf-8');
-  } catch (error) {
-    console.warn('Failed to load default system prompt:', error);
+  } catch {
     cachedDefaultSystemPrompt = '';
   }
-
   return cachedDefaultSystemPrompt;
 };
 
@@ -638,6 +647,17 @@ export class CoworkStore {
     this.saveDb();
   }
 
+  deleteSessions(ids: string[]): void {
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      this.markMemorySourcesInactiveBySession(id);
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    this.db.run(`DELETE FROM cowork_sessions WHERE id IN (${placeholders})`, ids);
+    this.markOrphanImplicitMemoriesStale();
+    this.saveDb();
+  }
+
   setSessionPinned(id: string, pinned: boolean): void {
     this.db.run('UPDATE cowork_sessions SET pinned = ? WHERE id = ?', [pinned ? 1 : 0, id]);
     this.saveDb();
@@ -770,6 +790,59 @@ export class CoworkStore {
     };
   }
 
+  /**
+   * Insert a message before an existing message (by shifting sequences).
+   * Used for channel-originated sessions where user messages need to appear
+   * before assistant messages that were created during streaming.
+   */
+  insertMessageBeforeId(sessionId: string, beforeMessageId: string, message: Omit<CoworkMessage, 'id' | 'timestamp'>): CoworkMessage {
+    const id = uuidv4();
+    const now = Date.now();
+
+    // Get the target message's sequence
+    const targetRow = this.db.exec(
+      'SELECT sequence FROM cowork_messages WHERE id = ? AND session_id = ?',
+      [beforeMessageId, sessionId],
+    );
+    const targetSequence = targetRow[0]?.values[0]?.[0] as number | undefined;
+
+    if (targetSequence === undefined) {
+      // Fallback to normal append if the target message is not found
+      return this.addMessage(sessionId, message);
+    }
+
+    // Shift all messages with sequence >= target up by 1
+    this.db.run(
+      'UPDATE cowork_messages SET sequence = sequence + 1 WHERE session_id = ? AND sequence >= ?',
+      [sessionId, targetSequence],
+    );
+
+    // Insert at the target's original sequence
+    this.db.run(`
+      INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      id,
+      sessionId,
+      message.type,
+      message.content,
+      message.metadata ? JSON.stringify(message.metadata) : null,
+      now,
+      targetSequence,
+    ]);
+
+    this.db.run('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?', [now, sessionId]);
+    this.saveDb();
+
+    return {
+      id,
+      type: message.type,
+      content: message.content,
+      timestamp: now,
+      metadata: message.metadata,
+    };
+  }
+
   updateMessage(sessionId: string, messageId: string, updates: { content?: string; metadata?: CoworkMessageMetadata }): void {
     const setClauses: string[] = [];
     const values: (string | null)[] = [];
@@ -803,20 +876,20 @@ export class CoworkStore {
     }
 
     const workingDirRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['workingDirectory']);
-    const executionModeRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['executionMode']);
+    const agentEngineRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['agentEngine']);
     const memoryEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryEnabled']);
     const memoryImplicitUpdateEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryImplicitUpdateEnabled']);
     const memoryLlmJudgeEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryLlmJudgeEnabled']);
     const memoryGuardLevelRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryGuardLevel']);
     const memoryUserMemoriesMaxItemsRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryUserMemoriesMaxItems']);
 
-    const normalizedExecutionMode =
-      executionModeRow?.value === 'container' ? 'sandbox' : (executionModeRow?.value as CoworkExecutionMode);
+    const normalizedAgentEngine = normalizeCoworkAgentEngineValue(agentEngineRow?.value);
 
     return {
       workingDirectory: workingDirRow?.value || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
-      executionMode: normalizedExecutionMode || 'local',
+      executionMode: 'local' as CoworkExecutionMode,
+      agentEngine: normalizedAgentEngine,
       memoryEnabled: parseBooleanConfig(memoryEnabledRow?.value, DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
         memoryImplicitUpdateEnabledRow?.value,
@@ -852,6 +925,17 @@ export class CoworkStore {
           value = excluded.value,
           updated_at = excluded.updated_at
       `, [config.executionMode, now]);
+    }
+
+    if (config.agentEngine !== undefined) {
+      const normalizedAgentEngine = normalizeCoworkAgentEngineValue(config.agentEngine);
+      this.db.run(`
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('agentEngine', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `, [normalizedAgentEngine, now]);
     }
 
     if (config.memoryEnabled !== undefined) {

@@ -8,6 +8,7 @@ export { default as MiniMaxIcon } from './MiniMaxIcon';
 export { default as YouDaoZhiYunIcon } from './YouDaoZhiYunIcon';
 export { default as QwenIcon } from './QwenIcon';
 export { default as XiaomiIcon } from './XiaomiIcon';
+export { default as StepfunIcon } from './StepfunIcon';
 export { default as OpenRouterIcon } from './OpenRouterIcon';
 export { default as OllamaIcon } from './OllamaIcon';
 export { default as VolcengineIcon } from './VolcengineIcon';

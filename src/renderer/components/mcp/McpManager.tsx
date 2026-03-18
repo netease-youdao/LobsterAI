@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import {
-  MagnifyingGlassIcon,
-  TrashIcon,
-  PencilIcon,
-} from '@heroicons/react/24/outline';
+import SearchIcon from '../icons/SearchIcon';
+import TrashIcon from '../icons/TrashIcon';
+import PencilIcon from '../icons/PencilIcon';
 import ConnectorIcon from '../icons/ConnectorIcon';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
@@ -39,6 +37,8 @@ const McpManager: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState('all');
   const [dynamicRegistry, setDynamicRegistry] = useState<McpRegistryEntry[]>(mcpRegistry);
   const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(mcpCategories);
+  const [bridgeSyncing, setBridgeSyncing] = useState(false);
+  const [bridgeSyncResult, setBridgeSyncResult] = useState<{ tools: number; error?: string } | null>(null);
   const currentLanguage = i18nService.getLanguage();
 
   useEffect(() => {
@@ -172,6 +172,7 @@ const McpManager: React.FC = () => {
       const updatedServers = await mcpService.setServerEnabled(serverId, !targetServer.enabled);
       dispatch(setMcpServers(updatedServers));
       setActionError('');
+      triggerBridgeRefresh();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : i18nService.t('mcpUpdateFailed'));
     }
@@ -202,6 +203,7 @@ const McpManager: React.FC = () => {
     }
     setIsDeleting(false);
     setPendingDelete(null);
+    triggerBridgeRefresh();
   };
 
   const handleOpenEditForm = (server: McpServerConfig) => {
@@ -244,6 +246,7 @@ const McpManager: React.FC = () => {
       }
     }
     handleCloseForm();
+    triggerBridgeRefresh();
   };
 
   const handleOpenCreateForm = () => {
@@ -253,6 +256,27 @@ const McpManager: React.FC = () => {
   };
 
   const existingNames = useMemo(() => servers.map(s => s.name), [servers]);
+
+  /**
+   * Trigger MCP bridge refresh after server config changes.
+   * Shows loading state while MCP servers restart + gateway reloads.
+   */
+  const triggerBridgeRefresh = async () => {
+    setBridgeSyncing(true);
+    setBridgeSyncResult(null);
+    try {
+      const result = await mcpService.refreshBridge();
+      setBridgeSyncResult({ tools: result.tools, error: result.error });
+      // Auto-hide success message after 5 seconds
+      if (!result.error) {
+        setTimeout(() => setBridgeSyncResult(null), 5000);
+      }
+    } catch {
+      setBridgeSyncResult({ tools: 0, error: 'MCP bridge refresh failed' });
+    } finally {
+      setBridgeSyncing(false);
+    }
+  };
 
   const marketplaceCount = useMemo(
     () => dynamicRegistry.length,
@@ -290,10 +314,42 @@ const McpManager: React.FC = () => {
         />
       )}
 
+      {/* MCP Bridge sync status */}
+      {bridgeSyncing && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs dark:bg-blue-500/10 bg-blue-50 dark:text-blue-400 text-blue-600 border dark:border-blue-500/20 border-blue-200">
+          <svg className="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          {i18nService.t('mcpBridgeSyncing') || 'Syncing MCP tools...'}
+        </div>
+      )}
+      {!bridgeSyncing && bridgeSyncResult && (
+        <div className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs border ${
+          bridgeSyncResult.error
+            ? 'dark:bg-red-500/10 bg-red-50 dark:text-red-400 text-red-600 dark:border-red-500/20 border-red-200'
+            : 'dark:bg-green-500/10 bg-green-50 dark:text-green-400 text-green-600 dark:border-green-500/20 border-green-200'
+        }`}>
+          <span>
+            {bridgeSyncResult.error
+              ? `${i18nService.t('mcpBridgeSyncError') || 'Sync failed'}: ${bridgeSyncResult.error}`
+              : `${i18nService.t('mcpBridgeSyncDone') || 'MCP tools synced'}: ${bridgeSyncResult.tools} ${bridgeSyncResult.tools === 1 ? 'tool' : 'tools'}`
+            }
+          </span>
+          <button
+            type="button"
+            onClick={() => setBridgeSyncResult(null)}
+            className="ml-2 opacity-60 hover:opacity-100"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       {/* Search */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
           <input
             type="text"
             placeholder={i18nService.t('searchMcpServers')}

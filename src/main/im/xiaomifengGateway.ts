@@ -261,6 +261,13 @@ export class XiaomifengGateway extends EventEmitter {
   }
 
   /**
+   * Check whether the native SDK instance is instantiated.
+   */
+  isRunning(): boolean {
+    return this.v2Client !== null;
+  }
+
+  /**
    * Check if gateway has a pending reconnection timer
    */
   isReconnecting(): boolean {
@@ -378,7 +385,7 @@ export class XiaomifengGateway extends EventEmitter {
       console.log('[Xiaomifeng Gateway] Attempting SDK init with appKey:', XiaomifengGateway.FIXED_APP_KEY);
       this.v2Client = new NIM({
         appkey: XiaomifengGateway.FIXED_APP_KEY,
-        debugLevel: "log",
+        debugLevel: "warn",
         apiVersion: 'v2',
       }) as unknown as V2NIM;
       console.log('[Xiaomifeng Gateway] SDK initialized successfully, dataPath:', dataPath);
@@ -567,7 +574,6 @@ export class XiaomifengGateway extends EventEmitter {
       // Ignore offline/roaming messages synced on reconnect
       const messageSource: number = msg.messageSource ?? 0;
       if (messageSource !== 1) {
-        this.log(`[Xiaomifeng Gateway] Ignoring non-online message (messageSource=${messageSource})`);
         return;
       }
 
@@ -972,5 +978,17 @@ export class XiaomifengGateway extends EventEmitter {
 
     await this.sendBeeReply(this.lastConversation.conversationId, text);
     this.status.lastOutboundAt = Date.now();
+  }
+
+  async sendConversationNotification(conversationId: string, text: string): Promise<void> {
+    if (!conversationId) {
+      throw new Error('No conversation available for notification');
+    }
+    await this.sendBeeReply(conversationId, text);
+    this.status.lastOutboundAt = Date.now();
+  }
+
+  async sendNotificationWithMedia(text: string): Promise<void> {
+    await this.sendNotification(text);
   }
 }

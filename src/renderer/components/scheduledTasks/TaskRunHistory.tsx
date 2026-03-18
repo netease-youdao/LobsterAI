@@ -1,27 +1,28 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useSelector } from 'react-redux';
+import { RootState } from '../../store';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTaskRun } from '../../types/scheduledTask';
+import RunSessionModal from './RunSessionModal';
+import { formatDuration } from './utils';
 
 interface TaskRunHistoryProps {
   taskId: string;
   runs: ScheduledTaskRun[];
 }
 
-function formatDuration(ms: number | null): string {
-  if (!ms) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.round(ms / 60000)}m`;
-}
-
 const statusIcons: Record<string, { icon: string; color: string }> = {
   success: { icon: '✓', color: 'text-green-500' },
   error: { icon: '✗', color: 'text-red-500' },
+  skipped: { icon: '↷', color: 'text-yellow-500' },
   running: { icon: '●', color: 'text-blue-500' },
 };
 
 const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
+  const hasMore = useSelector((state: RootState) => state.scheduledTask.runsHasMore[taskId] ?? false);
+  const [viewingRun, setViewingRun] = useState<ScheduledTaskRun | null>(null);
+
   const handleLoadMore = async () => {
     await scheduledTaskService.loadRuns(taskId, 50, runs.length);
   };
@@ -47,11 +48,6 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
                   <span className="text-sm dark:text-claude-darkText text-claude-text">
                     {new Date(run.startedAt).toLocaleString()}
                   </span>
-                  <span className="ml-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {run.trigger === 'manual'
-                      ? i18nService.t('scheduledTasksManual')
-                      : i18nService.t('scheduledTasksScheduled')}
-                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-3 shrink-0 ml-2">
@@ -68,15 +64,10 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
                     {run.error}
                   </span>
                 )}
-                {run.sessionId && (
+                {(run.sessionId || run.sessionKey) && (
                   <button
                     type="button"
-                    onClick={() => {
-                      // Navigate to the cowork session
-                      window.dispatchEvent(new CustomEvent('scheduledTask:viewSession', {
-                        detail: { sessionId: run.sessionId },
-                      }));
-                    }}
+                    onClick={() => setViewingRun(run)}
                     className="text-xs text-claude-accent hover:text-claude-accentHover transition-colors"
                   >
                     {i18nService.t('scheduledTasksViewSession')}
@@ -87,7 +78,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
           );
         })}
       </div>
-      {runs.length >= 20 && (
+      {hasMore && (
         <button
           type="button"
           onClick={handleLoadMore}
@@ -95,6 +86,13 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
         >
           {i18nService.t('scheduledTasksLoadMore')}
         </button>
+      )}
+      {viewingRun && (
+        <RunSessionModal
+          sessionId={viewingRun.sessionId}
+          sessionKey={viewingRun.sessionKey}
+          onClose={() => setViewingRun(null)}
+        />
       )}
     </div>
   );

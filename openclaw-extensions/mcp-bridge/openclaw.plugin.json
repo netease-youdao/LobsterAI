@@ -1,0 +1,46 @@
+{
+  "id": "mcp-bridge",
+  "name": "MCP Bridge",
+  "description": "Expose LobsterAI-managed MCP servers as native OpenClaw tools.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "callbackUrl": {
+        "type": "string",
+        "minLength": 1
+      },
+      "secret": {
+        "type": "string",
+        "minLength": 1
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "minimum": 1000
+      },
+      "tools": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "server": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string"
+            },
+            "inputSchema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}

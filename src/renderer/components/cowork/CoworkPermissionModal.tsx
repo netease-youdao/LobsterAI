@@ -216,21 +216,37 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
             <>
               {questions.map((question) => {
                 const selectedValues = getSelectedValues(question);
+                const ctx = (toolInput as Record<string, unknown>)?.context as Record<string, unknown> | undefined;
+                const reqInput = ctx?.requestedToolInput as Record<string, unknown> | undefined;
+                const command = typeof reqInput?.command === 'string' ? (reqInput.command as string).trim() : '';
                 return (
                   <div
                     key={question.question}
                     className="rounded-xl border dark:border-claude-darkBorder border-claude-border p-4 space-y-3"
                   >
-                    <div className="flex items-start gap-2">
+                    {/* 问题 */}
+                    <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
                       {question.header && (
-                        <span className="text-[11px] uppercase tracking-wide px-2 py-1 rounded-full bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                        <span className="inline-block text-[11px] uppercase tracking-wide px-2 py-0.5 mr-1.5 rounded-full bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary align-middle">
                           {question.header}
                         </span>
                       )}
-                      <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
-                        {question.question}
-                      </div>
+                      {question.question}
                     </div>
+                    {/* 命令详情 */}
+                    {command && (
+                      <div>
+                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
+                          {i18nService.t('coworkToolInput')}
+                        </label>
+                        <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg max-h-40 overflow-y-auto">
+                          <pre className="text-xs dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words font-mono">
+                            {command}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+                    {/* 选项 */}
                     <div className="space-y-2">
                       {question.options.map((option) => {
                         const isSelected = selectedValues.includes(option.label);
@@ -276,25 +292,25 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                 <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
                   {i18nService.t('coworkToolInput')}
                 </label>
-                <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg max-h-48 overflow-y-auto">
+                <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg">
                   <pre className="text-xs dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words font-mono">
                     {formatToolInput(permission.toolInput)}
                   </pre>
                 </div>
               </div>
-
-              {/* Warning for dangerous operations */}
-              {isDangerousBash && (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
-                  <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700 dark:text-red-400">
-                    {i18nService.t('coworkDangerousOperation')}
-                  </p>
-                </div>
-              )}
             </>
           )}
         </div>
+
+        {/* Warning for dangerous operations - 固定在滚动区域外，始终可见 */}
+        {!isQuestionTool && isDangerousBash && (
+          <div className="flex items-start gap-2 p-3 mx-6 my-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700 dark:text-red-400">
+              {i18nService.t('coworkDangerousOperation')}
+            </p>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t dark:border-claude-darkBorder border-claude-border">

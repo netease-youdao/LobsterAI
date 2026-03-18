@@ -1,10 +1,12 @@
 'use strict';
 
 const path = require('path');
-const { existsSync, mkdirSync, readdirSync, statSync } = require('fs');
+const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync } = require('fs');
 const { spawnSync } = require('child_process');
+const asar = require('@electron/asar');
 const { ensurePortableGit } = require('./setup-mingit.js');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
+const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -12,6 +14,189 @@ function isWindowsTarget(context) {
 
 function isMacTarget(context) {
   return context?.electronPlatformName === 'darwin';
+}
+
+function resolveTargetArch(context) {
+  if (context?.arch === 3) return 'arm64';
+  if (context?.arch === 0) return 'ia32';
+  if (context?.arch === 1) return 'x64';
+  if (process.arch === 'arm64') return 'arm64';
+  if (process.arch === 'ia32') return 'ia32';
+  return 'x64';
+}
+
+function resolveOpenClawRuntimeTargetId(context) {
+  const platform = context?.electronPlatformName;
+  const arch = resolveTargetArch(context);
+
+  if (platform === 'darwin') {
+    return arch === 'x64' ? 'mac-x64' : 'mac-arm64';
+  }
+  if (platform === 'win32') {
+    return arch === 'arm64' ? 'win-arm64' : 'win-x64';
+  }
+  if (platform === 'linux') {
+    return arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+  }
+
+  return null;
+}
+
+function readRuntimeBuildInfo(runtimeRoot) {
+  const buildInfoPath = path.join(runtimeRoot, 'runtime-build-info.json');
+  if (!existsSync(buildInfoPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(buildInfoPath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getOpenClawRuntimeBuildHint(targetId) {
+  if (!targetId) {
+    return 'npm run openclaw:runtime:host';
+  }
+  return `npm run openclaw:runtime:${targetId}`;
+}
+
+function syncCurrentOpenClawRuntimeForTarget(context) {
+  const runtimeBase = path.join(__dirname, '..', 'vendor', 'openclaw-runtime');
+  const currentRoot = path.join(runtimeBase, 'current');
+  const targetId = resolveOpenClawRuntimeTargetId(context);
+
+  if (!targetId) {
+    return { runtimeRoot: currentRoot, targetId: null };
+  }
+
+  const targetRoot = path.join(runtimeBase, targetId);
+  if (!existsSync(targetRoot)) {
+    return { runtimeRoot: currentRoot, targetId };
+  }
+
+  const currentBuildInfo = readRuntimeBuildInfo(currentRoot);
+  if (currentBuildInfo?.target !== targetId) {
+    rmSync(currentRoot, { recursive: true, force: true });
+    cpSync(targetRoot, currentRoot, { recursive: true, force: true });
+    console.log(`[electron-builder-hooks] Synced OpenClaw runtime ${targetId} -> current`);
+  }
+
+  return { runtimeRoot: currentRoot, targetId };
+}
+
+function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
+  const pkgPath = path.join(__dirname, '..', 'package.json');
+  let plugins = [];
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    plugins = (pkg.openclaw && pkg.openclaw.plugins) || [];
+  } catch {
+    return; // Cannot read package.json — skip verification
+  }
+
+  if (!Array.isArray(plugins) || plugins.length === 0) {
+    return;
+  }
+
+  const extensionsDir = path.join(runtimeRoot, 'extensions');
+  const missing = [];
+
+  for (const plugin of plugins) {
+    if (!plugin.id) continue;
+    const pluginDir = path.join(extensionsDir, plugin.id);
+    if (!existsSync(pluginDir)) {
+      missing.push(plugin.id);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Preinstalled OpenClaw plugins missing from runtime: '
+      + missing.join(', ')
+      + `. Run \`${buildHint}\` (which includes openclaw:plugins) before packaging.`,
+    );
+  }
+
+  console.log(`[electron-builder-hooks] Verified ${plugins.length} preinstalled OpenClaw plugin(s).`);
+}
+
+function ensureBundledOpenClawRuntime(context) {
+  const { runtimeRoot, targetId } = syncCurrentOpenClawRuntimeForTarget(context);
+  const buildHint = getOpenClawRuntimeBuildHint(targetId);
+
+  const localMcpBridgeDir = path.join(runtimeRoot, 'extensions', 'mcp-bridge');
+  if (!existsSync(localMcpBridgeDir)) {
+    syncLocalOpenClawExtensions(runtimeRoot);
+  }
+
+  const requiredExternalPaths = [
+    path.join(runtimeRoot, 'node_modules'),
+  ];
+  const missingExternal = requiredExternalPaths.filter((candidate) => !existsSync(candidate));
+  if (missingExternal.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw runtime is incomplete. Missing: '
+      + missingExternal.join(', ')
+      + `. Run \`${buildHint}\` before packaging.`,
+    );
+  }
+
+  // Verify preinstalled plugins are present in the runtime extensions directory
+  verifyPreinstalledPlugins(runtimeRoot, buildHint);
+
+  const gatewayAsarPath = path.join(runtimeRoot, 'gateway.asar');
+  if (existsSync(gatewayAsarPath)) {
+    let entries;
+    try {
+      // Normalize paths: on Windows, asar.listPackage may return backslash paths
+      entries = new Set(asar.listPackage(gatewayAsarPath).map(e => e.replace(/\\/g, '/')));
+    } catch (error) {
+      throw new Error(
+        '[electron-builder-hooks] Failed to read OpenClaw gateway.asar: '
+        + `${gatewayAsarPath}. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const hasOpenClawEntry = entries.has('/openclaw.mjs');
+    const hasControlUiIndex = entries.has('/dist/control-ui/index.html');
+    const hasGatewayEntry = entries.has('/dist/entry.js') || entries.has('/dist/entry.mjs');
+
+    if (!hasOpenClawEntry || !hasControlUiIndex || !hasGatewayEntry) {
+      throw new Error(
+        '[electron-builder-hooks] OpenClaw gateway.asar is incomplete. '
+        + `openclaw.mjs=${hasOpenClawEntry}, control-ui=${hasControlUiIndex}, entry=${hasGatewayEntry}.`,
+      );
+    }
+
+    return;
+  }
+
+  const legacyRequiredPaths = [
+    path.join(runtimeRoot, 'openclaw.mjs'),
+    path.join(runtimeRoot, 'dist', 'control-ui', 'index.html'),
+  ];
+
+  const hasLegacyEntry = existsSync(path.join(runtimeRoot, 'dist', 'entry.js'))
+    || existsSync(path.join(runtimeRoot, 'dist', 'entry.mjs'));
+  if (!hasLegacyEntry) {
+    throw new Error(
+      '[electron-builder-hooks] Missing OpenClaw runtime entry. '
+      + `Expected ${path.join(runtimeRoot, 'dist', 'entry.js')} or ${path.join(runtimeRoot, 'dist', 'entry.mjs')}, `
+      + `or ${path.join(runtimeRoot, 'gateway.asar')}.`,
+    );
+  }
+
+  const missingLegacy = legacyRequiredPaths.filter((candidate) => !existsSync(candidate));
+  if (missingLegacy.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw legacy runtime is incomplete. Missing: '
+      + missingLegacy.join(', ')
+      + `. Run \`${buildHint}\` before packaging.`,
+    );
+  }
 }
 
 function findPackagedBash(appOutDir) {
@@ -127,108 +312,72 @@ function applyMacIconFix(appPath) {
 }
 
 /**
- * Re-download node-nim native binaries for the target platform.
- *
- * node-nim's download-sdk.js has a bug when cross-compiling: it uses
- * `process.platform` (immutable) instead of `npm_config_platform` to decide
- * the arch, so on macOS it always picks "universal" even when targeting win32.
- *
- * To work around this we invoke the script with a small wrapper that patches
- * `process.platform` before the real script runs.
+ * Remove broken symlinks from a directory recursively.
+ * This fixes macOS code signing failures caused by dangling symlinks in node_modules/.bin
  */
-async function rebuildNodeNimForTarget(targetPlatform, targetArch) {
-  const nodeNimDir = path.join(__dirname, '..', 'node_modules', 'node-nim');
-  const downloadScript = path.join(nodeNimDir, 'script', 'download-sdk.js');
+function removeBrokenSymlinks(dir) {
+  if (!existsSync(dir)) return 0;
 
-  if (!existsSync(downloadScript)) {
-    console.warn('[electron-builder-hooks] node-nim download script not found, skipping native binary rebuild');
+  let removedCount = 0;
+  const entries = readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+
+    try {
+      if (entry.isSymbolicLink()) {
+        // Check if symlink target exists
+        try {
+          statSync(fullPath); // follows symlink
+        } catch {
+          // Symlink is broken - remove it
+          rmSync(fullPath, { force: true });
+          removedCount++;
+        }
+      } else if (entry.isDirectory()) {
+        removedCount += removeBrokenSymlinks(fullPath);
+      }
+    } catch (err) {
+      // Skip entries we can't access
+    }
+  }
+
+  return removedCount;
+}
+
+/**
+ * Clean up broken symlinks in cfmind/extensions to prevent macOS signing failures.
+ */
+function cleanupBrokenSymlinksInExtensions(appOutDir) {
+  const extensionsDir = path.join(appOutDir, 'Contents', 'Resources', 'cfmind', 'extensions');
+
+  if (!existsSync(extensionsDir)) {
     return;
   }
 
-  const releaseDir = path.join(nodeNimDir, 'build', 'Release');
-  if (existsSync(releaseDir)) {
-    const fs = require('fs');
-    const files = fs.readdirSync(releaseDir);
-    const hasDylib = files.some(f => f.endsWith('.dylib'));
-    const hasDll = files.some(f => f.endsWith('.dll'));
+  console.log('[electron-builder-hooks] Cleaning up broken symlinks in cfmind/extensions...');
 
-    if (targetPlatform === 'win32' && hasDll && !hasDylib) {
-      console.log('[electron-builder-hooks] node-nim already has win32 binaries, skipping re-download');
-      return;
-    }
-    if (targetPlatform === 'darwin' && hasDylib && !hasDll) {
-      console.log('[electron-builder-hooks] node-nim already has darwin binaries, skipping re-download');
-      return;
-    }
-  }
+  let totalRemoved = 0;
+  const extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
 
-  console.log(`[electron-builder-hooks] Re-downloading node-nim binaries for ${targetPlatform}-${targetArch}...`);
+  for (const entry of extensionEntries) {
+    if (!entry.isDirectory()) continue;
 
-  // Workaround for cross-platform builds:
-  //
-  // node-nim's download-sdk.js has two issues when cross-compiling:
-  // 1. It uses `process.platform` (immutable) to decide arch → always 'universal' on macOS
-  // 2. The download logic only runs when `require.main === module`
-  //
-  // Solution: create a wrapper script that:
-  // - Overrides process.platform and process.arch BEFORE the module loads
-  // - Calls the exported downloadSDK() function directly (bypassing the main guard)
-  //
-  // We also must ensure the module-level `arch` and `platform` variables pick up
-  // the overridden values, which happens because they read process.platform at
-  // load time via `const platform = process.env.npm_config_platform || process.platform`.
-  const wrapperCode = [
-    // Override process.platform and process.arch so module-level const picks them up
-    `Object.defineProperty(process, 'platform', { value: '${targetPlatform}', writable: true, configurable: true });`,
-    `Object.defineProperty(process, 'arch', { value: '${targetArch}', writable: true, configurable: true });`,
-    // Load the module (this evaluates the top-level const arch/platform with our overrides)
-    `const sdk = require(${JSON.stringify(downloadScript)});`,
-    // Call the exported downloadSDK() function directly
-    `sdk.downloadSDK().then(() => {`,
-    `  console.log(' ✅ Download completed successfully');`,
-    `}).catch((err) => {`,
-    `  console.error(' ❌ Download failed:', err.message);`,
-    `  process.exit(1);`,
-    `});`,
-  ].join('\n');
-
-  const result = spawnSync(process.execPath, ['-e', wrapperCode], {
-    cwd: nodeNimDir,
-    encoding: 'utf-8',
-    stdio: 'inherit',
-    timeout: 5 * 60 * 1000, // 5 minute timeout for download
-    env: {
-      ...process.env,
-      npm_config_platform: targetPlatform,
-      npm_config_arch: targetArch,
-      npm_package_version: require(path.join(nodeNimDir, 'package.json')).version,
-    },
-  });
-
-  if (result.status !== 0) {
-    throw new Error(
-      `Failed to download node-nim binaries for ${targetPlatform}-${targetArch}. ` +
-      `Exit code: ${result.status}. ${result.stderr || ''}`
-    );
-  }
-
-  // Verify the downloaded binaries are correct
-  if (existsSync(releaseDir)) {
-    const fs = require('fs');
-    const files = fs.readdirSync(releaseDir);
-    console.log(`[electron-builder-hooks] node-nim build/Release contents: ${files.join(', ')}`);
-
-    const hasDll = files.some(f => f.endsWith('.dll'));
-    const hasNode = files.some(f => f.endsWith('.node'));
-    if (targetPlatform === 'win32' && (!hasDll || !hasNode)) {
-      throw new Error(
-        `node-nim binary download completed but win32 binaries (.dll/.node) not found. ` +
-        `Found: ${files.join(', ')}`
-      );
+    const nodeModulesBin = path.join(extensionsDir, entry.name, 'node_modules', '.bin');
+    if (existsSync(nodeModulesBin)) {
+      const removed = removeBrokenSymlinks(nodeModulesBin);
+      if (removed > 0) {
+        console.log(`[electron-builder-hooks]   ${entry.name}: removed ${removed} broken symlink(s)`);
+        totalRemoved += removed;
+      }
     }
   }
 
-  console.log(`[electron-builder-hooks] ✓ node-nim binaries updated for ${targetPlatform}-${targetArch}`);
+  if (totalRemoved > 0) {
+    console.log(`[electron-builder-hooks] ✓ Removed ${totalRemoved} broken symlink(s) total`);
+  } else {
+    console.log('[electron-builder-hooks] ✓ No broken symlinks found');
+  }
 }
 
 /**
@@ -313,6 +462,7 @@ function installSkillDependencies() {
 }
 
 async function beforePack(context) {
+  ensureBundledOpenClawRuntime(context);
   // Install skill dependencies first (for all platforms)
   installSkillDependencies();
 
@@ -333,72 +483,6 @@ async function beforePack(context) {
     );
   }
 
-  // Re-download node-nim native binaries for Windows
-  const targetArch = context.arch === 1 ? 'x64' : context.arch === 3 ? 'arm64' : 'x64';
-  await rebuildNodeNimForTarget('win32', targetArch);
-}
-
-/**
- * Check if node-nim binaries match the host platform.
- * Returns true if they need to be restored.
- */
-function nodeNimNeedsRestore() {
-  const hostPlatform = process.platform; // real platform (not overridden here)
-  const releaseDir = path.join(__dirname, '..', 'node_modules', 'node-nim', 'build', 'Release');
-  if (!existsSync(releaseDir)) return false;
-
-  const fs = require('fs');
-  const files = fs.readdirSync(releaseDir);
-  const hasDylib = files.some(f => f.endsWith('.dylib'));
-  const hasDll = files.some(f => f.endsWith('.dll'));
-
-  if (hostPlatform === 'darwin' && hasDll && !hasDylib) return true;
-  if (hostPlatform === 'win32' && hasDylib && !hasDll) return true;
-  return false;
-}
-
-/**
- * Restore node-nim binaries to the host (build machine) platform.
- * This is called after cross-platform packaging so that local dev
- * (`npm run electron:dev`) continues to work.
- */
-function restoreNodeNimForHost() {
-  const hostPlatform = process.platform;
-  const hostArch = process.arch;
-
-  if (!nodeNimNeedsRestore()) return;
-
-  console.log(`[electron-builder-hooks] Restoring node-nim binaries for host platform (${hostPlatform}-${hostArch})...`);
-
-  const nodeNimDir = path.join(__dirname, '..', 'node_modules', 'node-nim');
-  const downloadScript = path.join(nodeNimDir, 'script', 'download-sdk.js');
-
-  if (!existsSync(downloadScript)) {
-    console.warn('[electron-builder-hooks] node-nim download script not found, cannot restore host binaries');
-    return;
-  }
-
-  // For the host platform, download-sdk.js works correctly without patching
-  // because process.platform already matches the host.
-  const result = spawnSync(process.execPath, [downloadScript], {
-    cwd: nodeNimDir,
-    encoding: 'utf-8',
-    stdio: 'inherit',
-    timeout: 5 * 60 * 1000,
-    env: {
-      ...process.env,
-      npm_package_version: require(path.join(nodeNimDir, 'package.json')).version,
-    },
-  });
-
-  if (result.status !== 0) {
-    console.error(
-      `[electron-builder-hooks] ⚠️ Failed to restore node-nim for ${hostPlatform}-${hostArch}. ` +
-      `Run "cd node_modules/node-nim && node script/download-sdk.js" manually to fix.`
-    );
-  } else {
-    console.log(`[electron-builder-hooks] ✓ node-nim binaries restored for ${hostPlatform}-${hostArch}`);
-  }
 }
 
 async function afterPack(context) {
@@ -434,10 +518,6 @@ async function afterPack(context) {
       );
     }
     console.log(`[electron-builder-hooks] Verified bundled Python runtime: ${pythonExe}`);
-
-    // Restore node-nim to host platform after packaging is done
-    // so that local dev (npm run electron:dev) still works
-    restoreNodeNimForHost();
   }
 
   if (isMacTarget(context)) {
@@ -445,6 +525,8 @@ async function afterPack(context) {
     const appPath = path.join(context.appOutDir, `${appName}.app`);
 
     if (existsSync(appPath)) {
+      // Clean up broken symlinks before signing to prevent ENOENT errors
+      cleanupBrokenSymlinksInExtensions(appPath);
       applyMacIconFix(appPath);
     } else {
       console.warn(`[electron-builder-hooks] App not found at ${appPath}, skipping icon fix`);

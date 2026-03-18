@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSelector } from 'react-redux';
-import { MagnifyingGlassIcon, Cog6ToothIcon, PuzzlePieceIcon, CheckIcon } from '@heroicons/react/24/outline';
+import { CheckIcon } from '@heroicons/react/24/outline';
+import SearchIcon from '../icons/SearchIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import Cog6ToothIcon from '../icons/Cog6ToothIcon';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -108,7 +111,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
       {/* Search input */}
       <div className="p-3 border-b dark:border-claude-darkBorder border-claude-border">
         <div className="relative">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
           <input
             ref={searchInputRef}
             type="text"
@@ -147,7 +150,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
                   {isActive ? (
                     <CheckIcon className="h-4 w-4" />
                   ) : (
-                    <PuzzlePieceIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                    <PuzzleIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">

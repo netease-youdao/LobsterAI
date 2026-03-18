@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync, readdirSync 
 import { delimiter, dirname, join } from 'path';
 import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
-import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
@@ -1151,13 +1150,19 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   const hasSystemNode = hasCommandInEnv('node', env);
   const hasSystemNpx = hasCommandInEnv('npx', env);
   const hasSystemNpm = hasCommandInEnv('npm', env);
-  const shouldInjectShim = process.platform === 'win32' || !(hasSystemNode && hasSystemNpx && hasSystemNpm);
+  const shouldForcePackagedDarwinShim = app.isPackaged && process.platform === 'darwin';
+  const shouldInjectShim = shouldForcePackagedDarwinShim
+    || process.platform === 'win32'
+    || !(hasSystemNode && hasSystemNpx && hasSystemNpm);
   if (shouldInjectShim) {
     const shimDir = ensureElectronNodeShim(electronNodeRuntimePath, npmBinDir);
     if (shimDir) {
       env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
       env.LOBSTERAI_NODE_SHIM_ACTIVE = '1';
       coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
+      if (shouldForcePackagedDarwinShim) {
+        coworkLog('INFO', 'resolveNodeShim', 'Packaged macOS build: forcing bundled Electron node/npx/npm shims to avoid stale system Node versions');
+      }
 
       // Re-compute ORIGINAL_PATH after shim injection so that git-bash
       // also sees the bundled node/npx/npm in its PATH.
@@ -1315,12 +1320,6 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
     env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
   } else {
     delete env.LOBSTERAI_ELECTRON_PATH;
-  }
-
-  // Inject internal API base URL for skill scripts (e.g. scheduled-task creation)
-  const internalApiBaseURL = getInternalApiBaseURL();
-  if (internalApiBaseURL) {
-    env.LOBSTERAI_API_BASE_URL = internalApiBaseURL;
   }
 
   // Skip system proxy resolution if proxy env vars already exist
@@ -1598,6 +1597,7 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
   try {
     const url = buildAnthropicMessagesUrl(config.baseURL);
     const prompt = `Generate a short title from this input, keep the same language, return plain text only (no markdown), and keep it within ${SESSION_TITLE_MAX_CHARS} characters: ${normalizedInput}`;
+    console.log(`[cowork-title] Generating title: apiType=${config.apiType}, baseURL=${config.baseURL}, requestUrl=${url}, model=${config.model}`);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -1626,7 +1626,9 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
     }
 
     const payload = await response.json();
+    console.log(`[cowork-title] Title response payload:`, JSON.stringify(payload).slice(0, 500));
     const llmTitle = extractTextFromAnthropicResponse(payload);
+    console.log(`[cowork-title] Extracted title text: "${llmTitle}"`);
     return normalizeTitleToPlainText(llmTitle, fallbackTitle);
   } catch (error) {
     console.error('Failed to generate session title:', error);

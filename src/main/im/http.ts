@@ -1,8 +1,5 @@
 import { app, session } from 'electron';
 
-// Fallback for cases where Electron session is not ready yet.
-const nodeFetch = require('node-fetch');
-
 function linkAbortSignal(source: AbortSignal, controller: AbortController): void {
   if (source.aborted) {
     controller.abort();
@@ -17,11 +14,11 @@ export async function fetchWithSystemProxy(url: string, options: RequestInit = {
       return await session.defaultSession.fetch(url, options);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[IM HTTP] session fetch failed, fallback to node-fetch: ${message}`);
+      console.warn(`[IM HTTP] session fetch failed, fallback to global fetch: ${message}`);
     }
   }
 
-  return nodeFetch(url, options);
+  return fetch(url, options);
 }
 
 export async function fetchJsonWithTimeout<T>(

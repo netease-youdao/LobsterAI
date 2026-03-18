@@ -8,19 +8,29 @@ import { i18nService } from '../../services/i18n';
 interface CoworkSessionListProps {
   sessions: CoworkSessionSummary[];
   currentSessionId: string | null;
+  isBatchMode: boolean;
+  selectedIds: Set<string>;
+  showBatchOption?: boolean;
   onSelectSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onTogglePin: (sessionId: string, pinned: boolean) => void;
   onRenameSession: (sessionId: string, title: string) => void;
+  onToggleSelection: (sessionId: string) => void;
+  onEnterBatchMode: (sessionId: string) => void;
 }
 
 const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
   sessions,
   currentSessionId,
+  isBatchMode,
+  selectedIds,
+  showBatchOption = true,
   onSelectSession,
   onDeleteSession,
   onTogglePin,
   onRenameSession,
+  onToggleSelection,
+  onEnterBatchMode,
 }) => {
   const unreadSessionIds = useSelector((state: RootState) => state.cowork.unreadSessionIds);
   const unreadSessionIdSet = useMemo(() => new Set(unreadSessionIds), [unreadSessionIds]);
@@ -60,10 +70,15 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           session={session}
           hasUnread={unreadSessionIdSet.has(session.id)}
           isActive={session.id === currentSessionId}
+          isBatchMode={isBatchMode}
+          isSelected={selectedIds.has(session.id)}
+          showBatchOption={showBatchOption}
           onSelect={() => onSelectSession(session.id)}
           onDelete={() => onDeleteSession(session.id)}
           onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
           onRename={(title) => onRenameSession(session.id, title)}
+          onToggleSelection={() => onToggleSelection(session.id)}
+          onEnterBatchMode={() => onEnterBatchMode(session.id)}
         />
       ))}
     </div>

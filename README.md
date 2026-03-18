@@ -30,7 +30,7 @@ At its core is **Cowork mode** — it executes tools, manipulates files, and run
 ## Key Features
 
 - **All-in-One Productivity Assistant** — Data analysis, PPT creation, video generation, document writing, web search, email — covers the full range of daily work
-- **Local + Sandbox Execution** — Run tasks directly on your machine or in an isolated Alpine Linux sandbox
+- **Local + Sandbox Execution** — Run tasks directly on your machine or in an OpenClaw sandbox environment
 - **Built-in Skills** — Office document generation, web search, Playwright automation, Remotion video generation, and more
 - **Windows Built-in Python Runtime** — Windows packages bundle a ready-to-use Python interpreter runtime; Python skill dependencies can be installed on demand
 - **Scheduled Tasks** — Create recurring tasks via conversation or the GUI — daily news digests, inbox cleanup, periodic report generation, and more
@@ -69,6 +69,37 @@ npm run electron:dev
 
 The dev server runs at `http://localhost:5175` by default.
 
+#### Develop with OpenClaw Agent Engine
+
+LobsterAI can use [OpenClaw](https://github.com/openclaw/openclaw) as its agent engine.
+The required OpenClaw version is pinned in `package.json` under `openclaw.version`.
+
+```bash
+# First run: automatically clones and builds OpenClaw (may take several minutes)
+npm run electron:dev:openclaw
+
+# Subsequent runs: skips build if the pinned version hasn't changed
+npm run electron:dev:openclaw
+```
+
+By default, OpenClaw source is cloned/managed at `../openclaw` (relative to this repo). Override with:
+
+```bash
+OPENCLAW_SRC=/path/to/openclaw npm run electron:dev:openclaw
+```
+
+To force a rebuild even when the version hasn't changed:
+
+```bash
+OPENCLAW_FORCE_BUILD=1 npm run electron:dev:openclaw
+```
+
+To skip the automatic version checkout (e.g., when developing OpenClaw locally):
+
+```bash
+OPENCLAW_SKIP_ENSURE=1 npm run electron:dev:openclaw
+```
+
 ### Production Build
 
 ```bash
@@ -101,6 +132,28 @@ npm run dist:win
 
 # Linux (.AppImage & .deb)
 npm run dist:linux
+```
+
+Desktop packaging (macOS / Windows / Linux) bundles a prebuilt OpenClaw runtime under `Resources/cfmind`.
+The pinned OpenClaw version (`package.json` → `openclaw.version`) is automatically fetched and built during packaging — no manual setup needed.
+The build is cached: if the runtime for the pinned version already exists locally, the build step is skipped automatically.
+
+You can also build OpenClaw runtime manually:
+
+```bash
+# Build runtime for current host platform (auto-detect mac/win/linux + arch)
+npm run openclaw:runtime:host
+
+# Build explicit targets
+npm run openclaw:runtime:mac-arm64
+npm run openclaw:runtime:win-x64
+npm run openclaw:runtime:linux-x64
+```
+
+Override OpenClaw source path with an environment variable when needed:
+
+```bash
+OPENCLAW_SRC=/path/to/openclaw npm run dist:win
 ```
 
 Windows builds bundle a portable Python runtime under `resources/python-win` (included as installer resource `python-win`), so end users do not need to install Python manually.
@@ -149,8 +202,6 @@ src/
 │   ├── im/                         # IM gateways (DingTalk/Feishu/Telegram/Discord)
 │   └── libs/
 │       ├── coworkRunner.ts         # Agent SDK executor
-│       ├── coworkVmRunner.ts       # Sandbox VM execution
-│       ├── coworkSandboxRuntime.ts # Sandbox lifecycle
 │       └── coworkMemoryExtractor.ts # Memory extraction
 │
 ├── renderer/                        # React frontend
@@ -187,7 +238,6 @@ Cowork is the core feature of LobsterAI — an AI working session system built o
 |------|-------------|
 | `auto` | Automatically selects based on context |
 | `local` | Direct local execution, full speed |
-| `sandbox` | Isolated Alpine Linux VM, safety first |
 
 ### Stream Events
 
@@ -315,7 +365,7 @@ LobsterAI enforces security at multiple layers:
 
 - **Process Isolation** — Context isolation enabled, node integration disabled
 - **Permission Gating** — Tool invocations require explicit user approval
-- **Sandbox Execution** — Optional Alpine Linux VM for isolated execution
+- **Sandbox Execution** — Optional OpenClaw sandbox for isolated execution
 - **Content Security** — HTML sandbox, DOMPurify, Mermaid strict mode
 - **Workspace Boundaries** — File operations restricted to the designated working directory
 - **IPC Validation** — All cross-process calls are type-checked
@@ -348,11 +398,46 @@ Cowork session config includes:
 
 - **Working Directory** — Root directory for Agent operations
 - **System Prompt** — Customize Agent behavior
-- **Execution Mode** — `auto` / `local` / `sandbox`
+- **Execution Mode** — `auto` / `local`
 
 ### Internationalization
 
 Currently English and Chinese are supported. Switch languages in the Settings panel.
+
+## OpenClaw Version Management
+
+LobsterAI pins its OpenClaw dependency to a specific release version, declared in `package.json`:
+
+```json
+{
+  "openclaw": {
+    "version": "v2026.3.2",
+    "repo": "https://github.com/openclaw/openclaw.git"
+  }
+}
+```
+
+### How It Works
+
+| Step | What happens | When |
+|------|-------------|------|
+| **Version ensure** | Clones or checks out the pinned tag in `../openclaw` | Before every runtime build |
+| **Build cache check** | Compares pinned version with `runtime-build-info.json` | Before every runtime build |
+| **Full build** | `pnpm install` → `build` → `ui:build` → pack to asar | Only when version changed |
+
+### Updating OpenClaw Version
+
+1. Change `openclaw.version` in `package.json` to the desired release tag
+2. Run `npm run electron:dev:openclaw` or `npm run dist:win` — the new version is fetched and built automatically
+3. Commit the `package.json` change
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OPENCLAW_SRC` | Path to OpenClaw source directory | `../openclaw` |
+| `OPENCLAW_FORCE_BUILD` | Set to `1` to force rebuild even if version matches | — |
+| `OPENCLAW_SKIP_ENSURE` | Set to `1` to skip automatic version checkout | — |
 
 ## Development Guidelines
 

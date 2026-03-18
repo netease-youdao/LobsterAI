@@ -8,11 +8,13 @@ import {
   removeTask,
   updateTaskState,
   setRuns,
+  appendRuns,
   addOrUpdateRun,
   setAllRuns,
   appendAllRuns,
 } from '../store/slices/scheduledTaskSlice';
 import type {
+  ScheduledTaskChannelOption,
   ScheduledTaskInput,
   ScheduledTaskStatusEvent,
   ScheduledTaskRunEvent,
@@ -58,6 +60,12 @@ class ScheduledTaskService {
       }
     );
     this.cleanupFns.push(cleanupRun);
+
+    // Listen for full refresh events (e.g., after first poll or migration)
+    const cleanupRefresh = api.onRefresh(() => {
+      this.loadTasks();
+    });
+    this.cleanupFns.push(cleanupRefresh);
   }
 
   async loadTasks(): Promise<void> {
@@ -72,6 +80,8 @@ class ScheduledTaskService {
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+    } finally {
+      store.dispatch(setLoading(false));
     }
   }
 
@@ -103,6 +113,10 @@ class ScheduledTaskService {
       const result = await api.update(id, input);
       if (result.success && result.task) {
         store.dispatch(updateTask(result.task));
+      } else if (!result.success) {
+        const errorMsg = result.error || 'Failed to update task';
+        store.dispatch(setError(errorMsg));
+        throw new Error(errorMsg);
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
@@ -165,14 +179,19 @@ class ScheduledTaskService {
     }
   }
 
-  async loadRuns(taskId: string, limit?: number, offset?: number): Promise<void> {
+  async loadRuns(taskId: string, limit = 20, offset?: number): Promise<void> {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
     try {
       const result = await api.listRuns(taskId, limit, offset);
       if (result.success && result.runs) {
-        store.dispatch(setRuns({ taskId, runs: result.runs }));
+        const hasMore = result.runs.length >= limit;
+        if (offset && offset > 0) {
+          store.dispatch(appendRuns({ taskId, runs: result.runs, hasMore }));
+        } else {
+          store.dispatch(setRuns({ taskId, runs: result.runs, hasMore }));
+        }
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
@@ -194,6 +213,19 @@ class ScheduledTaskService {
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async listChannels(): Promise<ScheduledTaskChannelOption[]> {
+    const api = window.electron?.scheduledTasks;
+    if (!api?.listChannels) return [];
+
+    try {
+      const result = await api.listChannels();
+      return result.success && result.channels ? result.channels : [];
+    } catch (err: unknown) {
+      store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+      return [];
     }
   }
 }

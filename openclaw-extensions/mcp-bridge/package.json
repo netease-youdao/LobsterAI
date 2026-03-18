@@ -1,0 +1,11 @@
+{
+  "name": "@lobsterai/openclaw-mcp-bridge",
+  "version": "0.0.0",
+  "description": "Expose LobsterAI-managed MCP servers as native OpenClaw tools.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

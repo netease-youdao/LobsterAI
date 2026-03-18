@@ -470,4 +470,3 @@ Both implementations:
 ## Related Skills
 
 - **imap-smtp-email** - For email-based meeting invitations
-- **scheduled-task** - For recurring calendar synchronization

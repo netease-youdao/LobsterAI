@@ -9,18 +9,21 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, PlusCircleIcon, TrashIcon, PencilIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, ShieldCheckIcon, EnvelopeIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
+import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
+import PlusCircleIcon from './icons/PlusCircleIcon';
+import TrashIcon from './icons/TrashIcon';
+import PencilIcon from './icons/PencilIcon';
 import BrainIcon from './icons/BrainIcon';
 import { useDispatch, useSelector } from 'react-redux';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import { RootState } from '../store';
 import ThemedSelect from './ui/ThemedSelect';
 import type {
-  CoworkExecutionMode,
+  CoworkAgentEngine,
+  OpenClawEngineStatus,
   CoworkUserMemoryEntry,
   CoworkMemoryStats,
-  CoworkSandboxProgress,
-  CoworkSandboxStatus,
 } from '../types/cowork';
 import IMSettings from './im/IMSettings';
 import EmailSkillConfig from './skills/EmailSkillConfig';
@@ -36,13 +39,14 @@ import {
   YouDaoZhiYunIcon,
   QwenIcon,
   XiaomiIcon,
+  StepfunIcon,
   VolcengineIcon,
   OpenRouterIcon,
   OllamaIcon,
   CustomProviderIcon,
 } from './icons/providers';
 
-type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email' | 'about';
+type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -62,10 +66,11 @@ const providerKeys = [
   'moonshot',
   'zhipu',
   'minimax',
-  'youdaozhiyun',
-  'qwen',
-  'xiaomi',
   'volcengine',
+  'qwen',
+  'youdaozhiyun',
+  'stepfun',
+  'xiaomi',
   'openrouter',
   'ollama',
   'custom',
@@ -132,9 +137,10 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   moonshot: { label: 'Moonshot', icon: <MoonshotIcon /> },
   zhipu: { label: 'Zhipu', icon: <ZhipuIcon /> },
   minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
-  youdaozhiyun: { label: '有道智云', icon: <YouDaoZhiYunIcon /> },
+  youdaozhiyun: { label: 'Youdao', icon: <YouDaoZhiYunIcon /> },
   qwen: { label: 'Qwen', icon: <QwenIcon /> },
   xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
+  stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
   volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
   openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
   ollama: { label: 'Ollama', icon: <OllamaIcon /> },
@@ -228,7 +234,7 @@ const copyTextToClipboard = async (text: string): Promise<boolean> => {
 };
 
 const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
-  if (provider === 'openai' || provider === 'gemini') {
+  if (provider === 'openai' || provider === 'gemini' || provider === 'stepfun') {
     return 'openai';
   }
   if (provider === 'youdaozhiyun') {
@@ -251,6 +257,16 @@ const getProviderDefaultBaseUrl = (
 ): string | null => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
   return defaults ? defaults[apiFormat] : null;
+};
+const resolveBaseUrl = (
+  provider: ProviderType,
+  baseUrl: string,
+  apiFormat: 'anthropic' | 'openai'
+): string => {
+  if (baseUrl.trim()) return baseUrl;
+  return getProviderDefaultBaseUrl(provider, apiFormat)
+    || defaultConfig.providers?.[provider]?.baseUrl
+    || '';
 };
 const shouldAutoSwitchProviderBaseUrl = (provider: ProviderType, currentBaseUrl: string): boolean => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
@@ -347,6 +363,16 @@ const getDefaultActiveProvider = (): ProviderType => {
   return firstEnabledProvider ?? providerKeys[0];
 };
 
+/** Join workspace directory with a filename using platform-aware separator. */
+const joinWorkspacePath = (dir: string | undefined, filename: string): string => {
+  const base = dir?.trim() || '~/.openclaw/workspace';
+  const sep = window.electron.platform === 'win32' ? '\\' : '/';
+  // Normalize: if base already ends with a separator, don't double it
+  return base.endsWith(sep) || base.endsWith('/') || base.endsWith('\\')
+    ? `${base}${filename}`
+    : `${base}${sep}${filename}`;
+};
+
 const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
   const dispatch = useDispatch();
   // 状态
@@ -370,9 +396,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
+  const [showApiKey, setShowApiKey] = useState(false);
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+
+  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled);
   
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
@@ -409,6 +438,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     window.electron.appInfo.getVersion().then(setAppVersion);
   }, []);
 
+  useEffect(() => {
+    setShowApiKey(false);
+  }, [activeProvider]);
+
   const handleCopyContactEmail = useCallback(async () => {
     const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
     if (copied) {
@@ -427,7 +460,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     if (updateCheckStatus === 'checking' || !appVersion) return;
     setUpdateCheckStatus('checking');
     try {
-      const info = await checkForAppUpdate(appVersion);
+      const info = await checkForAppUpdate(appVersion, true);
       if (info) {
         setUpdateCheckStatus('idle');
         onUpdateFound?.(info);
@@ -498,7 +531,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
 
-  const [coworkExecutionMode, setCoworkExecutionMode] = useState<CoworkExecutionMode>(coworkConfig.executionMode || 'local');
+  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
@@ -508,17 +541,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
-  const [coworkSandboxStatus, setCoworkSandboxStatus] = useState<CoworkSandboxStatus | null>(null);
-  const [coworkSandboxLoading, setCoworkSandboxLoading] = useState(true);
-  const [coworkSandboxProgress, setCoworkSandboxProgress] = useState<CoworkSandboxProgress | null>(null);
-  const [coworkSandboxInstalling, setCoworkSandboxInstalling] = useState(false);
+  const [bootstrapIdentity, setBootstrapIdentity] = useState<string>('');
+  const [bootstrapUser, setBootstrapUser] = useState<string>('');
+  const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
+  const [bootstrapLoaded, setBootstrapLoaded] = useState<boolean>(false);
+  const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
 
   useEffect(() => {
-    setCoworkExecutionMode(coworkConfig.executionMode || 'local');
+    setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
   }, [
-    coworkConfig.executionMode,
+    coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
@@ -532,35 +566,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }
   }, []);
 
-  const loadCoworkSandboxStatus = useCallback(async () => {
-    setCoworkSandboxLoading(true);
-    try {
-      const status = await coworkService.getSandboxStatus();
-      setCoworkSandboxStatus(status);
-      if (status?.progress) {
-        setCoworkSandboxProgress(status.progress);
-      }
-    } catch (loadError) {
-      console.error('Failed to load cowork sandbox status:', loadError);
-      setCoworkSandboxStatus(null);
-    } finally {
-      setCoworkSandboxLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    loadCoworkSandboxStatus();
-  }, [loadCoworkSandboxStatus]);
-
-  useEffect(() => {
-    const unsubscribe = coworkService.onSandboxDownloadProgress((progress) => {
-      setCoworkSandboxProgress(progress);
-      if (progress.percent !== undefined && progress.percent >= 1) {
-        void loadCoworkSandboxStatus();
-      }
+    let active = true;
+    void coworkService.getOpenClawEngineStatus().then((status) => {
+      if (!active || !status) return;
+      setOpenClawEngineStatus(status);
     });
-    return () => unsubscribe();
-  }, [loadCoworkSandboxStatus]);
+    const unsubscribe = coworkService.onOpenClawEngineStatus((status) => {
+      if (!active) return;
+      setOpenClawEngineStatus(status);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -660,6 +680,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             ...prev,
             qwen: {
               ...prev.qwen,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
+        } else if (normalizedApiBaseUrl.includes('stepfun')) {
+          setActiveProvider('stepfun');
+          setProviders(prev => ({
+            ...prev,
+            stepfun: {
+              ...prev.stepfun,
               enabled: true,
               apiKey: config.api.key,
               baseUrl: config.api.baseUrl
@@ -913,50 +944,39 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     });
   };
 
-  const hasCoworkConfigChanges = coworkExecutionMode !== coworkConfig.executionMode
+  const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
+  const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
-  const coworkSandboxDisabled = !coworkSandboxStatus?.supported
-    || !coworkSandboxStatus?.runtimeReady
-    || !coworkSandboxStatus?.imageReady;
-
-  const coworkSandboxStatusHint = useMemo(() => {
-    if (coworkSandboxLoading) return i18nService.t('coworkSandboxChecking');
-    if (!coworkSandboxStatus?.supported) return i18nService.t('coworkSandboxUnsupported');
-    if (coworkSandboxStatus?.downloading) return i18nService.t('coworkSandboxDownloading');
-    if (!coworkSandboxStatus?.runtimeReady) return i18nService.t('coworkSandboxRuntimeMissing');
-    if (!coworkSandboxStatus?.imageReady) return i18nService.t('coworkSandboxImageMissing');
-    return '';
-  }, [coworkSandboxLoading, coworkSandboxStatus]);
-
-  const coworkSandboxPercent = useMemo(() => {
-    if (!coworkSandboxProgress) return null;
-    if (coworkSandboxProgress.percent !== undefined && Number.isFinite(coworkSandboxProgress.percent)) {
-      return Math.min(100, Math.max(0, Math.round(coworkSandboxProgress.percent * 100)));
+  const openClawProgressPercent = useMemo(() => {
+    if (typeof openClawEngineStatus?.progressPercent !== 'number' || !Number.isFinite(openClawEngineStatus.progressPercent)) {
+      return null;
     }
-    if (coworkSandboxProgress.total && coworkSandboxProgress.total > 0) {
-      return Math.min(100, Math.max(0, Math.round((coworkSandboxProgress.received / coworkSandboxProgress.total) * 100)));
+    return Math.max(0, Math.min(100, Math.round(openClawEngineStatus.progressPercent)));
+  }, [openClawEngineStatus]);
+
+  const resolveOpenClawStatusText = (status: OpenClawEngineStatus | null): string => {
+    if (!status) {
+      return i18nService.t('coworkOpenClawNotInstalledNotice');
     }
-    return null;
-  }, [coworkSandboxProgress]);
-
-  const coworkSandboxStageLabel = coworkSandboxProgress?.stage === 'image'
-    ? (i18nService.getLanguage() === 'zh' ? '镜像' : 'Image')
-    : (i18nService.getLanguage() === 'zh' ? '运行时' : 'Runtime');
-
-  const handleInstallCoworkSandbox = async () => {
-    setCoworkSandboxInstalling(true);
-    try {
-      const result = await coworkService.installSandbox();
-      if (result?.status) {
-        setCoworkSandboxStatus(result.status);
-        if (result.status.progress) {
-          setCoworkSandboxProgress(result.status.progress);
-        }
-      }
-    } finally {
-      setCoworkSandboxInstalling(false);
+    if (status.message?.trim()) {
+      return status.message.trim();
+    }
+    switch (status.phase) {
+      case 'not_installed':
+        return i18nService.t('coworkOpenClawNotInstalledNotice');
+      case 'installing':
+        return i18nService.t('coworkOpenClawInstalling');
+      case 'ready':
+        return i18nService.t('coworkOpenClawReadyNotice');
+      case 'starting':
+        return i18nService.t('coworkOpenClawStarting');
+      case 'error':
+        return i18nService.t('coworkOpenClawError');
+      case 'running':
+      default:
+        return i18nService.t('coworkOpenClawRunning');
     }
   };
 
@@ -987,6 +1007,38 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     void loadCoworkMemoryData();
   }, [activeTab, loadCoworkMemoryData]);
 
+  /**
+   * Detect OpenClaw default template content and return empty string.
+   * Templates contain YAML frontmatter and specific marker phrases.
+   */
+  const stripDefaultTemplate = (content: string): string => {
+    if (!content.trim()) return '';
+    const TEMPLATE_MARKERS = [
+      'Fill this in during your first conversation',
+      "You're not a chatbot. You're becoming someone",
+      'Learn about the person you\'re helping',
+    ];
+    if (TEMPLATE_MARKERS.some((m) => content.includes(m))) return '';
+    return content;
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'coworkAgent') return;
+    if (!bootstrapLoaded) {
+      void (async () => {
+        const [identity, user, soul] = await Promise.all([
+          coworkService.readBootstrapFile('IDENTITY.md'),
+          coworkService.readBootstrapFile('USER.md'),
+          coworkService.readBootstrapFile('SOUL.md'),
+        ]);
+        setBootstrapIdentity(stripDefaultTemplate(identity));
+        setBootstrapUser(stripDefaultTemplate(user));
+        setBootstrapSoul(stripDefaultTemplate(soul));
+        setBootstrapLoaded(true);
+      })();
+    }
+  }, [activeTab, bootstrapLoaded]);
+
   const resetCoworkMemoryEditor = () => {
     setCoworkMemoryEditingId(null);
     setCoworkMemoryDraftText('');
@@ -1003,13 +1055,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         await coworkService.updateMemoryEntry({
           id: coworkMemoryEditingId,
           text,
-          status: 'created',
-          isExplicit: true,
         });
       } else {
         await coworkService.createMemoryEntry({
           text,
-          isExplicit: true,
         });
       }
       resetCoworkMemoryEditor();
@@ -1042,21 +1091,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }
   };
 
-  const getMemoryStatusLabel = (status: CoworkUserMemoryEntry['status']): string => {
-    if (status === 'created') return i18nService.t('coworkMemoryStatusActive');
-    if (status === 'stale') return i18nService.t('coworkMemoryStatusInactive');
-    return i18nService.t('coworkMemoryStatusDeleted');
-  };
-
-  const formatMemoryUpdatedAt = (timestamp: number): string => {
-    if (!Number.isFinite(timestamp) || timestamp <= 0) return '-';
-    try {
-      return new Date(timestamp).toLocaleString();
-    } catch {
-      return '-';
-    }
-  };
-
   const handleOpenCoworkMemoryModal = () => {
     resetCoworkMemoryEditor();
     setShowMemoryModal(true);
@@ -1082,6 +1116,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }));
   };
 
+  const enableProvider = (provider: ProviderType) => {
+    setProviders(prev => {
+      if (prev[provider].enabled) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [provider]: {
+          ...prev[provider],
+          enabled: true,
+        },
+      };
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSaving(true);
@@ -1089,13 +1139,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
     try {
       const normalizedProviders = Object.fromEntries(
-        Object.entries(providers).map(([providerKey, providerConfig]) => [
-          providerKey,
-          {
-            ...providerConfig,
-            apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
-          },
-        ])
+        Object.entries(providers).map(([providerKey, providerConfig]) => {
+          const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
+          return [
+            providerKey,
+            {
+              ...providerConfig,
+              apiFormat,
+              baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+            },
+          ];
+        })
       ) as ProvidersConfig;
 
       // Find the first enabled provider to use as the primary API
@@ -1153,11 +1207,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       dispatch(setAvailableModels(allModels));
 
       if (hasCoworkConfigChanges) {
-        await coworkService.updateConfig({
-          executionMode: coworkExecutionMode,
+        const updated = await coworkService.updateConfig({
+          agentEngine: coworkAgentEngine,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
+        if (!updated) {
+          throw new Error(i18nService.t('coworkConfigSaveFailed'));
+        }
+      }
+
+      // Save bootstrap files (IDENTITY.md, USER.md, SOUL.md) only if loaded
+      if (bootstrapLoaded) {
+        const results = await Promise.all([
+          coworkService.writeBootstrapFile('IDENTITY.md', bootstrapIdentity),
+          coworkService.writeBootstrapFile('USER.md', bootstrapUser),
+          coworkService.writeBootstrapFile('SOUL.md', bootstrapSoul),
+        ]);
+        if (results.some(r => !r)) {
+          throw new Error(i18nService.t('coworkBootstrapSaveFailed'));
+        }
       }
 
       didSaveRef.current = true;
@@ -1348,7 +1417,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     try {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
       // Apply Coding Plan endpoint switch
-      let effectiveBaseUrl = providerConfig.baseUrl;
+      let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, getEffectiveApiFormat(testingProvider, providerConfig.apiFormat));
       let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
       
       // Handle Zhipu GLM Coding Plan endpoint switch
@@ -1450,12 +1519,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       }
 
       if (response.ok) {
+        enableProvider(testingProvider);
         showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
       } else {
         const data = response.data || {};
         // 提取错误信息
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
         if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
+          enableProvider(testingProvider);
           showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
           return;
         }
@@ -1475,13 +1546,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     const entries = await Promise.all(
       Object.entries(providers).map(async ([providerKey, providerConfig]) => {
         const apiKey = await encryptWithPassword(providerConfig.apiKey, password);
+        const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
         return [
           providerKey,
           {
             enabled: providerConfig.enabled,
             apiKey,
-            baseUrl: providerConfig.baseUrl,
-            apiFormat: getEffectiveApiFormat(providerKey, providerConfig.apiFormat),
+            baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+            apiFormat,
             codingPlanEnabled: (providerConfig as ProviderConfig).codingPlanEnabled,
             models: providerConfig.models,
           },
@@ -1749,11 +1821,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   // 渲染标签页
   const sidebarTabs: { key: TabType; label: string; icon: React.ReactNode }[] = useMemo(() => [
     { key: 'general',        label: i18nService.t('general'),        icon: <Cog6ToothIcon className="h-5 w-5" /> },
+    { key: 'coworkAgentEngine', label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
     { key: 'model',          label: i18nService.t('model'),          icon: <CubeIcon className="h-5 w-5" /> },
     { key: 'im',             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
     { key: 'email',          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
     { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
-    { key: 'coworkSandbox',  label: i18nService.t('coworkSandbox'),  icon: <ShieldCheckIcon className="h-5 w-5" /> },
+    { key: 'coworkAgent',    label: i18nService.t('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
     { key: 'shortcuts',      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
     { key: 'about',          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
   ], [language]);
@@ -1997,151 +2070,73 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       case 'email':
         return <EmailSkillConfig />;
 
-      case 'coworkSandbox':
+      case 'coworkAgentEngine':
         return (
           <div className="space-y-6">
             <div className="space-y-3">
-              <label className="block text-sm font-medium dark:text-claude-darkText text-claude-text">
-                {i18nService.t('coworkExecutionMode')}
-              </label>
-              <div className="space-y-2">
-                {([
-                  {
-                    value: 'auto',
-                    label: i18nService.t('coworkExecutionModeAuto'),
-                    hint: i18nService.t('coworkExecutionModeAutoHint'),
-                  },
-                  {
-                    value: 'local',
-                    label: i18nService.t('coworkExecutionModeLocal'),
-                    hint: i18nService.t('coworkExecutionModeLocalHint'),
-                  },
-                  {
-                    value: 'sandbox',
-                    label: i18nService.t('coworkExecutionModeSandbox'),
-                    hint: i18nService.t('coworkExecutionModeSandboxHint'),
-                  },
-                ] as Array<{ value: CoworkExecutionMode; label: string; hint: string }>).map((option) => {
-                  const isDisabled = option.value === 'sandbox' && coworkSandboxDisabled;
-                  return (
-                    <label
-                      key={option.value}
-                      className={`flex items-start gap-3 rounded-xl border px-3 py-2 text-sm transition-colors ${
-                        isDisabled
-                          ? 'cursor-not-allowed opacity-60 dark:border-claude-darkBorder border-claude-border'
-                          : 'cursor-pointer dark:border-claude-darkBorder border-claude-border hover:border-claude-accent'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="cowork-execution-mode"
-                        value={option.value}
-                        checked={coworkExecutionMode === option.value}
-                        onChange={() => setCoworkExecutionMode(option.value)}
-                        disabled={isDisabled}
-                        className="mt-1"
-                      />
-                      <span>
-                        <span className="block font-medium dark:text-claude-darkText text-claude-text">
-                          {option.label}
-                        </span>
-                        <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                          {option.hint}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
+              <div className="flex items-start gap-3 rounded-xl border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border">
+                <input
+                  type="radio"
+                  checked={true}
+                  readOnly
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block font-medium dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('coworkAgentEngineOpenClaw')}
+                  </span>
+                  <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('coworkAgentEngineOpenClawHint')}
+                  </span>
+                </span>
               </div>
-
-              {coworkSandboxStatusHint && (
-                <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {coworkSandboxStatusHint}
-                </div>
-              )}
-
-              {coworkSandboxProgress && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    <span>
-                      {coworkSandboxStageLabel}
-                    </span>
-                    {coworkSandboxPercent !== null && (
-                      <span>{coworkSandboxPercent}%</span>
-                    )}
-                  </div>
-                  <div className="h-2 rounded-full dark:bg-claude-darkBorder bg-claude-border overflow-hidden">
-                    <div
-                      className="h-full bg-claude-accent transition-all"
-                      style={{ width: `${coworkSandboxPercent ?? 0}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {coworkSandboxDisabled && coworkSandboxStatus?.supported && (
-                <button
-                  type="button"
-                  onClick={handleInstallCoworkSandbox}
-                  disabled={coworkSandboxInstalling || coworkSandboxLoading}
-                  className="inline-flex items-center justify-center px-4 py-2 rounded-xl bg-claude-accent hover:bg-claude-accentHover text-white text-sm font-medium transition-colors disabled:opacity-50 active:scale-[0.98]"
-                >
-                  {coworkSandboxInstalling ? i18nService.t('coworkSandboxInstalling') : i18nService.t('coworkSandboxInstall')}
-                </button>
-              )}
-
-              {coworkSandboxDisabled && !coworkSandboxStatus?.supported && (
-                <div className="text-xs text-blue-500 dark:text-blue-400">
-                  {i18nService.t('coworkSandboxSelectionBlocked')}
-                </div>
-              )}
             </div>
+            {isOpenClawAgentEngine && (
+              <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+                <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('coworkOpenClawInstallHint')}
+                </div>
+                <div className={`rounded-xl border px-4 py-3 text-sm ${openClawEngineStatus?.phase === 'error'
+                  ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
+                  : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      {resolveOpenClawStatusText(openClawEngineStatus)}
+                      {openClawProgressPercent !== null && (
+                        <span className="ml-2 text-xs opacity-80">{openClawProgressPercent}%</span>
+                      )}
+                    </div>
+                  </div>
+                  {openClawProgressPercent !== null && (
+                    <div className="mt-2 h-2 rounded-full bg-black/10 overflow-hidden">
+                      <div
+                        className="h-full bg-claude-accent transition-all"
+                        style={{ width: `${openClawProgressPercent}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         );
 
       case 'coworkMemory':
         return (
           <div className="space-y-6">
+            {/* Section 1: Long-term Memory (MEMORY.md) */}
             <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
               <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
                 {i18nService.t('coworkMemoryTitle')}
               </div>
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={coworkMemoryEnabled}
-                  onChange={(event) => setCoworkMemoryEnabled(event.target.checked)}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block text-sm dark:text-claude-darkText text-claude-text">
-                    {i18nService.t('coworkMemoryEnabled')}
-                  </span>
-                  <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {i18nService.t('coworkMemoryEnabledHint')}
-                  </span>
-                  <span className="mt-1 block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {i18nService.t('coworkMemorySimpleHint')}
-                  </span>
+              {/* Memory toggle hidden – always enabled by default */}
+              <div className="mt-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span className="font-medium">{i18nService.t('coworkMemoryFilePath')}:</span>{' '}
+                <span className="break-all font-mono opacity-80">
+                  {joinWorkspacePath(coworkConfig.workingDirectory, 'MEMORY.md')}
                 </span>
-              </label>
-              <label className={`flex items-start gap-3 ${coworkMemoryEnabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-                <input
-                  type="checkbox"
-                  checked={coworkMemoryLlmJudgeEnabled}
-                  onChange={(event) => setCoworkMemoryLlmJudgeEnabled(event.target.checked)}
-                  disabled={!coworkMemoryEnabled}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block text-sm dark:text-claude-darkText text-claude-text">
-                    {i18nService.t('coworkMemoryLlmJudgeEnabled')}
-                  </span>
-                  <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {i18nService.t('coworkMemoryLlmJudgeEnabledHint')}
-                  </span>
-                </span>
-              </label>
+              </div>
             </div>
 
             <div className="space-y-4 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
@@ -2166,7 +2161,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
               {coworkMemoryStats && (
                 <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.created + coworkMemoryStats.stale} · ${i18nService.t('coworkMemoryActiveLabel')}: ${coworkMemoryStats.created} · ${i18nService.t('coworkMemoryInactiveLabel')}: ${coworkMemoryStats.stale}`}
+                  {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
                 </div>
               )}
 
@@ -2178,7 +2173,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface"
               />
 
-              <div className="max-h-[500px] overflow-auto rounded-lg border dark:border-claude-darkBorder border-claude-border">
+              <div className="rounded-lg border dark:border-claude-darkBorder border-claude-border">
                 {coworkMemoryListLoading ? (
                   <div className="px-3 py-3 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
                     {i18nService.t('loading')}
@@ -2192,17 +2187,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     {coworkMemoryEntries.map((entry) => (
                       <div key={entry.id} className="px-3 py-3 text-xs hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1 space-y-1 min-w-0">
+                          <div className="flex-1 min-w-0">
                             <div className="font-medium dark:text-claude-darkText text-claude-text break-words">
                               {entry.text}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                              <span className="rounded-full border px-2 py-0.5 dark:border-claude-darkBorder border-claude-border">
-                                {getMemoryStatusLabel(entry.status)}
-                              </span>
-                              <span>
-                                {`${i18nService.t('coworkMemoryUpdatedAt')}: ${formatMemoryUpdatedAt(entry.updatedAt)}`}
-                              </span>
                             </div>
                           </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
@@ -2326,7 +2313,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             </div>
 
             {/* Provider Settings - Right Side */}
-            <div className="w-3/5 pl-4 space-y-4 overflow-y-auto">
+            <div className="w-3/5 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
               <div className="flex items-center justify-between pb-2 border-b dark:border-claude-darkBorder border-claude-border">
                 <h3 className="text-base font-medium dark:text-claude-darkText text-claude-text">
                   {(providerMeta[activeProvider]?.label ?? activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1))} {i18nService.t('providerSettings')}
@@ -2347,14 +2334,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                     {i18nService.t('apiKey')}
                   </label>
-                  <input
-                    type="password"
-                    id={`${activeProvider}-apiKey`}
-                    value={providers[activeProvider].apiKey}
-                    onChange={(e) => handleProviderConfigChange(activeProvider, 'apiKey', e.target.value)}
-                    className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
-                    placeholder={i18nService.t('apiKeyPlaceholder')}
-                  />
+                  <div className="relative">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      id={`${activeProvider}-apiKey`}
+                      value={providers[activeProvider].apiKey}
+                      onChange={(e) => handleProviderConfigChange(activeProvider, 'apiKey', e.target.value)}
+                      className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-xs"
+                      placeholder={i18nService.t('apiKeyPlaceholder')}
+                    />
+                    <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                      {providers[activeProvider].apiKey && (
+                        <button
+                          type="button"
+                          onClick={() => handleProviderConfigChange(activeProvider, 'apiKey', '')}
+                          className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                          title={i18nService.t('clear') || 'Clear'}
+                        >
+                          <XCircleIconSolid className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                        title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                      >
+                        {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -2362,33 +2371,47 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 <label htmlFor={`${activeProvider}-baseUrl`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                   {i18nService.t('baseUrl')}
                 </label>
-                <input
-                  type="text"
-                  id={`${activeProvider}-baseUrl`}
-                  value={
-                    activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled
-                      ? (getEffectiveApiFormat('zhipu', providers.zhipu.apiFormat) === 'anthropic'
-                          ? 'https://open.bigmodel.cn/api/anthropic'
-                          : 'https://open.bigmodel.cn/api/coding/paas/v4')
-                      : activeProvider === 'qwen' && providers.qwen.codingPlanEnabled
-                        ? (getEffectiveApiFormat('qwen', providers.qwen.apiFormat) === 'anthropic'
-                            ? 'https://coding.dashscope.aliyuncs.com/apps/anthropic'
-                            : 'https://coding.dashscope.aliyuncs.com/v1')
-                        : activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled
-                          ? (getEffectiveApiFormat('volcengine', providers.volcengine.apiFormat) === 'anthropic'
-                              ? 'https://ark.cn-beijing.volces.com/api/coding'
-                              : 'https://ark.cn-beijing.volces.com/api/coding/v3')
-                          : activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled
-                            ? (getEffectiveApiFormat('moonshot', providers.moonshot.apiFormat) === 'anthropic'
-                                ? 'https://api.kimi.com/coding'
-                                : 'https://api.kimi.com/coding/v1')
-                            : providers[activeProvider].baseUrl
-                  }
-                  onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
-                  disabled={(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled)}
-                  className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs ${(activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  placeholder={i18nService.t('baseUrlPlaceholder')}
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    id={`${activeProvider}-baseUrl`}
+                    value={
+                      activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled
+                        ? (getEffectiveApiFormat('zhipu', providers.zhipu.apiFormat) === 'anthropic'
+                            ? 'https://open.bigmodel.cn/api/anthropic'
+                            : 'https://open.bigmodel.cn/api/coding/paas/v4')
+                        : activeProvider === 'qwen' && providers.qwen.codingPlanEnabled
+                          ? (getEffectiveApiFormat('qwen', providers.qwen.apiFormat) === 'anthropic'
+                              ? 'https://coding.dashscope.aliyuncs.com/apps/anthropic'
+                              : 'https://coding.dashscope.aliyuncs.com/v1')
+                          : activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled
+                            ? (getEffectiveApiFormat('volcengine', providers.volcengine.apiFormat) === 'anthropic'
+                                ? 'https://ark.cn-beijing.volces.com/api/coding'
+                                : 'https://ark.cn-beijing.volces.com/api/coding/v3')
+                            : activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled
+                              ? (getEffectiveApiFormat('moonshot', providers.moonshot.apiFormat) === 'anthropic'
+                                  ? 'https://api.kimi.com/coding'
+                                  : 'https://api.kimi.com/coding/v1')
+                              : providers[activeProvider].baseUrl
+                    }
+                    onChange={(e) => handleProviderConfigChange(activeProvider, 'baseUrl', e.target.value)}
+                    disabled={isBaseUrlLocked}
+                    className={`block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-xs ${isBaseUrlLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    placeholder={getProviderDefaultBaseUrl(activeProvider, getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat)) || defaultConfig.providers?.[activeProvider]?.baseUrl || i18nService.t('baseUrlPlaceholder')}
+                  />
+                  {providers[activeProvider].baseUrl && !isBaseUrlLocked && (
+                    <div className="absolute right-2 inset-y-0 flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => handleProviderConfigChange(activeProvider, 'baseUrl', '')}
+                        className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                        title={i18nService.t('clear') || 'Clear'}
+                      >
+                        <XCircleIconSolid className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {activeProvider === 'custom' && (
                 <div className="mt-1.5 space-y-0.5 text-[11px] text-claude-secondaryText dark:text-claude-darkSecondaryText">
                   <p>
@@ -2618,7 +2641,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
 
                 {/* Models List */}
-                <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
                   {providers[activeProvider].models?.map(model => (
                     <div
                       key={model.id}
@@ -2641,14 +2664,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                             onClick={() => handleEditModel(model.id, model.name, model.supportsImage)}
                             className="p-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent opacity-0 group-hover:opacity-100 transition-opacity"
                           >
-                            <PencilIcon className="h-3 w-3" />
+                            <PencilIcon className="h-3.5 w-3.5" />
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDeleteModel(model.id)}
                             className="p-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                           >
-                            <TrashIcon className="h-3 w-3" />
+                            <TrashIcon className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>
@@ -2670,6 +2693,55 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        );
+
+      case 'coworkAgent':
+        return (
+          <div className="space-y-6">
+            {/* Agent Settings (IDENTITY.md + SOUL.md) */}
+            <div className="space-y-4 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+              <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkBootstrapAgentSectionTitle')}
+              </div>
+              {[
+                { filename: 'IDENTITY.md', titleKey: 'coworkBootstrapIdentityTitle', hintKey: 'coworkBootstrapIdentityHint', value: bootstrapIdentity, setter: setBootstrapIdentity },
+                { filename: 'SOUL.md', titleKey: 'coworkBootstrapSoulTitle', hintKey: 'coworkBootstrapSoulHint', value: bootstrapSoul, setter: setBootstrapSoul },
+              ].map(({ filename, titleKey, hintKey, value, setter }) => (
+                <div key={filename} className="space-y-2">
+                  <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t(titleKey)}
+                    <span className="ml-1.5 font-normal opacity-60">
+                      （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, filename)}</span>）
+                    </span>
+                  </div>
+                  <textarea
+                    value={value}
+                    onChange={(e) => setter(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
+                    placeholder={i18nService.t(hintKey)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* User Profile (USER.md) */}
+            <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+              <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkBootstrapUserTitle')}
+                <span className="ml-1.5 text-xs font-normal opacity-60 dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, 'USER.md')}</span>）
+                </span>
+              </div>
+              <textarea
+                value={bootstrapUser}
+                onChange={(e) => setBootstrapUser(e.target.value)}
+                rows={3}
+                className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
+                placeholder={i18nService.t('coworkBootstrapUserHint')}
+              />
             </div>
           </div>
         );
