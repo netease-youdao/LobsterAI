@@ -326,18 +326,11 @@ const buildOpenAIResponsesUrl = (baseUrl: string): string => {
 const shouldUseOpenAIResponsesForProvider = (provider: string): boolean => (
   provider === 'openai'
 );
-const shouldUseMaxCompletionTokensForOpenAI = (provider: string, modelId?: string): boolean => {
-  if (provider !== 'openai') {
-    return false;
-  }
-  const normalizedModel = (modelId ?? '').toLowerCase();
-  const resolvedModel = normalizedModel.includes('/')
-    ? normalizedModel.slice(normalizedModel.lastIndexOf('/') + 1)
-    : normalizedModel;
-  return resolvedModel.startsWith('gpt-5')
-    || resolvedModel.startsWith('o1')
-    || resolvedModel.startsWith('o3')
-    || resolvedModel.startsWith('o4');
+const shouldUseMaxCompletionTokensForOpenAI = (provider: string): boolean => {
+  // OpenAI's newer models reject `max_tokens` and require `max_completion_tokens`.
+  // Since all current OpenAI models accept `max_completion_tokens`, always use it
+  // for the official OpenAI provider.
+  return provider === 'openai';
 };
 const CONNECTIVITY_TEST_TOKEN_BUDGET = 64;
 
@@ -1509,7 +1502,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               model: firstModel.id,
               messages: [{ role: 'user', content: 'Hi' }],
             };
-        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(testingProvider, firstModel.id)) {
+        if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(testingProvider)) {
           openAIRequestBody.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
         } else {
           if (!useResponsesApi) {

@@ -767,20 +767,6 @@ function clampMaxTokensFromError(
   return { changed: true, clampedTo: nextValue };
 }
 
-function shouldUseMaxCompletionTokensForModel(model: unknown): boolean {
-  if (typeof model !== 'string') {
-    return false;
-  }
-  const normalizedModel = model.toLowerCase();
-  const resolvedModel = normalizedModel.includes('/')
-    ? normalizedModel.slice(normalizedModel.lastIndexOf('/') + 1)
-    : normalizedModel;
-  return resolvedModel.startsWith('gpt-5')
-    || resolvedModel.startsWith('o1')
-    || resolvedModel.startsWith('o3')
-    || resolvedModel.startsWith('o4');
-}
-
 function normalizeMaxTokensFieldForOpenAIProvider(
   openAIRequest: Record<string, unknown>,
   provider?: string
@@ -788,9 +774,10 @@ function normalizeMaxTokensFieldForOpenAIProvider(
   if (provider !== 'openai') {
     return;
   }
-  if (!shouldUseMaxCompletionTokensForModel(openAIRequest.model)) {
-    return;
-  }
+  // OpenAI's newer models (o-series, gpt-4.1+, gpt-5, etc.) reject `max_tokens`
+  // and require `max_completion_tokens`. Since all current OpenAI models accept
+  // `max_completion_tokens`, always use it for the official OpenAI provider to
+  // avoid fragile per-model checks.
   const maxTokens = openAIRequest.max_tokens;
   if (typeof maxTokens !== 'number' || !Number.isFinite(maxTokens)) {
     return;

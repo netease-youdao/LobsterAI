@@ -144,18 +144,10 @@ export class IMChatHandler {
   }
 
   private shouldUseMaxCompletionTokens(config: LLMConfig): boolean {
-    const provider = config.provider?.toLowerCase();
-    if (provider !== 'openai') {
-      return false;
-    }
-    const normalizedModel = config.model?.toLowerCase() || '';
-    const resolvedModel = normalizedModel.includes('/')
-      ? normalizedModel.slice(normalizedModel.lastIndexOf('/') + 1)
-      : normalizedModel;
-    return resolvedModel.startsWith('gpt-5')
-      || resolvedModel.startsWith('o1')
-      || resolvedModel.startsWith('o3')
-      || resolvedModel.startsWith('o4');
+    // OpenAI's newer models reject `max_tokens` and require `max_completion_tokens`.
+    // Since all current OpenAI models accept `max_completion_tokens`, always use it
+    // for the official OpenAI provider.
+    return config.provider?.toLowerCase() === 'openai';
   }
 
   /**
