@@ -1,4 +1,5 @@
 import { app, utilityProcess, type UtilityProcess } from 'electron';
+import { spawn, execFile, type ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
@@ -9,10 +10,12 @@ import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtension
 import { applyBundledOpenClawRuntimeHotfixes } from './openclawRuntimeHotfix';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 
+type GatewayProcess = UtilityProcess | ChildProcess;
+
 const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
-const GATEWAY_BOOT_TIMEOUT_MS = 180 * 1000;
+const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
 const GATEWAY_RESTART_DELAY_MS = 3000;
 
 export type OpenClawEnginePhase =
@@ -110,8 +113,14 @@ const isPortReachable = (host: string, port: number, timeoutMs = 1200): Promise<
   });
 };
 
-const isUtilityProcessAlive = (child: UtilityProcess | null): child is UtilityProcess => {
-  return Boolean(child && typeof child.pid === 'number');
+const isGatewayProcessAlive = (child: GatewayProcess | null): child is GatewayProcess => {
+  if (!child) return false;
+  if ('pid' in child && typeof child.pid === 'number') {
+    // For ChildProcess, also check it hasn't already exited.
+    if ('exitCode' in child && child.exitCode !== null) return false;
+    return true;
+  }
+  return false;
 };
 
 const fetchWithTimeout = async (url: string, timeoutMs: number): Promise<Response> => {
@@ -142,8 +151,8 @@ export class OpenClawEngineManager extends EventEmitter {
 
   private desiredVersion: string;
   private status: OpenClawEngineStatus;
-  private gatewayProcess: UtilityProcess | null = null;
-  private readonly expectedGatewayExits = new WeakSet<UtilityProcess>();
+  private gatewayProcess: GatewayProcess | null = null;
+  private readonly expectedGatewayExits = new WeakSet<object>();
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
   private gatewayPort: number | null = null;
@@ -298,7 +307,7 @@ export class OpenClawEngineManager extends EventEmitter {
       return ensured;
     }
 
-    if (isUtilityProcessAlive(this.gatewayProcess)) {
+    if (isGatewayProcessAlive(this.gatewayProcess)) {
       const port = this.gatewayPort ?? this.readGatewayPort();
       if (port) {
         const healthy = await this.isGatewayHealthy(port);
@@ -407,17 +416,36 @@ export class OpenClawEngineManager extends EventEmitter {
 
     const forkArgs = ['gateway', '--bind', 'loopback', '--port', String(port), '--token', token, '--verbose'];
     console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs)}`);
-    const child = utilityProcess.fork(
-      openclawEntry,
-      forkArgs,
-      {
-        cwd: runtime.root,
-        env,
-        stdio: 'pipe',
-        serviceName: 'OpenClaw Gateway',
-      },
-    );
-    console.log(`[OpenClaw] startGateway: utilityProcess.fork() called (${elapsed()})`);
+
+    // On Windows, use child_process.spawn with ELECTRON_RUN_AS_NODE=1 instead of
+    // utilityProcess.fork(). Benchmark shows utilityProcess has ~5x overhead for
+    // cold ESM compilation on Windows (163s vs 34s for a 28MB bundle).
+    let child: GatewayProcess;
+    if (process.platform === 'win32') {
+      await this.warmupCompileCacheIfNeeded(runtime.root, compileCacheDir, env);
+      child = spawn(
+        process.execPath,
+        [openclawEntry, ...forkArgs],
+        {
+          cwd: runtime.root,
+          env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        },
+      );
+    } else {
+      child = utilityProcess.fork(
+        openclawEntry,
+        forkArgs,
+        {
+          cwd: runtime.root,
+          env,
+          stdio: 'pipe',
+          serviceName: 'OpenClaw Gateway',
+        },
+      );
+    }
+    console.log(`[OpenClaw] startGateway: gateway process created (${elapsed()}), platform=${process.platform}`);
 
     this.gatewayProcess = child;
     this.attachGatewayProcessLogs(child);
@@ -638,6 +666,76 @@ export class OpenClawEngineManager extends EventEmitter {
     } catch (error) {
       console.error('[OpenClaw] Failed to prepare CLI shims:', error);
       return null;
+    }
+  }
+
+  /**
+   * On Windows, pre-warm the V8 compile cache before starting the gateway.
+   * This reduces cold startup from ~34s to ~4s by pre-compiling the 28MB bundle.
+   * Skipped if the compile cache directory already contains cached bytecode.
+   */
+  private async warmupCompileCacheIfNeeded(
+    runtimeRoot: string,
+    compileCacheDir: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
+    // Check if compile cache already has content (any subdirectory with files).
+    try {
+      if (fs.existsSync(compileCacheDir)) {
+        const entries = fs.readdirSync(compileCacheDir);
+        if (entries.length > 0) {
+          console.log(`[OpenClaw] compile cache exists (${entries.length} entries), skipping warmup`);
+          return;
+        }
+      }
+    } catch {
+      // ignore read errors
+    }
+
+    const warmupScript = findPath([
+      path.join(runtimeRoot, 'warmup-compile-cache.cjs'),
+      path.join(runtimeRoot, '..', 'warmup-compile-cache.cjs'),
+    ]);
+    if (!warmupScript) {
+      console.log('[OpenClaw] warmup script not found, skipping compile cache warmup');
+      return;
+    }
+
+    console.log(`[OpenClaw] First start detected — warming up compile cache...`);
+    this.setStatus({
+      phase: 'starting',
+      version: this.status.version,
+      progressPercent: 5,
+      message: 'First start: warming up compile cache...',
+      canRetry: false,
+    });
+
+    const t0 = Date.now();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = execFile(
+          process.execPath,
+          [warmupScript, '--cache-dir', compileCacheDir],
+          {
+            cwd: runtimeRoot,
+            env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+            timeout: 120_000,
+            windowsHide: true,
+          },
+          (err) => {
+            if (err) reject(err);
+            else resolve();
+          },
+        );
+        child.stderr?.on('data', (chunk: Buffer | string) => {
+          const text = typeof chunk === 'string' ? chunk : chunk.toString();
+          console.log(`[OpenClaw warmup] ${text.trimEnd()}`);
+        });
+      });
+      console.log(`[OpenClaw] compile cache warmup completed in ${Date.now() - t0}ms`);
+    } catch (err) {
+      // Warmup failure is not fatal — gateway can still start (just slower).
+      console.warn(`[OpenClaw] compile cache warmup failed (${Date.now() - t0}ms):`, err);
     }
   }
 
@@ -1003,7 +1101,7 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  private stopGatewayProcess(child: UtilityProcess): void {
+  private stopGatewayProcess(child: GatewayProcess): void {
     this.expectedGatewayExits.add(child);
 
     try {
@@ -1013,17 +1111,17 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     setTimeout(() => {
-      if (typeof child.pid === 'number') {
-        try {
+      try {
+        if ('pid' in child && typeof child.pid === 'number') {
           child.kill();
-        } catch {
-          // ignore
         }
+      } catch {
+        // ignore
       }
     }, 1200);
   }
 
-  private attachGatewayProcessLogs(child: UtilityProcess): void {
+  private attachGatewayProcessLogs(child: GatewayProcess): void {
     ensureDir(path.dirname(this.gatewayLogPath));
     const appendLog = (chunk: Buffer | string, stream: 'stdout' | 'stderr') => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
@@ -1043,9 +1141,14 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  private attachGatewayExitHandlers(child: UtilityProcess): void {
-    child.once('error', (type, location) => {
-      console.error(`[OpenClaw] gateway process error event: type=${type}, location=${location}`);
+  private attachGatewayExitHandlers(child: GatewayProcess): void {
+    child.once('error', (...args: unknown[]) => {
+      // UtilityProcess error: (type: string, location: string)
+      // ChildProcess error: (err: Error)
+      const errorMsg = args[0] instanceof Error
+        ? args[0].message
+        : `${args[0]}${args[1] ? ` (${args[1]})` : ''}`;
+      console.error(`[OpenClaw] gateway process error event: ${errorMsg}`);
       if (this.expectedGatewayExits.has(child)) {
         this.expectedGatewayExits.delete(child);
         return;
@@ -1054,7 +1157,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.setStatus({
         phase: 'error',
         version: this.status.version,
-        message: `OpenClaw gateway process error: ${type}${location ? ` (${location})` : ''}`,
+        message: `OpenClaw gateway process error: ${errorMsg}`,
         canRetry: true,
       });
       this.scheduleGatewayRestart();
