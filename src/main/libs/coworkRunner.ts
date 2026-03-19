@@ -29,6 +29,7 @@ const FINAL_RESULT_MAX_CHARS = 120_000;
 const STDERR_TAIL_MAX_CHARS = 24_000;
 const SDK_STARTUP_TIMEOUT_MS = 30_000;
 const SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS = 120_000;
+const SDK_EVENT_IDLE_TIMEOUT_MS = 300_000; // 5 minutes – abort if no events arrive within this window
 const STDERR_FATAL_PATTERNS = [
   /authentication[_ ]error/i,
   /invalid[_ ]api[_ ]key/i,
@@ -1930,6 +1931,11 @@ export class CoworkRunner extends EventEmitter {
     }
 
     let startupTimer: ReturnType<typeof setTimeout> | null = null;
+    // Idle timeout: abort if no events arrive for an extended period.
+    // This prevents the session from hanging forever when the upstream API
+    // (e.g. GLM5/Zhipu) stops sending events without closing the connection.
+    let eventIdleTimer: ReturnType<typeof setTimeout> | null = null;
+    let eventIdleTimedOut = false;
 
     try {
       coworkLog('INFO', 'runClaudeCodeLocal', 'Starting local Claude Code session', {
@@ -2339,12 +2345,30 @@ export class CoworkRunner extends EventEmitter {
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');
       let eventCount = 0;
 
+      const resetEventIdleTimer = () => {
+        if (eventIdleTimer) {
+          clearTimeout(eventIdleTimer);
+        }
+        eventIdleTimer = setTimeout(() => {
+          coworkLog('ERROR', 'runClaudeCodeLocal', 'Event idle timeout: no events received within idle window', {
+            timeoutMs: SDK_EVENT_IDLE_TIMEOUT_MS,
+            eventCount,
+          });
+          eventIdleTimedOut = true;
+          if (!abortController.signal.aborted) {
+            abortController.abort();
+          }
+        }, SDK_EVENT_IDLE_TIMEOUT_MS);
+      };
+
       for await (const event of result as AsyncIterable<unknown>) {
         // Clear startup timeout on first event
         if (startupTimer) {
           clearTimeout(startupTimer);
           startupTimer = null;
         }
+        // Reset idle timeout on every event
+        resetEventIdleTimer();
         if (this.isSessionStopRequested(sessionId, activeSession)) {
           break;
         }
@@ -2354,10 +2378,14 @@ export class CoworkRunner extends EventEmitter {
         coworkLog('INFO', 'runClaudeCodeLocal', `Event #${eventCount}: type=${eventType}`);
         this.handleClaudeEvent(sessionId, event);
       }
-      // Clean up timer if loop ended before first event (e.g. empty iterator)
+      // Clean up timers if loop ended before first event (e.g. empty iterator)
       if (startupTimer) {
         clearTimeout(startupTimer);
         startupTimer = null;
+      }
+      if (eventIdleTimer) {
+        clearTimeout(eventIdleTimer);
+        eventIdleTimer = null;
       }
       coworkLog('INFO', 'runClaudeCodeLocal', `Event iteration completed, total events: ${eventCount}`);
 
@@ -2376,10 +2404,14 @@ export class CoworkRunner extends EventEmitter {
         this.emit('complete', sessionId, activeSession.claudeSessionId);
       }
     } catch (error) {
-      // Clean up startup timer if still pending
+      // Clean up timers if still pending
       if (startupTimer) {
         clearTimeout(startupTimer);
         startupTimer = null;
+      }
+      if (eventIdleTimer) {
+        clearTimeout(eventIdleTimer);
+        eventIdleTimer = null;
       }
 
       if (this.stoppedSessions.has(sessionId)) {
@@ -2395,7 +2427,15 @@ export class CoworkRunner extends EventEmitter {
         stderr: stderrOutput || '(no stderr captured)',
         claudeCodePath,
         claudeCodePathExists: fs.existsSync(claudeCodePath),
+        eventIdleTimedOut,
       });
+
+      // Provide a clear error message when the event idle timeout triggered
+      if (eventIdleTimedOut) {
+        const idleError = `Event idle timeout: the model stopped sending events for ${SDK_EVENT_IDLE_TIMEOUT_MS / 1000}s. The session has been aborted.\n\nLog file: ${getCoworkLogPath()}`;
+        this.handleError(sessionId, idleError);
+        return;
+      }
 
       const detailedError = stderrOutput
         ? `${errorMessage}\n\nProcess stderr:\n${stderrOutput.slice(-2000)}\n\nLog file: ${getCoworkLogPath()}`

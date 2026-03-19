@@ -50,6 +50,8 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [/gateway.*draining|draining.*restart/i, 'coworkErrorGatewayDraining'],
   // Content moderation: Qwen, StepFun 451, generic
   [/DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i, 'coworkErrorContentFiltered'],
+  // Event idle timeout: upstream API stopped sending events
+  [/event idle timeout/i, 'coworkErrorEventIdleTimeout'],
   // Network errors
   [/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|could not connect|connection.*refused|network.*error/i, 'coworkErrorNetworkError'],
   // Server errors: HTTP 500/502/503
