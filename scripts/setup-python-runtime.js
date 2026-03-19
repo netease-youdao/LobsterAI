@@ -283,8 +283,15 @@ async function ensurePipPayload(rootDir, options = {}) {
     "pip_pyz = root / 'tools' / 'pip.pyz'",
     'if not pip_pyz.exists():',
     "    raise SystemExit(f'pip runtime archive missing: {pip_pyz}')",
+    '',
+    '# Ensure pip imports resolve to the zipapp payload, not this shim package.',
+    'sys.path.insert(0, str(pip_pyz))',
+    'for name in list(sys.modules):',
+    "    if name == 'pip' or name.startswith('pip.'):",
+    '        del sys.modules[name]',
+    '',
     "sys.argv[0] = 'pip'",
-    "runpy.run_path(str(pip_pyz), run_name='__main__')",
+    "runpy.run_module('pip', run_name='__main__', alter_sys=True)",
     '',
   ].join('\n');
 
