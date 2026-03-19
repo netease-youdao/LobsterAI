@@ -1,5 +1,6 @@
 ---
 name: remotion-best-practices
+version: 1.0.0
 description: Best practices for Remotion - Video creation in React
 official: true
 metadata:
