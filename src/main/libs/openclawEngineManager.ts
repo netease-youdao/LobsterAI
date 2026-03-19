@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
+import { t } from '../i18n';
 import { getElectronNodeRuntimePath } from './coworkUtil';
 import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { applyBundledOpenClawRuntimeHotfixes } from './openclawRuntimeHotfix';
@@ -182,13 +183,13 @@ export class OpenClawEngineManager extends EventEmitter {
       ? {
           phase: 'ready',
           version: this.desiredVersion,
-          message: 'OpenClaw runtime is ready.',
+          message: t('coworkOpenClawRuntimeReady'),
           canRetry: false,
         }
       : {
           phase: 'not_installed',
           version: null,
-          message: `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
+          message: `${t('coworkOpenClawRuntimeMissing')} ${runtime.expectedPathHint}`,
           canRetry: true,
         };
   }
@@ -261,7 +262,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.setStatus({
         phase: 'not_installed',
         version: null,
-        message: `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
+        message: `${t('coworkOpenClawRuntimeMissing')} ${runtime.expectedPathHint}`,
         canRetry: true,
       });
       return this.getStatus();
@@ -279,7 +280,7 @@ export class OpenClawEngineManager extends EventEmitter {
     this.setStatus({
       phase: 'ready',
       version: this.desiredVersion,
-      message: 'OpenClaw runtime is ready.',
+      message: t('coworkOpenClawRuntimeReady'),
       canRetry: false,
     });
     return this.getStatus();
@@ -317,7 +318,7 @@ export class OpenClawEngineManager extends EventEmitter {
             this.setStatus({
               phase: 'running',
               version: this.desiredVersion,
-              message: `OpenClaw gateway is running on loopback:${port}.`,
+              message: `${t('coworkOpenClawGatewayRunning')}（loopback:${port}）。`,
               canRetry: false,
             });
           }
@@ -335,7 +336,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.setStatus({
         phase: 'not_installed',
         version: null,
-        message: `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
+        message: `${t('coworkOpenClawRuntimeMissing')} ${runtime.expectedPathHint}`,
         canRetry: true,
       });
       return this.getStatus();
@@ -351,7 +352,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.setStatus({
         phase: 'error',
         version: runtime.version,
-        message: `OpenClaw entry file is missing in runtime: ${runtime.root}.`,
+        message: `${t('coworkOpenClawEntryMissing')}：${runtime.root}。`,
         canRetry: true,
       });
       return this.getStatus();
@@ -370,7 +371,7 @@ export class OpenClawEngineManager extends EventEmitter {
       phase: 'starting',
       version: runtime.version,
       progressPercent: 10,
-      message: 'Starting OpenClaw gateway...',
+      message: t('coworkOpenClawGateway'),
       canRetry: false,
     });
 
@@ -462,7 +463,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.setStatus({
         phase: 'error',
         version: runtime.version,
-        message: 'OpenClaw gateway failed to become healthy in time.',
+        message: t('coworkOpenClawGatewayTimeout'),
         canRetry: true,
       });
       this.stopGatewayProcess(child);
@@ -474,7 +475,7 @@ export class OpenClawEngineManager extends EventEmitter {
       phase: 'running',
       version: runtime.version,
       progressPercent: 100,
-      message: `OpenClaw gateway is running on loopback:${port}.`,
+      message: `${t('coworkOpenClawGatewayRunning')}（loopback:${port}）。`,
       canRetry: false,
     });
 
@@ -706,7 +707,7 @@ export class OpenClawEngineManager extends EventEmitter {
       phase: 'starting',
       version: this.status.version,
       progressPercent: 5,
-      message: 'First start: warming up compile cache...',
+      message: t('coworkOpenClawWarmingUp'),
       canRetry: false,
     });
 
@@ -1084,7 +1085,7 @@ export class OpenClawEngineManager extends EventEmitter {
           phase: 'starting',
           version: this.status.version,
           progressPercent: progress,
-          message: `Starting OpenClaw gateway... (${Math.round(elapsedMs / 1000)}s)`,
+          message: `${t('coworkOpenClawGateway')} (${Math.round(elapsedMs / 1000)}s)`,
           canRetry: false,
         });
 
@@ -1157,7 +1158,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.setStatus({
         phase: 'error',
         version: this.status.version,
-        message: `OpenClaw gateway process error: ${errorMsg}`,
+        message: `${t('coworkOpenClawGatewayError')}：${errorMsg}`,
         canRetry: true,
       });
     });
@@ -1176,7 +1177,7 @@ export class OpenClawEngineManager extends EventEmitter {
       this.setStatus({
         phase: 'error',
         version: this.status.version,
-        message: `OpenClaw gateway exited unexpectedly (code=${code ?? 'null'}).`,
+        message: `${t('coworkOpenClawGatewayExitedUnexpectedly')}（code=${code ?? 'null'}）。`,
         canRetry: true,
       });
       this.scheduleGatewayRestart();

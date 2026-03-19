@@ -26,6 +26,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Timeout hint
     taskTimedOut: '[任务超时] 任务因超过最大允许时长而被自动停止。你可以继续对话以从中断处继续。',
+
+    // OpenClaw gateway status
+    coworkOpenClawGateway: '正在启动 OpenClaw 网关...',
+    coworkOpenClawRuntimeReady: 'OpenClaw runtime 已就绪。',
+    coworkOpenClawRuntimeMissing: '未检测到内置 OpenClaw runtime（cfmind）。预期路径：',
+    coworkOpenClawGatewayRunning: 'OpenClaw gateway 正在运行',
+    coworkOpenClawEntryMissing: 'OpenClaw runtime 中缺少入口文件',
+    coworkOpenClawGatewayTimeout: 'OpenClaw gateway 未能在规定时间内启动成功。',
+    coworkOpenClawGatewayError: 'OpenClaw gateway 进程错误',
+    coworkOpenClawGatewayExitedUnexpectedly: 'OpenClaw gateway 意外退出',
+    coworkOpenClawWarmingUp: '首次启动：正在预热编译缓存...',
   },
   en: {
     // Tray menu
@@ -39,6 +50,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Timeout hint
     taskTimedOut: '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
+
+    // OpenClaw gateway status
+    coworkOpenClawGateway: 'Starting OpenClaw gateway...',
+    coworkOpenClawRuntimeReady: 'OpenClaw runtime is ready.',
+    coworkOpenClawRuntimeMissing: 'Bundled OpenClaw runtime is missing. Expected:',
+    coworkOpenClawGatewayRunning: 'OpenClaw gateway is running on',
+    coworkOpenClawEntryMissing: 'OpenClaw entry file is missing in runtime',
+    coworkOpenClawGatewayTimeout: 'OpenClaw gateway failed to become healthy in time.',
+    coworkOpenClawGatewayError: 'OpenClaw gateway process error',
+    coworkOpenClawGatewayExitedUnexpectedly: 'OpenClaw gateway exited unexpectedly',
+    coworkOpenClawWarmingUp: 'First start: warming up compile cache...',
   },
 };
 
