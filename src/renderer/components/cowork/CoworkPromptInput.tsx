@@ -7,6 +7,11 @@ import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import CoworkImageLightbox from './CoworkImageLightbox';
+import MentionPopover from './mentions/MentionPopover';
+import { createAttachmentMentionItem } from './mentions/attachmentMentions';
+import { buildPromptWithAttachmentMentions } from './mentions/attachmentMentionPrompt';
+import { useMentions } from './mentions/useMentions';
+import type { AttachmentMentionItem } from './mentions/types';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
@@ -17,14 +22,7 @@ import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
 import { getCompactFolderName } from '../../utils/path';
 
-type CoworkAttachment = {
-  path: string;
-  name: string;
-  isImage?: boolean;
-  dataUrl?: string;
-};
-
-const INPUT_FILE_LABEL = '输入文件';
+type CoworkAttachment = AttachmentMentionItem;
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
@@ -91,6 +89,7 @@ interface CoworkPromptInputProps {
   showFolderSelector?: boolean;
   showModelSelector?: boolean;
   onManageSkills?: () => void;
+  enableMentions?: boolean;
 }
 
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
@@ -107,6 +106,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showFolderSelector = false,
       showModelSelector = false,
       onManageSkills,
+      enableMentions = true,
     } = props;
     const dispatch = useDispatch();
     const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompt);
@@ -121,7 +121,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
+    const inputContainerRef = useRef<HTMLDivElement>(null);
     const dragDepthRef = useRef(0);
+    const nextClipboardImageIndexRef = useRef(1);
+    const usedMentionTokensRef = useRef<Set<string>>(new Set());
 
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
@@ -186,6 +189,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         setValue('');
         setAttachments([]);
         setExpandedImage(null);
+        nextClipboardImageIndexRef.current = 1;
+        usedMentionTokensRef.current = new Set();
       }
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
@@ -212,6 +217,25 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
   }, [value, draftPrompt, dispatch]);
 
+  const {
+    isOpen: isMentionPopoverOpen,
+    filteredItems: filteredMentionItems,
+    highlightedIndex: highlightedMentionIndex,
+    invalidMentionTokens,
+    setHighlightedIndex: setHighlightedMentionIndex,
+    handleSelectionChange,
+    handleKeyDown: handleMentionKeyDown,
+    handleSelectMention,
+    registerRemovedMention,
+    closePopover: closeMentionPopover,
+  } = useMentions({
+    enabled: enableMentions,
+    value,
+    items: attachments,
+    textareaRef,
+    setValue,
+  });
+
   const handleSubmit = useCallback(() => {
     if (showFolderSelector && !workingDirectory?.trim()) {
       setShowFolderRequiredWarning(true);
@@ -237,7 +261,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         const extracted = extractBase64FromDataUrl(attachment.dataUrl);
         if (extracted) {
           imageAtts.push({
-            name: attachment.name,
+            name: attachment.label,
             mimeType: extracted.mimeType,
             base64Data: extracted.base64Data,
           });
@@ -245,17 +269,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       }
     }
 
-    // Build prompt with ALL attachments that have real file paths (both regular files and images).
-    // Image attachments also need their file paths in the prompt so the model knows
-    // where the original files are located (e.g., for skills like seedream that need --image <path>).
-    // Note: inline/clipboard images have pseudo-paths starting with 'inline:' and are excluded.
-    const attachmentLines = attachments
-      .filter((a) => !a.path.startsWith('inline:'))
-      .map((attachment) => `${INPUT_FILE_LABEL}: ${attachment.path}`)
-      .join('\n');
-    const finalPrompt = trimmedValue
-      ? (attachmentLines ? `${trimmedValue}\n\n${attachmentLines}` : trimmedValue)
-      : attachmentLines;
+    const { prompt: finalPrompt } = buildPromptWithAttachmentMentions({
+      prompt: trimmedValue,
+      attachments,
+      inputFileLabel: i18nService.t('coworkInputFileLabel'),
+      mentionSectionTitle: i18nService.t('coworkAttachmentReferencesTitle'),
+      clipboardImageDescription: i18nService.t('coworkAttachmentReferenceClipboardDescription'),
+      imageDescription: i18nService.t('coworkAttachmentReferenceImageDescription'),
+      fileDescription: i18nService.t('coworkAttachmentReferenceFileDescription'),
+    });
 
     if (imageAtts.length > 0) {
       console.log('[CoworkPromptInput] handleSubmit: passing imageAtts to onSubmit', {
@@ -270,6 +292,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setAttachments([]);
     setImageVisionHint(false);
     setExpandedImage(null);
+    nextClipboardImageIndexRef.current = 1;
+    usedMentionTokensRef.current = new Set();
   }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch, modelSupportsImage]);
 
   const handleSelectSkill = useCallback((skill: Skill) => {
@@ -283,8 +307,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [onManageSkills]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to submit, Shift+Enter for new line
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+    if (isComposing) {
+      return;
+    }
+
+    if (handleMentionKeyDown(event)) {
+      return;
+    }
+
+    // Enter to submit, Shift+Enter for new line
     if (event.key === 'Enter' && !event.shiftKey && !isComposing && !isStreaming && !disabled) {
       event.preventDefault();
       handleSubmit();
@@ -316,33 +348,64 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
   };
 
-  const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
+  const createLocalAttachment = useCallback((params: {
+    path: string;
+    name: string;
+    isImage?: boolean;
+    dataUrl?: string;
+    existingAttachments?: CoworkAttachment[];
+    sourceKindOverride?: CoworkAttachment['sourceKind'];
+  }): CoworkAttachment => {
+    const isClipboardImage = params.sourceKindOverride === 'clipboard_image' || (params.isImage && params.path.startsWith('inline:'));
+    const clipboardImageIndex = isClipboardImage ? nextClipboardImageIndexRef.current++ : undefined;
+    const nextAttachment = createAttachmentMentionItem({
+      path: params.path,
+      name: params.name,
+      isImage: params.isImage,
+      dataUrl: params.dataUrl,
+      clipboardImageIndex,
+      existingItems: params.existingAttachments,
+      reservedMentionTokens: Array.from(usedMentionTokensRef.current),
+      sourceKindOverride: params.sourceKindOverride,
+    });
+    usedMentionTokensRef.current.add(nextAttachment.mentionToken);
+    return nextAttachment;
+  }, []);
+
+  const addAttachment = useCallback((filePath: string, imageInfo?: {
+    isImage: boolean;
+    dataUrl?: string;
+    sourceKindOverride?: CoworkAttachment['sourceKind'];
+  }) => {
     if (!filePath) return;
     setAttachments((prev) => {
       if (prev.some((attachment) => attachment.path === filePath)) {
         return prev;
       }
-      return [...prev, {
+      return [...prev, createLocalAttachment({
         path: filePath,
         name: getFileNameFromPath(filePath),
         isImage: imageInfo?.isImage,
         dataUrl: imageInfo?.dataUrl,
-      }];
+        existingAttachments: prev,
+        sourceKindOverride: imageInfo?.sourceKindOverride,
+      })];
     });
-  }, []);
+  }, [createLocalAttachment]);
 
   const addImageAttachmentFromDataUrl = useCallback((name: string, dataUrl: string) => {
     // Use the dataUrl as the unique key (no file path for inline images)
     const pseudoPath = `inline:${name}:${Date.now()}`;
     setAttachments((prev) => {
-      return [...prev, {
+      return [...prev, createLocalAttachment({
         path: pseudoPath,
         name,
         isImage: true,
         dataUrl,
-      }];
+        existingAttachments: prev,
+      })];
     });
-  }, []);
+  }, [createLocalAttachment]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -449,7 +512,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             } else {
               const stagedPath = await saveInlineFile(file);
               if (stagedPath) {
-                addAttachment(stagedPath);
+                addAttachment(stagedPath, {
+                  isImage: true,
+                  sourceKindOverride: 'clipboard_image',
+                });
               }
             }
           }
@@ -464,7 +530,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
         const stagedPath = await saveInlineFile(file);
         if (stagedPath) {
-          addAttachment(stagedPath, { isImage: true, dataUrl: imageDataUrl });
+          addAttachment(stagedPath, {
+            isImage: true,
+            dataUrl: imageDataUrl,
+            sourceKindOverride: 'clipboard_image',
+          });
         }
         continue;
       }
@@ -529,8 +599,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [addAttachment, isAddingFile, disabled, isStreaming, modelSupportsImage]);
 
   const handleRemoveAttachment = useCallback((path: string) => {
-    setAttachments((prev) => prev.filter((attachment) => attachment.path !== path));
-  }, []);
+    setAttachments((prev) => {
+      const targetAttachment = prev.find((attachment) => attachment.path === path);
+      if (targetAttachment) {
+        registerRemovedMention(targetAttachment);
+      }
+      return prev.filter((attachment) => attachment.path !== path);
+    });
+  }, [registerRemovedMention]);
 
   const hasFileTransfer = (dataTransfer: DataTransfer | null): boolean => {
     if (!dataTransfer) return false;
@@ -594,7 +670,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
             <div
-              key={attachment.path}
+              key={attachment.mentionId}
               className={`group inline-flex max-w-full items-center gap-1 rounded-full border py-1 text-xs dark:text-claude-darkText text-claude-text transition-colors ${
                 attachment.isImage
                   ? 'px-1.5 dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface hover:border-claude-accent/50 dark:hover:border-claude-accent/50'
@@ -607,7 +683,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     type="button"
                     onClick={() => {
                       if (!attachment.dataUrl) return;
-                      setExpandedImage({ src: attachment.dataUrl, alt: attachment.name });
+                      setExpandedImage({ src: attachment.dataUrl, alt: attachment.label });
                     }}
                     className={`inline-flex min-w-0 items-center gap-2 rounded-full pr-1 transition-all ${
                       attachment.dataUrl
@@ -620,19 +696,19 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                       <span className="flex h-8 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-black/5 transition-transform transition-colors group-hover:border-claude-accent/50 dark:border-claude-darkBorder/50 border-claude-border/50 dark:bg-white/5 group-hover:scale-[1.02]">
                         <img
                           src={attachment.dataUrl}
-                          alt={attachment.name}
+                          alt={attachment.label}
                           className="h-full w-full object-contain"
                         />
                       </span>
                     ) : (
                       <PhotoIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
                     )}
-                    <span className="truncate max-w-[180px]">{attachment.name}</span>
+                    <span className="truncate max-w-[180px]">{attachment.label}</span>
                   </button>
                 ) : (
                   <>
                     <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span className="truncate max-w-[180px]">{attachment.name}</span>
+                    <span className="truncate max-w-[180px]">{attachment.label}</span>
                   </>
                 )}
                 <button
@@ -649,6 +725,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 </button>
             </div>
           ))}
+        </div>
+      )}
+      {invalidMentionTokens.length > 0 && (
+        <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400">
+          {i18nService.t('coworkAttachmentReferenceInvalidWarning').replace(
+            '{tokens}',
+            invalidMentionTokens.map((token) => `@${token}`).join('、'),
+          )}
         </div>
       )}
       {imageVisionHint && (
@@ -668,13 +752,23 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           </button>
         </div>
       )}
-      <div
-        className={enhancedContainerClass}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
+      <div ref={inputContainerRef} className="relative">
+        <MentionPopover
+          isOpen={isMentionPopoverOpen}
+          items={filteredMentionItems}
+          highlightedIndex={highlightedMentionIndex}
+          onClose={closeMentionPopover}
+          onSelect={handleSelectMention}
+          onHighlight={setHighlightedMentionIndex}
+          anchorRef={inputContainerRef}
+        />
+        <div
+          className={enhancedContainerClass}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
         {isDraggingFiles && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-claude-accent/10 text-xs font-medium text-claude-accent">
             {i18nService.t('coworkDropFileHint')}
@@ -685,8 +779,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                setValue(e.target.value);
+                handleSelectionChange(e.target.selectionStart);
+              }}
               onKeyDown={handleKeyDown}
+              onClick={(e) => handleSelectionChange(e.currentTarget.selectionStart)}
+              onKeyUp={(e) => handleSelectionChange(e.currentTarget.selectionStart)}
+              onSelect={(e) => handleSelectionChange(e.currentTarget.selectionStart)}
               onPaste={handlePaste}
               placeholder={placeholder}
               disabled={disabled}
@@ -771,8 +871,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                setValue(e.target.value);
+                handleSelectionChange(e.target.selectionStart);
+              }}
               onKeyDown={handleKeyDown}
+              onClick={(e) => handleSelectionChange(e.currentTarget.selectionStart)}
+              onKeyUp={(e) => handleSelectionChange(e.currentTarget.selectionStart)}
+              onSelect={(e) => handleSelectionChange(e.currentTarget.selectionStart)}
               onPaste={handlePaste}
               placeholder={placeholder}
               disabled={disabled}
@@ -815,6 +921,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             )}
           </>
         )}
+        </div>
       </div>
       {showFolderRequiredWarning && (
         <div className="mt-2 text-xs text-red-500 dark:text-red-400">
