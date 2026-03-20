@@ -1,0 +1,27 @@
+scripts/pack-openclaw-tar.cjs
+  0334b872f0bf5f7e 6,11-12,15-16,18-19,24-25,27,29,31-34,36-39,43,45-54,58,69-116,119-175,177-178,180-182,184-190,192-194,196,198-203,205-221,223-240,243,245,247,250-251,253-256,261-262,269-308,323,325,328-330,341
+scripts/unpack-cfmind.cjs
+  0334b872f0bf5f7e 4,6,9-10,12-14,21,25,28,31,33-34,37-40,45-46,49,62,64-112,114-174,176-178,181,183-185,187-193,197-203,206-207,209-228,230-233,235-238,240,242-243
+scripts/nsis-installer.nsh
+  0334b872f0bf5f7e 45-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "9241078e7890af953a2ab3290556173d5df86768",
+  "prompts": {
+    "0334b872f0bf5f7e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9bb1e6db-73f2-4aa5-b7d2-f6be60d7e337",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 230,
+      "total_deletions": 450,
+      "accepted_lines": 437,
+      "overriden_lines": 0
+    }
+  }
+}
