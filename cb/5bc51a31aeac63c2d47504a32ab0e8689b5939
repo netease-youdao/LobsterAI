@@ -1,0 +1,48 @@
+scripts/build-openclaw-runtime.sh
+  1da98c2bd0b2201a 276-284,297-304,307-308
+src/main/libs/openclawEngineManager.ts
+  1da98c2bd0b2201a 13-14,118-123,346-347,379-380,423-439,450,568-580,594,615-640,714-780,799-811,934-1000,1124-1135,1282-1285
+src/main/libs/openclawConfigSync.ts
+  1da98c2bd0b2201a 507-510,1147
+scripts/unpack-cfmind.cjs
+  0334b872f0bf5f7e 4,6,9-10,12-14,21,25,28,31-34,37-46,48-51,56-57,60,62,64-112,114-118,120-122,125,127-129,131-137,141-147,150-151,153-172,174-177,179-182,184,186-188
+scripts/nsis-installer.nsh
+  0334b872f0bf5f7e 50-73
+scripts/pack-openclaw-tar.cjs
+  0334b872f0bf5f7e 6,11-12,15-16,18-19,24-25,27,29,31-34,36-41,43-48,50-51,62-75,78-82,84-88,90-96,98-100,102-104,106-115,117-144,165,168-170,181
+scripts/electron-builder-hooks.cjs
+  1da98c2bd0b2201a 150-169,488-494,496-526,528-529,531
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "cb5bc51a31aeac63c2d47504a32ab0e8689b5939",
+  "prompts": {
+    "0334b872f0bf5f7e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9bb1e6db-73f2-4aa5-b7d2-f6be60d7e337",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 5,
+      "accepted_lines": 274,
+      "overriden_lines": 0
+    },
+    "1da98c2bd0b2201a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bec531f6-491c-48e2-ad5b-ccb435a05fca",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 872,
+      "total_deletions": 31,
+      "accepted_lines": 318,
+      "overriden_lines": 0
+    }
+  }
+}
