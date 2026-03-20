@@ -8,6 +8,7 @@ import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { PERSONA_PRESETS, buildPersonaPrompt } from '../constants/personaPresets';
 import ErrorMessage from './ErrorMessage';
 import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
@@ -546,6 +547,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [bootstrapUser, setBootstrapUser] = useState<string>('');
   const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
   const [bootstrapLoaded, setBootstrapLoaded] = useState<boolean>(false);
+  const [activePersonaPresetId, setActivePersonaPresetId] = useState<string | null>(null);
+  const [customSoulText, setCustomSoulText] = useState<string>('');
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
 
   useEffect(() => {
@@ -1034,7 +1037,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         ]);
         setBootstrapIdentity(stripDefaultTemplate(identity));
         setBootstrapUser(stripDefaultTemplate(user));
-        setBootstrapSoul(stripDefaultTemplate(soul));
+        const soulContent = stripDefaultTemplate(soul);
+        setBootstrapSoul(soulContent);
+        // Detect if existing SOUL.md matches a preset (trim both sides for robust comparison)
+        const trimmedSoul = soulContent.trim();
+        const matchedPreset = PERSONA_PRESETS.find((p) => buildPersonaPrompt(p).trim() === trimmedSoul);
+        if (matchedPreset) {
+          setActivePersonaPresetId(matchedPreset.id);
+          setCustomSoulText('');
+        } else {
+          setActivePersonaPresetId(null);
+          setCustomSoulText(soulContent);
+        }
         setBootstrapLoaded(true);
       })();
     }
@@ -2711,26 +2725,89 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
                 {i18nService.t('coworkBootstrapAgentSectionTitle')}
               </div>
-              {[
-                { filename: 'IDENTITY.md', titleKey: 'coworkBootstrapIdentityTitle', hintKey: 'coworkBootstrapIdentityHint', value: bootstrapIdentity, setter: setBootstrapIdentity },
-                { filename: 'SOUL.md', titleKey: 'coworkBootstrapSoulTitle', hintKey: 'coworkBootstrapSoulHint', value: bootstrapSoul, setter: setBootstrapSoul },
-              ].map(({ filename, titleKey, hintKey, value, setter }) => (
-                <div key={filename} className="space-y-2">
-                  <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {i18nService.t(titleKey)}
-                    <span className="ml-1.5 font-normal opacity-60">
-                      （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, filename)}</span>）
-                    </span>
-                  </div>
-                  <textarea
-                    value={value}
-                    onChange={(e) => setter(e.target.value)}
-                    rows={3}
-                    className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
-                    placeholder={i18nService.t(hintKey)}
-                  />
+              {/* IDENTITY.md */}
+              <div className="space-y-2">
+                <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('coworkBootstrapIdentityTitle')}
+                  <span className="ml-1.5 font-normal opacity-60">
+                    （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, 'IDENTITY.md')}</span>）
+                  </span>
                 </div>
-              ))}
+                <textarea
+                  value={bootstrapIdentity}
+                  onChange={(e) => setBootstrapIdentity(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
+                  placeholder={i18nService.t('coworkBootstrapIdentityHint')}
+                />
+              </div>
+
+              {/* SOUL.md – Agent 人设 with inline preset selector */}
+              <div className="space-y-2">
+                <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('coworkBootstrapSoulTitle')}
+                  <span className="ml-1.5 font-normal opacity-60">
+                    （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, 'SOUL.md')}</span>）
+                  </span>
+                </div>
+
+                {/* Persona preset radio cards */}
+                <div className="flex flex-wrap gap-2">
+                  {/* Custom option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePersonaPresetId(null);
+                      setBootstrapSoul(customSoulText);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      activePersonaPresetId === null
+                        ? 'border-claude-accent bg-claude-accent/10 dark:bg-claude-accent/20 text-claude-accent'
+                        : 'dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+                    }`}
+                  >
+                    {i18nService.t('coworkBootstrapPersonaPresetCustom')}
+                  </button>
+                  {/* Preset options */}
+                  {PERSONA_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      title={`${i18nService.t(preset.nameKey)} · ${preset.desc}`}
+                      onClick={() => {
+                        if (activePersonaPresetId === null) {
+                          // Save current custom text before switching
+                          setCustomSoulText(bootstrapSoul);
+                        }
+                        setActivePersonaPresetId(preset.id);
+                        setBootstrapSoul(buildPersonaPrompt(preset));
+                      }}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                        activePersonaPresetId === preset.id
+                          ? 'border-claude-accent bg-claude-accent/10 dark:bg-claude-accent/20 text-claude-accent'
+                          : 'dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+                      }`}
+                    >
+                      {i18nService.t(preset.nameKey)}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Textarea: editable only in custom mode */}
+                <textarea
+                  value={bootstrapSoul}
+                  onChange={(e) => {
+                    setBootstrapSoul(e.target.value);
+                    setCustomSoulText(e.target.value);
+                  }}
+                  readOnly={activePersonaPresetId !== null}
+                  rows={6}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y ${
+                    activePersonaPresetId !== null ? 'opacity-60 cursor-not-allowed' : ''
+                  }`}
+                  placeholder={i18nService.t('coworkBootstrapSoulHint')}
+                />
+              </div>
             </div>
 
             {/* User Profile (USER.md) */}
