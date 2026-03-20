@@ -6,6 +6,7 @@ import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
+import CoworkImageLightbox from './CoworkImageLightbox';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
@@ -116,6 +117,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isDraggingFiles, setIsDraggingFiles] = useState(false);
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
+    const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
@@ -145,6 +147,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const isLarge = size === 'large';
   const minHeight = isLarge ? 60 : 24;
   const maxHeight = isLarge ? 200 : 200;
+  const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
+  const modelSupportsImage = !!selectedModel?.supportsImage;
 
   // Load skills on mount
   useEffect(() => {
@@ -181,6 +185,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       if (shouldClear) {
         setValue('');
         setAttachments([]);
+        setExpandedImage(null);
       }
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
@@ -228,7 +233,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Extract image attachments (with base64 data) for vision-capable models
     const imageAtts: CoworkImageAttachment[] = [];
     for (const attachment of attachments) {
-      if (attachment.isImage && attachment.dataUrl) {
+      if (modelSupportsImage && attachment.isImage && attachment.dataUrl) {
         const extracted = extractBase64FromDataUrl(attachment.dataUrl);
         if (extracted) {
           imageAtts.push({
@@ -264,7 +269,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     dispatch(setDraftPrompt(''));
     setAttachments([]);
     setImageVisionHint(false);
-  }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);
+    setExpandedImage(null);
+  }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch, modelSupportsImage]);
 
   const handleSelectSkill = useCallback((skill: Skill) => {
     dispatch(toggleActiveSkill(skill.id));
@@ -309,9 +315,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       onWorkingDirectoryChange(path);
     }
   };
-
-  const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
-  const modelSupportsImage = !!selectedModel?.supportsImage;
 
   const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
     if (!filePath) return;
@@ -419,27 +422,31 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         : isImageMimeType(file.type);
 
       if (fileIsImage) {
-        if (modelSupportsImage) {
-          // For images on vision-capable models, read as data URL
-          if (nativePath) {
-            try {
-              const result = await window.electron.dialog.readFileAsDataUrl(nativePath);
-              if (result.success && result.dataUrl) {
-                addAttachment(nativePath, { isImage: true, dataUrl: result.dataUrl });
-                continue;
-              }
-            } catch (error) {
-              console.error('Failed to read image as data URL:', error);
+        let imageDataUrl: string | undefined;
+        if (nativePath) {
+          try {
+            const result = await window.electron.dialog.readFileAsDataUrl(nativePath);
+            if (result.success && result.dataUrl) {
+              imageDataUrl = result.dataUrl;
             }
-            // Fallback: add as regular file attachment
-            addAttachment(nativePath);
+          } catch (error) {
+            console.error('Failed to read image as data URL:', error);
+          }
+        } else {
+          try {
+            imageDataUrl = await fileToDataUrl(file);
+          } catch (error) {
+            console.error('Failed to read image from clipboard:', error);
+          }
+        }
+
+        if (modelSupportsImage) {
+          if (nativePath) {
+            addAttachment(nativePath, { isImage: true, dataUrl: imageDataUrl });
           } else {
-            // No native path (clipboard/drag from browser) - read via FileReader
-            try {
-              const dataUrl = await fileToDataUrl(file);
-              addImageAttachmentFromDataUrl(file.name, dataUrl);
-            } catch (error) {
-              console.error('Failed to read image from clipboard:', error);
+            if (imageDataUrl) {
+              addImageAttachmentFromDataUrl(file.name, imageDataUrl);
+            } else {
               const stagedPath = await saveInlineFile(file);
               if (stagedPath) {
                 addAttachment(stagedPath);
@@ -448,8 +455,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           }
           continue;
         }
-        // Model doesn't support image input — add as file path and show hint
+
         hasImageWithoutVision = true;
+        if (nativePath) {
+          addAttachment(nativePath, { isImage: true, dataUrl: imageDataUrl });
+          continue;
+        }
+
+        const stagedPath = await saveInlineFile(file);
+        if (stagedPath) {
+          addAttachment(stagedPath, { isImage: true, dataUrl: imageDataUrl });
+        }
+        continue;
       }
 
       // Non-image file or model doesn't support images: use original flow
@@ -479,20 +496,24 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       let hasImageWithoutVision = false;
       for (const filePath of result.paths) {
         if (isImagePath(filePath)) {
-          if (modelSupportsImage) {
-            try {
-              const readResult = await window.electron.dialog.readFileAsDataUrl(filePath);
-              if (readResult.success && readResult.dataUrl) {
-                addAttachment(filePath, { isImage: true, dataUrl: readResult.dataUrl });
-                continue;
-              }
-            } catch (error) {
-              console.error('Failed to read image as data URL:', error);
-
+          let imageDataUrl: string | undefined;
+          try {
+            const readResult = await window.electron.dialog.readFileAsDataUrl(filePath);
+            if (readResult.success && readResult.dataUrl) {
+              imageDataUrl = readResult.dataUrl;
             }
+          } catch (error) {
+            console.error('Failed to read image as data URL:', error);
+          }
+
+          if (modelSupportsImage) {
+            addAttachment(filePath, { isImage: true, dataUrl: imageDataUrl });
+            continue;
           } else {
             hasImageWithoutVision = true;
           }
+          addAttachment(filePath, { isImage: true, dataUrl: imageDataUrl });
+          continue;
         }
         addAttachment(filePath);
       }
@@ -572,27 +593,61 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
-              <div
-                key={attachment.path}
-                className="inline-flex items-center gap-1.5 rounded-full border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface px-2.5 py-1 text-xs dark:text-claude-darkText text-claude-text max-w-full"
-                title={attachment.path}
-              >
+            <div
+              key={attachment.path}
+              className={`group inline-flex max-w-full items-center gap-1 rounded-full border py-1 text-xs dark:text-claude-darkText text-claude-text transition-colors ${
+                attachment.isImage
+                  ? 'px-1.5 dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface hover:border-claude-accent/50 dark:hover:border-claude-accent/50'
+                  : 'gap-1.5 px-2.5 dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface'
+              }`}
+              title={attachment.path}
+            >
                 {attachment.isImage ? (
-                  <PhotoIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!attachment.dataUrl) return;
+                      setExpandedImage({ src: attachment.dataUrl, alt: attachment.name });
+                    }}
+                    className={`inline-flex min-w-0 items-center gap-2 rounded-full pr-1 transition-all ${
+                      attachment.dataUrl
+                        ? 'cursor-pointer hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                        : 'cursor-default'
+                    }`}
+                    disabled={!attachment.dataUrl}
+                  >
+                    {attachment.dataUrl ? (
+                      <span className="flex h-8 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-black/5 transition-transform transition-colors group-hover:border-claude-accent/50 dark:border-claude-darkBorder/50 border-claude-border/50 dark:bg-white/5 group-hover:scale-[1.02]">
+                        <img
+                          src={attachment.dataUrl}
+                          alt={attachment.name}
+                          className="h-full w-full object-contain"
+                        />
+                      </span>
+                    ) : (
+                      <PhotoIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+                    )}
+                    <span className="truncate max-w-[180px]">{attachment.name}</span>
+                  </button>
                 ) : (
-                  <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                  <>
+                    <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span className="truncate max-w-[180px]">{attachment.name}</span>
+                  </>
                 )}
-                <span className="truncate max-w-[180px]">{attachment.name}</span>
                 <button
                   type="button"
-                  onClick={() => handleRemoveAttachment(attachment.path)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleRemoveAttachment(attachment.path);
+                  }}
                   className="ml-0.5 rounded-full p-0.5 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
                   aria-label={i18nService.t('coworkAttachmentRemove')}
                   title={i18nService.t('coworkAttachmentRemove')}
                 >
                   <XMarkIcon className="h-3 w-3" />
                 </button>
-              </div>
+            </div>
           ))}
         </div>
       )}
@@ -766,6 +821,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           {i18nService.t('coworkSelectFolderFirst')}
         </div>
       )}
+      <CoworkImageLightbox
+        imageSrc={expandedImage?.src ?? null}
+        imageAlt={expandedImage?.alt}
+        onClose={() => setExpandedImage(null)}
+      />
     </div>
   );
   }

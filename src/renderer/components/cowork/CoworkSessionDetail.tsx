@@ -22,6 +22,7 @@ import PuzzleIcon from '../icons/PuzzleIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
+import CoworkImageLightbox from './CoworkImageLightbox';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../common/scheduledReminderText';
@@ -894,7 +895,7 @@ const CopyButton: React.FC<{
 
 export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
 
   // Get skills used for this message
   const messageSkillIds = (message.metadata as CoworkMessageMetadata)?.skillIds || [];
@@ -924,21 +925,24 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                 )}
                 {imageAttachments.length > 0 && (
                   <div className={`flex flex-wrap gap-2 ${message.content?.trim() ? 'mt-2' : ''}`}>
-                    {imageAttachments.map((img, idx) => (
-                      <div key={idx} className="relative group">
-                        <img
-                          src={`data:${img.mimeType};base64,${img.base64Data}`}
-                          alt={img.name}
-                          className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border dark:border-claude-darkBorder/50 border-claude-border/50 hover:border-claude-accent/50 transition-colors"
-                          title={img.name}
-                          onClick={() => setExpandedImage(`data:${img.mimeType};base64,${img.base64Data}`)}
-                        />
-                        <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
-                          <PhotoIcon className="h-3 w-3 flex-shrink-0" />
-                          <span className="truncate">{img.name}</span>
+                    {imageAttachments.map((img, idx) => {
+                      const imageSrc = `data:${img.mimeType};base64,${img.base64Data}`;
+                      return (
+                        <div key={idx} className="relative group">
+                          <img
+                            src={imageSrc}
+                            alt={img.name}
+                            className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border dark:border-claude-darkBorder/50 border-claude-border/50 hover:border-claude-accent/50 transition-colors"
+                            title={img.name}
+                            onClick={() => setExpandedImage({ src: imageSrc, alt: img.name })}
+                          />
+                          <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
+                            <PhotoIcon className="h-3 w-3 flex-shrink-0" />
+                            <span className="truncate">{img.name}</span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -964,20 +968,11 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
           </div>
         </div>
       </div>
-      {/* Image lightbox overlay */}
-      {expandedImage && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 cursor-pointer"
-          onClick={() => setExpandedImage(null)}
-        >
-          <img
-            src={expandedImage}
-            alt="Preview"
-            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
+      <CoworkImageLightbox
+        imageSrc={expandedImage?.src ?? null}
+        imageAlt={expandedImage?.alt}
+        onClose={() => setExpandedImage(null)}
+      />
     </div>
   );
 });
