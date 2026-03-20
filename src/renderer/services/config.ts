@@ -66,6 +66,27 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
   ) as AppConfig['providers'];
 };
 
+// Model IDs that have been removed from specific providers.
+// These will be filtered out from saved configs during migration.
+const REMOVED_PROVIDER_MODELS: Record<string, string[]> = {
+  deepseek: ['deepseek-chat'],
+};
+
+// Models to inject into existing saved configs (for existing users).
+// These models will be added on every startup if missing from the stored config.
+// Note: users cannot permanently remove these models — they will be re-injected
+// on next launch. Once all users have upgraded, entries here should be removed
+// so the models follow normal user-editable behavior (same as other models).
+// position: 'start' inserts at the beginning, 'end' appends at the end.
+const ADDED_PROVIDER_MODELS: Record<string, { models: Array<{ id: string; name: string; supportsImage?: boolean }>; position: 'start' | 'end' }> = {
+  minimax: {
+    models: [
+      { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
+    ],
+    position: 'start',
+  },
+};
+
 class ConfigService {
   private config: AppConfig = defaultConfig;
 
@@ -85,6 +106,24 @@ class ConfigService {
                     ...(defaultConfig.providers as Record<string, any>)?.[providerKey],
                     ...providerConfig,
                   };
+                  // Filter out removed models
+                  const removedIds = REMOVED_PROVIDER_MODELS[providerKey];
+                  if (removedIds && mergedProvider.models) {
+                    mergedProvider.models = mergedProvider.models.filter(
+                      (m: { id: string }) => !removedIds.includes(m.id)
+                    );
+                  }
+                  // Inject added models (for existing users who already have saved config)
+                  const addedConfig = ADDED_PROVIDER_MODELS[providerKey];
+                  if (addedConfig && mergedProvider.models) {
+                    const existingIds = new Set(mergedProvider.models.map((m: { id: string }) => m.id));
+                    const newModels = addedConfig.models.filter(m => !existingIds.has(m.id));
+                    if (newModels.length > 0) {
+                      mergedProvider.models = addedConfig.position === 'start'
+                        ? [...newModels, ...mergedProvider.models]
+                        : [...mergedProvider.models, ...newModels];
+                    }
+                  }
                   return {
                     ...mergedProvider,
                     baseUrl: normalizeProviderBaseUrl(providerKey, mergedProvider.baseUrl),
@@ -95,6 +134,18 @@ class ConfigService {
             )
           : defaultConfig.providers;
 
+        // Migrate model.defaultModel if it was removed
+        const allRemovedIds = Object.values(REMOVED_PROVIDER_MODELS).flat();
+        const migratedModel = { ...defaultConfig.model, ...storedConfig.model };
+        if (allRemovedIds.includes(migratedModel.defaultModel)) {
+          migratedModel.defaultModel = defaultConfig.model.defaultModel;
+        }
+        if (migratedModel.availableModels) {
+          migratedModel.availableModels = migratedModel.availableModels.filter(
+            (m: { id: string }) => !allRemovedIds.includes(m.id)
+          );
+        }
+
         this.config = {
           ...defaultConfig,
           ...storedConfig,
@@ -102,10 +153,7 @@ class ConfigService {
             ...defaultConfig.api,
             ...storedConfig.api,
           },
-          model: {
-            ...defaultConfig.model,
-            ...storedConfig.model,
-          },
+          model: migratedModel,
           app: {
             ...defaultConfig.app,
             ...storedConfig.app,

@@ -4,9 +4,9 @@ const path = require('path');
 const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync, lstatSync } = require('fs');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
-const { ensurePortableGit } = require('./setup-mingit.js');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
+const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -466,12 +466,52 @@ async function beforePack(context) {
   // Install skill dependencies first (for all platforms)
   installSkillDependencies();
 
+  if (isWindowsTarget(context)) {
+    // Pack all large resource directories into a single tar for faster NSIS
+    // installation.  NSIS extracts thousands of small files very slowly on NTFS;
+    // a single tar archive is extracted by 7z almost instantly, and we unpack
+    // it in the NSIS customInstall macro using Electron's Node runtime.
+    const buildTarDir = path.join(__dirname, '..', 'build-tar');
+    mkdirSync(buildTarDir, { recursive: true });
+
+    const outputTar = path.join(buildTarDir, 'win-resources.tar');
+    const sources = [
+      {
+        label: 'OpenClaw runtime',
+        dir: path.join(__dirname, '..', 'vendor', 'openclaw-runtime', 'current'),
+        prefix: 'cfmind',
+      },
+      {
+        label: 'SKILLs',
+        dir: path.join(__dirname, '..', 'SKILLs'),
+        prefix: 'SKILLs',
+      },
+      {
+        label: 'Python runtime',
+        dir: path.join(__dirname, '..', 'resources', 'python-win'),
+        prefix: 'python-win',
+      },
+    ];
+
+    console.log(`[electron-builder-hooks] Packing combined Windows tar: ${outputTar}`);
+    const t0 = Date.now();
+
+    // Remove old tar if exists
+    if (existsSync(outputTar)) rmSync(outputTar);
+
+    const { totalFiles, skipped } = packMultipleSources(sources, outputTar);
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    const sizeMB = (statSync(outputTar).size / (1024 * 1024)).toFixed(1);
+    console.log(
+      `[electron-builder-hooks] Combined tar packed in ${elapsed}s: `
+      + `${totalFiles} files, ${skipped} skipped, ${sizeMB} MB`
+    );
+  }
+
   if (!isWindowsTarget(context)) {
     return;
   }
 
-  console.log('[electron-builder-hooks] Windows target detected, ensuring PortableGit is prepared...');
-  await ensurePortableGit({ required: true });
   console.log('[electron-builder-hooks] Windows target detected, ensuring portable Python runtime is prepared...');
   await ensurePortablePythonRuntime({ required: true });
   const runtimeRoot = path.join(__dirname, '..', 'resources', 'python-win');
@@ -486,40 +526,6 @@ async function beforePack(context) {
 }
 
 async function afterPack(context) {
-  if (isWindowsTarget(context)) {
-    const bashPath = findPackagedBash(context.appOutDir);
-    if (!bashPath) {
-      throw new Error(
-        'Windows package is missing bundled PortableGit bash.exe. '
-        + 'Expected one of: '
-        + `${path.join(context.appOutDir, 'resources', 'mingit', 'bin', 'bash.exe')} or `
-        + `${path.join(context.appOutDir, 'resources', 'mingit', 'usr', 'bin', 'bash.exe')}`
-      );
-    }
-
-    console.log(`[electron-builder-hooks] Verified bundled PortableGit: ${bashPath}`);
-    verifyPackagedPortableGitRuntimeDirs(context.appOutDir);
-
-    const pythonExe = findPackagedPythonExecutable(context.appOutDir);
-    if (!pythonExe) {
-      throw new Error(
-        'Windows package is missing bundled python runtime executable. '
-        + 'Expected one of: '
-        + `${path.join(context.appOutDir, 'resources', 'python-win', 'python.exe')} or `
-        + `${path.join(context.appOutDir, 'resources', 'python-win', 'python3.exe')}`
-      );
-    }
-    const packagedRuntimeRoot = path.join(context.appOutDir, 'resources', 'python-win');
-    const packagedRuntimeHealth = checkRuntimeHealth(packagedRuntimeRoot, { requirePip: true });
-    if (!packagedRuntimeHealth.ok) {
-      throw new Error(
-        'Windows package bundled python runtime is unhealthy. Missing files: '
-        + packagedRuntimeHealth.missing.join(', ')
-      );
-    }
-    console.log(`[electron-builder-hooks] Verified bundled Python runtime: ${pythonExe}`);
-  }
-
   if (isMacTarget(context)) {
     const appName = context.packager.appInfo.productFilename;
     const appPath = path.join(context.appOutDir, `${appName}.app`);

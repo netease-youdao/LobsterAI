@@ -23,6 +23,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles (created by ChannelSessionSync)
     cronSessionPrefix: '定时',
+
+    // Timeout hint
+    taskTimedOut: '[任务超时] 任务因超过最大允许时长而被自动停止。你可以继续对话以从中断处继续。',
   },
   en: {
     // Tray menu
@@ -33,6 +36,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles
     cronSessionPrefix: 'Cron',
+
+    // Timeout hint
+    taskTimedOut: '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
   },
 };
 

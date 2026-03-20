@@ -22,12 +22,20 @@ const mapExecutionModeToSandboxMode = (_mode: CoworkExecutionMode): 'off' | 'non
   return 'off';
 };
 
+/**
+ * Default agent timeout in seconds written to openclaw config.
+ * Also used by the runtime adapter's client-side timeout watchdog.
+ */
+export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
+
 const mapApiTypeToOpenClawApi = (apiType: 'anthropic' | 'openai' | undefined): 'anthropic-messages' | 'openai-completions' => {
   return apiType === 'openai' ? 'openai-completions' : 'anthropic-messages';
 };
 
 const ensureDir = (dirPath: string): void => {
-  fs.mkdirSync(dirPath, { recursive: true });
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
 };
 
 const normalizeModelName = (modelId: string): string => {
@@ -538,13 +546,14 @@ export class OpenClawConfigSync {
       },
       agents: {
         defaults: {
+          timeoutSeconds: OPENCLAW_AGENT_TIMEOUT_SECONDS,
           model: {
             primary: providerSelection.primaryModel,
           },
           sandbox: {
             mode: sandboxMode,
           },
-          ...(workspaceDir ? { workspace: workspaceDir } : {}),
+          ...(workspaceDir ? { workspace: path.resolve(workspaceDir) } : {}),
         },
       },
       session: {

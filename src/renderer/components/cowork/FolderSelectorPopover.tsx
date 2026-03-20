@@ -152,12 +152,21 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
     }
   }, [showRecentSubmenu]);
 
+  const isWindowsDriveRoot = (dirPath: string): boolean => {
+    if (window.electron.platform !== 'win32') return false;
+    return /^[a-zA-Z]:[/\\]?$/.test(dirPath.trim());
+  };
+
   const handleAddFolder = async () => {
+    onClose();
     try {
       const result = await window.electron.dialog.selectDirectory();
       if (result.success && result.path) {
+        if (isWindowsDriveRoot(result.path)) {
+          window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('folderDriveRootNotAllowed') }));
+          return;
+        }
         onSelectFolder(result.path);
-        onClose();
       }
     } catch (error) {
       console.error('Failed to select directory:', error);
@@ -165,6 +174,10 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
   };
 
   const handleSelectRecentFolder = (path: string) => {
+    if (isWindowsDriveRoot(path)) {
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('folderDriveRootNotAllowed') }));
+      return;
+    }
     onSelectFolder(path);
     onClose();
   };

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
-import { clearCurrentSession, setCurrentSession, setStreaming } from '../../store/slices/coworkSlice';
+import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
 import { setActions, selectAction, clearSelection } from '../../store/slices/quickActionSlice';
 import { coworkService } from '../../services/cowork';
@@ -239,7 +239,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         .join('\n\n') || undefined;
 
       // Start the actual session immediately with fallback title
-      const startedSession = await coworkService.startSession({
+      const { session: startedSession, error: startError } = await coworkService.startSession({
         prompt,
         title: fallbackTitle,
         cwd: config.workingDirectory || undefined,
@@ -247,6 +247,21 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         activeSkillIds: sessionSkillIds,
         imageAttachments,
       });
+
+      if (!startedSession && startError) {
+        // Show the error as a system message in the temp session
+        dispatch(addMessage({
+          sessionId: tempSessionId,
+          message: {
+            id: `error-${Date.now()}`,
+            type: 'system',
+            content: i18nService.t('coworkErrorSessionStartFailed').replace('{error}', startError),
+            timestamp: Date.now(),
+          },
+        }));
+        dispatch(updateSessionStatus({ sessionId: tempSessionId, status: 'error' }));
+        return;
+      }
 
       // Generate title in the background and update when ready
       if (startedSession) {

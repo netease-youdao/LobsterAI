@@ -235,10 +235,9 @@ export const defaultConfig: AppConfig = {
   },
   model: {
     availableModels: [
-      { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
     ],
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-reasoner',
     defaultModelProvider: 'deepseek',
   },
   providers: {
@@ -280,8 +279,7 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.deepseek.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
-        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false }
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }
       ]
     },
     moonshot: {
@@ -311,6 +309,7 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiFormat: 'anthropic',
       models: [
+        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
         { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false },
         { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
       ]

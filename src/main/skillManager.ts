@@ -794,6 +794,135 @@ const downloadGithubArchive = async (
   return extractRoot;
 };
 
+/**
+ * Check if a source string looks like an npm package spec.
+ * Supports: package-name, @scope/package, package@version, @scope/package@version
+ */
+const isNpmPackageSpec = (source: string): boolean => {
+  // Must not be a local path, URL, or GitHub shorthand (owner/repo)
+  if (source.startsWith('.') || source.startsWith('/') || source.startsWith('~')) return false;
+  try { new URL(source); return false; } catch { /* not a URL, good */ }
+
+  // Scoped package: @scope/name or @scope/name@version
+  if (/^@[\w-]+\/[\w.-]+(@[\w.^~>=<*-]+)?$/.test(source)) return true;
+  // Unscoped package: name or name@version (must not contain '/' which would be owner/repo)
+  if (/^[\w.-]+(@[\w.^~>=<*-]+)?$/.test(source) && !source.includes('/')) return true;
+
+  return false;
+};
+
+/**
+ * Resolve the bundled npm-cli.js path for running npm commands.
+ */
+const resolveNpmCliJs = (): string | null => {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin', 'npm-cli.js')]
+    : [
+        path.join(app.getAppPath(), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+        path.join(process.cwd(), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      ];
+  return candidates.find(c => fs.existsSync(c)) || null;
+};
+
+/**
+ * Download and extract an npm package using `npm pack`.
+ * Similar to openclaw's plugin install: npm pack → extract .tgz → return path.
+ */
+const downloadNpmPackage = async (spec: string, tempRoot: string): Promise<string> => {
+  const npmCliJs = resolveNpmCliJs();
+  const electronPath = getElectronNodeRuntimePath();
+
+  // Determine how to invoke npm
+  let npmCommand: string;
+  let npmArgs: string[];
+  if (npmCliJs) {
+    npmCommand = electronPath;
+    npmArgs = [npmCliJs, 'pack', spec, '--ignore-scripts', '--json'];
+  } else {
+    npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    npmArgs = ['pack', spec, '--ignore-scripts', '--json'];
+  }
+
+  const packResult = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn(npmCommand, npmArgs, {
+      cwd: tempRoot,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data) => { stdout += data; });
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.on('error', (err) => resolve({ code: 1, stdout: '', stderr: err.message }));
+  });
+
+  if (packResult.code !== 0) {
+    const detail = packResult.stderr.trim() || packResult.stdout.trim();
+    throw new Error(`npm pack failed for "${spec}": ${detail}`);
+  }
+
+  // Find the .tgz file
+  const tgzFiles = fs.readdirSync(tempRoot).filter(f => f.endsWith('.tgz'));
+  if (tgzFiles.length === 0) {
+    // Try parsing JSON output for filename
+    try {
+      const parsed = JSON.parse(packResult.stdout);
+      const entries = Array.isArray(parsed) ? parsed : [parsed];
+      for (const entry of entries) {
+        if (entry.filename && fs.existsSync(path.join(tempRoot, entry.filename))) {
+          tgzFiles.push(entry.filename);
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (tgzFiles.length === 0) {
+    throw new Error(`npm pack produced no .tgz archive for "${spec}"`);
+  }
+
+  // Extract .tgz (which is a gzip'd tar containing a 'package/' directory)
+  const tgzPath = path.join(tempRoot, tgzFiles[0]);
+  const extractDir = path.join(tempRoot, 'npm-extracted');
+  fs.mkdirSync(extractDir, { recursive: true });
+
+  // Use tar to extract (Node.js built-in zlib + tar via npm's own bundled tar)
+  const tarExtract = await new Promise<{ code: number; stderr: string }>((resolve) => {
+    const tarCommand = npmCliJs ? electronPath : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+    const tarArgs = npmCliJs
+      ? [npmCliJs, 'exec', '--', 'tar', 'xzf', tgzPath, '-C', extractDir]
+      : ['exec', '--', 'tar', 'xzf', tgzPath, '-C', extractDir];
+
+    // Try system tar first (available on all platforms including Windows 10+)
+    const child = spawn('tar', ['xzf', tgzPath, '-C', extractDir], {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('close', (code) => resolve({ code: code ?? 1, stderr }));
+    child.on('error', () => resolve({ code: 1, stderr: 'tar not found' }));
+  });
+
+  if (tarExtract.code !== 0) {
+    throw new Error(`Failed to extract npm package: ${tarExtract.stderr}`);
+  }
+
+  // npm pack extracts to a 'package/' subdirectory
+  const packageDir = path.join(extractDir, 'package');
+  if (fs.existsSync(packageDir)) {
+    return packageDir;
+  }
+
+  // Fallback: return first directory in extract dir
+  const dirs = fs.readdirSync(extractDir)
+    .map(name => path.join(extractDir, name))
+    .filter(p => fs.statSync(p).isDirectory());
+  return dirs[0] || extractDir;
+};
+
 const isRemoteZipUrl = (source: string): boolean => {
   try {
     const url = new URL(source);
@@ -1216,64 +1345,82 @@ export class SkillManager {
         return { success: false, error: 'Missing skill source' };
       }
 
+      console.log(`[SkillManager] downloadSkill: source="${trimmed}"`);
       const root = this.ensureSkillsRoot();
       let localSource = trimmed;
       if (fs.existsSync(localSource)) {
         const stat = fs.statSync(localSource);
         if (stat.isFile()) {
           if (isZipFile(localSource)) {
+            console.log('[SkillManager] downloadSkill: detected local zip file');
             const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
             await extractZip(localSource, { dir: tempRoot });
             localSource = tempRoot;
             cleanupPath = tempRoot;
           } else if (path.basename(localSource) === SKILL_FILE_NAME) {
+            console.log('[SkillManager] downloadSkill: detected local SKILL.md file');
             localSource = path.dirname(localSource);
           } else {
             return { success: false, error: 'Skill source must be a directory, zip file, or SKILL.md file' };
           }
+        } else {
+          console.log('[SkillManager] downloadSkill: detected local directory');
         }
       } else if (isRemoteZipUrl(trimmed)) {
+        console.log('[SkillManager] downloadSkill: detected remote zip URL');
         const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
         cleanupPath = tempRoot;
         localSource = await downloadZipUrl(trimmed, tempRoot);
+      } else if (isNpmPackageSpec(trimmed)) {
+        console.log(`[SkillManager] downloadSkill: detected npm package spec "${trimmed}"`);
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-npm-'));
+        cleanupPath = tempRoot;
+        localSource = await downloadNpmPackage(trimmed, tempRoot);
+        console.log(`[SkillManager] downloadSkill: npm package extracted to ${localSource}`);
       } else {
         const normalized = this.normalizeGitSource(trimmed);
         if (!normalized) {
-          return { success: false, error: 'Invalid skill source. Use owner/repo, repo URL, or a GitHub tree/blob URL.' };
+          return { success: false, error: 'Invalid skill source. Use owner/repo, repo URL, npm package spec, or a GitHub tree/blob URL.' };
         }
         const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-'));
         cleanupPath = tempRoot;
         const repoName = normalizeFolderName(normalized.repoNameHint || deriveRepoName(normalized.repoUrl));
         const clonePath = path.join(tempRoot, repoName);
-        const cloneArgs = ['clone', '--depth', '1'];
-        if (normalized.ref) {
-          cloneArgs.push('--branch', normalized.ref);
-        }
-        cloneArgs.push(normalized.repoUrl, clonePath);
-        const gitRuntime = resolveGitCommand();
         const githubSource = parseGithubRepoSource(normalized.repoUrl);
         let downloadedSourceRoot = clonePath;
-        try {
-          await runCommand(gitRuntime.command, cloneArgs, { env: gitRuntime.env });
-        } catch (error) {
-          const errno = (error as NodeJS.ErrnoException | null)?.code;
-          if (githubSource) {
-            try {
-              downloadedSourceRoot = await downloadGithubArchive(githubSource, tempRoot, normalized.ref);
-            } catch (archiveError) {
-              const gitMessage = extractErrorMessage(error);
-              const archiveMessage = extractErrorMessage(archiveError);
-              if (errno === 'ENOENT' && process.platform === 'win32') {
-                throw new Error(
-                  'Git executable not found. Please install Git for Windows or reinstall LobsterAI with bundled PortableGit.'
-                  + ` Archive fallback also failed: ${archiveMessage}`
-                );
-              }
-              throw new Error(`Git clone failed: ${gitMessage}. Archive fallback failed: ${archiveMessage}`);
+
+        // Prefer HTTP zip download for GitHub repos (no git dependency required).
+        // Fall back to git clone only for non-GitHub sources or if download fails.
+        let downloaded = false;
+        if (githubSource) {
+          console.log(`[SkillManager] downloadSkill: trying GitHub HTTP zip download for ${githubSource.owner}/${githubSource.repo}`);
+          try {
+            downloadedSourceRoot = await downloadGithubArchive(githubSource, tempRoot, normalized.ref);
+            downloaded = true;
+            console.log(`[SkillManager] downloadSkill: GitHub HTTP download succeeded → ${downloadedSourceRoot}`);
+          } catch (err) {
+            console.log(`[SkillManager] downloadSkill: GitHub HTTP download failed: ${err instanceof Error ? err.message : err}, falling back to git clone`);
+          }
+        }
+
+        if (!downloaded) {
+          console.log(`[SkillManager] downloadSkill: using git clone for ${normalized.repoUrl}`);
+          const cloneArgs = ['clone', '--depth', '1'];
+          if (normalized.ref) {
+            cloneArgs.push('--branch', normalized.ref);
+          }
+          cloneArgs.push(normalized.repoUrl, clonePath);
+          const gitRuntime = resolveGitCommand();
+          try {
+            await runCommand(gitRuntime.command, cloneArgs, { env: gitRuntime.env });
+          } catch (error) {
+            const errno = (error as NodeJS.ErrnoException | null)?.code;
+            if (errno === 'ENOENT' && process.platform === 'win32') {
+              throw new Error(
+                'Failed to download skill. Git is not installed.'
+                + ' Please install Git for Windows, or use a GitHub URL (HTTP download).'
+              );
             }
-          } else if (errno === 'ENOENT' && process.platform === 'win32') {
-            throw new Error('Git executable not found. Please install Git for Windows or reinstall LobsterAI with bundled PortableGit.');
-          } else {
             throw error;
           }
         }
