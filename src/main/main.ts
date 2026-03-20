@@ -3695,6 +3695,20 @@ if (!gotTheLock) {
     if (cronJobService) {
       cronJobService.stopPolling();
     }
+
+    // Flush any pending database writes before exit
+    if (store) {
+      console.log('[Main] Flushing database...');
+      await store.flush().catch((error) => {
+        console.error('[Main] Failed to flush database:', error);
+        // Fall back to sync save as last resort
+        try {
+          store.saveSync();
+        } catch (syncError) {
+          console.error('[Main] Sync save also failed:', syncError);
+        }
+      });
+    }
   };
 
   app.on('before-quit', (e) => {

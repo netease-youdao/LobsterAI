@@ -14,11 +14,24 @@ type ChangePayload<T = unknown> = {
 
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 
-// Pre-read the sql.js WASM binary from disk.
-// Using fs.readFileSync (which handles non-ASCII paths via Windows wide-char APIs)
-// and passing the buffer directly to initSqlJs bypasses Emscripten's file loading,
-// which can fail or hang when the install path contains Chinese characters on Windows.
-function loadWasmBinary(): ArrayBuffer {
+// Debounce delay for async save operations (ms)
+const SAVE_DEBOUNCE_MS = 100;
+
+// Pre-read the sql.js WASM binary from disk asynchronously.
+// Using fs.promises.readFile for non-blocking IO during app startup.
+async function loadWasmBinaryAsync(): Promise<ArrayBuffer> {
+  const wasmPath = app.isPackaged
+    ? path.join(
+        process.resourcesPath,
+        'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
+      )
+    : path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm');
+  const buf = await fs.promises.readFile(wasmPath);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+}
+
+// Synchronous version for critical shutdown scenarios only
+function loadWasmBinarySync(): ArrayBuffer {
   const wasmPath = app.isPackaged
     ? path.join(
         process.resourcesPath,
@@ -35,6 +48,11 @@ export class SqliteStore {
   private emitter = new EventEmitter();
   private static sqlPromise: Promise<SqlJsStatic> | null = null;
 
+  // Async save state management
+  private savePromise: Promise<void> | null = null;
+  private pendingSave = false;
+  private saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
   private constructor(db: Database, dbPath: string) {
     this.db = db;
     this.dbPath = dbPath;
@@ -46,28 +64,31 @@ export class SqliteStore {
 
     // Initialize SQL.js with WASM file path (cached promise for reuse)
     if (!SqliteStore.sqlPromise) {
-      const wasmBinary = loadWasmBinary();
-      SqliteStore.sqlPromise = initSqlJs({
-        wasmBinary,
-      });
+      // Use async WASM loading to avoid blocking main thread
+      const wasmBinaryPromise = loadWasmBinaryAsync();
+      SqliteStore.sqlPromise = wasmBinaryPromise.then((wasmBinary) =>
+        initSqlJs({ wasmBinary })
+      );
     }
     const SQL = await SqliteStore.sqlPromise;
 
-    // Load existing database or create new one
+    // Load existing database or create new one (async file read)
     let db: Database;
-    if (fs.existsSync(dbPath)) {
-      const buffer = fs.readFileSync(dbPath);
+    try {
+      await fs.promises.access(dbPath, fs.constants.F_OK);
+      const buffer = await fs.promises.readFile(dbPath);
       db = new SQL.Database(buffer);
-    } else {
+    } catch {
+      // File doesn't exist, create new database
       db = new SQL.Database();
     }
 
     const store = new SqliteStore(db, dbPath);
-    store.initializeTables(basePath);
+    await store.initializeTables(basePath);
     return store;
   }
 
-  private initializeTables(basePath: string) {
+  private async initializeTables(basePath: string) {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
@@ -183,17 +204,17 @@ export class SqliteStore {
 
       if (!columns.includes('execution_mode')) {
         this.db.run('ALTER TABLE cowork_sessions ADD COLUMN execution_mode TEXT;');
-        this.save();
+        await this.saveAsync();
       }
 
       if (!columns.includes('pinned')) {
         this.db.run('ALTER TABLE cowork_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;');
-        this.save();
+        await this.saveAsync();
       }
 
       if (!columns.includes('active_skill_ids')) {
         this.db.run('ALTER TABLE cowork_sessions ADD COLUMN active_skill_ids TEXT;');
-        this.save();
+        await this.saveAsync();
       }
 
       // Migration: Add sequence column to cowork_messages
@@ -216,7 +237,7 @@ export class SqliteStore {
           SET sequence = (SELECT seq FROM numbered WHERE numbered.id = cowork_messages.id)
         `);
 
-        this.save();
+        await this.saveAsync();
       }
     } catch {
       // Column already exists or migration not needed.
@@ -239,15 +260,110 @@ export class SqliteStore {
       console.warn('Failed to migrate cowork execution mode:', error);
     }
 
-    this.migrateLegacyMemoryFileToUserMemories();
-    this.migrateFromElectronStore(basePath);
-    this.save();
+    await this.migrateLegacyMemoryFileToUserMemories();
+    await this.migrateFromElectronStore(basePath);
+    await this.saveAsync();
   }
 
-  save() {
+  /**
+   * Asynchronously save the database to disk with debouncing.
+   * Multiple rapid calls will be coalesced into a single write.
+   */
+  async saveAsync(): Promise<void> {
+    // Clear any pending debounce timer
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+
+    // If a save is already in progress, mark that we need another save
+    if (this.savePromise) {
+      this.pendingSave = true;
+      return this.savePromise;
+    }
+
+    const doSave = async (): Promise<void> => {
+      let needsResave = false;
+      try {
+        const data = this.db.export();
+        const buffer = Buffer.from(data);
+        await fs.promises.writeFile(this.dbPath, buffer);
+      } finally {
+        this.savePromise = null;
+
+        // If another save was requested while we were saving, schedule it
+        if (this.pendingSave) {
+          this.pendingSave = false;
+          needsResave = true;
+        }
+      }
+      // Chain another save outside of finally block
+      if (needsResave) {
+        await this.saveAsync();
+      }
+    };
+
+    this.savePromise = doSave();
+    return this.savePromise;
+  }
+
+  /**
+   * Schedule an async save with debouncing.
+   * Use this for non-critical saves to reduce IO frequency.
+   */
+  save(): void {
+    // Clear any existing debounce timer
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+    }
+
+    // Schedule a debounced save
+    this.saveDebounceTimer = setTimeout(() => {
+      this.saveDebounceTimer = null;
+      this.saveAsync().catch((error) => {
+        console.error('[SqliteStore] Debounced save failed:', error);
+      });
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Synchronously save the database to disk.
+   * Use sparingly - only for critical scenarios like app shutdown.
+   */
+  saveSync(): void {
+    // Cancel any pending async save
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    this.pendingSave = false;
+
     const data = this.db.export();
     const buffer = Buffer.from(data);
     fs.writeFileSync(this.dbPath, buffer);
+  }
+
+  /**
+   * Flush any pending saves immediately (async).
+   * Call this before app quit to ensure all data is persisted.
+   */
+  async flush(): Promise<void> {
+    // Cancel debounce timer and save immediately
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+
+    // Wait for any in-progress save
+    if (this.savePromise) {
+      await this.savePromise;
+    }
+
+    // If there was a pending save, do it now
+    if (this.pendingSave) {
+      this.pendingSave = false;
+      await this.saveAsync();
+    }
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
@@ -302,7 +418,17 @@ export class SqliteStore {
     return () => this.save();
   }
 
-  private tryReadLegacyMemoryText(): string {
+  // Expose async save for external use
+  getSaveAsyncFunction(): () => Promise<void> {
+    return () => this.saveAsync();
+  }
+
+  // Expose sync save for critical shutdown scenarios
+  getSaveSyncFunction(): () => void {
+    return () => this.saveSync();
+  }
+
+  private async tryReadLegacyMemoryText(): Promise<string> {
     const candidates = [
       path.join(process.cwd(), 'MEMORY.md'),
       path.join(app.getAppPath(), 'MEMORY.md'),
@@ -312,8 +438,9 @@ export class SqliteStore {
 
     for (const candidate of candidates) {
       try {
-        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-          return fs.readFileSync(candidate, 'utf8');
+        const stat = await fs.promises.stat(candidate);
+        if (stat.isFile()) {
+          return await fs.promises.readFile(candidate, 'utf8');
         }
       } catch {
         // Skip unreadable candidates.
@@ -352,12 +479,12 @@ export class SqliteStore {
     return crypto.createHash('sha1').update(normalized).digest('hex');
   }
 
-  private migrateLegacyMemoryFileToUserMemories(): void {
+  private async migrateLegacyMemoryFileToUserMemories(): Promise<void> {
     if (this.get<string>(USER_MEMORIES_MIGRATION_KEY) === '1') {
       return;
     }
 
-    const content = this.tryReadLegacyMemoryText();
+    const content = await this.tryReadLegacyMemoryText();
     if (!content.trim()) {
       this.set(USER_MEMORIES_MIGRATION_KEY, '1');
       return;
@@ -404,16 +531,22 @@ export class SqliteStore {
     this.set(USER_MEMORIES_MIGRATION_KEY, '1');
   }
 
-  private migrateFromElectronStore(userDataPath: string) {
+  private async migrateFromElectronStore(userDataPath: string): Promise<void> {
     const result = this.db.exec('SELECT COUNT(*) as count FROM kv');
     const count = result[0]?.values[0]?.[0] as number;
     if (count > 0) return;
 
     const legacyPath = path.join(userDataPath, 'config.json');
-    if (!fs.existsSync(legacyPath)) return;
+    
+    try {
+      await fs.promises.access(legacyPath, fs.constants.F_OK);
+    } catch {
+      // File doesn't exist
+      return;
+    }
 
     try {
-      const raw = fs.readFileSync(legacyPath, 'utf8');
+      const raw = await fs.promises.readFile(legacyPath, 'utf8');
       const data = JSON.parse(raw) as Record<string, unknown>;
       if (!data || typeof data !== 'object') return;
 
@@ -430,7 +563,7 @@ export class SqliteStore {
           `, [key, JSON.stringify(value), now]);
         });
         this.db.run('COMMIT;');
-        this.save();
+        await this.saveAsync();
         console.info(`Migrated ${entries.length} entries from electron-store.`);
       } catch (error) {
         this.db.run('ROLLBACK;');
