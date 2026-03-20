@@ -56,6 +56,68 @@ const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, ms));
 };
 
+/**
+ * Check if a path contains non-ASCII characters that may cause issues on Windows.
+ * Returns a diagnostic message if problematic characters are found.
+ */
+const validatePathForWindows = (filePath: string, label: string): string | null => {
+  if (process.platform !== 'win32') return null;
+  
+  // Check for non-ASCII characters (Chinese, etc.)
+  const nonAsciiMatch = filePath.match(/[^\x00-\x7F]/);
+  if (nonAsciiMatch) {
+    return `${label} contains non-ASCII characters (e.g., "${nonAsciiMatch[0]}") which may cause issues: ${filePath}`;
+  }
+  
+  // Check for problematic special characters
+  const problematicChars = /[&^%$#@!`~]/;
+  if (problematicChars.test(filePath)) {
+    return `${label} contains special characters which may cause issues: ${filePath}`;
+  }
+  
+  return null;
+};
+
+/**
+ * Collect early spawn errors from a ChildProcess.
+ * Returns a promise that resolves with collected stderr output after a short delay,
+ * or rejects immediately if a spawn error occurs.
+ */
+const collectEarlySpawnErrors = (
+  child: ChildProcess,
+  timeoutMs = 2000,
+): Promise<{ stderrChunks: string[]; exitCode: number | null }> => {
+  return new Promise((resolve) => {
+    const stderrChunks: string[] = [];
+    let exitCode: number | null = null;
+    let resolved = false;
+
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      resolve({ stderrChunks, exitCode });
+    };
+
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderrChunks.push(typeof chunk === 'string' ? chunk : chunk.toString());
+    });
+
+    child.once('error', (err) => {
+      stderrChunks.push(`spawn error: ${err.message}`);
+      finish();
+    });
+
+    child.once('exit', (code) => {
+      exitCode = code;
+      // Give a brief moment to collect any remaining stderr
+      setTimeout(finish, 100);
+    });
+
+    // Timeout to avoid waiting forever
+    setTimeout(finish, timeoutMs);
+  });
+};
+
 const parseJsonFile = <T>(filePath: string): T | null => {
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -341,6 +403,24 @@ export class OpenClawEngineManager extends EventEmitter {
       return this.getStatus();
     }
 
+    // Validate paths for Windows compatibility issues (e.g., Chinese characters)
+    const pathWarnings: string[] = [];
+    const execPathWarning = validatePathForWindows(process.execPath, 'Electron executable path');
+    if (execPathWarning) {
+      pathWarnings.push(execPathWarning);
+      console.warn(`[OpenClaw] ${execPathWarning}`);
+    }
+    const runtimePathWarning = validatePathForWindows(runtime.root, 'Runtime root path');
+    if (runtimePathWarning) {
+      pathWarnings.push(runtimePathWarning);
+      console.warn(`[OpenClaw] ${runtimePathWarning}`);
+    }
+    const userDataPathWarning = validatePathForWindows(this.baseDir, 'User data path');
+    if (userDataPathWarning) {
+      pathWarnings.push(userDataPathWarning);
+      console.warn(`[OpenClaw] ${userDataPathWarning}`);
+    }
+
     this.ensureBareEntryFiles(runtime.root);
     this.applyRuntimeHotfixes(runtime.root);
     console.log(`[OpenClaw] startGateway: ensureBareEntryFiles done (${elapsed()})`);
@@ -348,10 +428,14 @@ export class OpenClawEngineManager extends EventEmitter {
     const openclawEntry = this.resolveOpenClawEntry(runtime.root);
     console.log(`[OpenClaw] startGateway: resolveOpenClawEntry done (${elapsed()}), entry=${openclawEntry}`);
     if (!openclawEntry) {
+      const baseMessage = `OpenClaw entry file is missing in runtime: ${runtime.root}.`;
+      const fullMessage = pathWarnings.length > 0
+        ? `${baseMessage} Note: ${pathWarnings[0]}`
+        : baseMessage;
       this.setStatus({
         phase: 'error',
         version: runtime.version,
-        message: `OpenClaw entry file is missing in runtime: ${runtime.root}.`,
+        message: fullMessage,
         canRetry: true,
       });
       return this.getStatus();
@@ -421,9 +505,20 @@ export class OpenClawEngineManager extends EventEmitter {
     // utilityProcess.fork(). Benchmark shows utilityProcess has ~5x overhead for
     // cold ESM compilation on Windows (163s vs 34s for a 28MB bundle).
     let child: GatewayProcess;
+    let earlyExitInfo: { stderrChunks: string[]; exitCode: number | null } | null = null;
+
     if (process.platform === 'win32') {
       await this.warmupCompileCacheIfNeeded(runtime.root, compileCacheDir, env);
-      child = spawn(
+      
+      // Log detailed spawn info for Windows debugging
+      console.log(`[OpenClaw] Windows spawn details:`, {
+        execPath: process.execPath,
+        entryPath: openclawEntry,
+        cwd: runtime.root,
+        hasPathWarnings: pathWarnings.length > 0,
+      });
+
+      const spawnedChild = spawn(
         process.execPath,
         [openclawEntry, ...forkArgs],
         {
@@ -433,6 +528,47 @@ export class OpenClawEngineManager extends EventEmitter {
           windowsHide: true,
         },
       );
+      child = spawnedChild;
+
+      // On Windows, collect early spawn errors to provide better diagnostics
+      // We give the process 3 seconds to fail early before proceeding with health checks
+      const earlyErrorPromise = collectEarlySpawnErrors(spawnedChild, 3000);
+      
+      // Wait briefly to check for immediate spawn failures
+      await sleep(500);
+      
+      // Check if process already exited (early failure)
+      if (spawnedChild.exitCode !== null) {
+        earlyExitInfo = await earlyErrorPromise;
+        const stderrOutput = earlyExitInfo.stderrChunks.join('').trim();
+        const exitCode = earlyExitInfo.exitCode;
+        
+        console.error(`[OpenClaw] Gateway process failed immediately on Windows:`, {
+          exitCode,
+          stderr: stderrOutput.slice(0, 1000),
+          pathWarnings,
+        });
+
+        let errorMessage = `OpenClaw gateway failed to start (exit code: ${exitCode}).`;
+        if (stderrOutput) {
+          // Extract first meaningful error line
+          const firstError = stderrOutput.split('\n').find(line => 
+            line.includes('Error') || line.includes('error') || line.includes('Cannot')
+          ) || stderrOutput.slice(0, 200);
+          errorMessage += ` Error: ${firstError}`;
+        }
+        if (pathWarnings.length > 0) {
+          errorMessage += ` Warning: ${pathWarnings[0]}`;
+        }
+
+        this.setStatus({
+          phase: 'error',
+          version: runtime.version,
+          message: errorMessage,
+          canRetry: true,
+        });
+        return this.getStatus();
+      }
     } else {
       child = utilityProcess.fork(
         openclawEntry,
@@ -459,10 +595,39 @@ export class OpenClawEngineManager extends EventEmitter {
     const ready = await this.waitForGatewayReady(port, GATEWAY_BOOT_TIMEOUT_MS);
     console.log(`[OpenClaw] startGateway: waitForGatewayReady returned (${elapsed()}), ready=${ready}`);
     if (!ready) {
+      // Collect diagnostic information for timeout failures
+      const diagnostics: string[] = [];
+      
+      if (pathWarnings.length > 0) {
+        diagnostics.push(...pathWarnings);
+      }
+      
+      // Check if process is still alive
+      const processAlive = isGatewayProcessAlive(child);
+      if (!processAlive) {
+        diagnostics.push('Gateway process is no longer running');
+      }
+      
+      // Try to get last known health check status
+      const lastHealthCheck = await this.isGatewayHealthy(port, true);
+      diagnostics.push(`Final health check: ${lastHealthCheck ? 'passed' : 'failed'}`);
+
+      let errorMessage = 'OpenClaw gateway failed to become healthy in time.';
+      if (diagnostics.length > 0) {
+        errorMessage += ` Diagnostics: ${diagnostics.slice(0, 2).join('; ')}`;
+      }
+
+      console.error(`[OpenClaw] Gateway startup timeout diagnostics:`, {
+        elapsed: elapsed(),
+        processAlive,
+        pathWarnings,
+        port,
+      });
+
       this.setStatus({
         phase: 'error',
         version: runtime.version,
-        message: 'OpenClaw gateway failed to become healthy in time.',
+        message: errorMessage,
         canRetry: true,
       });
       this.stopGatewayProcess(child);
@@ -698,19 +863,25 @@ export class OpenClawEngineManager extends EventEmitter {
     ]);
     if (!warmupScript) {
       console.log('[OpenClaw] warmup script not found, skipping compile cache warmup');
+      console.log('[OpenClaw] Gateway will start without compile cache (first startup may take 30-60 seconds)');
       return;
     }
 
     console.log(`[OpenClaw] First start detected — warming up compile cache...`);
+    console.log(`[OpenClaw] Warmup script: ${warmupScript}`);
+    console.log(`[OpenClaw] Cache directory: ${compileCacheDir}`);
+    
     this.setStatus({
       phase: 'starting',
       version: this.status.version,
       progressPercent: 5,
-      message: 'First start: warming up compile cache...',
+      message: 'First start: warming up compile cache (this may take 1-2 minutes)...',
       canRetry: false,
     });
 
     const t0 = Date.now();
+    const WARMUP_TIMEOUT_MS = 180_000; // 3 minutes timeout (increased from 2)
+    
     try {
       await new Promise<void>((resolve, reject) => {
         const child = execFile(
@@ -719,7 +890,7 @@ export class OpenClawEngineManager extends EventEmitter {
           {
             cwd: runtimeRoot,
             env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
-            timeout: 120_000,
+            timeout: WARMUP_TIMEOUT_MS,
             windowsHide: true,
           },
           (err) => {
@@ -727,15 +898,57 @@ export class OpenClawEngineManager extends EventEmitter {
             else resolve();
           },
         );
+        
+        // Collect stderr for diagnostics
+        const stderrChunks: string[] = [];
         child.stderr?.on('data', (chunk: Buffer | string) => {
           const text = typeof chunk === 'string' ? chunk : chunk.toString();
+          stderrChunks.push(text);
           console.log(`[OpenClaw warmup] ${text.trimEnd()}`);
+        });
+
+        // Update progress periodically during warmup
+        const progressInterval = setInterval(() => {
+          const elapsedSec = Math.round((Date.now() - t0) / 1000);
+          const progressPercent = Math.min(9, 5 + Math.round((elapsedSec / 120) * 4)); // 5% to 9%
+          this.setStatus({
+            phase: 'starting',
+            version: this.status.version,
+            progressPercent,
+            message: `First start: warming up compile cache (${elapsedSec}s)...`,
+            canRetry: false,
+          });
+        }, 5000);
+
+        child.once('exit', () => {
+          clearInterval(progressInterval);
+        });
+        child.once('error', () => {
+          clearInterval(progressInterval);
         });
       });
       console.log(`[OpenClaw] compile cache warmup completed in ${Date.now() - t0}ms`);
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const elapsedMs = Date.now() - t0;
+      
       // Warmup failure is not fatal — gateway can still start (just slower).
-      console.warn(`[OpenClaw] compile cache warmup failed (${Date.now() - t0}ms):`, err);
+      console.warn(`[OpenClaw] compile cache warmup failed (${elapsedMs}ms):`, {
+        error: errorMessage,
+        warmupScript,
+        compileCacheDir,
+        runtimeRoot,
+      });
+      
+      // Provide more specific guidance for common errors
+      if (errorMessage.includes('ETIMEDOUT') || errorMessage.includes('timeout')) {
+        console.warn('[OpenClaw] Warmup timed out. This may indicate a slow disk or high system load.');
+        console.warn('[OpenClaw] The gateway will start without compile cache. Subsequent starts will be faster.');
+      } else if (errorMessage.includes('ENOENT')) {
+        console.warn('[OpenClaw] Warmup script or dependencies not found. The runtime may be corrupted.');
+      } else if (errorMessage.includes('EPERM') || errorMessage.includes('EACCES')) {
+        console.warn('[OpenClaw] Permission denied during warmup. Check if antivirus is blocking the operation.');
+      }
     }
   }
 
@@ -869,11 +1082,37 @@ export class OpenClawEngineManager extends EventEmitter {
         fs.writeFileSync(launcherPath, expectedContent, 'utf8');
         console.log(`[OpenClaw] Generated gateway-launcher.cjs for Windows ESM compat`);
       }
+      
+      // Verify the file was written correctly
+      if (!fs.existsSync(launcherPath)) {
+        throw new Error('Launcher file does not exist after write');
+      }
+      
+      return launcherPath;
     } catch (err) {
-      console.error('[OpenClaw] Failed to write gateway-launcher.cjs:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error('[OpenClaw] Failed to write gateway-launcher.cjs:', {
+        error: errorMessage,
+        launcherPath,
+        runtimeRoot,
+        esmEntry,
+      });
+      
+      // Check for specific Windows permission issues
+      if (errorMessage.includes('EPERM') || errorMessage.includes('EACCES')) {
+        console.error('[OpenClaw] Permission denied - the runtime directory may be read-only or protected by antivirus software.');
+      }
+      
+      // Check for path encoding issues
+      const pathWarning = validatePathForWindows(launcherPath, 'Launcher path');
+      if (pathWarning) {
+        console.error(`[OpenClaw] ${pathWarning}`);
+      }
+      
+      // Fall back to ESM entry, but log a warning since this will likely fail on Windows
+      console.warn('[OpenClaw] Falling back to ESM entry - this may cause startup failure on Windows due to drive letter URL scheme issue.');
       return esmEntry;
     }
-    return launcherPath;
   }
 
   private resolveGatewayClientEntry(runtimeRoot: string): string | null {
@@ -986,6 +1225,7 @@ export class OpenClawEngineManager extends EventEmitter {
 
   private async resolveGatewayPort(): Promise<number> {
     const candidates: number[] = [];
+    const unavailablePorts: number[] = [];
 
     candidates.push(DEFAULT_GATEWAY_PORT);
     if (this.gatewayPort) candidates.push(this.gatewayPort);
@@ -997,16 +1237,36 @@ export class OpenClawEngineManager extends EventEmitter {
       if (await isPortAvailable(candidate)) {
         return candidate;
       }
+      unavailablePorts.push(candidate);
     }
 
+    // Scan a range of ports starting from default
+    let scannedCount = 0;
     for (let offset = 1; offset <= GATEWAY_PORT_SCAN_LIMIT; offset += 1) {
       const candidate = DEFAULT_GATEWAY_PORT + offset;
+      scannedCount++;
       if (await isPortAvailable(candidate)) {
+        if (unavailablePorts.length > 0) {
+          console.log(`[OpenClaw] Preferred ports ${unavailablePorts.join(', ')} unavailable, using ${candidate}`);
+        }
         return candidate;
       }
     }
 
-    throw new Error('No available loopback port for OpenClaw gateway.');
+    // Log detailed diagnostic info before throwing
+    console.error(`[OpenClaw] Port resolution failed:`, {
+      preferredPorts: uniqCandidates,
+      scannedRange: `${DEFAULT_GATEWAY_PORT + 1} - ${DEFAULT_GATEWAY_PORT + GATEWAY_PORT_SCAN_LIMIT}`,
+      scannedCount,
+      platform: process.platform,
+    });
+
+    // On Windows, provide more specific guidance
+    const errorMessage = process.platform === 'win32'
+      ? `No available loopback port for OpenClaw gateway (tried ${DEFAULT_GATEWAY_PORT}-${DEFAULT_GATEWAY_PORT + GATEWAY_PORT_SCAN_LIMIT}). Check if Windows Firewall is blocking loopback connections or if another application is using these ports.`
+      : `No available loopback port for OpenClaw gateway (tried ${DEFAULT_GATEWAY_PORT}-${DEFAULT_GATEWAY_PORT + GATEWAY_PORT_SCAN_LIMIT}).`;
+
+    throw new Error(errorMessage);
   }
 
   private async isGatewayHealthy(port: number, verbose = false): Promise<boolean> {
