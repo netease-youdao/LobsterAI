@@ -531,6 +531,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly reCreatedChannelSessionIds = new Set<string>();
   /** Channel sessionKeys explicitly deleted by the user. Polling will not re-create these. */
   private readonly deletedChannelKeys = new Set<string>();
+  /** Sessions that were manually stopped by the user. Used to suppress the timeout hint
+   *  when the gateway sends back a late 'aborted' event after stopSession() already cleaned up the turn. */
+  private readonly manuallyStoppedSessions = new Set<string>();
   /** Session keys whose origin is "heartbeat" — discovered via polling, used to filter real-time events. */
   private readonly heartbeatSessionKeys = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
@@ -855,6 +858,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const turn = this.activeTurns.get(sessionId);
     if (turn) {
       turn.stopRequested = true;
+      this.manuallyStoppedSessions.add(sessionId);
       const client = this.gatewayClient;
       if (client) {
         void client.request('chat.abort', {
@@ -975,6 +979,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const completionPromise = new Promise<void>((resolve, reject) => {
       this.pendingTurns.set(sessionId, { resolve, reject });
     });
+    this.manuallyStoppedSessions.delete(sessionId);
     this.activeTurns.set(sessionId, {
       sessionId,
       sessionKey,
@@ -2303,7 +2308,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private handleChatAborted(sessionId: string, turn: ActiveTurn): void {
     this.store.updateSession(sessionId, { status: 'idle' });
-    if (!turn.stopRequested) {
+    if (!turn.stopRequested && !this.manuallyStoppedSessions.has(sessionId)) {
       // The run was aborted without user request — most likely a timeout.
       // Add a visible hint so the user knows the task was interrupted.
       const hintMessage = this.store.addMessage(sessionId, {
@@ -3273,6 +3278,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.clearPendingApprovalsBySession(sessionId);
     this.bridgedSessions.delete(sessionId);
     this.confirmationModeBySession.delete(sessionId);
+    this.manuallyStoppedSessions.delete(sessionId);
 
     // Propagate to channel session sync
     if (this.channelSessionSync) {
@@ -3286,6 +3292,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    */
   private ensureActiveTurn(sessionId: string, sessionKey: string, runId: string): void {
     if (this.activeTurns.has(sessionId)) return;
+    if (this.manuallyStoppedSessions.has(sessionId)) {
+      console.warn('[OpenClawRuntime] ensureActiveTurn called after manual stop — sessionId:', sessionId, 'runId:', runId, 'sessionKey:', sessionKey);
+    }
     const turnRunId = runId || randomUUID();
     const turnToken = this.nextTurnToken(sessionId);
     const isChannel = this.channelSessionSync
