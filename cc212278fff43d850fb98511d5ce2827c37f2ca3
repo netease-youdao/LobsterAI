@@ -1,0 +1,23 @@
+electron-builder.json
+  0334b872f0bf5f7e 145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "cc212278fff43d850fb98511d5ce2827c37f2ca3",
+  "prompts": {
+    "0334b872f0bf5f7e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9bb1e6db-73f2-4aa5-b7d2-f6be60d7e337",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 5,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
