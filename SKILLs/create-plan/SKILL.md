@@ -1,5 +1,6 @@
 ---
 name: create-plan
+version: 1.0.0
 description: Create a concise plan. Use when a user explicitly asks for a plan related to a coding task.
 official: true
 metadata:

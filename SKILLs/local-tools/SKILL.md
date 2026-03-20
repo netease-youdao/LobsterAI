@@ -1,5 +1,6 @@
 ---
 name: local-tools
+version: 1.0.0
 description: Access local system resources including Calendar on macOS and Windows. Use this skill when you need to manage user's schedule directly on their device.
 official: true
 ---

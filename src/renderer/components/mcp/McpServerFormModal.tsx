@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { i18nService } from '../../services/i18n';
 import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
+import ThemedSelect from '../ui/ThemedSelect';
 
 interface McpServerFormModalProps {
   isOpen: boolean;
@@ -262,16 +263,23 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           {/* Transport Type */}
           <div className="space-y-1.5">
             <label className={labelClass}>{i18nService.t('mcpTransportType')}</label>
-            <select
-              value={transportType}
-              onChange={(e) => setTransportType(e.target.value as 'stdio' | 'sse' | 'http')}
-              className={isRegistry ? readOnlyInputClass : inputClass}
-              disabled={isRegistry}
-            >
-              <option value="stdio">{i18nService.t('mcpTransportStdio')}</option>
-              <option value="sse">{i18nService.t('mcpTransportSse')}</option>
-              <option value="http">{i18nService.t('mcpTransportHttp')}</option>
-            </select>
+            {isRegistry ? (
+              <div className={readOnlyInputClass}>
+                {i18nService.t(`mcpTransport${transportType.charAt(0).toUpperCase() + transportType.slice(1)}`)}
+              </div>
+            ) : (
+              <ThemedSelect
+                id="transport-type"
+                value={transportType}
+                onChange={(value) => setTransportType(value as 'stdio' | 'sse' | 'http')}
+                options={[
+                  { value: 'stdio', label: i18nService.t('mcpTransportStdio') },
+                  { value: 'sse', label: i18nService.t('mcpTransportSse') },
+                  { value: 'http', label: i18nService.t('mcpTransportHttp') }
+                ]}
+                className="w-full"
+              />
+            )}
           </div>
 
           {/* stdio fields */}
