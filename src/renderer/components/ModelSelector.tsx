@@ -3,6 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../store';
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { setSelectedModel, isSameModelIdentity, getModelIdentityKey } from '../store/slices/modelSlice';
+import { i18nService } from '../services/i18n';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down';
@@ -41,7 +42,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
   if (availableModels.length === 0) {
     return (
       <div className="px-3 py-1.5 rounded-xl dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary text-sm">
-        请先在设置中配置模型
+        {i18nService.t('noModelsConfigured')}
       </div>
     );
   }
