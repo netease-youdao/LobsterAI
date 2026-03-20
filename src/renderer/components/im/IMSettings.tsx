@@ -1490,9 +1490,9 @@ const IMSettings: React.FC = () => {
                     }}
                     className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
                   >
-                    <option value="allowlist">Allowlist</option>
-                    <option value="open">Open</option>
-                    <option value="disabled">Disabled</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
                   </select>
                 </div>
 
