@@ -79,7 +79,7 @@ export interface CoworkPromptInputRef {
 }
 
 interface CoworkPromptInputProps {
-  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => void;
+  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop?: () => void;
   isStreaming?: boolean;
   placeholder?: string;
@@ -90,6 +90,7 @@ interface CoworkPromptInputProps {
   showFolderSelector?: boolean;
   showModelSelector?: boolean;
   onManageSkills?: () => void;
+  sessionId?: string;
 }
 
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
@@ -106,9 +107,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showFolderSelector = false,
       showModelSelector = false,
       onManageSkills,
+      sessionId,
     } = props;
     const dispatch = useDispatch();
-    const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompt);
+    const draftKey = sessionId || '__home__';
+    const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[draftKey] || '');
     const [value, setValue] = useState(draftPrompt);
     const [attachments, setAttachments] = useState<CoworkAttachment[]>([]);
     const [showFolderMenu, setShowFolderMenu] = useState(false);
@@ -198,16 +201,21 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
   }, [workingDirectory]);
 
+  // Sync value from draft when sessionId changes
+  useEffect(() => {
+    setValue(draftPrompt);
+  }, [draftKey]); // intentionally omit draftPrompt to only trigger on session switch
+
   useEffect(() => {
     if (value !== draftPrompt) {
       const timer = setTimeout(() => {
-        dispatch(setDraftPrompt(value));
+        dispatch(setDraftPrompt({ sessionId: draftKey, draft: value }));
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [value, draftPrompt, dispatch]);
+  }, [value, draftPrompt, dispatch, draftKey]);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (showFolderSelector && !workingDirectory?.trim()) {
       setShowFolderRequiredWarning(true);
       return;
@@ -259,9 +267,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         base64Lengths: imageAtts.map(a => a.base64Data.length),
       });
     }
-    onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
+    const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
+    if (result === false) return;
     setValue('');
-    dispatch(setDraftPrompt(''));
+    dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
     setAttachments([]);
     setImageVisionHint(false);
   }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);

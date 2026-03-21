@@ -252,6 +252,7 @@ export interface WecomGatewayStatus {
 
 export interface PopoOpenClawConfig {
   enabled: boolean;
+  connectionMode: 'websocket' | 'webhook';
   appKey: string;
   appSecret: string;
   token: string;
@@ -531,6 +532,7 @@ export const DEFAULT_WECOM_CONFIG: WecomOpenClawConfig = {
 
 export const DEFAULT_POPO_CONFIG: PopoOpenClawConfig = {
   enabled: false,
+  connectionMode: 'websocket',
   appKey: '',
   appSecret: '',
   token: '',

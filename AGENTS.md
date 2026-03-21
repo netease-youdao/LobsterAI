@@ -214,9 +214,12 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 
 ## Testing Guidelines
 
-- Tests use Node.js built-in `node:test` module (no Jest/Mocha/Vitest).
-- Run tests: `npm run test:memory` (compiles Electron main process first, then runs `tests/coworkMemoryExtractor.test.mjs`).
-- Test files live in `tests/` directory and import compiled output from `dist-electron/`.
+- Unit tests use [Vitest](https://vitest.dev/) and are **co-located** with the source files they cover.
+- Test files must use the `.test.ts` extension and be placed next to the source file (e.g. `src/main/foo.ts` → `src/main/foo.test.ts`).
+- Import test utilities from `vitest`: `import { test, expect } from 'vitest';`
+- **Never** use `.test.mjs` or any other extension — `.test.ts` is the only accepted format.
+- Run all tests: `npm test`. Filter by module: `npm test -- <name>` (e.g. `npm test -- logger`).
+- Avoid importing Electron-only APIs (e.g. `electron-log`) in tests — inline any logic that depends on them.
 - Validate UI changes manually by running `npm run electron:dev` and exercising key flows:
   - Cowork: start session, send prompts, approve/deny tool permissions, stop session
   - Artifacts: preview HTML, SVG, Mermaid diagrams, React components

@@ -14,6 +14,8 @@ import { i18nService } from '../../services/i18n';
 import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, FeishuOpenClawConfig, DingTalkOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
+import { QRCodeSVG } from 'qrcode.react';
+import { ArrowPathIcon } from '@heroicons/react/24/outline';
 import { SchemaForm } from './SchemaForm';
 import type { UiHint } from './SchemaForm';
 
@@ -158,6 +160,82 @@ const IMSettings: React.FC = () => {
     }).catch(() => {});
   }, []);
 
+  // Cleanup feishu QR timers on unmount
+  useEffect(() => {
+    return () => {
+      if (feishuQrPollTimerRef.current) clearInterval(feishuQrPollTimerRef.current);
+      if (feishuQrCountdownTimerRef.current) clearInterval(feishuQrCountdownTimerRef.current);
+    };
+  }, []);
+
+  // Reset feishu QR state when switching away from feishu
+  useEffect(() => {
+    if (activePlatform !== 'feishu') {
+      if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
+      if (feishuQrCountdownTimerRef.current) { clearInterval(feishuQrCountdownTimerRef.current); feishuQrCountdownTimerRef.current = null; }
+      setFeishuQrStatus('idle');
+      setFeishuQrUrl('');
+      setFeishuQrError('');
+    }
+  }, [activePlatform]);
+
+  const handleFeishuStartQr = async () => {
+    if (feishuQrPollTimerRef.current) clearInterval(feishuQrPollTimerRef.current);
+    if (feishuQrCountdownTimerRef.current) clearInterval(feishuQrCountdownTimerRef.current);
+    setFeishuQrStatus('loading');
+    setFeishuQrError('');
+    try {
+      const result = await window.electron.feishu.install.qrcode(false);
+      if (!isMountedRef.current) return;
+      setFeishuQrUrl(result.url);
+      feishuQrDeviceCodeRef.current = result.deviceCode;
+      const expireIn = result.expireIn ?? 300;
+      setFeishuQrTimeLeft(expireIn);
+      setFeishuQrStatus('showing');
+
+      // Countdown
+      feishuQrCountdownTimerRef.current = setInterval(() => {
+        setFeishuQrTimeLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(feishuQrCountdownTimerRef.current!);
+            feishuQrCountdownTimerRef.current = null;
+            if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
+            setFeishuQrStatus('error');
+            setFeishuQrError(i18nService.t('feishuBotCreateWizardQrcodeExpired'));
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      // Poll
+      const intervalMs = Math.max(result.interval ?? 5, 3) * 1000;
+      feishuQrPollTimerRef.current = setInterval(async () => {
+        try {
+          const pollResult = await window.electron.feishu.install.poll(feishuQrDeviceCodeRef.current);
+          if (!isMountedRef.current) return;
+          if (pollResult.done && pollResult.appId && pollResult.appSecret) {
+            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+            dispatch(setFeishuConfig({ appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true }));
+            await imService.updateConfig({ feishu: { ...config.feishu, appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true } });
+            if (!isMountedRef.current) return;   // re-check after async updateConfig
+            setFeishuQrStatus('success');
+          } else if (pollResult.error && pollResult.error !== 'authorization_pending' && pollResult.error !== 'slow_down') {
+            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+            setFeishuQrStatus('error');
+            setFeishuQrError(pollResult.error);
+          }
+        } catch { /* keep retrying */ }
+      }, intervalMs);
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      setFeishuQrStatus('error');
+      setFeishuQrError(err?.message || '获取二维码失败');
+    }
+  };
+
   // Reset wecom quick setup state when switching away from wecom
   useEffect(() => {
     if (activePlatform !== 'wecom') {
@@ -245,6 +323,15 @@ const IMSettings: React.FC = () => {
   // State for Feishu allow-from inputs
   const [feishuAllowedUserIdInput, setFeishuAllowedUserIdInput] = useState('');
   const [feishuGroupAllowIdInput, setFeishuGroupAllowIdInput] = useState('');
+  // Inline QR code state for feishu bot creation (mirroring WeCom quick-setup pattern)
+  const [feishuQrStatus, setFeishuQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
+  const [feishuQrUrl, setFeishuQrUrl] = useState<string>('');
+  const [feishuQrTimeLeft, setFeishuQrTimeLeft] = useState<number>(0);
+  const [feishuQrError, setFeishuQrError] = useState<string>('');
+  // These don't need to be state — they don't affect rendering directly
+  const feishuQrDeviceCodeRef = useRef<string>('');
+  const feishuQrPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feishuQrCountdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Pairing state for OpenClaw platforms
   const [pairingCodeInput, setPairingCodeInput] = useState<Record<string, string>>({});
@@ -639,7 +726,11 @@ const IMSettings: React.FC = () => {
       return !!(wecomOpenClawConfig.botId && wecomOpenClawConfig.secret);
     }
     if (platform === 'popo') {
-      return !!(config.popo.appKey && config.popo.appSecret && config.popo.token && config.popo.aesKey);
+      const effectiveMode = config.popo.connectionMode || (config.popo.token ? 'webhook' : 'websocket');
+      if (effectiveMode === 'webhook') {
+        return !!(config.popo.appKey && config.popo.appSecret && config.popo.token && config.popo.aesKey);
+      }
+      return !!(config.popo.appKey && config.popo.appSecret && config.popo.aesKey);
     }
     return !!(config.feishu.appId && config.feishu.appSecret);
   };
@@ -1288,6 +1379,65 @@ const IMSettings: React.FC = () => {
         {/* Feishu Settings */}
         {activePlatform === 'feishu' && (
           <div className="space-y-3">
+            {/* Scan QR code section */}
+            <div className="rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60 p-4 text-center space-y-3">
+              {(feishuQrStatus === 'idle' || feishuQrStatus === 'error') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleFeishuStartQr()}
+                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('feishuBotCreateWizardScanBtn')}
+                  </button>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('feishuBotCreateWizardScanHint')}
+                  </p>
+                  {feishuQrStatus === 'error' && feishuQrError && (
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                      <XCircleIcon className="h-4 w-4 flex-shrink-0" />
+                      {feishuQrError}
+                    </div>
+                  )}
+                </>
+              )}
+              {feishuQrStatus === 'loading' && (
+                <div className="flex flex-col items-center gap-2 py-2">
+                  <ArrowPathIcon className="h-7 w-7 text-claude-accent animate-spin" />
+                  <span className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">正在生成二维码…</span>
+                </div>
+              )}
+              {feishuQrStatus === 'showing' && feishuQrUrl && (
+                <div className="flex flex-col items-center gap-2">
+                  <div className="p-2 bg-white rounded-lg inline-block">
+                    <QRCodeSVG value={feishuQrUrl} size={160} />
+                  </div>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary max-w-[240px]">
+                    {i18nService.t('feishuBotCreateWizardQrcodeDesc')}
+                  </p>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {feishuQrTimeLeft}s
+                  </p>
+                </div>
+              )}
+              {feishuQrStatus === 'success' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('feishuBotCreateWizardSuccessTitle')}
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="relative flex items-center">
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+              <span className="px-3 text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary whitespace-nowrap">
+                {i18nService.t('feishuBotCreateWizardOrManual')}
+              </span>
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+            </div>
+
+            {/* Manual guide */}
             <PlatformGuide
               steps={[
                 i18nService.t('imFeishuGuideStep1'),
@@ -1626,6 +1776,7 @@ const IMSettings: React.FC = () => {
                 {status.feishu.error}
               </div>
             )}
+
           </div>
         )}
 
@@ -3010,6 +3161,25 @@ const IMSettings: React.FC = () => {
               guideUrl={IM_GUIDE_URLS.popo}
             />
 
+            {/* Connection Mode selector */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('imPopoConnectionMode')}
+              </label>
+              <select
+                value={popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')}
+                onChange={(e) => {
+                  const update = { connectionMode: e.target.value as PopoOpenClawConfig['connectionMode'] };
+                  handlePopoChange(update);
+                  void handleSavePopoConfig(update);
+                }}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+              >
+                <option value="websocket">{i18nService.t('imPopoConnectionModeWebsocket')}</option>
+                <option value="webhook">{i18nService.t('imPopoConnectionModeWebhook')}</option>
+              </select>
+            </div>
+
             {/* Credential hint */}
             <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
               {i18nService.t('imPopoCredentialHint')}
@@ -3083,7 +3253,8 @@ const IMSettings: React.FC = () => {
               </div>
             </div>
 
-            {/* Token input */}
+            {/* Token input (webhook mode only) */}
+            {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
             <div className="space-y-1.5">
               <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Token</label>
               <div className="relative">
@@ -3120,6 +3291,7 @@ const IMSettings: React.FC = () => {
                 </div>
               </div>
             </div>
+            )}
 
             {/* AES Key input */}
             <div className="space-y-1.5">
@@ -3168,6 +3340,9 @@ const IMSettings: React.FC = () => {
                 {i18nService.t('imAdvancedSettings')}
               </summary>
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* Webhook fields (webhook mode only) */}
+                {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
+                <>
                 {/* Webhook Base URL */}
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Webhook Base URL</label>
@@ -3206,6 +3381,8 @@ const IMSettings: React.FC = () => {
                     className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
                   />
                 </div>
+                </>
+                )}
 
                 {/* DM Policy */}
                 <div className="space-y-1.5">

@@ -78,7 +78,13 @@ class SkillService {
     }
   }
 
-  async downloadSkill(source: string): Promise<{ success: boolean; skills?: Skill[]; error?: string }> {
+  async downloadSkill(source: string): Promise<{
+    success: boolean;
+    skills?: Skill[];
+    error?: string;
+    auditReport?: any;
+    pendingInstallId?: string;
+  }> {
     try {
       const result = await window.electron.skills.download(source);
       if (result.success && result.skills) {
@@ -88,6 +94,23 @@ class SkillService {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to download skill';
       console.error('Failed to download skill:', error);
+      return { success: false, error: message };
+    }
+  }
+
+  async confirmInstall(
+    pendingId: string,
+    action: string
+  ): Promise<{ success: boolean; skills?: Skill[]; error?: string }> {
+    try {
+      const result = await window.electron.skills.confirmInstall(pendingId, action);
+      if (result.success && result.skills) {
+        this.skills = result.skills;
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to confirm install';
+      console.error('Failed to confirm install:', error);
       return { success: false, error: message };
     }
   }

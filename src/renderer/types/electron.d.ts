@@ -226,7 +226,8 @@ interface IElectronAPI {
     list: () => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
     setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
     delete: (id: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
-    download: (source: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
+    download: (source: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string; auditReport?: any; pendingInstallId?: string }>;
+    confirmInstall: (pendingId: string, action: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
     getRoot: () => Promise<{ success: boolean; path?: string; error?: string }>;
     autoRoutingPrompt: () => Promise<{ success: boolean; prompt?: string | null; error?: string }>;
     getConfig: (skillId: string) => Promise<{ success: boolean; config?: Record<string, string>; error?: string }>;
@@ -301,6 +302,7 @@ interface IElectronAPI {
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) => Promise<{ success: boolean; error?: string }>;
     renameSession: (options: { sessionId: string; title: string }) => Promise<{ success: boolean; error?: string }>;
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
+    remoteManaged: (sessionId: string) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
     listSessions: () => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
     exportResultImage: (options: {
       rect: { x: number; y: number; width: number; height: number };
@@ -432,6 +434,27 @@ interface IElectronAPI {
   };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;
+  };
+  feishu: {
+    install: {
+      qrcode: (isLark: boolean) => Promise<{
+        url: string;
+        deviceCode: string;
+        interval: number;
+        expireIn: number;
+      }>;
+      poll: (deviceCode: string) => Promise<{
+        done: boolean;
+        appId?: string;
+        appSecret?: string;
+        domain?: string;
+        error?: string;
+      }>;
+      verify: (appId: string, appSecret: string) => Promise<{
+        success: boolean;
+        error?: string;
+      }>;
+    };
   };
 }
 
@@ -599,6 +622,7 @@ interface WecomConfig {
 
 interface PopoOpenClawConfig {
   enabled: boolean;
+  connectionMode: 'websocket' | 'webhook';
   appKey: string;
   appSecret: string;
   token: string;

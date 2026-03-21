@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.3.19",
+  "version": "2026.3.20",
   "openclaw": {
     "version": "v2026.3.2",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -34,7 +34,7 @@
       {
         "id": "moltbot-popo",
         "npm": "moltbot-popo",
-        "version": "1.0.62",
+        "version": "1.0.65-beta.21",
         "registry": "https://npm.nie.netease.com",
         "optional": true
       },
@@ -53,7 +53,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "test:memory": "npm run compile:electron && node --test tests/coworkMemoryExtractor.test.mjs",
+    "test": "vitest run",
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
     "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json",
@@ -101,8 +101,12 @@
     "@electron/remote": "^2.0.12",
     "@headlessui/react": "^1.7.18",
     "@heroicons/react": "^2.1.1",
+    "@larksuite/openclaw-lark": "^2026.3.17",
+    "@larksuite/openclaw-lark-tools": "~1.0.26",
     "@larksuiteoapi/node-sdk": "^1.58.0",
+    "qrcode.react": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@nodesecure/js-x-ray": "^14.2.0",
     "@reduxjs/toolkit": "^2.2.1",
     "@types/uuid": "^10.0.0",
     "@wecom/wecom-aibot-sdk": "^0.1.0",
@@ -170,6 +174,7 @@
     "vite": "^5.1.4",
     "vite-plugin-electron": "^0.28.0",
     "vite-plugin-electron-renderer": "^0.14.5",
+    "vitest": "^4.1.0",
     "wait-on": "^7.2.0"
   }
 }

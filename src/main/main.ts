@@ -58,7 +58,7 @@ import { McpServerManager } from './libs/mcpServerManager';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
-import { initLogger, getLogFilePath } from './logger';
+import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
@@ -889,7 +889,20 @@ const syncOpenClawConfig = async (
     };
   }
 
-  if (!syncResult.changed || !options.restartGatewayIfRunning) {
+  // Update secret env vars so the gateway process receives the latest
+  // plaintext credentials via environment variables (openclaw.json only
+  // contains ${VAR} placeholders, never plaintext secrets).
+  const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
+  const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
+  const secretEnvVarsChanged = JSON.stringify(nextSecretEnvVars) !== JSON.stringify(prevSecretEnvVars);
+  getOpenClawEngineManager().setSecretEnvVars(nextSecretEnvVars);
+
+  // When secret env vars change, the running gateway must be restarted even if
+  // the caller didn't request it — the ${VAR} placeholders in openclaw.json
+  // resolve from the process environment which is fixed at spawn time.
+  const needsRestart = syncResult.changed || secretEnvVarsChanged;
+
+  if (!needsRestart || (!options.restartGatewayIfRunning && !secretEnvVarsChanged)) {
     return {
       success: true,
       changed: syncResult.changed,
@@ -1616,7 +1629,7 @@ if (!gotTheLock) {
       const archiveResult = await exportLogsZip({
         outputPath,
         entries: [
-          { archiveName: 'main.log', filePath: getLogFilePath() },
+          ...getRecentMainLogEntries(),
           { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
         ],
       });
@@ -1720,6 +1733,17 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:download', async (_event, source: string) => {
     return getSkillManager().downloadSkill(source);
+  });
+
+  ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
+    const validActions = ['install', 'installDisabled', 'cancel'];
+    if (!validActions.includes(action)) {
+      return { success: false, error: 'Invalid action' };
+    }
+    return getSkillManager().confirmPendingInstall(
+      pendingId,
+      action as 'install' | 'installDisabled' | 'cancel'
+    );
   });
 
   ipcMain.handle('skills:getRoot', () => {
@@ -2202,6 +2226,19 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get session',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:remoteManaged', async (_event, sessionId: string) => {
+    try {
+      const mapping = getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId);
+      return { success: true, remoteManaged: !!mapping };
+    } catch (error) {
+      return {
+        success: false,
+        remoteManaged: false,
+        error: error instanceof Error ? error.message : 'Failed to check remote managed session',
       };
     }
   });
@@ -2990,6 +3027,31 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to reject pairing request',
       };
+    }
+  });
+
+  // Feishu bot install helpers
+  ipcMain.handle('feishu:install:qrcode', async (_event, { isLark }: { isLark: boolean }) => {
+    try {
+      return await getIMGatewayManager().startFeishuInstallQrcode(isLark);
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : '获取二维码失败');
+    }
+  });
+
+  ipcMain.handle('feishu:install:poll', async (_event, { deviceCode }: { deviceCode: string }) => {
+    try {
+      return await getIMGatewayManager().pollFeishuInstall(deviceCode);
+    } catch (error) {
+      return { done: false, error: error instanceof Error ? error.message : '轮询失败' };
+    }
+  });
+
+  ipcMain.handle('feishu:install:verify', async (_event, { appId, appSecret }: { appId: string; appSecret: string }) => {
+    try {
+      return await getIMGatewayManager().verifyFeishuCredentials(appId, appSecret);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '验证失败' };
     }
   });
 

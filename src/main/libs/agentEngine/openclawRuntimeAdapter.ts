@@ -531,6 +531,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly reCreatedChannelSessionIds = new Set<string>();
   /** Channel sessionKeys explicitly deleted by the user. Polling will not re-create these. */
   private readonly deletedChannelKeys = new Set<string>();
+  /** Sessions that were manually stopped by the user. Used to suppress the timeout hint
+   *  when the gateway sends back a late 'aborted' event after stopSession() already cleaned up the turn. */
+  private readonly manuallyStoppedSessions = new Set<string>();
   /** Session keys whose origin is "heartbeat" — discovered via polling, used to filter real-time events. */
   private readonly heartbeatSessionKeys = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
@@ -855,6 +858,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const turn = this.activeTurns.get(sessionId);
     if (turn) {
       turn.stopRequested = true;
+      this.manuallyStoppedSessions.add(sessionId);
       const client = this.gatewayClient;
       if (client) {
         void client.request('chat.abort', {
@@ -975,6 +979,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const completionPromise = new Promise<void>((resolve, reject) => {
       this.pendingTurns.set(sessionId, { resolve, reject });
     });
+    this.manuallyStoppedSessions.delete(sessionId);
     this.activeTurns.set(sessionId, {
       sessionId,
       sessionKey,
@@ -2139,6 +2144,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
 
+    console.debug('[Debug:splitBeforeTool] assistantMessageId:', turn.assistantMessageId,
+      'currentText.length:', turn.currentText.length,
+      'committedAssistantText.length:', turn.committedAssistantText.length,
+      'currentAssistantSegmentText.length:', turn.currentAssistantSegmentText.length,
+      'currentText:', turn.currentText.slice(0, 100),
+      'pendingTimer:', this.pendingMessageUpdateTimer.has(turn.assistantMessageId));
+
     const segmentText = turn.currentAssistantSegmentText.trim();
     if (segmentText) {
       const committedCandidate = `${turn.committedAssistantText}${segmentText}`;
@@ -2155,7 +2167,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
     }
 
-    turn.assistantMessageId = null;
+    // Keep assistantMessageId so subsequent text appends to the same message
+    // instead of creating a new fragmented message after each tool_use block
     turn.currentAssistantSegmentText = '';
   }
 
@@ -2197,6 +2210,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (segmentText === previousSegmentText && streamedText === previousText) return;
 
     if (!turn.assistantMessageId) {
+      console.debug('[Debug:handleChatDelta] CREATE assistant msg, segmentText.length:', segmentText.length, 'text:', segmentText.slice(0, 60));
       const assistantMessage = this.store.addMessage(sessionId, {
         type: 'assistant',
         content: segmentText,
@@ -2212,15 +2226,23 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     if (turn.assistantMessageId && segmentText !== previousSegmentText) {
+      // Send full accumulated text so the message contains the complete assistant
+      // response, not just the latest fragment after the last tool_use block.
+      // streamedText is the raw full text from OpenClaw; committed + segment
+      // reconstructs the same thing, so we use streamedText directly.
+      const fullContent = turn.committedAssistantText
+        ? streamedText.trim()
+        : segmentText;
+      console.debug('[Debug:handleChatDelta] UPDATE assistant msg, fullContent.length:', fullContent.length, 'committed.length:', turn.committedAssistantText.length, 'text:', fullContent.slice(0, 60));
       this.store.updateMessage(sessionId, turn.assistantMessageId, {
-        content: segmentText,
+        content: fullContent,
         metadata: {
           isStreaming: true,
           isFinal: false,
         },
       });
       turn.currentAssistantSegmentText = segmentText;
-      this.throttledEmitMessageUpdate(sessionId, turn.assistantMessageId, segmentText);
+      this.throttledEmitMessageUpdate(sessionId, turn.assistantMessageId, fullContent);
     }
   }
 
@@ -2239,15 +2261,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (turn.assistantMessageId) {
       const persistedSegmentText = finalSegmentText || previousSegmentText;
       if (persistedSegmentText) {
+        // Send full accumulated text for the final message.
+        // Fall back to persistedSegmentText when finalText is empty (e.g. final
+        // event contains only tool_use blocks with no text).
+        const fullContent = turn.committedAssistantText
+          ? ((finalText || '').trim() || persistedSegmentText)
+          : persistedSegmentText;
         this.store.updateMessage(sessionId, turn.assistantMessageId, {
-          content: persistedSegmentText,
+          content: fullContent,
           metadata: {
             isStreaming: false,
             isFinal: true,
           },
         });
         if (persistedSegmentText !== previousSegmentText) {
-          this.emit('messageUpdate', sessionId, turn.assistantMessageId, persistedSegmentText);
+          this.emit('messageUpdate', sessionId, turn.assistantMessageId, fullContent);
         }
       }
     } else if (finalSegmentText) {
@@ -2303,7 +2331,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private handleChatAborted(sessionId: string, turn: ActiveTurn): void {
     this.store.updateSession(sessionId, { status: 'idle' });
-    if (!turn.stopRequested) {
+    if (!turn.stopRequested && !this.manuallyStoppedSessions.has(sessionId)) {
       // The run was aborted without user request — most likely a timeout.
       // Add a visible hint so the user knows the task was interrupted.
       const hintMessage = this.store.addMessage(sessionId, {
@@ -2637,18 +2665,24 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const session = this.store.getSession(sessionId);
       const currentMessage = session?.messages.find((message) => message.id === turn.assistantMessageId);
       const currentText = currentMessage?.content.trim() ?? '';
-      if (canonicalSegmentText === currentText) {
+      // Use full accumulated text (canonicalText) when committed text exists,
+      // to stay consistent with handleChatDelta/handleChatFinal which store
+      // the complete assistant response in a single message.
+      const persistContent = turn.committedAssistantText
+        ? (canonicalText.trim() || canonicalSegmentText)
+        : canonicalSegmentText;
+      if (persistContent === currentText) {
         return;
       }
 
       this.store.updateMessage(sessionId, turn.assistantMessageId, {
-        content: canonicalSegmentText,
+        content: persistContent,
         metadata: {
           isStreaming: false,
           isFinal: true,
         },
       });
-      this.emit('messageUpdate', sessionId, turn.assistantMessageId, canonicalSegmentText);
+      this.emit('messageUpdate', sessionId, turn.assistantMessageId, persistContent);
     } catch (error) {
       console.warn('[OpenClawRuntime] chat.history sync after final failed:', error);
     }
@@ -3273,6 +3307,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.clearPendingApprovalsBySession(sessionId);
     this.bridgedSessions.delete(sessionId);
     this.confirmationModeBySession.delete(sessionId);
+    this.manuallyStoppedSessions.delete(sessionId);
 
     // Propagate to channel session sync
     if (this.channelSessionSync) {
@@ -3286,6 +3321,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    */
   private ensureActiveTurn(sessionId: string, sessionKey: string, runId: string): void {
     if (this.activeTurns.has(sessionId)) return;
+    if (this.manuallyStoppedSessions.has(sessionId)) {
+      console.warn('[OpenClawRuntime] ensureActiveTurn called after manual stop — sessionId:', sessionId, 'runId:', runId, 'sessionKey:', sessionKey);
+    }
     const turnRunId = runId || randomUUID();
     const turnToken = this.nextTurnToken(sessionId);
     const isChannel = this.channelSessionSync

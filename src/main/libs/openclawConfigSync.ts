@@ -315,7 +315,7 @@ const buildProviderSelection = (options: {
       providerConfig: {
         baseUrl: normalizeKimiCodingBaseUrl(options.baseURL),
         api: 'anthropic-messages',
-        apiKey: options.apiKey,
+        apiKey: '${LOBSTER_PROVIDER_API_KEY}',
         auth: 'api-key',
         models: [
           {
@@ -348,7 +348,7 @@ const buildProviderSelection = (options: {
       providerConfig: {
         baseUrl: normalizeMoonshotBaseUrl(options.baseURL),
         api: 'openai-completions',
-        apiKey: options.apiKey,
+        apiKey: '${LOBSTER_PROVIDER_API_KEY}',
         auth: 'api-key',
         models: [
           {
@@ -379,7 +379,7 @@ const buildProviderSelection = (options: {
     providerConfig: {
       baseUrl: stripChatCompletionsSuffix(options.baseURL),
       api: providerApi,
-      apiKey: options.apiKey,
+      apiKey: '${LOBSTER_PROVIDER_API_KEY}',
       auth: 'api-key',
       models: [
         {
@@ -635,7 +635,7 @@ export class OpenClawConfigSync {
         ...entries['mcp-bridge'],
         config: {
           callbackUrl: mcpBridgeCfg.callbackUrl,
-          secret: mcpBridgeCfg.secret,
+          secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
           tools: mcpBridgeCfg.tools,
         },
       };
@@ -646,7 +646,7 @@ export class OpenClawConfigSync {
     if (tgConfig?.enabled && tgConfig.botToken) {
       const telegramChannel: Record<string, unknown> = {
         enabled: true,
-        botToken: tgConfig.botToken,
+        botToken: '${LOBSTER_TG_BOT_TOKEN}',
         dmPolicy: tgConfig.dmPolicy || 'open',
         allowFrom: (() => {
           const ids = tgConfig.allowFrom?.length ? [...tgConfig.allowFrom] : [];
@@ -674,7 +674,7 @@ export class OpenClawConfigSync {
       if (tgConfig.webhookUrl) {
         telegramChannel.webhookUrl = tgConfig.webhookUrl;
         if (tgConfig.webhookSecret) {
-          telegramChannel.webhookSecret = tgConfig.webhookSecret;
+          telegramChannel.webhookSecret = '${LOBSTER_TG_WEBHOOK_SECRET}';
         }
       }
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), telegram: telegramChannel };
@@ -686,7 +686,7 @@ export class OpenClawConfigSync {
     if (dcConfig?.enabled && dcConfig.botToken) {
       const discordChannel: Record<string, unknown> = {
         enabled: true,
-        token: dcConfig.botToken,
+        token: '${LOBSTER_DC_BOT_TOKEN}',
         dm: {
           policy: dcConfig.dmPolicy || 'open',
           allowFrom: (() => {
@@ -733,7 +733,7 @@ export class OpenClawConfigSync {
       const feishuChannel: Record<string, unknown> = {
         enabled: true,
         appId: feishuConfig.appId,
-        appSecret: feishuConfig.appSecret,
+        appSecret: '${LOBSTER_FEISHU_APP_SECRET}',
         domain: feishuConfig.domain || 'feishu',
         dmPolicy: feishuConfig.dmPolicy || 'open',
         allowFrom: (() => {
@@ -763,7 +763,7 @@ export class OpenClawConfigSync {
       const dingtalkChannel: Record<string, unknown> = {
         enabled: true,
         clientId: dingTalkConfig.clientId,
-        clientSecret: dingTalkConfig.clientSecret,
+        clientSecret: '${LOBSTER_DINGTALK_CLIENT_SECRET}',
         dmPolicy: dingTalkConfig.dmPolicy || 'open',
         allowFrom: (() => {
           const ids = dingTalkConfig.allowFrom?.length ? [...dingTalkConfig.allowFrom] : [];
@@ -776,7 +776,7 @@ export class OpenClawConfigSync {
         groupSessionScope: dingTalkConfig.groupSessionScope || 'group',
         sharedMemoryAcrossConversations: dingTalkConfig.sharedMemoryAcrossConversations ?? false,
         ...(dingTalkConfig.gatewayBaseUrl ? { gatewayBaseUrl: dingTalkConfig.gatewayBaseUrl } : {}),
-        ...(gatewayToken ? { gatewayToken } : {}),
+        ...(gatewayToken ? { gatewayToken: '${LOBSTER_DINGTALK_GW_TOKEN}' } : {}),
       };
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'dingtalk-connector': dingtalkChannel };
     }
@@ -786,7 +786,7 @@ export class OpenClawConfigSync {
       const qqChannel: Record<string, unknown> = {
         enabled: true,
         appId: qqConfig.appId,
-        clientSecret: qqConfig.appSecret,
+        clientSecret: '${LOBSTER_QQ_CLIENT_SECRET}',
         dmPolicy: qqConfig.dmPolicy || 'open',
         allowFrom: (() => {
           const ids = qqConfig.allowFrom?.length ? [...qqConfig.allowFrom] : [];
@@ -813,7 +813,7 @@ export class OpenClawConfigSync {
       const wecomChannel: Record<string, unknown> = {
         enabled: true,
         botId: wecomConfig.botId,
-        secret: wecomConfig.secret,
+        secret: '${LOBSTER_WECOM_SECRET}',
         dmPolicy: wecomConfig.dmPolicy || 'open',
         allowFrom: (() => {
           const ids = wecomConfig.allowFrom?.length ? [...wecomConfig.allowFrom] : [];
@@ -833,13 +833,17 @@ export class OpenClawConfigSync {
 
     // Sync POPO OpenClaw channel config (via moltbot-popo plugin)
     if (popoConfig?.enabled && popoConfig.appKey) {
+      // Migration: old configs lack connectionMode. If token is set, the user
+      // was using webhook mode; otherwise default to the new websocket mode.
+      const effectiveConnectionMode = popoConfig.connectionMode
+        || (popoConfig.token ? 'webhook' : 'websocket');
+      const isWebSocket = effectiveConnectionMode === 'websocket';
       const popoChannel: Record<string, unknown> = {
         enabled: true,
+        connectionMode: effectiveConnectionMode,
         appKey: popoConfig.appKey,
-        appSecret: popoConfig.appSecret,
-        token: popoConfig.token,
+        appSecret: '${LOBSTER_POPO_APP_SECRET}',
         aesKey: popoConfig.aesKey,
-        webhookPort: popoConfig.webhookPort || 3100,
         dmPolicy: popoConfig.dmPolicy || 'open',
         allowFrom: (() => {
           const ids = popoConfig.allowFrom?.length ? [...popoConfig.allowFrom] : [];
@@ -853,16 +857,21 @@ export class OpenClawConfigSync {
           return ids;
         })(),
       };
+      // Webhook-only fields
+      if (!isWebSocket) {
+        popoChannel.token = '${LOBSTER_POPO_TOKEN}';
+        popoChannel.webhookPort = popoConfig.webhookPort || 3100;
+      }
       if (popoConfig.textChunkLimit && popoConfig.textChunkLimit !== 3000) {
         popoChannel.textChunkLimit = popoConfig.textChunkLimit;
       }
       if (popoConfig.richTextChunkLimit && popoConfig.richTextChunkLimit !== 5000) {
         popoChannel.richTextChunkLimit = popoConfig.richTextChunkLimit;
       }
-      if (popoConfig.webhookBaseUrl) {
+      if (!isWebSocket && popoConfig.webhookBaseUrl) {
         popoChannel.webhookBaseUrl = popoConfig.webhookBaseUrl;
       }
-      if (popoConfig.webhookPath && popoConfig.webhookPath !== '/popo/callback') {
+      if (!isWebSocket && popoConfig.webhookPath && popoConfig.webhookPath !== '/popo/callback') {
         popoChannel.webhookPath = popoConfig.webhookPath;
       }
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'moltbot-popo': popoChannel };
@@ -873,7 +882,7 @@ export class OpenClawConfigSync {
         enabled: true,
         appKey: nimConfig.appKey,
         account: nimConfig.account,
-        token: nimConfig.token,
+        token: '${LOBSTER_NIM_TOKEN}',
       };
       // Pass structured sub-configs directly — the plugin's Zod schema validates them
       if (nimConfig.p2p) nimChannel.p2p = nimConfig.p2p;
@@ -923,6 +932,87 @@ export class OpenClawConfigSync {
       configPath,
       ...(agentsMdWarning ? { agentsMdWarning } : {}),
     };
+  }
+
+  /**
+   * Collect all secret values that should be injected as environment variables
+   * into the OpenClaw gateway process. The openclaw.json file uses `${VAR}`
+   * placeholders for these values so that no plaintext secrets are stored on disk.
+   */
+  collectSecretEnvVars(): Record<string, string> {
+    const env: Record<string, string> = {};
+
+    // Provider API Key
+    const apiResolution = resolveRawApiConfig();
+    if (apiResolution.config?.apiKey) {
+      env.LOBSTER_PROVIDER_API_KEY = apiResolution.config.apiKey;
+    }
+
+    // MCP Bridge Secret
+    const mcpBridgeCfg = this.getMcpBridgeConfig?.();
+    if (mcpBridgeCfg?.secret) {
+      env.LOBSTER_MCP_BRIDGE_SECRET = mcpBridgeCfg.secret;
+    }
+
+    // Telegram
+    const tgConfig = this.getTelegramOpenClawConfig?.();
+    if (tgConfig?.enabled && tgConfig.botToken) {
+      env.LOBSTER_TG_BOT_TOKEN = tgConfig.botToken;
+      if (tgConfig.webhookSecret) {
+        env.LOBSTER_TG_WEBHOOK_SECRET = tgConfig.webhookSecret;
+      }
+    }
+
+    // Discord
+    const dcConfig = this.getDiscordOpenClawConfig?.();
+    if (dcConfig?.enabled && dcConfig.botToken) {
+      env.LOBSTER_DC_BOT_TOKEN = dcConfig.botToken;
+    }
+
+    // Feishu
+    const feishuConfig = this.getFeishuConfig();
+    if (feishuConfig?.enabled && feishuConfig.appSecret) {
+      env.LOBSTER_FEISHU_APP_SECRET = feishuConfig.appSecret;
+    }
+
+    // DingTalk
+    const dingTalkConfig = this.getDingTalkConfig();
+    if (dingTalkConfig?.enabled && dingTalkConfig.clientSecret) {
+      env.LOBSTER_DINGTALK_CLIENT_SECRET = dingTalkConfig.clientSecret;
+    }
+    const gatewayToken = this.engineManager.getGatewayToken();
+    if (gatewayToken) {
+      env.LOBSTER_DINGTALK_GW_TOKEN = gatewayToken;
+    }
+
+    // QQ
+    const qqConfig = this.getQQConfig();
+    if (qqConfig?.enabled && qqConfig.appSecret) {
+      env.LOBSTER_QQ_CLIENT_SECRET = qqConfig.appSecret;
+    }
+
+    // WeCom
+    const wecomConfig = this.getWecomConfig();
+    if (wecomConfig?.enabled && wecomConfig.secret) {
+      env.LOBSTER_WECOM_SECRET = wecomConfig.secret;
+    }
+
+    // POPO
+    const popoConfig = this.getPopoConfig();
+    if (popoConfig?.enabled && popoConfig.appSecret) {
+      env.LOBSTER_POPO_APP_SECRET = popoConfig.appSecret;
+    }
+    if (popoConfig?.enabled && popoConfig.token) {
+      env.LOBSTER_POPO_TOKEN = popoConfig.token;
+    }
+
+    // NIM
+    const nimConfig = this.getNimConfig();
+    if (nimConfig?.enabled && nimConfig.token) {
+      env.LOBSTER_NIM_TOKEN = nimConfig.token;
+    }
+
+    return env;
   }
 
   private syncManagedSessionStore(selection: OpenClawProviderSelection): boolean {

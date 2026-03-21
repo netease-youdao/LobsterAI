@@ -157,6 +157,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private shutdownRequested = false;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
+  private secretEnvVars: Record<string, string> = {};
 
   constructor() {
     super();
@@ -191,6 +192,19 @@ export class OpenClawEngineManager extends EventEmitter {
           message: `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
           canRetry: true,
         };
+  }
+
+  /**
+   * Set secret environment variables to inject into the gateway process.
+   * These contain the plaintext values for `${VAR}` placeholders in openclaw.json.
+   */
+  setSecretEnvVars(vars: Record<string, string>): void {
+    this.secretEnvVars = vars;
+  }
+
+  /** Return the current secret env vars snapshot (for change detection). */
+  getSecretEnvVars(): Record<string, string> {
+    return this.secretEnvVars;
   }
 
   override on<U extends keyof OpenClawEngineManagerEvents>(
@@ -395,6 +409,9 @@ export class OpenClawEngineManager extends EventEmitter {
       NODE_COMPILE_CACHE: compileCacheDir,
       LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath.replace(/\\/g, '/'),
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
+      // Inject secret values for ${VAR} placeholders in openclaw.json.
+      // This keeps plaintext credentials out of the config file on disk.
+      ...this.secretEnvVars,
     };
     if (cliShimDir) {
       // Plain object is case-sensitive: the spread key from process.env on Windows is "Path",

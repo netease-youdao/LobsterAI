@@ -64,8 +64,6 @@ const DIRS_TO_DELETE = new Set([
 
 const PACKAGES_TO_STUB = [
   'koffi',            // Windows FFI for terminal PTY — not needed in gateway mode
-  'pdfjs-dist',       // Browser-side PDF rendering — gateway is a backend process
-  'playwright-core',  // Browser automation — gateway doesn't launch browsers
 ];
 
 const GENERIC_STUB_INDEX_CJS = `// Stub (CJS): this package is not needed for headless gateway operation.
