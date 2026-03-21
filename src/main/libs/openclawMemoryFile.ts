@@ -39,12 +39,48 @@ export interface OpenClawMemoryStats {
 const DEFAULT_OPENCLAW_WORKSPACE = path.join(os.homedir(), '.openclaw', 'workspace');
 
 /**
+ * Allowed base directories for workspace paths.
+ * Resolved paths must fall under one of these prefixes.
+ */
+const ALLOWED_BASES = [
+  os.homedir(),
+  os.tmpdir(),
+];
+
+/**
+ * Sanitize a user-provided working directory to prevent path traversal attacks.
+ *
+ * Resolves and normalises the path, then checks it falls within an allowed
+ * base directory (home or tmp).  If the path escapes, logs a warning and
+ * returns the default workspace directory instead.
+ */
+export function sanitizeWorkspacePath(workingDirectory: string | undefined): string {
+  const raw = (workingDirectory || '').trim();
+  if (!raw) return DEFAULT_OPENCLAW_WORKSPACE;
+
+  const resolved = path.resolve(raw);
+  const normalised = path.normalize(resolved);
+
+  const isAllowed = ALLOWED_BASES.some(
+    (base) => normalised === base || normalised.startsWith(base + path.sep),
+  );
+
+  if (!isAllowed) {
+    console.warn(
+      `${TAG} sanitizeWorkspacePath: path "${raw}" resolves to "${normalised}" which is outside allowed directories. Falling back to default workspace.`,
+    );
+    return DEFAULT_OPENCLAW_WORKSPACE;
+  }
+
+  return normalised;
+}
+
+/**
  * Resolve the MEMORY.md path from the user-configured working directory.
  * Falls back to `~/.openclaw/workspace/MEMORY.md` when unset.
  */
 export function resolveMemoryFilePath(workingDirectory: string | undefined): string {
-  const dir = (workingDirectory || '').trim();
-  return path.join(dir || DEFAULT_OPENCLAW_WORKSPACE, 'MEMORY.md');
+  return path.join(sanitizeWorkspacePath(workingDirectory), 'MEMORY.md');
 }
 
 // ---------------------------------------------------------------------------
@@ -380,8 +416,7 @@ function validateBootstrapFilename(filename: string): void {
  */
 export function resolveBootstrapFilePath(workingDirectory: string | undefined, filename: string): string {
   validateBootstrapFilename(filename);
-  const dir = (workingDirectory || '').trim();
-  return path.join(dir || DEFAULT_OPENCLAW_WORKSPACE, filename);
+  return path.join(sanitizeWorkspacePath(workingDirectory), filename);
 }
 
 /**
@@ -468,7 +503,7 @@ export function syncMemoryFileOnWorkspaceChange(
 
     // Ensure memory/ directory exists for OpenClaw daily logs
     const memoryDir = path.join(
-      (newWorkingDirectory || '').trim() || DEFAULT_OPENCLAW_WORKSPACE,
+      sanitizeWorkspacePath(newWorkingDirectory),
       'memory',
     );
     if (!fs.existsSync(memoryDir)) {
