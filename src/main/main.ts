@@ -769,6 +769,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       engineManager: getOpenClawEngineManager(),
       getCoworkConfig: () => getCoworkStore().getConfig(),
       isEnterprise: () => !!getStore().get('enterprise_config'),
+      getAgents: () => getCoworkStore().getAgents(),
       getSkillsList: () => getSkillManager().listSkills().map(s => ({ id: s.id, enabled: s.enabled })),
       getTelegramOpenClawConfig: () => {
         try {
@@ -2444,11 +2445,23 @@ if (!gotTheLock) {
 
       const coworkStoreInstance = getCoworkStore();
       const config = coworkStoreInstance.getConfig();
-      const systemPrompt = mergeCoworkSystemPrompt(
-        activeEngine,
-        options.systemPrompt ?? config.systemPrompt,
-      );
-      const selectedWorkspaceRoot = (options.cwd || config.workingDirectory || '').trim();
+
+      // If agentId is specified, look up the agent's config and use it
+      let agentSystemPrompt = options.systemPrompt ?? config.systemPrompt;
+      let agentCwd = options.cwd || config.workingDirectory || '';
+      let agentExecutionMode = config.executionMode || 'local';
+      if (options.agentId) {
+        const { agents } = coworkStoreInstance.getAgents();
+        const agent = agents.find(a => a.id === options.agentId);
+        if (agent) {
+          agentSystemPrompt = options.systemPrompt ?? agent.systemPrompt ?? config.systemPrompt;
+          agentCwd = options.cwd || agent.workingDirectory || config.workingDirectory || '';
+          agentExecutionMode = agent.executionMode || config.executionMode || 'local';
+        }
+      }
+
+      const systemPrompt = mergeCoworkSystemPrompt(activeEngine, agentSystemPrompt);
+      const selectedWorkspaceRoot = agentCwd.trim();
 
       if (!selectedWorkspaceRoot) {
         return {
@@ -3196,6 +3209,67 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set config',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:agents:get', async () => {
+    try {
+      const { agents, activeAgentId } = getCoworkStore().getAgents();
+      return { success: true, agents, activeAgentId };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get agents',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:agents:set', async (_event, options: {
+    agents: import('./coworkStore').CoworkAgentRecord[];
+    activeAgentId: string;
+  }) => {
+    try {
+      const { agents, activeAgentId } = options;
+      if (!Array.isArray(agents) || agents.length === 0) {
+        return { success: false, error: 'agents must be a non-empty array' };
+      }
+      if (typeof activeAgentId !== 'string' || !activeAgentId) {
+        return { success: false, error: 'activeAgentId is required' };
+      }
+      getCoworkStore().setAgents(agents, activeAgentId);
+
+      // Find active agent and sync openclaw config
+      const activeAgent = agents.find((a) => a.id === activeAgentId) ?? agents[0]!;
+      const previousConfig = getCoworkStore().getConfig();
+      if (activeAgent.workingDirectory && activeAgent.workingDirectory !== previousConfig.workingDirectory) {
+        getCoworkStore().setConfig({ workingDirectory: activeAgent.workingDirectory });
+        getSkillManager().handleWorkingDirectoryChange();
+        try {
+          ensureDefaultIdentity(activeAgent.workingDirectory);
+        } catch (err) {
+          console.warn('[OpenClaw] ensureDefaultIdentity failed (non-fatal):', err);
+        }
+      }
+
+      const syncResult = await syncOpenClawConfig({
+        reason: 'agents-config-change',
+        restartGatewayIfRunning: true,
+      });
+      if (!syncResult.success && getCoworkStore().getConfig().agentEngine === 'openclaw') {
+        return {
+          success: false,
+          code: ENGINE_NOT_READY_CODE,
+          error: syncResult.error || 'OpenClaw config sync failed.',
+          engineStatus: syncResult.status || getOpenClawEngineManager().getStatus(),
+        };
+      }
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to set agents',
       };
     }
   });

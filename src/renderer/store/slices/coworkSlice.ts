@@ -4,6 +4,7 @@ import type {
   CoworkSessionSummary,
   CoworkMessage,
   CoworkConfig,
+  AgentConfig,
   CoworkPermissionRequest,
   CoworkSessionStatus,
 } from '../../types/cowork';
@@ -28,6 +29,8 @@ interface CoworkState {
   remoteManaged: boolean;
   pendingPermissions: CoworkPermissionRequest[];
   config: CoworkConfig;
+  agents: AgentConfig[];
+  activeAgentId: string;
 }
 
 const initialState: CoworkState = {
@@ -51,7 +54,11 @@ const initialState: CoworkState = {
     memoryLlmJudgeEnabled: false,
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
+    agents: [],
+    activeAgentId: 'main',
   },
+  agents: [],
+  activeAgentId: 'main',
 };
 
 const markSessionRead = (state: CoworkState, sessionId: string | null) => {
@@ -338,6 +345,15 @@ const coworkSlice = createSlice({
     clearDraftAttachments(state, action: PayloadAction<string>) {
       delete state.draftAttachments[action.payload];
     },
+
+    setAgents(state, action: PayloadAction<{ agents: AgentConfig[]; activeAgentId: string }>) {
+      state.agents = action.payload.agents;
+      state.activeAgentId = action.payload.activeAgentId;
+    },
+
+    setActiveAgentId(state, action: PayloadAction<string>) {
+      state.activeAgentId = action.payload;
+    },
   },
 });
 
@@ -365,6 +381,8 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  setAgents,
+  setActiveAgentId,
 } = coworkSlice.actions;
 
 export default coworkSlice.reducer;

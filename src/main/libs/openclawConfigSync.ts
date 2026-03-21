@@ -651,6 +651,7 @@ type OpenClawConfigSyncDeps = {
   engineManager: OpenClawEngineManager;
   getCoworkConfig: () => CoworkConfig;
   isEnterprise: () => boolean;
+  getAgents?: () => { agents: CoworkAgentRecord[]; activeAgentId: string };
   getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
   getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
   getDingTalkConfig: () => DingTalkOpenClawConfig | null;
@@ -671,6 +672,7 @@ export class OpenClawConfigSync {
   private readonly engineManager: OpenClawEngineManager;
   private readonly getCoworkConfig: () => CoworkConfig;
   private readonly isEnterprise: () => boolean;
+  private readonly getAgents?: () => { agents: CoworkAgentRecord[]; activeAgentId: string };
   private readonly getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
   private readonly getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
   private readonly getDingTalkConfig: () => DingTalkOpenClawConfig | null;
@@ -690,6 +692,7 @@ export class OpenClawConfigSync {
     this.engineManager = deps.engineManager;
     this.getCoworkConfig = deps.getCoworkConfig;
     this.isEnterprise = deps.isEnterprise;
+    this.getAgents = deps.getAgents;
     this.getTelegramOpenClawConfig = deps.getTelegramOpenClawConfig;
     this.getDiscordOpenClawConfig = deps.getDiscordOpenClawConfig;
     this.getDingTalkConfig = deps.getDingTalkConfig;
@@ -1579,6 +1582,65 @@ export class OpenClawConfigSync {
       entries[skill.id] = { enabled: skill.enabled };
     }
     return entries;
+  }
+
+  /**
+   * Build the `agents` section of openclaw.json from multi-agent config or
+   * fall back to a single-agent defaults-only config.
+   */
+  private buildAgentsConfig(options: {
+    workspaceDir: string;
+    sandboxMode: 'off' | 'non-main' | 'all';
+    primaryModel: string;
+  }): Record<string, unknown> {
+    const { workspaceDir, sandboxMode, primaryModel } = options;
+
+    const defaults = {
+      timeoutSeconds: OPENCLAW_AGENT_TIMEOUT_SECONDS,
+      model: { primary: primaryModel },
+      sandbox: { mode: sandboxMode },
+    };
+
+    // Try to get multi-agent list
+    let agentRecords: CoworkAgentRecord[] = [];
+    let activeAgentId = 'main';
+    if (this.getAgents) {
+      try {
+        const result = this.getAgents();
+        agentRecords = result.agents;
+        activeAgentId = result.activeAgentId;
+      } catch {
+        agentRecords = [];
+      }
+    }
+
+    if (agentRecords.length <= 1) {
+      // Single-agent: use defaults-only form (backwards-compatible)
+      return {
+        defaults: {
+          ...defaults,
+          ...(workspaceDir ? { workspace: path.resolve(workspaceDir) } : {}),
+        },
+      };
+    }
+
+    // Multi-agent: build agents.list and set defaults without workspace
+    // (each agent entry carries its own workspace)
+    const list = agentRecords.map((agent, index) => {
+      const isDefault = agent.id === activeAgentId || (index === 0 && !agentRecords.some((a) => a.id === activeAgentId));
+      const agentWorkspace = (agent.workingDirectory || '').trim();
+      return {
+        id: agent.id,
+        name: agent.name || agent.id,
+        ...(isDefault ? { default: true } : {}),
+        ...(agentWorkspace ? { workspace: path.resolve(agentWorkspace) } : {}),
+      };
+    });
+
+    return {
+      defaults,
+      list,
+    };
   }
 
   /**

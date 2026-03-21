@@ -59,6 +59,8 @@ interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: 'strict' | 'standard' | 'relaxed';
   memoryUserMemoriesMaxItems: number;
+  agents?: import('./cowork').AgentConfig[];
+  activeAgentId?: string;
 }
 
 type CoworkConfigUpdate = Partial<Pick<
@@ -372,6 +374,8 @@ interface IElectronAPI {
     onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => () => void;
     onStreamError: (callback: (data: { sessionId: string; error: string }) => void) => () => void;
     onSessionsChanged: (callback: () => void) => () => void;
+    getAgents: () => Promise<{ success: boolean; agents?: import('./cowork').AgentConfig[]; activeAgentId?: string; error?: string }>;
+    setAgents: (options: { agents: import('./cowork').AgentConfig[]; activeAgentId: string }) => Promise<{ success: boolean; error?: string }>;
   };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;

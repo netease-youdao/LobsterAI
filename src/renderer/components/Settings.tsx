@@ -21,10 +21,13 @@ import { RootState } from '../store';
 import ThemedSelect from './ui/ThemedSelect';
 import type {
   CoworkAgentEngine,
+  CoworkExecutionMode,
   OpenClawEngineStatus,
   CoworkUserMemoryEntry,
   CoworkMemoryStats,
+  AgentConfig,
 } from '../types/cowork';
+import { setAgents as setAgentsAction } from '../store/slices/coworkSlice';
 import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
@@ -646,6 +649,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
   const [bootstrapLoaded, setBootstrapLoaded] = useState<boolean>(false);
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
+
+  // Multi-Agent management state
+  const agentsFromStore = useSelector((state: RootState) => state.cowork.agents);
+  const activeAgentIdFromStore = useSelector((state: RootState) => state.cowork.activeAgentId);
+  const [localAgents, setLocalAgents] = useState<AgentConfig[]>([]);
+  const [localActiveAgentId, setLocalActiveAgentId] = useState<string>('main');
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [agentDraft, setAgentDraft] = useState<AgentConfig | null>(null);
+  const [agentSaveStatus, setAgentSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
@@ -1376,6 +1388,19 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       })();
     }
   }, [activeTab, bootstrapLoaded]);
+
+  // Load agents from store when switching to coworkAgent tab
+  useEffect(() => {
+    if (activeTab !== 'coworkAgent') return;
+    const agents = agentsFromStore.length > 0 ? agentsFromStore : [];
+    setLocalAgents(agents);
+    setLocalActiveAgentId(activeAgentIdFromStore);
+    if (agents.length > 0 && !selectedAgentId) {
+      setSelectedAgentId(activeAgentIdFromStore || agents[0].id);
+      setAgentDraft(agents.find(a => a.id === (activeAgentIdFromStore || agents[0].id)) || agents[0]);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const resetCoworkMemoryEditor = () => {
     setCoworkMemoryEditingId(null);
@@ -3376,7 +3401,83 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           </div>
         );
 
-      case 'coworkAgent':
+      case 'coworkAgent': {
+        const handleSelectAgent = (agent: AgentConfig) => {
+          setSelectedAgentId(agent.id);
+          setAgentDraft({ ...agent });
+          setAgentSaveStatus('idle');
+        };
+
+        const handleAddAgent = () => {
+          const newId = `agent_${Date.now()}`;
+          const newAgent: AgentConfig = {
+            id: newId,
+            name: i18nService.t('agentNewDefaultName'),
+            workingDirectory: coworkConfig.workingDirectory || '',
+            systemPrompt: '',
+            executionMode: 'local' as CoworkExecutionMode,
+            identity: '',
+            soul: '',
+          };
+          const updated = [...localAgents, newAgent];
+          setLocalAgents(updated);
+          setSelectedAgentId(newId);
+          setAgentDraft({ ...newAgent });
+          setAgentSaveStatus('idle');
+        };
+
+        const handleDeleteAgent = async () => {
+          if (!agentDraft || localAgents.length <= 1) return;
+          if (!window.confirm(i18nService.t('agentDeleteConfirm'))) return;
+          const updated = localAgents.filter(a => a.id !== agentDraft.id);
+          const newActiveId = localActiveAgentId === agentDraft.id ? updated[0]?.id || '' : localActiveAgentId;
+          setLocalAgents(updated);
+          setLocalActiveAgentId(newActiveId);
+          setSelectedAgentId(updated[0]?.id || null);
+          setAgentDraft(updated[0] ? { ...updated[0] } : null);
+          try {
+            await coworkService.saveAgents(updated, newActiveId);
+            dispatch(setAgentsAction({ agents: updated, activeAgentId: newActiveId }));
+          } catch {
+            setError(i18nService.t('agentSaveFailed'));
+          }
+        };
+
+        const handleSaveAgent = async () => {
+          if (!agentDraft) return;
+          setAgentSaveStatus('saving');
+          const updated = localAgents.map(a => a.id === agentDraft.id ? { ...agentDraft } : a);
+          setLocalAgents(updated);
+          try {
+            await coworkService.saveAgents(updated, localActiveAgentId);
+            dispatch(setAgentsAction({ agents: updated, activeAgentId: localActiveAgentId }));
+            setAgentSaveStatus('saved');
+            setTimeout(() => setAgentSaveStatus('idle'), 2000);
+          } catch {
+            setAgentSaveStatus('error');
+            setError(i18nService.t('agentSaveFailed'));
+          }
+        };
+
+        const handleSetActive = async () => {
+          if (!agentDraft) return;
+          setLocalActiveAgentId(agentDraft.id);
+          const updated = localAgents.map(a => a.id === agentDraft.id ? { ...agentDraft } : a);
+          setLocalAgents(updated);
+          try {
+            await coworkService.saveAgents(updated, agentDraft.id);
+            dispatch(setAgentsAction({ agents: updated, activeAgentId: agentDraft.id }));
+          } catch {
+            setError(i18nService.t('agentSaveFailed'));
+          }
+        };
+
+        const handlePickWorkDir = async () => {
+          if (!agentDraft) return;
+          const dir = await coworkService.pickWorkingDirectory();
+          if (dir) setAgentDraft({ ...agentDraft, workingDirectory: dir });
+        };
+
         return (
           <div className="space-y-6">
             {/* Agent Settings (IDENTITY.md + SOUL.md) */}
@@ -3424,6 +3525,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             </div>
           </div>
         );
+      }
 
       case 'shortcuts':
         return (
