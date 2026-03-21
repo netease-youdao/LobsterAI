@@ -1203,10 +1203,18 @@ export class OpenClawEngineManager extends EventEmitter {
   private scheduleGatewayRestart(): void {
     if (this.shutdownRequested) return;
     if (this.gatewayRestartTimer) return;
+    if (this.startGatewayPromise) {
+      console.log('[OpenClaw] scheduleGatewayRestart: startGateway already in progress, skipping');
+      return;
+    }
 
     this.gatewayRestartTimer = setTimeout(() => {
       this.gatewayRestartTimer = null;
       if (this.shutdownRequested) return;
+      if (this.startGatewayPromise) {
+        console.log('[OpenClaw] scheduleGatewayRestart: startGateway already in progress at timer fire, skipping');
+        return;
+      }
       void this.startGateway();
     }, GATEWAY_RESTART_DELAY_MS);
   }
