@@ -83,7 +83,7 @@ export class McpBridgeServer {
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     // Only accept POST /mcp/execute
     if (req.method !== 'POST' || !req.url?.startsWith('/mcp/execute')) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'Not found' }));
       return;
     }
@@ -91,7 +91,7 @@ export class McpBridgeServer {
     // Verify secret token
     const authHeader = req.headers['x-mcp-bridge-secret'];
     if (authHeader !== this.secret) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
     }
@@ -105,19 +105,19 @@ export class McpBridgeServer {
       };
 
       if (!server || !tool) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: 'Missing "server" or "tool" field' }));
         return;
       }
 
       const result = await this.mcpManager.callTool(server, tool, args || {});
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(result));
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       log('ERROR', `Request handling error: ${errMsg}`);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({
         content: [{ type: 'text', text: `Bridge error: ${errMsg}` }],
         isError: true,

@@ -892,10 +892,21 @@ function writeJSON(
 ): void {
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
-    'Content-Type': 'application/json',
+    'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
   });
   res.end(payload);
+}
+
+/**
+ * Extract charset from Content-Type header (e.g. "application/json; charset=utf-8").
+ * Returns the normalised charset string or null when absent / unparseable.
+ */
+function extractContentTypeCharset(req: http.IncomingMessage): string | null {
+  const ct = req.headers['content-type'];
+  if (!ct) return null;
+  const match = ct.match(/charset\s*=\s*"?([^";,\s]+)"?/i);
+  return match ? match[1].toLowerCase().replace(/^utf8$/i, 'utf-8') : null;
 }
 
 function readRequestBody(req: http.IncomingMessage): Promise<string> {
@@ -904,9 +915,26 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
     let totalBytes = 0;
     let settled = false;
 
+    // When the Content-Type header declares a charset, honour it directly
+    // instead of running heuristic detection. This prevents CJK characters
+    // (e.g. Chinese paths in workingDirectory) from being misinterpreted
+    // as Latin-1 / Windows-1252 when the client already tells us the encoding.
+    const declaredCharset = extractContentTypeCharset(req);
+
     const decodeBody = (raw: Buffer): string => {
       if (raw.length === 0) {
         return '';
+      }
+
+      // If the request explicitly declares a charset, trust it.
+      // JSON APIs (including the OpenClaw gateway) always use UTF-8,
+      // so this path avoids any ambiguity for CJK characters.
+      if (declaredCharset) {
+        try {
+          return new TextDecoder(declaredCharset, { fatal: false }).decode(raw);
+        } catch {
+          // Unknown charset label — fall through to auto-detection.
+        }
       }
 
       // BOM-aware decoding first.
