@@ -418,6 +418,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
+  const [preventSleep, setPreventSleepState] = useState(false);
+  const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(notice ?? null);
@@ -643,7 +645,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       }).catch(err => {
         console.error('Failed to load auto-launch setting:', err);
       });
-      
+
+      // Load prevent-sleep setting
+      window.electron.preventSleep.get().then(({ enabled }) => {
+        setPreventSleepState(enabled);
+      }).catch(err => {
+        console.error('Failed to load prevent-sleep setting:', err);
+      });
+
       // Set up providers based on saved config
       if (config.api) {
         // For backward compatibility with older config
@@ -2121,6 +2130,55 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                       autoLaunch ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+
+            {/* Prevent Sleep Section */}
+            <div>
+              <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('preventSleep')}
+              </h4>
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-sm dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                  {i18nService.t('preventSleepDescription')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={preventSleep}
+                  onClick={async () => {
+                    if (isUpdatingPreventSleep) return;
+                    const next = !preventSleep;
+                    setIsUpdatingPreventSleep(true);
+                    try {
+                      const result = await window.electron.preventSleep.set(next);
+                      if (result.success) {
+                        setPreventSleepState(next);
+                      } else {
+                        setError(result.error || 'Failed to update prevent-sleep setting');
+                      }
+                    } catch (err) {
+                      console.error('Failed to set prevent-sleep:', err);
+                      setError('Failed to update prevent-sleep setting');
+                    } finally {
+                      setIsUpdatingPreventSleep(false);
+                    }
+                  }}
+                  disabled={isUpdatingPreventSleep}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    isUpdatingPreventSleep ? 'opacity-50 cursor-not-allowed' : ''
+                  } ${
+                    preventSleep
+                      ? 'bg-claude-accent'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      preventSleep ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
