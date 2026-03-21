@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { configService } from '../services/config';
 import { apiService } from '../services/api';
-import { checkForAppUpdate } from '../services/appUpdate';
 import type { AppUpdateInfo } from '../services/appUpdate';
 import { themeService } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
@@ -28,26 +27,35 @@ import type {
 import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
-import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
+import AboutTab from './settings/AboutTab';
+import { defaultConfig, getVisibleProviders } from '../config';
 import {
-  OpenAIIcon,
-  DeepSeekIcon,
-  GeminiIcon,
-  AnthropicIcon,
-  MoonshotIcon,
-  ZhipuIcon,
-  MiniMaxIcon,
-  YouDaoZhiYunIcon,
-  QwenIcon,
-  XiaomiIcon,
-  StepfunIcon,
-  VolcengineIcon,
-  OpenRouterIcon,
-  OllamaIcon,
-  CustomProviderIcon,
-} from './icons/providers';
+  type TabType,
+  type ProviderType,
+  type ProvidersConfig,
+  type ProviderConfig,
+  type Model,
+  type ProviderConnectionTestResult,
+  type ProvidersExportPayload,
+  type ProvidersImportPayload,
+  providerKeys,
+  providerMeta,
+  providerRequiresApiKey,
+  getEffectiveApiFormat,
+  shouldShowApiFormatSelector,
+  getProviderDefaultBaseUrl,
+  resolveBaseUrl,
+  shouldAutoSwitchProviderBaseUrl,
+  buildOpenAICompatibleChatCompletionsUrl,
+  buildOpenAIResponsesUrl,
+  shouldUseOpenAIResponsesForProvider,
+  shouldUseMaxCompletionTokensForOpenAI,
+  CONNECTIVITY_TEST_TOKEN_BUDGET,
+  getDefaultProviders,
+  getDefaultActiveProvider,
+  joinWorkspacePath,
+} from './settings/settingsTypes';
 
-type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -59,320 +67,6 @@ interface SettingsProps extends SettingsOpenOptions {
   onUpdateFound?: (info: AppUpdateInfo) => void;
 }
 
-const providerKeys = [
-  'openai',
-  'gemini',
-  'anthropic',
-  'deepseek',
-  'moonshot',
-  'zhipu',
-  'minimax',
-  'volcengine',
-  'qwen',
-  'youdaozhiyun',
-  'stepfun',
-  'xiaomi',
-  'openrouter',
-  'ollama',
-  'custom',
-] as const;
-
-type ProviderType = (typeof providerKeys)[number];
-type ProvidersConfig = NonNullable<AppConfig['providers']>;
-type ProviderConfig = ProvidersConfig[string];
-type Model = NonNullable<ProviderConfig['models']>[number];
-type ProviderConnectionTestResult = {
-  success: boolean;
-  message: string;
-  provider: ProviderType;
-};
-
-interface ProviderExportEntry {
-  enabled: boolean;
-  apiKey: PasswordEncryptedPayload;
-  baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai';
-  codingPlanEnabled?: boolean;
-  models?: Model[];
-}
-
-interface ProvidersExportPayload {
-  type: typeof EXPORT_FORMAT_TYPE;
-  version: 2;
-  exportedAt: string;
-  encryption: {
-    algorithm: 'AES-GCM';
-    keySource: 'password';
-    keyDerivation: 'PBKDF2';
-  };
-  providers: Record<string, ProviderExportEntry>;
-}
-
-interface ProvidersImportEntry {
-  enabled?: boolean;
-  apiKey?: EncryptedPayload | PasswordEncryptedPayload | string;
-  apiKeyEncrypted?: string;
-  apiKeyIv?: string;
-  baseUrl?: string;
-  apiFormat?: 'anthropic' | 'openai' | 'native';
-  codingPlanEnabled?: boolean;
-  models?: Model[];
-}
-
-interface ProvidersImportPayload {
-  type?: string;
-  version?: number;
-  encryption?: {
-    algorithm?: string;
-    keySource?: string;
-    keyDerivation?: string;
-  };
-  providers?: Record<string, ProvidersImportEntry>;
-}
-
-const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode }> = {
-  openai: { label: 'OpenAI', icon: <OpenAIIcon /> },
-  deepseek: { label: 'DeepSeek', icon: <DeepSeekIcon /> },
-  gemini: { label: 'Gemini', icon: <GeminiIcon /> },
-  anthropic: { label: 'Anthropic', icon: <AnthropicIcon /> },
-  moonshot: { label: 'Moonshot', icon: <MoonshotIcon /> },
-  zhipu: { label: 'Zhipu', icon: <ZhipuIcon /> },
-  minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
-  youdaozhiyun: { label: 'Youdao', icon: <YouDaoZhiYunIcon /> },
-  qwen: { label: 'Qwen', icon: <QwenIcon /> },
-  xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
-  stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
-  volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
-  openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
-  ollama: { label: 'Ollama', icon: <OllamaIcon /> },
-  custom: { label: 'Custom', icon: <CustomProviderIcon /> },
-};
-
-const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropic: string; openai: string }>> = {
-  deepseek: {
-    anthropic: 'https://api.deepseek.com/anthropic',
-    openai: 'https://api.deepseek.com',
-  },
-  moonshot: {
-    anthropic: 'https://api.moonshot.cn/anthropic',
-    openai: 'https://api.moonshot.cn/v1',
-  },
-  zhipu: {
-    anthropic: 'https://open.bigmodel.cn/api/anthropic',
-    openai: 'https://open.bigmodel.cn/api/paas/v4',
-  },
-  minimax: {
-    anthropic: 'https://api.minimaxi.com/anthropic',
-    openai: 'https://api.minimaxi.com/v1',
-  },
-  qwen: {
-    anthropic: 'https://dashscope.aliyuncs.com/apps/anthropic',
-    openai: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  },
-  xiaomi: {
-    anthropic: 'https://api.xiaomimimo.com/anthropic',
-    openai: 'https://api.xiaomimimo.com/v1/chat/completions',
-  },
-  volcengine: {
-    anthropic: 'https://ark.cn-beijing.volces.com/api/compatible',
-    openai: 'https://ark.cn-beijing.volces.com/api/v3',
-  },
-  openrouter: {
-    anthropic: 'https://openrouter.ai/api',
-    openai: 'https://openrouter.ai/api/v1',
-  },
-  ollama: {
-    anthropic: 'http://localhost:11434',
-    openai: 'http://localhost:11434/v1',
-  },
-  custom: {
-    anthropic: '',
-    openai: '',
-  },
-};
-
-const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
-const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
-const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
-  value === 'openai' ? 'openai' : 'anthropic'
-);
-const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
-const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
-const ABOUT_SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
-
-const copyTextFallback = (text: string): boolean => {
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  textarea.style.pointerEvents = 'none';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  textarea.setSelectionRange(0, text.length);
-  const copied = document.execCommand('copy');
-  document.body.removeChild(textarea);
-  return copied;
-};
-
-const copyTextToClipboard = async (text: string): Promise<boolean> => {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch (clipboardError) {
-      console.warn('Navigator clipboard write failed, trying fallback:', clipboardError);
-    }
-  }
-
-  try {
-    return copyTextFallback(text);
-  } catch (fallbackError) {
-    console.error('Fallback clipboard copy failed:', fallbackError);
-    return false;
-  }
-};
-
-const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
-  if (provider === 'openai' || provider === 'gemini' || provider === 'stepfun') {
-    return 'openai';
-  }
-  if (provider === 'youdaozhiyun') {
-    return 'openai';
-  }
-  if (provider === 'anthropic') {
-    return 'anthropic';
-  }
-  return null;
-};
-const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' => (
-  getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value)
-);
-const shouldShowApiFormatSelector = (provider: string): boolean => (
-  getFixedApiFormatForProvider(provider) === null
-);
-const getProviderDefaultBaseUrl = (
-  provider: ProviderType,
-  apiFormat: 'anthropic' | 'openai'
-): string | null => {
-  const defaults = providerSwitchableDefaultBaseUrls[provider];
-  return defaults ? defaults[apiFormat] : null;
-};
-const resolveBaseUrl = (
-  provider: ProviderType,
-  baseUrl: string,
-  apiFormat: 'anthropic' | 'openai'
-): string => {
-  if (baseUrl.trim()) return baseUrl;
-  return getProviderDefaultBaseUrl(provider, apiFormat)
-    || defaultConfig.providers?.[provider]?.baseUrl
-    || '';
-};
-const shouldAutoSwitchProviderBaseUrl = (provider: ProviderType, currentBaseUrl: string): boolean => {
-  const defaults = providerSwitchableDefaultBaseUrls[provider];
-  if (!defaults) {
-    return false;
-  }
-
-  const normalizedCurrent = normalizeBaseUrl(currentBaseUrl);
-  return (
-    normalizedCurrent === normalizeBaseUrl(defaults.anthropic)
-    || normalizedCurrent === normalizeBaseUrl(defaults.openai)
-  );
-};
-const buildOpenAICompatibleChatCompletionsUrl = (baseUrl: string, provider: string): string => {
-  const normalized = baseUrl.trim().replace(/\/+$/, '');
-  if (!normalized) {
-    return '/v1/chat/completions';
-  }
-  if (normalized.endsWith('/chat/completions')) {
-    return normalized;
-  }
-
-  const isGeminiLike = provider === 'gemini' || normalized.includes('generativelanguage.googleapis.com');
-  if (isGeminiLike) {
-    if (normalized.endsWith('/v1beta/openai') || normalized.endsWith('/v1/openai')) {
-      return `${normalized}/chat/completions`;
-    }
-    if (normalized.endsWith('/v1beta') || normalized.endsWith('/v1')) {
-      const betaBase = normalized.endsWith('/v1')
-        ? `${normalized.slice(0, -3)}v1beta`
-        : normalized;
-      return `${betaBase}/openai/chat/completions`;
-    }
-    return `${normalized}/v1beta/openai/chat/completions`;
-  }
-
-  // Handle /v1, /v4 etc. versioned paths
-  if (/\/v\d+$/.test(normalized)) {
-    return `${normalized}/chat/completions`;
-  }
-  return `${normalized}/v1/chat/completions`;
-};
-const buildOpenAIResponsesUrl = (baseUrl: string): string => {
-  const normalized = baseUrl.trim().replace(/\/+$/, '');
-  if (!normalized) {
-    return '/v1/responses';
-  }
-  if (normalized.endsWith('/responses')) {
-    return normalized;
-  }
-  if (normalized.endsWith('/v1')) {
-    return `${normalized}/responses`;
-  }
-  return `${normalized}/v1/responses`;
-};
-const shouldUseOpenAIResponsesForProvider = (provider: string): boolean => (
-  provider === 'openai'
-);
-const shouldUseMaxCompletionTokensForOpenAI = (provider: string, modelId?: string): boolean => {
-  if (provider !== 'openai') {
-    return false;
-  }
-  const normalizedModel = (modelId ?? '').toLowerCase();
-  const resolvedModel = normalizedModel.includes('/')
-    ? normalizedModel.slice(normalizedModel.lastIndexOf('/') + 1)
-    : normalizedModel;
-  return resolvedModel.startsWith('gpt-5')
-    || resolvedModel.startsWith('o1')
-    || resolvedModel.startsWith('o3')
-    || resolvedModel.startsWith('o4');
-};
-const CONNECTIVITY_TEST_TOKEN_BUDGET = 64;
-
-const getDefaultProviders = (): ProvidersConfig => {
-  const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
-  const entries = Object.entries(providers) as Array<[string, ProviderConfig]>;
-  return Object.fromEntries(
-    entries.map(([providerKey, providerConfig]) => [
-      providerKey,
-      {
-        ...providerConfig,
-        models: providerConfig.models?.map(model => ({
-          ...model,
-          supportsImage: model.supportsImage ?? false,
-        })),
-      },
-    ])
-  ) as ProvidersConfig;
-};
-
-const getDefaultActiveProvider = (): ProviderType => {
-  const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
-  const firstEnabledProvider = providerKeys.find(providerKey => providers[providerKey]?.enabled);
-  return firstEnabledProvider ?? providerKeys[0];
-};
-
-/** Join workspace directory with a filename using platform-aware separator. */
-const joinWorkspacePath = (dir: string | undefined, filename: string): string => {
-  const base = dir?.trim() || '~/.openclaw/workspace';
-  const sep = window.electron.platform === 'win32' ? '\\' : '/';
-  // Normalize: if base already ends with a separator, don't double it
-  return base.endsWith(sep) || base.endsWith('/') || base.endsWith('\\')
-    ? `${base}${filename}`
-    : `${base}${sep}${filename}`;
-};
 
 const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
   const dispatch = useDispatch();
@@ -407,8 +101,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const emailCopiedTimerRef = useRef<number | null>(null);
-  const updateCheckTimerRef = useRef<number | null>(null);
   
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
@@ -426,109 +118,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [modelFormError, setModelFormError] = useState<string | null>(null);
 
-  // About tab
-  const [appVersion, setAppVersion] = useState('');
-  const [emailCopied, setEmailCopied] = useState(false);
-  const [isExportingLogs, setIsExportingLogs] = useState(false);
+  // About tab – testMode is managed here because it's saved to config
   const [testMode, setTestMode] = useState(false);
-  const [logoClickCount, setLogoClickCount] = useState(0);
-  const [testModeUnlocked, setTestModeUnlocked] = useState(false);
-  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error'>('idle');
-
-  useEffect(() => {
-    window.electron.appInfo.getVersion().then(setAppVersion);
-  }, []);
 
   useEffect(() => {
     setShowApiKey(false);
   }, [activeProvider]);
 
-  const handleCopyContactEmail = useCallback(async () => {
-    const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
-    if (copied) {
-      setEmailCopied(true);
-      if (emailCopiedTimerRef.current != null) {
-        window.clearTimeout(emailCopiedTimerRef.current);
-      }
-      emailCopiedTimerRef.current = window.setTimeout(() => {
-        setEmailCopied(false);
-        emailCopiedTimerRef.current = null;
-      }, 1200);
-    }
-  }, []);
-
-  const handleCheckUpdate = useCallback(async () => {
-    if (updateCheckStatus === 'checking' || !appVersion) return;
-    setUpdateCheckStatus('checking');
-    try {
-      const info = await checkForAppUpdate(appVersion, true);
-      if (info) {
-        setUpdateCheckStatus('idle');
-        onUpdateFound?.(info);
-      } else {
-        setUpdateCheckStatus('upToDate');
-        if (updateCheckTimerRef.current != null) {
-          window.clearTimeout(updateCheckTimerRef.current);
-        }
-        updateCheckTimerRef.current = window.setTimeout(() => {
-          setUpdateCheckStatus('idle');
-          updateCheckTimerRef.current = null;
-        }, 3000);
-      }
-    } catch {
-      setUpdateCheckStatus('error');
-      if (updateCheckTimerRef.current != null) {
-        window.clearTimeout(updateCheckTimerRef.current);
-      }
-      updateCheckTimerRef.current = window.setTimeout(() => {
-        setUpdateCheckStatus('idle');
-        updateCheckTimerRef.current = null;
-      }, 3000);
-    }
-  }, [appVersion, updateCheckStatus, onUpdateFound]);
-
-  const handleOpenUserManual = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
-  }, []);
-
-  const handleOpenServiceTerms = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_SERVICE_TERMS_URL);
-  }, []);
-
-  const handleExportLogs = useCallback(async () => {
-    if (isExportingLogs) {
-      return;
-    }
-
-    setError(null);
-    setNoticeMessage(null);
-    setIsExportingLogs(true);
-    try {
-      const result = await window.electron.log.exportZip();
-      if (!result.success) {
-        setError(result.error || i18nService.t('aboutExportLogsFailed'));
-        return;
-      }
-      if (result.canceled) {
-        return;
-      }
-
-      if (result.path) {
-        await window.electron.shell.showItemInFolder(result.path);
-      }
-
-      if ((result.missingEntries?.length ?? 0) > 0) {
-        const missingList = result.missingEntries?.join(', ') || '';
-        setNoticeMessage(`${i18nService.t('aboutExportLogsPartial')}: ${missingList}`);
-      } else {
-        setNoticeMessage(i18nService.t('aboutExportLogsSuccess'));
-      }
-    } catch (exportError) {
-      setError(exportError instanceof Error ? exportError.message : i18nService.t('aboutExportLogsFailed'));
-    } finally {
-      setIsExportingLogs(false);
-    }
-  }, [isExportingLogs]);
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
 
@@ -558,15 +154,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
 
-  useEffect(() => () => {
-    if (emailCopiedTimerRef.current != null) {
-      window.clearTimeout(emailCopiedTimerRef.current);
-    }
-    if (updateCheckTimerRef.current != null) {
-      window.clearTimeout(updateCheckTimerRef.current);
-    }
-  }, []);
-
   useEffect(() => {
     let active = true;
     void coworkService.getOpenClawEngineStatus().then((status) => {
@@ -595,7 +182,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       setUseSystemProxy(config.useSystemProxy ?? false);
       const savedTestMode = config.app?.testMode ?? false;
       setTestMode(savedTestMode);
-      if (savedTestMode) setTestModeUnlocked(true);
 
       // Load auto-launch setting
       window.electron.autoLaunch.get().then(({ enabled }) => {
@@ -2800,136 +2386,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
       case 'about':
         return (
-          <div className="flex min-h-full flex-col items-center pt-6 pb-3">
-            {/* Logo & App Name */}
-            <img
-              src="logo.png"
-              alt="LobsterAI"
-              className="w-16 h-16 mb-3 cursor-pointer select-none"
-              onClick={() => {
-                const next = logoClickCount + 1;
-                setLogoClickCount(next);
-                if (next >= 10 && !testModeUnlocked) {
-                  setTestModeUnlocked(true);
-                }
-              }}
-            />
-            <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
-            <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
-
-            {/* Info Card */}
-            <div className="w-full mt-8 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
-                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutVersion')}</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{appVersion}</span>
-                  <button
-                    type="button"
-                    disabled={updateCheckStatus === 'checking'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCheckUpdate();
-                    }}
-                    className="text-xs px-2 py-0.5 rounded-md border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent hover:border-claude-accent dark:hover:border-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {updateCheckStatus === 'checking' && i18nService.t('updateChecking')}
-                    {updateCheckStatus === 'upToDate' && i18nService.t('updateUpToDate')}
-                    {updateCheckStatus === 'error' && i18nService.t('updateCheckFailed')}
-                    {updateCheckStatus === 'idle' && i18nService.t('checkForUpdate')}
-                  </button>
-                </div>
-              </div>
-              <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
-                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutContactEmail')}</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCopyContactEmail();
-                    }}
-                    title={i18nService.t('copyToClipboard')}
-                    className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary bg-transparent border-none appearance-none p-0 m-0 cursor-pointer focus:outline-none"
-                  >
-                    {ABOUT_CONTACT_EMAIL}
-                  </button>
-                  {emailCopied && (
-                    <span className="text-[11px] leading-4 text-emerald-600 dark:text-emerald-400">
-                      {language === 'zh' ? '已复制' : 'Copied'}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className={`flex items-center justify-between px-4 py-3${testModeUnlocked ? ' border-b border-claude-border dark:border-claude-darkBorder' : ''}`}>
-                <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutUserManual')}</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenUserManual();
-                  }}
-                  className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
-                >
-                  {ABOUT_USER_MANUAL_URL}
-                </button>
-              </div>
-              {testModeUnlocked && (
-                <div className="flex items-center justify-between px-4 py-3">
-                  <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('testMode')}</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={testMode}
-                    onClick={() => setTestMode((prev) => !prev)}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-                      testMode ? 'bg-claude-accent' : 'bg-gray-300 dark:bg-gray-600'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        testMode ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="mt-auto w-full pt-14 pb-2 flex flex-col items-center">
-              <div className="flex items-center justify-center text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenServiceTerms();
-                  }}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                >
-                  {i18nService.t('aboutServiceTerms')}
-                </button>
-                <span className="mx-3 text-xs opacity-40">|</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleExportLogs();
-                  }}
-                  disabled={isExportingLogs}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-claude-accent dark:hover:text-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isExportingLogs ? i18nService.t('aboutExportingLogs') : i18nService.t('aboutExportLogs')}
-                </button>
-              </div>
-
-              <p className="mt-5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {language === 'zh' ? '网易有道 版权所有' : 'NetEase Youdao. All rights reserved.'}
-              </p>
-              <p className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                Copyright &copy; {new Date().getFullYear()} NetEase Youdao. All Rights Reserved.
-              </p>
-            </div>
-          </div>
+          <AboutTab
+            language={language}
+            testMode={testMode}
+            setTestMode={setTestMode}
+            setError={setError}
+            setNoticeMessage={setNoticeMessage}
+            onUpdateFound={onUpdateFound}
+          />
         );
 
       default:
