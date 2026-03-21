@@ -357,6 +357,10 @@ interface IElectronAPI {
     get: () => Promise<{ enabled: boolean }>;
     set: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   };
+  preventSleep: {
+    get: () => Promise<{ enabled: boolean }>;
+    set: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  };
   appInfo: {
     getVersion: () => Promise<string>;
     getSystemLocale: () => Promise<string>;

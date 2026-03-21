@@ -262,6 +262,10 @@ contextBridge.exposeInMainWorld('electron', {
     get: () => ipcRenderer.invoke('app:getAutoLaunch'),
     set: (enabled: boolean) => ipcRenderer.invoke('app:setAutoLaunch', enabled),
   },
+  preventSleep: {
+    get: () => ipcRenderer.invoke('app:getPreventSleep'),
+    set: (enabled: boolean) => ipcRenderer.invoke('app:setPreventSleep', enabled),
+  },
   appInfo: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
