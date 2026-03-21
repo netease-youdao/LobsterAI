@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { scheduledTaskService } from '../../services/scheduledTask';
+import { getNextCronExecutions } from './utils';
 import { i18nService } from '../../services/i18n';
 import type {
   ScheduledTask,
@@ -186,6 +187,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   ]);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const nextExecutions = useMemo(() => {
+    if (form.scheduleKind !== 'cron') return [];
+    return getNextCronExecutions(form.cronExpr, form.cronTz);
+  }, [form.scheduleKind, form.cronExpr, form.cronTz]);
 
   useEffect(() => {
     setForm(createFormState(task));
@@ -416,28 +422,47 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       )}
 
       {form.scheduleKind === 'cron' && (
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className={labelClass}>{i18nService.t('scheduledTasksFormCronExpression')}</label>
-            <input
-              type="text"
-              value={form.cronExpr}
-              onChange={(event) => updateForm({ cronExpr: event.target.value })}
-              className={inputClass}
-              placeholder={i18nService.t('scheduledTasksFormCronPlaceholder')}
-            />
+        <>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={labelClass}>{i18nService.t('scheduledTasksFormCronExpression')}</label>
+              <input
+                type="text"
+                value={form.cronExpr}
+                onChange={(event) => updateForm({ cronExpr: event.target.value })}
+                className={inputClass}
+                placeholder={i18nService.t('scheduledTasksFormCronPlaceholder')}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>{i18nService.t('scheduledTasksFormCronTimezone')}</label>
+              <input
+                type="text"
+                value={form.cronTz}
+                onChange={(event) => updateForm({ cronTz: event.target.value })}
+                className={inputClass}
+                placeholder={i18nService.t('scheduledTasksFormCronTimezonePlaceholder')}
+              />
+            </div>
           </div>
-          <div>
-            <label className={labelClass}>{i18nService.t('scheduledTasksFormCronTimezone')}</label>
-            <input
-              type="text"
-              value={form.cronTz}
-              onChange={(event) => updateForm({ cronTz: event.target.value })}
-              className={inputClass}
-              placeholder={i18nService.t('scheduledTasksFormCronTimezonePlaceholder')}
-            />
-          </div>
-        </div>
+          {nextExecutions.length > 0 && (
+            <div
+              key="cron-preview"
+              className="mt-3 px-3 py-2.5 rounded-lg bg-claude-surfaceMuted dark:bg-claude-darkSurfaceMuted animate-fade-in-up"
+            >
+              <p className="text-xs font-medium text-claude-textSecondary dark:text-claude-darkTextSecondary mb-1.5">
+                {i18nService.t('scheduledTasksFormCronNextRuns')}
+              </p>
+              <div className="space-y-0.5">
+                {nextExecutions.map((date, idx) => (
+                  <p key={idx} className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {date.toLocaleString()}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
       {errors.schedule && <p className={errorClass}>{errors.schedule}</p>}
 

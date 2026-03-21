@@ -1,3 +1,4 @@
+import { CronExpressionParser } from 'cron-parser';
 import { i18nService } from '../../services/i18n';
 import type {
   ScheduledTask,
@@ -139,6 +140,22 @@ function formatCronExpr(schedule: ScheduleCron): string {
 function fallbackCron(schedule: ScheduleCron): string {
   const tzLabel = schedule.tz ? ` (${schedule.tz})` : '';
   return `Cron · ${schedule.expr}${tzLabel}`;
+}
+
+/**
+ * Get the next N execution times for a cron expression with optional timezone.
+ * Returns an empty array if the cron expression is invalid or the timezone is invalid.
+ */
+export function getNextCronExecutions(cronExpr: string, cronTz?: string, count?: number): Date[] {
+  if (cronExpr.trim() === '') return [];
+  const tz = cronTz?.trim() || undefined;
+  try {
+    const interval = CronExpressionParser.parse(cronExpr, { tz });
+    const dates = interval.take(count ?? 5);
+    return dates.map((d) => d.toDate());
+  } catch {
+    return [];
+  }
 }
 
 export function formatScheduleLabel(schedule: Schedule): string {
