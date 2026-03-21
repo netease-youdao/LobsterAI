@@ -859,6 +859,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunchDescription: '系统启动时自动运行应用',
     useSystemProxy: '使用系统代理',
     useSystemProxyDescription: '开启后网络请求将跟随系统代理（保存后生效）',
+    preventSleep: '防止休眠',
+    preventSleepDescription: '防止系统在应用运行时进入睡眠模式',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -1904,6 +1906,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunchDescription: 'Automatically start the app when you log in',
     useSystemProxy: 'Use System Proxy',
     useSystemProxyDescription: 'When enabled, network requests follow system proxy settings (applies after Save)',
+    preventSleep: 'Prevent Sleep',
+    preventSleepDescription: 'Prevent the system from sleeping while the app is running',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',
