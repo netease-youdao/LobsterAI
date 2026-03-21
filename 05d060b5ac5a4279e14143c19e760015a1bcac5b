@@ -1,0 +1,25 @@
+src/renderer/types/electron.d.ts
+  36222f03dbf2ae19 359-361
+src/main/preload.ts
+  36222f03dbf2ae19 263-266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "05d060b5ac5a4279e14143c19e760015a1bcac5b",
+  "prompts": {
+    "36222f03dbf2ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebd67c3b-7a81-4593-bf03-cfdbb53671b8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 0,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}
