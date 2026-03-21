@@ -1,0 +1,37 @@
+src/main/libs/agentEngine/openclawRuntimeAdapter.ts
+  1f08da0a3efc2ec2 2147,2213,2236
+  927dd64db0ce9c9a 2148-2153,2170-2171,2229-2235,2238,2245,2264-2269,2271,2278,2668-2674,2679,2685
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "0e720ef3457f09cd6a1756123c6555366371caeb",
+  "prompts": {
+    "1f08da0a3efc2ec2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dda92475-2350-4c57-8c14-be46b9b633a3",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 3,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "927dd64db0ce9c9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f92135e6-bf13-479e-b0c0-b0839baf1dcf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 63,
+      "total_deletions": 35,
+      "accepted_lines": 34,
+      "overriden_lines": 0
+    }
+  }
+}
