@@ -1,0 +1,23 @@
+docs/superpowers/plans/2026-03-21-prevent-sleep.md
+  36222f03dbf2ae19 1-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "21a324177f330452c9dd784c116d65a5e83f564c",
+  "prompts": {
+    "36222f03dbf2ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebd67c3b-7a81-4593-bf03-cfdbb53671b8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 280,
+      "total_deletions": 0,
+      "accepted_lines": 280,
+      "overriden_lines": 0
+    }
+  }
+}
