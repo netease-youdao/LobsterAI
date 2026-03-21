@@ -13,11 +13,11 @@ import {
   ExclamationTriangleIcon,
   ChevronRightIcon,
   PhotoIcon,
+  PlusIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import ComposeIcon from '../icons/ComposeIcon';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
@@ -1877,8 +1877,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 type="button"
                 onClick={onNewChat}
                 className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                title={i18nService.t('newChat')}
               >
-                <ComposeIcon className="h-4 w-4" />
+                <PlusIcon className="h-4 w-4" />
               </button>
               {updateBadge}
             </div>
