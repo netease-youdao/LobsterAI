@@ -347,7 +347,15 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                 className="flex-1 min-w-0 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-2 py-1 text-sm font-medium dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent"
               />
             ) : (
-              <h3 className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
+              <h3
+                className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate"
+                onDoubleClick={(e) => {
+                  if (isBatchMode) return;
+                  e.stopPropagation();
+                  setIsRenaming(true);
+                  setRenameValue(session.title);
+                }}
+              >
                 {session.title}
               </h3>
             )}
