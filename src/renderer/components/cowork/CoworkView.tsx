@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
 import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
@@ -17,7 +17,7 @@ import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { QuickActionBar, PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
-import type { CoworkSession, CoworkImageAttachment, OpenClawEngineStatus } from '../../types/cowork';
+import type { CoworkSession, CoworkImageAttachment, CoworkMessage, OpenClawEngineStatus } from '../../types/cowork';
 
 export interface CoworkViewProps {
   onRequestAppSettings?: (options?: SettingsOpenOptions) => void;
@@ -153,6 +153,104 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       unsubscribeOpenClawStatus();
     };
   }, [dispatch]);
+
+  /**
+   * Execute a shell command entered via the "!" prefix shortcut.
+   * The command result is shown as a system message in the current session
+   * (or a new lightweight session when there is no active one), without
+   * involving the AI agent.
+   */
+  const handleShellCommand = useCallback(async (command: string): Promise<void> => {
+    const now = Date.now();
+    const cwd = config.workingDirectory || undefined;
+
+    // Build a user message so the command itself is visible in the chat
+    const userMessage: CoworkMessage = {
+      id: `shell-user-${now}`,
+      type: 'user',
+      content: `!${command}`,
+      timestamp: now,
+    };
+
+    // If there is no active session, create a temporary one so the output has
+    // somewhere to live.  We never persist it to the backend — it is purely
+    // in-memory for this command execution.
+    if (!currentSession) {
+      const tempSession: CoworkSession = {
+        id: `temp-shell-${now}`,
+        title: `!${command}`.slice(0, 50),
+        claudeSessionId: null,
+        status: 'idle',
+        pinned: false,
+        createdAt: now,
+        updatedAt: now,
+        cwd: cwd || '',
+        systemPrompt: '',
+        executionMode: config.executionMode || 'local',
+        activeSkillIds: [],
+        messages: [userMessage],
+      };
+      dispatch(setCurrentSession(tempSession));
+    } else {
+      dispatch(addMessage({ sessionId: currentSession.id, message: userMessage }));
+    }
+
+    // Execute the command via the main process
+    let result: { success: boolean; stdout: string; stderr: string; exitCode: number; error?: string };
+    try {
+      result = await window.electron.shell.exec({ command, cwd });
+    } catch (err) {
+      result = {
+        success: false,
+        stdout: '',
+        stderr: err instanceof Error ? err.message : String(err),
+        exitCode: 1,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    const sessionId = currentSession?.id ?? `temp-shell-${now}`;
+    const outputMessage: CoworkMessage = {
+      id: `shell-result-${now}`,
+      type: 'system',
+      content: [result.stdout, result.stderr].filter(Boolean).join('\n') || (result.success
+        ? i18nService.t('shellCommandNoOutput')
+        : (result.error ?? i18nService.t('shellCommandFailed'))),
+      timestamp: Date.now(),
+      metadata: {
+        shellCommand: command,
+        exitCode: result.exitCode,
+        isError: !result.success || result.exitCode !== 0,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      },
+    };
+    dispatch(addMessage({ sessionId, message: outputMessage }));
+  }, [config.workingDirectory, config.executionMode, currentSession, dispatch]);
+
+  /**
+   * Unified submit handler: intercepts the "!" shell shortcut before
+   * forwarding regular prompts to the appropriate session handler.
+   */
+  const handlePromptSubmit = useCallback(async (
+    prompt: string,
+    skillPrompt?: string,
+    imageAttachments?: CoworkImageAttachment[],
+  ): Promise<boolean | void> => {
+    const trimmed = prompt.trim();
+    if (trimmed.startsWith('!')) {
+      const command = trimmed.slice(1).trim();
+      if (command) {
+        await handleShellCommand(command);
+        return; // consumed — do not pass to AI
+      }
+    }
+    // Delegate to the appropriate session handler
+    if (currentSession) {
+      return handleContinueSession(prompt, skillPrompt, imageAttachments);
+    }
+    return handleStartSession(prompt, skillPrompt, imageAttachments);
+  }, [currentSession, handleShellCommand]);
 
   const handleStartSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]): Promise<boolean | void> => {
     if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
@@ -492,7 +590,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         {engineStatusBanner}
         <CoworkSessionDetail
           onManageSkills={() => onShowSkills?.()}
-          onContinue={handleContinueSession}
+          onContinue={handlePromptSubmit}
           onStop={handleStopSession}
           onNavigateHome={() => dispatch(clearCurrentSession())}
           isSidebarCollapsed={isSidebarCollapsed}
@@ -532,7 +630,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
             <div className="shadow-glow-accent rounded-2xl">
               <CoworkPromptInput
                 ref={promptInputRef}
-                onSubmit={handleStartSession}
+                onSubmit={handlePromptSubmit}
                 onStop={handleStopSession}
                 isStreaming={isStreaming}
                 disabled={!isEngineReady}

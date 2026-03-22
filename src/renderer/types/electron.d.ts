@@ -352,6 +352,13 @@ interface IElectronAPI {
     openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     showItemInFolder: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+    exec: (options: { command: string; cwd?: string }) => Promise<{
+      success: boolean;
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+      error?: string;
+    }>;
   };
   autoLaunch: {
     get: () => Promise<{ enabled: boolean }>;
