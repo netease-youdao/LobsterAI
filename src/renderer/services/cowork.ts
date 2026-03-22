@@ -284,7 +284,21 @@ class CoworkService {
       if (result.engineStatus) {
         this.notifyOpenClawStatus(result.engineStatus);
       }
-      if (result.code !== 'ENGINE_NOT_READY') {
+      if (result.code === 'ENGINE_NOT_READY') {
+        // Engine not ready: show a dedicated hint without changing session status,
+        // so the user can retry once the engine finishes starting.
+        if (result.error) {
+          store.dispatch(addMessage({
+            sessionId: options.sessionId,
+            message: {
+              id: `error-${Date.now()}`,
+              type: 'system',
+              content: i18nService.t('coworkErrorEngineNotReady'),
+              timestamp: Date.now(),
+            },
+          }));
+        }
+      } else {
         store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'error' }));
         if (result.error) {
           store.dispatch(addMessage({
@@ -292,26 +306,11 @@ class CoworkService {
             message: {
               id: `error-${Date.now()}`,
               type: 'system',
-              content: i18nService.t('coworkErrorSessionContinueFailed').replace('{error}', result.error),
+              content: classifyError(result.error),
               timestamp: Date.now(),
             },
           }));
         }
-      }
-      // Show a user-visible error message in the session
-      if (result.error) {
-        const errorContent = result.code === 'ENGINE_NOT_READY'
-          ? i18nService.t('coworkErrorEngineNotReady')
-          : classifyError(result.error);
-        store.dispatch(addMessage({
-          sessionId: options.sessionId,
-          message: {
-            id: `error-${Date.now()}`,
-            type: 'system',
-            content: errorContent,
-            timestamp: Date.now(),
-          },
-        }));
       }
       console.error('Failed to continue session:', result.error);
       return false;
