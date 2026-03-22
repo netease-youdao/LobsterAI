@@ -235,7 +235,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     }
     if (form.scheduleKind === 'at') {
       const runAtMs = Date.parse(form.scheduleAt);
-      if (!Number.isFinite(runAtMs) || runAtMs <= Date.now()) {
+      if (!Number.isFinite(runAtMs)) {
+        nextErrors.schedule = i18nService.t('scheduledTasksFormValidationDatetimeFuture');
+      } else if (mode === 'create' && runAtMs <= Date.now()) {
+        // Only enforce future-date constraint when creating a new task;
+        // editing an already-fired task should still allow saving other fields.
         nextErrors.schedule = i18nService.t('scheduledTasksFormValidationDatetimeFuture');
       }
     }
