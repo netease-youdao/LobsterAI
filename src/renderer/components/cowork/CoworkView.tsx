@@ -172,12 +172,15 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       timestamp: now,
     };
 
-    // If there is no active session, create a temporary one so the output has
-    // somewhere to live.  We never persist it to the backend — it is purely
-    // in-memory for this command execution.
+    // Determine (or create) the session that will hold the output.
+    // We capture sessionId here — before any async work — so that the
+    // result message lands in the same session regardless of React's
+    // asynchronous state-update cycle.
+    let sessionId: string;
     if (!currentSession) {
+      sessionId = `temp-shell-${now}`;
       const tempSession: CoworkSession = {
-        id: `temp-shell-${now}`,
+        id: sessionId,
         title: `!${command}`.slice(0, 50),
         claudeSessionId: null,
         status: 'idle',
@@ -192,7 +195,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       };
       dispatch(setCurrentSession(tempSession));
     } else {
-      dispatch(addMessage({ sessionId: currentSession.id, message: userMessage }));
+      sessionId = currentSession.id;
+      dispatch(addMessage({ sessionId, message: userMessage }));
     }
 
     // Execute the command via the main process
@@ -209,7 +213,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       };
     }
 
-    const sessionId = currentSession?.id ?? `temp-shell-${now}`;
     const outputMessage: CoworkMessage = {
       id: `shell-result-${now}`,
       type: 'system',
@@ -227,30 +230,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     };
     dispatch(addMessage({ sessionId, message: outputMessage }));
   }, [config.workingDirectory, config.executionMode, currentSession, dispatch]);
-
-  /**
-   * Unified submit handler: intercepts the "!" shell shortcut before
-   * forwarding regular prompts to the appropriate session handler.
-   */
-  const handlePromptSubmit = useCallback(async (
-    prompt: string,
-    skillPrompt?: string,
-    imageAttachments?: CoworkImageAttachment[],
-  ): Promise<boolean | void> => {
-    const trimmed = prompt.trim();
-    if (trimmed.startsWith('!')) {
-      const command = trimmed.slice(1).trim();
-      if (command) {
-        await handleShellCommand(command);
-        return; // consumed — do not pass to AI
-      }
-    }
-    // Delegate to the appropriate session handler
-    if (currentSession) {
-      return handleContinueSession(prompt, skillPrompt, imageAttachments);
-    }
-    return handleStartSession(prompt, skillPrompt, imageAttachments);
-  }, [currentSession, handleShellCommand]);
 
   const handleStartSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]): Promise<boolean | void> => {
     if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
@@ -426,6 +405,31 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       imageAttachments,
     });
   };
+
+  /**
+   * Unified submit handler: intercepts the "!" shell shortcut before
+   * forwarding regular prompts to the appropriate session handler.
+   * Defined after handleStartSession / handleContinueSession to avoid TDZ.
+   */
+  const handlePromptSubmit = useCallback(async (
+    prompt: string,
+    skillPrompt?: string,
+    imageAttachments?: CoworkImageAttachment[],
+  ): Promise<boolean | void> => {
+    const trimmed = prompt.trim();
+    if (trimmed.startsWith('!')) {
+      const command = trimmed.slice(1).trim();
+      if (command) {
+        await handleShellCommand(command);
+        return; // consumed — do not pass to AI
+      }
+    }
+    // Delegate to the appropriate session handler
+    if (currentSession) {
+      return handleContinueSession(prompt, skillPrompt, imageAttachments);
+    }
+    return handleStartSession(prompt, skillPrompt, imageAttachments);
+  }, [currentSession, handleShellCommand]); // handleStartSession / handleContinueSession are stable plain async fns
 
   const handleStopSession = async () => {
     if (!currentSession) return;
