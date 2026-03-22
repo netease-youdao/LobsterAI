@@ -2380,7 +2380,7 @@ if (!gotTheLock) {
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to export markdown',
+        error: error instanceof Error ? error.message : 'Failed to export session',
       };
     }
   });

@@ -460,16 +460,16 @@ class CoworkService {
   }): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> {
     const cowork = window.electron?.cowork;
     if (!cowork?.exportMarkdown) {
-      return { success: false, error: 'Cowork export markdown API not available' };
+      return { success: false, error: 'Cowork export session API not available' };
     }
 
     try {
       const result = await cowork.exportMarkdown(options);
-      return result ?? { success: false, error: 'Failed to export markdown' };
+      return result ?? { success: false, error: 'Failed to export session' };
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to export markdown',
+        error: error instanceof Error ? error.message : 'Failed to export session',
       };
     }
   }
