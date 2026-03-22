@@ -1,0 +1,23 @@
+src/main/im/imGatewayManager.ts
+  36222f03dbf2ae19 506-512,554-558,767-771,821-824,878-880,945-948,1477-1516,1589-1592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "00910106655cf3d07ec3646f47a5aa1325b55bdb",
+  "prompts": {
+    "36222f03dbf2ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebd67c3b-7a81-4593-bf03-cfdbb53671b8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 68,
+      "total_deletions": 3,
+      "accepted_lines": 72,
+      "overriden_lines": 0
+    }
+  }
+}
