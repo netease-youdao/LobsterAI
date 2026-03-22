@@ -302,9 +302,9 @@ contextBridge.exposeInMainWorld('electron', {
     getOpenClawConfigSchema: () => ipcRenderer.invoke('im:openclaw:config-schema'),
 
 
-    // Weixin QR login
-    weixinQrLoginStart: () => ipcRenderer.invoke('im:weixin:qr-login-start'),
-    weixinQrLoginWait: (accountId?: string) => ipcRenderer.invoke('im:weixin:qr-login-wait', accountId),
+    // Weixin QR login (direct ilink API)
+    weixinLoginStart: () => ipcRenderer.invoke('im:weixin:login:start'),
+    weixinLoginPoll: (qrcode: string) => ipcRenderer.invoke('im:weixin:login:poll', qrcode),
 
     // Pairing
     listPairingRequests: (platform: string) => ipcRenderer.invoke('im:pairing:list', platform),

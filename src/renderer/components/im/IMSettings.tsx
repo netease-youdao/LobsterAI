@@ -136,9 +136,13 @@ const IMSettings: React.FC = () => {
   const [wecomQuickSetupStatus, setWecomQuickSetupStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
   const [wecomQuickSetupError, setWecomQuickSetupError] = useState<string>('');
   // Weixin QR login state
-  const [weixinQrStatus, setWeixinQrStatus] = useState<'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'>('idle');
-  const [weixinQrUrl, setWeixinQrUrl] = useState<string>('');
+  const [weixinQrStatus, setWeixinQrStatus] = useState<'idle' | 'loading' | 'showing' | 'scaned' | 'success' | 'error'>('idle');
+  const [weixinQrcodeUrl, setWeixinQrcodeUrl] = useState<string>('');
+  const [weixinQrcode, setWeixinQrcode] = useState<string>('');
   const [weixinQrError, setWeixinQrError] = useState<string>('');
+  const [weixinQrTimeLeft, setWeixinQrTimeLeft] = useState<number>(0);
+  const weixinPollingRef = useRef(false);
+  const weixinCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [localIp, setLocalIp] = useState<string>('');
   const isMountedRef = useRef(true);
 
@@ -253,9 +257,13 @@ const IMSettings: React.FC = () => {
   // Reset weixin QR login state when switching away from weixin
   useEffect(() => {
     if (activePlatform !== 'weixin') {
+      weixinPollingRef.current = false;
+      if (weixinCountdownRef.current) { clearInterval(weixinCountdownRef.current); weixinCountdownRef.current = null; }
       setWeixinQrStatus('idle');
-      setWeixinQrUrl('');
+      setWeixinQrcodeUrl('');
+      setWeixinQrcode('');
       setWeixinQrError('');
+      setWeixinQrTimeLeft(0);
     }
   }, [activePlatform]);
 
@@ -481,42 +489,120 @@ const IMSettings: React.FC = () => {
     }
   };
 
-  const handleWeixinQrLogin = async () => {
+  const QR_EXPIRE_SECONDS = 300; // 5 minutes, matches ilink server TTL
+
+  const startWeixinCountdown = () => {
+    if (weixinCountdownRef.current) { clearInterval(weixinCountdownRef.current); }
+    setWeixinQrTimeLeft(QR_EXPIRE_SECONDS);
+    weixinCountdownRef.current = setInterval(() => {
+      setWeixinQrTimeLeft((prev) => {
+        if (prev <= 1) {
+          if (weixinCountdownRef.current) { clearInterval(weixinCountdownRef.current); weixinCountdownRef.current = null; }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const stopWeixinCountdown = () => {
+    if (weixinCountdownRef.current) { clearInterval(weixinCountdownRef.current); weixinCountdownRef.current = null; }
+    setWeixinQrTimeLeft(0);
+  };
+
+  const handleWeixinLogin = async () => {
     setWeixinQrStatus('loading');
     setWeixinQrError('');
+    weixinPollingRef.current = false;
+    stopWeixinCountdown();
+
     try {
-      const startResult = await window.electron.im.weixinQrLoginStart();
+      const startResult = await window.electron.im.weixinLoginStart();
       if (!isMountedRef.current) return;
 
-      if (!startResult.success || !startResult.qrDataUrl) {
+      if (!startResult.success || !startResult.qrcodeUrl || !startResult.qrcode) {
         setWeixinQrStatus('error');
         setWeixinQrError(startResult.message || i18nService.t('imWeixinQrFailed'));
         return;
       }
 
-      setWeixinQrUrl(startResult.qrDataUrl);
+      setWeixinQrcodeUrl(startResult.qrcodeUrl);
+      setWeixinQrcode(startResult.qrcode);
       setWeixinQrStatus('showing');
+      startWeixinCountdown();
 
-      // Start polling for scan result
-      setWeixinQrStatus('waiting');
-      const waitResult = await window.electron.im.weixinQrLoginWait(startResult.sessionKey);
-      if (!isMountedRef.current) return;
+      // Start polling
+      weixinPollingRef.current = true;
+      let currentQrcode = startResult.qrcode;
+      let refreshCount = 0;
+      const maxRefresh = 3;
 
-      if (waitResult.success && waitResult.connected) {
-        setWeixinQrStatus('success');
-        // Enable weixin and save config with accountId
-        const accountId = waitResult.accountId || '';
-        const fullConfig = { ...weixinOpenClawConfig, enabled: true, accountId };
-        dispatch(setWeixinConfig({ enabled: true, accountId }));
-        dispatch(clearError());
-        await imService.updateConfig({ weixin: fullConfig });
-        await imService.loadStatus();
-      } else {
-        setWeixinQrStatus('error');
-        setWeixinQrError(waitResult.message || i18nService.t('imWeixinQrFailed'));
+      while (weixinPollingRef.current && isMountedRef.current) {
+        const pollResult = await window.electron.im.weixinLoginPoll(currentQrcode);
+        if (!isMountedRef.current || !weixinPollingRef.current) return;
+
+        if (!pollResult.success) {
+          stopWeixinCountdown();
+          setWeixinQrStatus('error');
+          setWeixinQrError(pollResult.message || i18nService.t('imWeixinQrFailed'));
+          return;
+        }
+
+        switch (pollResult.status) {
+          case 'wait':
+            break;
+          case 'scaned':
+            setWeixinQrStatus('scaned');
+            stopWeixinCountdown();
+            break;
+          case 'expired': {
+            refreshCount++;
+            if (refreshCount > maxRefresh) {
+              stopWeixinCountdown();
+              setWeixinQrStatus('error');
+              setWeixinQrError(i18nService.t('imWeixinQrExpired'));
+              weixinPollingRef.current = false;
+              return;
+            }
+            // Auto-refresh QR code
+            stopWeixinCountdown();
+            setWeixinQrStatus('loading');
+            const refreshResult = await window.electron.im.weixinLoginStart();
+            if (!isMountedRef.current || !weixinPollingRef.current) return;
+            if (!refreshResult.success || !refreshResult.qrcodeUrl || !refreshResult.qrcode) {
+              setWeixinQrStatus('error');
+              setWeixinQrError(refreshResult.message || i18nService.t('imWeixinQrFailed'));
+              weixinPollingRef.current = false;
+              return;
+            }
+            currentQrcode = refreshResult.qrcode;
+            setWeixinQrcodeUrl(refreshResult.qrcodeUrl);
+            setWeixinQrcode(refreshResult.qrcode);
+            setWeixinQrStatus('showing');
+            startWeixinCountdown();
+            break;
+          }
+          case 'confirmed': {
+            weixinPollingRef.current = false;
+            stopWeixinCountdown();
+            setWeixinQrStatus('success');
+            const accountId = pollResult.accountId || '';
+            const fullConfig = { ...weixinOpenClawConfig, enabled: true, accountId };
+            dispatch(setWeixinConfig({ enabled: true, accountId }));
+            dispatch(clearError());
+            await imService.updateConfig({ weixin: fullConfig });
+            await imService.loadStatus();
+            return;
+          }
+        }
+
+        // Wait 2 seconds before next poll
+        await new Promise((r) => setTimeout(r, 2000));
       }
     } catch (err) {
       if (!isMountedRef.current) return;
+      weixinPollingRef.current = false;
+      stopWeixinCountdown();
       setWeixinQrStatus('error');
       setWeixinQrError(String(err));
     }
@@ -2976,7 +3062,7 @@ const IMSettings: React.FC = () => {
                 <>
                   <button
                     type="button"
-                    onClick={() => void handleWeixinQrLogin()}
+                    onClick={() => void handleWeixinLogin()}
                     className="px-4 py-2.5 rounded-lg text-sm font-medium bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {i18nService.t('imWeixinScanBtn')}
@@ -3000,16 +3086,23 @@ const IMSettings: React.FC = () => {
                   </span>
                 </div>
               )}
-              {(weixinQrStatus === 'showing' || weixinQrStatus === 'waiting') && weixinQrUrl && (
+              {(weixinQrStatus === 'showing' || weixinQrStatus === 'scaned') && weixinQrcodeUrl && (
                 <div className="space-y-3">
                   <p className="text-sm font-medium dark:text-claude-darkText text-claude-text">
-                    {i18nService.t('imWeixinQrScanPrompt')}
+                    {weixinQrStatus === 'scaned'
+                      ? i18nService.t('imWeixinQrWaiting')
+                      : i18nService.t('imWeixinQrScanPrompt')}
                   </p>
                   <div className="flex justify-center">
                     <div className="p-3 bg-white rounded-lg border dark:border-claude-darkBorder/40 border-claude-border/40">
-                      <QRCodeSVG value={weixinQrUrl} size={192} />
+                      <QRCodeSVG value={weixinQrcodeUrl} size={192} />
                     </div>
                   </div>
+                  {weixinQrStatus === 'showing' && weixinQrTimeLeft > 0 && (
+                    <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                      {weixinQrTimeLeft}s
+                    </p>
+                  )}
                 </div>
               )}
               {weixinQrStatus === 'success' && (

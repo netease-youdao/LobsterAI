@@ -25,6 +25,7 @@ import {
   rejectPairingRequest,
   readAllowFromStore,
 } from './im/imPairingStore';
+import { fetchWeixinQrCode, pollWeixinQrStatus, saveWeixinAccountToOpenClaw } from './im/weixinLogin';
 import { OpenClawConfigSync } from './libs/openclawConfigSync';
 import {
   resolveMemoryFilePath,
@@ -2959,28 +2960,39 @@ if (!gotTheLock) {
     }
   });
 
-  // Weixin QR login
-  ipcMain.handle('im:weixin:qr-login-start', async () => {
+  // Weixin QR login (direct ilink API, no OpenClaw Gateway dependency)
+  ipcMain.handle('im:weixin:login:start', async () => {
     try {
-      const result = await getIMGatewayManager().weixinQrLoginStart();
-      return { success: true, ...result };
+      const result = await fetchWeixinQrCode();
+      return { success: true, qrcode: result.qrcode, qrcodeUrl: result.qrcodeUrl };
     } catch (error) {
-      return { success: false, message: error instanceof Error ? error.message : 'Failed to start Weixin QR login' };
+      return { success: false, message: error instanceof Error ? error.message : 'Failed to fetch WeChat QR code' };
     }
   });
 
-  ipcMain.handle('im:weixin:qr-login-wait', async (_event, accountId?: string) => {
+  ipcMain.handle('im:weixin:login:poll', async (_event, qrcode: string) => {
     try {
-      const result = await getIMGatewayManager().weixinQrLoginWait(accountId);
-      if (result.connected) {
+      const result = await pollWeixinQrStatus(qrcode);
+      if (result.status === 'confirmed' && result.accountId) {
+        // Save account credentials to OpenClaw state directory so the weixin
+        // plugin can authenticate after gateway restart.
+        const stateDir = getOpenClawEngineManager().getStateDir();
+        saveWeixinAccountToOpenClaw(stateDir, result.accountId, {
+          token: result.botToken,
+          baseUrl: result.baseUrl,
+          userId: result.userId,
+        });
+
         // Restart gateway so the plugin picks up the new token and starts
         // a fresh monitor loop (the old one may be stuck in a session pause).
-        console.log('[IMGatewayManager] Weixin login succeeded, restarting OpenClaw gateway');
-        await getOpenClawEngineManager().restartGateway();
+        console.log('[WeixinLogin] login confirmed, restarting OpenClaw gateway');
+        getOpenClawEngineManager().restartGateway().catch((err: unknown) => {
+          console.error('[WeixinLogin] failed to restart gateway after login:', err);
+        });
       }
       return { success: true, ...result };
     } catch (error) {
-      return { success: false, connected: false, message: error instanceof Error ? error.message : 'Weixin QR login failed' };
+      return { success: false, status: 'wait' as const, message: error instanceof Error ? error.message : 'Failed to poll QR status' };
     }
   });
 
