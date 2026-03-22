@@ -1,0 +1,23 @@
+src/main/im/types.ts
+  36222f03dbf2ae19 280-297,300,312,331,572-579,595,669-676,694
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "75b799c2e7de6a404cb6bc4b7cca7762d13262e1",
+  "prompts": {
+    "36222f03dbf2ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebd67c3b-7a81-4593-bf03-cfdbb53671b8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 50,
+      "total_deletions": 1,
+      "accepted_lines": 50,
+      "overriden_lines": 0
+    }
+  }
+}
