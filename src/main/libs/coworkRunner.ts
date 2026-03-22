@@ -5,11 +5,13 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import type { CoworkStore, CoworkMessage, CoworkExecutionMode } from '../coworkStore';
+import type { CoworkStore, CoworkMessage, CoworkExecutionMode, CoworkAgentRecord } from '../coworkStore';
 import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
+import { getCoworkStore } from '../coworkStore';
+import { spawnSubagent, subagentRegistry } from './agentOrchestrator';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { isDeleteCommand, isDangerousCommand } from './commandSafety';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
@@ -2105,6 +2107,83 @@ export class CoworkRunner extends EventEmitter {
           tools: memoryTools,
         }),
       };
+
+      // --- spawn_subagent + list_subagents orchestration tools (yd_cowork only) ---
+      const { agents: allAgents } = getCoworkStore().getAgents();
+      const currentSession = this.store.getSession(sessionId);
+      const currentAgentId = currentSession?.agentId || '';
+      const teamAgents = allAgents.filter((a: CoworkAgentRecord) => a.id !== currentAgentId);
+      if (teamAgents.length > 0) {
+        const orchServerName = `orchestration-${sessionId.slice(0, 8)}`;
+        const agentListDescription = teamAgents
+          .map((a: CoworkAgentRecord) => `  - "${a.id}": ${a.name}`)
+          .join('\n');
+
+        const spawnTool = tool(
+          'spawn_subagent',
+          `异步派发子 Agent 完成独立任务。子 Agent 完成后会自动将结果作为用户消息发回，无需轮询。\n如需查看可用 Agent 列表，请先调用 list_available_agents。\n\n当前可用 Agent：\n${agentListDescription}`,
+          {
+            agent_id: z.string().describe('目标 Agent 的 ID'),
+            task: z.string().describe('给目标 Agent 的完整任务描述'),
+          },
+          (args: { agent_id: string; task: string }) => {
+            const currentDepth = (activeSession as any)._orchestrationDepth ?? 0;
+            const result = spawnSubagent({
+              agentId: args.agent_id,
+              task: args.task,
+              depth: currentDepth + 1,
+              parentSessionId: sessionId,
+              runner: this,
+            });
+            return {
+              content: [{ type: 'text', text: JSON.stringify(result) }],
+            } as any;
+          }
+        );
+
+        const listTool = tool(
+          'list_subagents',
+          '列出当前 session 中所有已派发的子 Agent 运行状态（已派发的任务进度）。',
+          {},
+          (_args: Record<string, never>) => {
+            const runs = subagentRegistry.listByParent(sessionId).map(r => ({
+              run_id: r.runId,
+              agent_name: r.agentName,
+              status: r.status,
+              spawned_at: new Date(r.spawnedAt).toISOString(),
+              ended_at: r.endedAt ? new Date(r.endedAt).toISOString() : undefined,
+            }));
+            return {
+              content: [{ type: 'text', text: JSON.stringify(runs) }],
+            } as any;
+          }
+        );
+
+        const availableTool = tool(
+          'list_available_agents',
+          '列出当前团队中所有可被调度的子 Agent（可用于 spawn_subagent 的目标）。',
+          {},
+          (_args: Record<string, never>) => {
+            const list = teamAgents.map((a: CoworkAgentRecord) => ({
+              id: a.id,
+              name: a.name,
+              description: a.systemPrompt?.split('\n')[0]?.replace(/^#+ /, '') || a.name,
+            }));
+            return {
+              content: [{ type: 'text', text: JSON.stringify(list) }],
+            } as any;
+          }
+        );
+
+        options.mcpServers = {
+          ...(options.mcpServers as Record<string, unknown>),
+          [orchServerName]: createSdkMcpServer({
+            name: orchServerName,
+            tools: [spawnTool, listTool, availableTool],
+          }),
+        };
+      }
+
       let userMcpServerCount = 0;
 
       // Inject user-configured MCP servers (local mode only)
@@ -3274,5 +3353,43 @@ export class CoworkRunner extends EventEmitter {
         console.error(`Failed to stop session ${sessionId}:`, error);
       }
     }
+  }
+
+  /**
+   * Inject a synthetic "User" message into a running session.
+   * Used by the async sub-agent system to announce completion back to the
+   * parent agent so it can continue processing the result.
+   */
+  async injectAnnounce(sessionId: string, agentName: string, text: string, isError = false): Promise<void> {
+    const prefix = isError ? `[${agentName} 失败]` : `[${agentName} 已完成]`;
+    const announcement = `${prefix}\n\n${text}`;
+
+    // Persist to SQLite so the history is visible in the UI
+    const store = this.store;
+    const msg = store.addMessage(sessionId, {
+      type: 'user',
+      content: announcement,
+      metadata: { isOrchAnnounce: true },
+    });
+
+    // Emit UI event so the renderer renders the injected message immediately
+    this.emit('messageAdded', sessionId, msg);
+
+    // Now drive the parent agent to continue with this message
+    await this.continueSession(sessionId, announcement);
+  }
+
+  /**
+   * Inject a one-line system log into a session's message stream.
+   * These appear as tool-use / system bubbles in the UI (not counted as
+   * conversation turns — no LLM follow-up triggered).
+   */
+  injectSystemLog(sessionId: string, text: string): void {
+    const msg = this.store.addMessage(sessionId, {
+      type: 'system',
+      content: text,
+      metadata: { isOrchLog: true },
+    });
+    this.emit('message', sessionId, msg);
   }
 }

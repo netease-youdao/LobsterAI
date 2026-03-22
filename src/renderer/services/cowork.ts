@@ -118,8 +118,8 @@ class CoworkService {
     this.streamListenerCleanups.push(messageCleanup);
 
     // Message update listener (for streaming content updates)
-    const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content }) => {
-      store.dispatch(updateMessageContent({ sessionId, messageId, content }));
+    const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content, metadata }) => {
+      store.dispatch(updateMessageContent({ sessionId, messageId, content, metadata }));
     });
     this.streamListenerCleanups.push(messageUpdateCleanup);
 

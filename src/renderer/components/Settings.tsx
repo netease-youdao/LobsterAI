@@ -657,7 +657,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [localActiveAgentId, setLocalActiveAgentId] = useState<string>('main');
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentConfig | null>(null);
-  const [agentSaveStatus, setAgentSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [agentDeletePendingConfirm, setAgentDeletePendingConfirm] = useState(false);
 
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
@@ -1389,16 +1389,38 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }
   }, [activeTab, bootstrapLoaded]);
 
-  // Load agents from store when switching to coworkAgent tab
+  // Load agents from DB when switching to coworkAgent tab (always fetch fresh)
   useEffect(() => {
     if (activeTab !== 'coworkAgent') return;
-    const agents = agentsFromStore.length > 0 ? agentsFromStore : [];
-    setLocalAgents(agents);
-    setLocalActiveAgentId(activeAgentIdFromStore);
-    if (agents.length > 0 && !selectedAgentId) {
-      setSelectedAgentId(activeAgentIdFromStore || agents[0].id);
-      setAgentDraft(agents.find(a => a.id === (activeAgentIdFromStore || agents[0].id)) || agents[0]);
-    }
+    const loadAgents = async () => {
+      try {
+        const result = await window.electron?.cowork?.getAgents();
+        if (result?.success && Array.isArray(result.agents) && result.agents.length > 0) {
+          const agents = result.agents as AgentConfig[];
+          const activeId = result.activeAgentId || agents[0].id;
+          // Sync Redux store so other parts of the app are up-to-date
+          dispatch(setAgentsAction({ agents, activeAgentId: activeId }));
+          setLocalAgents(agents);
+          setLocalActiveAgentId(activeId);
+          if (!selectedAgentId) {
+            setSelectedAgentId(activeId);
+            setAgentDraft(agents.find(a => a.id === activeId) || agents[0]);
+          }
+          return;
+        }
+      } catch {
+        // fall through to Redux fallback
+      }
+      // Fallback: use Redux store
+      const agents = agentsFromStore.length > 0 ? agentsFromStore : [];
+      setLocalAgents(agents);
+      setLocalActiveAgentId(activeAgentIdFromStore);
+      if (agents.length > 0 && !selectedAgentId) {
+        setSelectedAgentId(activeAgentIdFromStore || agents[0].id);
+        setAgentDraft(agents.find(a => a.id === (activeAgentIdFromStore || agents[0].id)) || agents[0]);
+      }
+    };
+    void loadAgents();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
@@ -1578,6 +1600,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         if (!updated) {
           throw new Error(i18nService.t('coworkConfigSaveFailed'));
         }
+      }
+
+      // Save agent draft changes (tab-based editor — changes committed on global Save)
+      if (agentDraft) {
+        const updatedAgents = localAgents.map(a => a.id === agentDraft.id ? { ...agentDraft } : a);
+        await coworkService.saveAgents(updatedAgents, localActiveAgentId);
+        dispatch(setAgentsAction({ agents: updatedAgents, activeAgentId: localActiveAgentId }));
       }
 
       // Save bootstrap files (IDENTITY.md, USER.md, SOUL.md) only if loaded
@@ -3405,7 +3434,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         const handleSelectAgent = (agent: AgentConfig) => {
           setSelectedAgentId(agent.id);
           setAgentDraft({ ...agent });
-          setAgentSaveStatus('idle');
+          setAgentDeletePendingConfirm(false);
         };
 
         const handleAddAgent = () => {
@@ -3418,17 +3447,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             executionMode: 'local' as CoworkExecutionMode,
             identity: '',
             soul: '',
+            user: '',
           };
           const updated = [...localAgents, newAgent];
           setLocalAgents(updated);
           setSelectedAgentId(newId);
           setAgentDraft({ ...newAgent });
-          setAgentSaveStatus('idle');
         };
 
         const handleDeleteAgent = async () => {
           if (!agentDraft || localAgents.length <= 1) return;
-          if (!window.confirm(i18nService.t('agentDeleteConfirm'))) return;
+          // window.confirm is disabled in Electron renderer; use a state-based confirm instead
+          if (!agentDeletePendingConfirm) {
+            setAgentDeletePendingConfirm(true);
+            return;
+          }
+          setAgentDeletePendingConfirm(false);
           const updated = localAgents.filter(a => a.id !== agentDraft.id);
           const newActiveId = localActiveAgentId === agentDraft.id ? updated[0]?.id || '' : localActiveAgentId;
           setLocalAgents(updated);
@@ -3439,22 +3473,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             await coworkService.saveAgents(updated, newActiveId);
             dispatch(setAgentsAction({ agents: updated, activeAgentId: newActiveId }));
           } catch {
-            setError(i18nService.t('agentSaveFailed'));
-          }
-        };
-
-        const handleSaveAgent = async () => {
-          if (!agentDraft) return;
-          setAgentSaveStatus('saving');
-          const updated = localAgents.map(a => a.id === agentDraft.id ? { ...agentDraft } : a);
-          setLocalAgents(updated);
-          try {
-            await coworkService.saveAgents(updated, localActiveAgentId);
-            dispatch(setAgentsAction({ agents: updated, activeAgentId: localActiveAgentId }));
-            setAgentSaveStatus('saved');
-            setTimeout(() => setAgentSaveStatus('idle'), 2000);
-          } catch {
-            setAgentSaveStatus('error');
             setError(i18nService.t('agentSaveFailed'));
           }
         };
@@ -3479,49 +3497,255 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         };
 
         return (
-          <div className="space-y-6">
-            {/* Agent Settings (IDENTITY.md + SOUL.md) */}
-            <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
-              <div className="text-sm font-medium text-foreground">
-                {i18nService.t('coworkBootstrapAgentSectionTitle')}
-              </div>
-              {[
-                { filename: 'IDENTITY.md', titleKey: 'coworkBootstrapIdentityTitle', hintKey: 'coworkBootstrapIdentityHint', value: bootstrapIdentity, setter: setBootstrapIdentity },
-                { filename: 'SOUL.md', titleKey: 'coworkBootstrapSoulTitle', hintKey: 'coworkBootstrapSoulHint', value: bootstrapSoul, setter: setBootstrapSoul },
-              ].map(({ filename, titleKey, hintKey, value, setter }) => (
-                <div key={filename} className="space-y-2">
-                  <div className="text-xs font-medium text-secondary">
-                    {i18nService.t(titleKey)}
-                    <span className="ml-1.5 font-normal opacity-60">
-                      （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, filename)}</span>）
-                    </span>
-                  </div>
-                  <textarea
-                    value={value}
-                    onChange={(e) => setter(e.target.value)}
-                    rows={3}
-                    className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface text-foreground resize-y"
-                    placeholder={i18nService.t(hintKey)}
-                  />
-                </div>
-              ))}
+          <div className="flex flex-col">
+
+            {/* Top: Tab bar */}
+            <div className="flex items-center gap-0.5 border-b dark:border-claude-darkBorder border-claude-border shrink-0 px-1 pt-1">
+              {localAgents.map(agent => {
+                const isSelected = selectedAgentId === agent.id;
+                const isActive = agent.id === localActiveAgentId;
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => handleSelectAgent(agent)}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-lg border-b-2 -mb-px transition-colors whitespace-nowrap ${
+                      isSelected
+                        ? 'border-claude-accent dark:text-claude-darkText text-claude-text font-medium'
+                        : 'border-transparent dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                    }`}
+                  >
+                    <span className="max-w-[80px] truncate">{agent.name || i18nService.t('agentNewDefaultName')}</span>
+                    {isActive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" title={i18nService.t('agentActiveLabel')} />
+                    )}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={handleAddAgent}
+                title={i18nService.t('agentAddNew')}
+                className="flex items-center px-2 py-2 ml-1 border-b-2 border-transparent dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
+              >
+                <PlusCircleIcon className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* User Profile (USER.md) */}
-            <div className="space-y-3 rounded-xl border px-4 py-4 border-border">
-              <div className="text-sm font-medium text-foreground">
-                {i18nService.t('coworkBootstrapUserTitle')}
-                <span className="ml-1.5 text-xs font-normal opacity-60 text-secondary">
-                  （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, 'USER.md')}</span>）
-                </span>
-              </div>
-              <textarea
-                value={bootstrapUser}
-                onChange={(e) => setBootstrapUser(e.target.value)}
-                rows={3}
-                className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface text-foreground resize-y"
-                placeholder={i18nService.t('coworkBootstrapUserHint')}
-              />
+            {/* Content: Agent editor */}
+            <div className="pt-5">
+              {agentDraft ? (
+                <div className="space-y-5">
+
+                  {/* Name */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('agentNameLabel')}
+                    </span>
+                    <input
+                      type="text"
+                      value={agentDraft.name}
+                      onChange={e => setAgentDraft({ ...agentDraft, name: e.target.value })}
+                      placeholder={i18nService.t('agentNamePlaceholder')}
+                      className="w-60 rounded-lg border px-3 py-1.5 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text"
+                    />
+                  </div>
+
+                  {/* Working Directory */}
+                  <div className="space-y-1.5">
+                    <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('agentWorkDirLabel')}
+                    </span>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={agentDraft.workingDirectory}
+                        onChange={e => setAgentDraft({ ...agentDraft, workingDirectory: e.target.value })}
+                        placeholder={i18nService.t('agentWorkDirPlaceholder')}
+                        className="flex-1 min-w-0 rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handlePickWorkDir()}
+                        className="px-3 py-2 text-sm rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent dark:hover:text-claude-accent hover:border-claude-accent dark:hover:border-claude-accent transition-colors flex-shrink-0"
+                      >
+                        {i18nService.t('browse')}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Execution Mode */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('agentExecutionModeLabel')}
+                    </span>
+                    <div className="w-60 shrink-0">
+                      <ThemedSelect
+                        id={`agent-exec-mode-${agentDraft.id}`}
+                        value={agentDraft.executionMode}
+                        onChange={v => setAgentDraft({ ...agentDraft, executionMode: v as CoworkExecutionMode })}
+                        className="py-1.5 px-3"
+                        options={[
+                          { value: 'local', label: i18nService.t('coworkExecutionModeLocal') },
+                          { value: 'auto', label: i18nService.t('coworkExecutionModeAuto') },
+                          { value: 'sandbox', label: i18nService.t('coworkExecutionModeSandbox') },
+                        ]}
+                      />
+                    </div>
+                  </div>
+
+                  {/* System Prompt */}
+                  <div className="space-y-1.5">
+                    <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('agentSystemPromptLabel')}
+                    </span>
+                    <textarea
+                      value={agentDraft.systemPrompt}
+                      onChange={e => setAgentDraft({ ...agentDraft, systemPrompt: e.target.value })}
+                      rows={5}
+                      placeholder={i18nService.t('agentSystemPromptPlaceholder')}
+                      className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
+                    />
+                  </div>
+
+                  {/* IDENTITY.md */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                        {i18nService.t('agentIdentityLabel')}
+                      </span>
+                      {agentDraft.workingDirectory && (
+                        <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                          {i18nService.t('agentStoragePath')}{joinWorkspacePath(agentDraft.workingDirectory, 'IDENTITY.md')}
+                        </span>
+                      )}
+                    </div>
+                    <textarea
+                      value={agentDraft.identity}
+                      onChange={e => setAgentDraft({ ...agentDraft, identity: e.target.value })}
+                      rows={4}
+                      placeholder={i18nService.t('agentIdentityHint')}
+                      className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y font-mono"
+                    />
+                  </div>
+
+                  {/* SOUL.md */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                        {i18nService.t('agentSoulLabel')}
+                      </span>
+                      {agentDraft.workingDirectory && (
+                        <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                          {i18nService.t('agentStoragePath')}{joinWorkspacePath(agentDraft.workingDirectory, 'SOUL.md')}
+                        </span>
+                      )}
+                    </div>
+                    <textarea
+                      value={agentDraft.soul}
+                      onChange={e => setAgentDraft({ ...agentDraft, soul: e.target.value })}
+                      rows={4}
+                      placeholder={i18nService.t('agentSoulHint')}
+                      className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y font-mono"
+                    />
+                  </div>
+
+                  {/* USER.md */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                        {i18nService.t('agentUserLabel')}
+                      </span>
+                      {agentDraft.workingDirectory && (
+                        <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                          {i18nService.t('agentStoragePath')}{joinWorkspacePath(agentDraft.workingDirectory, 'USER.md')}
+                        </span>
+                      )}
+                    </div>
+                    <textarea
+                      value={agentDraft.user}
+                      onChange={e => setAgentDraft({ ...agentDraft, user: e.target.value })}
+                      rows={4}
+                      placeholder={i18nService.t('agentUserHint')}
+                      className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
+                    />
+                  </div>
+
+                  {/* Invocable toggle */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                        {i18nService.t('agentInvocableLabel')}
+                      </span>
+                      <p className="mt-0.5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                        {i18nService.t('agentInvocableHint')}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={agentDraft.invocable !== false}
+                      onClick={() => setAgentDraft({ ...agentDraft, invocable: agentDraft.invocable === false ? true : false })}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${agentDraft.invocable !== false ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'}`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${agentDraft.invocable !== false ? 'translate-x-5' : 'translate-x-0'}`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Agent actions */}
+                  <div className="flex items-center gap-3 pt-1 pb-4">
+                    {agentDraft.id !== localActiveAgentId ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleSetActive()}
+                        className="px-3 py-1.5 text-sm rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text hover:border-claude-accent hover:text-claude-accent dark:hover:border-claude-accent dark:hover:text-claude-accent transition-colors"
+                      >
+                        {i18nService.t('agentSetActive')}
+                      </button>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                        {i18nService.t('agentActiveLabel')}
+                      </span>
+                    )}
+                    {localAgents.length > 1 && (
+                      agentDeletePendingConfirm ? (
+                        <div className="ml-auto flex items-center gap-2">
+                          <span className="text-xs text-red-500">{i18nService.t('agentDeleteConfirm')}</span>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteAgent()}
+                            className="px-3 py-1.5 text-sm rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors"
+                          >
+                            {i18nService.t('agentDeleteBtn')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAgentDeletePendingConfirm(false)}
+                            className="px-3 py-1.5 text-sm rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText transition-colors"
+                          >
+                            {i18nService.t('cancel')}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteAgent()}
+                          className="ml-auto px-3 py-1.5 text-sm rounded-lg text-red-500 hover:bg-red-500/10 transition-colors"
+                        >
+                          {i18nService.t('agentDeleteBtn')}
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex h-40 items-center justify-center text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('agentSelectToEdit')}
+                </div>
+              )}
             </div>
           </div>
         );
@@ -3781,7 +4005,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             {/* Tab content */}
             <div
               ref={contentRef}
-              className="px-6 py-4 flex-1 overflow-y-auto"
+              className="px-6 py-4 flex-1 overflow-y-auto overflow-x-hidden"
               style={{ scrollbarGutter: 'stable' }}
             >
               {renderTabContent()}

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
-import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
+import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus, setActiveAgentId } from '../../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
 import { setActions, selectAction, clearSelection } from '../../store/slices/quickActionSlice';
 import { coworkService } from '../../services/cowork';
@@ -51,14 +51,16 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   } = useSelector((state: RootState) => state.cowork);
   const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
 
-  // For multi-agent: local selected agent (defaults to active agent)
-  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
-  // Sync selectedAgentId with activeAgentId when agents load
+  // For multi-agent: local selected agent (defaults to active agent from Redux)
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(() => activeAgentId || '');
+  // Keep in sync when activeAgentId changes externally (e.g. settings save)
+  const prevActiveAgentIdRef = useRef(activeAgentId);
   useEffect(() => {
-    if (activeAgentId && !selectedAgentId) {
+    if (activeAgentId && activeAgentId !== prevActiveAgentIdRef.current) {
+      prevActiveAgentIdRef.current = activeAgentId;
       setSelectedAgentId(activeAgentId);
     }
-  }, [activeAgentId, selectedAgentId]);
+  }, [activeAgentId]);
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
@@ -584,7 +586,16 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
                     <button
                       key={agent.id}
                       type="button"
-                      onClick={() => setSelectedAgentId(agent.id)}
+                      onClick={() => {
+                        setSelectedAgentId(agent.id);
+                        // Sync activeAgentId to Redux + persist to DB
+                        dispatch(setActiveAgentId(agent.id));
+                        void coworkService.saveAgents(agents, agent.id);
+                        // Update working directory to match the selected agent
+                        if (agent.workingDirectory) {
+                          void coworkService.updateConfig({ workingDirectory: agent.workingDirectory });
+                        }
+                      }}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
                         (selectedAgentId || activeAgentId) === agent.id
                           ? 'bg-claude-accent text-white'

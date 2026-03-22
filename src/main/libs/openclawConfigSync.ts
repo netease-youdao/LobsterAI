@@ -1626,14 +1626,82 @@ export class OpenClawConfigSync {
 
     // Multi-agent: build agents.list and set defaults without workspace
     // (each agent entry carries its own workspace)
+    const configPath = this.engineManager.getConfigPath();
+    const stateAgentsDir = path.join(path.dirname(configPath), 'agents');
+    const mainModelsJson = path.join(stateAgentsDir, 'main', 'agent', 'models.json');
+
     const list = agentRecords.map((agent, index) => {
-      const isDefault = agent.id === activeAgentId || (index === 0 && !agentRecords.some((a) => a.id === activeAgentId));
+      // In OpenClaw, default=true marks the "main" agent (session key prefix
+      // "agent:main:"). Use activeAgentId if set, otherwise first agent.
+      const isDefault = activeAgentId
+        ? agent.id === activeAgentId
+        : index === 0;
       const agentWorkspace = (agent.workingDirectory || '').trim();
+      const resolvedWorkspace = agentWorkspace ? path.resolve(agentWorkspace) : '';
+
+      // OpenClaw's internal DEFAULT_AGENT_ID is "main". The default agent's
+      // entry in agents.list MUST use id="main" so that resolveAgentEntry()
+      // can find it and its subagents.allowAgents whitelist takes effect.
+      // Non-default agents keep their original id.
+      const effectiveId = isDefault ? 'main' : agent.id;
+
+      // Ensure OpenClaw state/agents/{id}/ directory exists so agents_list tool
+      // can discover this agent. Mirror models.json from the main agent entry.
+      const agentStateDir = path.join(stateAgentsDir, effectiveId);
+      const agentStateAgentDir = path.join(agentStateDir, 'agent');
+      try {
+        fs.mkdirSync(path.join(agentStateDir, 'sessions'), { recursive: true });
+        fs.mkdirSync(agentStateAgentDir, { recursive: true });
+        const targetModelsJson = path.join(agentStateAgentDir, 'models.json');
+        if (!fs.existsSync(targetModelsJson) && fs.existsSync(mainModelsJson)) {
+          fs.copyFileSync(mainModelsJson, targetModelsJson);
+        }
+      } catch (err) {
+        console.warn(`[OpenClawConfigSync] Failed to create agent state dir for "${agent.id}":`, err);
+      }
+
+      // Write per-agent AGENTS.md so OpenClaw subagent picks up the persona
+      if (resolvedWorkspace) {
+        try {
+          fs.mkdirSync(resolvedWorkspace, { recursive: true });
+          // Compose full persona: identity → soul → user → systemPrompt
+          const personaSections: string[] = [];
+          if (agent.identity?.trim()) personaSections.push(agent.identity.trim());
+          if (agent.soul?.trim()) personaSections.push(agent.soul.trim());
+          if (agent.user?.trim()) personaSections.push(agent.user.trim());
+          if (agent.systemPrompt?.trim()) personaSections.push(agent.systemPrompt.trim());
+          if (personaSections.length > 0) {
+            const agentsMdPath = path.join(resolvedWorkspace, 'AGENTS.md');
+            const marker = '<!-- LobsterAI managed: do not edit below this line -->';
+            // Preserve user content above the marker (if any), replace managed section
+            let existingContent = '';
+            try { existingContent = fs.readFileSync(agentsMdPath, 'utf8'); } catch { /* new file */ }
+            const markerIdx = existingContent.indexOf(marker);
+            const userContent = markerIdx >= 0
+              ? existingContent.slice(0, markerIdx).trimEnd()
+              : existingContent.trimEnd();
+            const managedSection = `${marker}\n\n${personaSections.join('\n\n---\n\n')}`;
+            const newContent = userContent ? `${userContent}\n\n${managedSection}\n` : `${managedSection}\n`;
+            fs.writeFileSync(agentsMdPath, newContent, 'utf8');
+          }
+        } catch (err) {
+          console.warn(`[OpenClawConfigSync] Failed to write AGENTS.md for agent "${agent.id}":`, err);
+        }
+      }
+
+      // Every agent gets subagents.allowAgents=["*"] so OpenClaw's agents_list
+      // tool returns the full team. The LLM decides based on its persona
+      // whether to delegate — no hard-coded Router distinction.
+      const subagentsConfig = agentRecords.length > 1
+        ? { allowAgents: ['*'] }
+        : undefined;
+
       return {
-        id: agent.id,
+        id: effectiveId,
         name: agent.name || agent.id,
         ...(isDefault ? { default: true } : {}),
-        ...(agentWorkspace ? { workspace: path.resolve(agentWorkspace) } : {}),
+        ...(resolvedWorkspace ? { workspace: resolvedWorkspace } : {}),
+        ...(subagentsConfig ? { subagents: subagentsConfig } : {}),
       };
     });
 

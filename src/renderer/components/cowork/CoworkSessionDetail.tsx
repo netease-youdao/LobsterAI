@@ -1182,6 +1182,55 @@ export const AssistantTurnBlock: React.FC<{
     const content = mapDisplayText ? mapDisplayText(normalizedContent) : normalizedContent;
     if (!content.trim()) return null;
 
+    // ── Orchestration log card (OpenClaw native subagent messages) ────────
+    // OpenClaw returns system messages like "子 Agent 已开始工作，会话密钥：..."
+    // which don't have isOrchLog metadata but should be styled similarly.
+    const isOpenClawSubagentMsg = content.includes('子 Agent 已开始工作') || content.includes('subagent:');
+
+    if (message.metadata?.isOrchLog || isOpenClawSubagentMsg) {
+      const isSpawn = content.includes('🚀') || content.includes('子 Agent 已开始工作');
+      const isSuccess = content.includes('✅');
+      const isError = content.includes('❌');
+
+      const borderColor = isError
+        ? 'border-red-400/50 dark:border-red-500/40'
+        : isSuccess
+          ? 'border-green-400/50 dark:border-green-500/40'
+          : 'border-claude-accent/40 dark:border-claude-accent/30';
+      const bgColor = isError
+        ? 'bg-red-50/60 dark:bg-red-950/20'
+        : isSuccess
+          ? 'bg-green-50/60 dark:bg-green-950/20'
+          : 'bg-blue-50/60 dark:bg-blue-950/20';
+      const textColor = isError
+        ? 'text-red-600 dark:text-red-400'
+        : isSuccess
+          ? 'text-green-700 dark:text-green-400'
+          : 'text-blue-700 dark:text-blue-400';
+      const dotColor = isError
+        ? 'bg-red-500'
+        : isSuccess
+          ? 'bg-green-500'
+          : isSpawn
+            ? 'bg-blue-500 animate-pulse'
+            : 'bg-claude-accent';
+
+      const boldMatch = content.match(/\*\*(.+?)\*\*/);
+      const agentName = boldMatch ? boldMatch[1] : '';
+      const displayContent = content.replace(/\*\*/g, '').replace(/`[^`]+`/g, '').trim();
+
+      return (
+        <div className={`rounded-lg border ${borderColor} ${bgColor} px-3 py-2 my-0.5`}>
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
+            {agentName && <span className={`text-xs font-semibold ${textColor}`}>{agentName}</span>}
+            <span className={`text-xs ${textColor} opacity-80 flex-1 truncate`}>{displayContent}</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Default system message ────────────────────────────────────────────
     return (
       <div className="rounded-lg border border-border bg-background px-3 py-2">
         <div className="flex items-center gap-2">

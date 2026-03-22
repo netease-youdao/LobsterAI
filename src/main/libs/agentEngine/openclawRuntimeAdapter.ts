@@ -580,6 +580,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   /** Session keys whose origin is "heartbeat" — discovered via polling, used to filter real-time events. */
   private readonly heartbeatSessionKeys = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
+  /** Maps agentId → OpenClaw subagent sessionKey for sub-task history lookup */
+  private readonly subagentSessionKeys = new Map<string, string>();
+  /** Collects subagent conversation messages from dropped events: agentId → messages[] */
+  private readonly subagentMessages = new Map<string, Array<{ role: string; content: string }>>();
+  /** Tracks subagent completion status: agentId → 'running' | 'done' */
+  private readonly subagentStatus = new Map<string, 'running' | 'done'>();
+  /** Session ID of the orchestrating parent that spawned subagents */
+  private orchestrationParentSessionId: string | null = null;
 
   private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
   private static readonly FULL_HISTORY_SYNC_LIMIT = 50;
@@ -988,10 +996,21 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   async startSession(sessionId: string, prompt: string, options: CoworkStartOptions = {}): Promise<void> {
+    // Enhance system prompt with dynamic agent list from gateway RPC
+    let enhancedSystemPrompt = options.systemPrompt;
+    try {
+      const agentListSnippet = await this.fetchAgentListSnippet(sessionId);
+      if (agentListSnippet && enhancedSystemPrompt) {
+        enhancedSystemPrompt = `${enhancedSystemPrompt}\n\n${agentListSnippet}`;
+      }
+    } catch (err) {
+      console.warn('[OpenClawRuntime] Failed to fetch agent list for system prompt:', err);
+    }
+
     await this.runTurn(sessionId, prompt, {
       skipInitialUserMessage: options.skipInitialUserMessage,
       skillIds: options.skillIds,
-      systemPrompt: options.systemPrompt,
+      systemPrompt: enhancedSystemPrompt,
       confirmationMode: options.confirmationMode,
       imageAttachments: options.imageAttachments,
       agentId: options.agentId,
@@ -1302,6 +1321,60 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       'If earlier LobsterAI system instructions exist, replace them with this version.',
       systemPrompt,
     ].join('\n');
+  }
+
+  /**
+   * Fetch the available agents from OpenClaw gateway via `agents.list` RPC
+   * and format as a markdown snippet for system prompt injection.
+   * Returns empty string if only one agent (no multi-agent setup) or on error.
+   */
+  private async fetchAgentListSnippet(sessionId: string): Promise<string> {
+    await this.ensureGatewayClientReady();
+    const client = this.gatewayClient;
+    if (!client) return '';
+
+    type AgentRow = { id: string; name?: string; default?: boolean };
+
+    try {
+      const result = await client.request<{
+        defaultId?: string;
+        agents?: AgentRow[];
+      }>('agents.list', {});
+
+      const agents = result?.agents;
+      if (!Array.isArray(agents) || agents.length <= 1) return '';
+
+      // Determine the current session's agent (the requester)
+      const session = this.store.getSession(sessionId);
+      const currentAgentDbId = session?.agentId;
+
+      // Build the list of OTHER agents (exclude the current one)
+      const otherAgents = agents.filter(a => {
+        // Match by id directly or by default flag (main = router)
+        if (a.id === 'main' && currentAgentDbId) return false; // skip self if router
+        if (a.id === currentAgentDbId) return false;           // skip exact match
+        return true;
+      });
+
+      if (otherAgents.length === 0) return '';
+
+      const lines = otherAgents.map(a => {
+        const label = a.name ? `**${a.name}**` : `\`${a.id}\``;
+        return `- ${label} (agentId: \`${a.id}\`)`;
+      });
+
+      return [
+        '## 可调度的 Agent 列表（通过 sessions_spawn 派发，runtime="subagent"）',
+        '',
+        '以下 Agent 已在当前环境中配置就绪。使用 `sessions_spawn` 工具分配任务时，将 `agentId` 设为对应值即可。',
+        '无需调用 `agents_list` 验证，直接派发。',
+        '',
+        ...lines,
+      ].join('\n');
+    } catch (err) {
+      console.warn('[OpenClawRuntime] agents.list RPC failed:', err);
+      return '';
+    }
   }
 
   private buildBridgePrefix(messages: CoworkMessage[], currentPrompt: string): string {
@@ -1919,6 +1992,98 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     if (!sessionId) {
+      // Capture subagent session keys and collect content
+      if (sessionKey.includes('subagent:')) {
+        const agentMatch = sessionKey.match(/^agent:([^:]+):subagent:/);
+        if (agentMatch) {
+          const agentId = agentMatch[1];
+          const existingKey = this.subagentSessionKeys.get(agentId);
+          if (!existingKey) {
+            this.subagentSessionKeys.set(agentId, sessionKey);
+            this.subagentStatus.set(agentId, 'running');
+            console.log(`[SubagentCapture] Captured: agentId=${agentId} → sessionKey=${sessionKey}`);
+          } else if (existingKey !== sessionKey) {
+            // Same agentId re-spawned with a new session — update tracking
+            this.subagentSessionKeys.set(agentId, sessionKey);
+            this.subagentStatus.set(agentId, 'running');
+            console.log(`[SubagentCapture] Re-captured: agentId=${agentId} → sessionKey=${sessionKey} (was ${existingKey})`);
+          }
+          // Detect lifecycle end → mark sub-agent as done
+          if (stream === 'lifecycle' && isRecord(agentPayload.data)) {
+            const phase = (agentPayload.data as Record<string, unknown>).phase;
+            if (phase === 'end' || phase === 'completed' || phase === 'finished' || phase === 'done') {
+              this.subagentStatus.set(agentId, 'done');
+              console.log(`[SubagentCapture] Lifecycle end for ${agentId}, marked as done`);
+              this.maybeAutoContinueOrchestration();
+            }
+          }
+          // Collect streamed content for this subagent (assistant text + tool calls/results)
+          if (!this.subagentMessages.has(agentId)) {
+            this.subagentMessages.set(agentId, []);
+          }
+          const msgs = this.subagentMessages.get(agentId)!;
+          const subData = isRecord(agentPayload.data) ? agentPayload.data as Record<string, unknown> : null;
+          const eventText = typeof subData?.text === 'string' ? subData.text : '';
+
+          if ((stream === 'assistant' || stream === 'user') && eventText.length > 0) {
+            // Agent events deliver `data.text` as CUMULATIVE text within a turn
+            // (grows with each event), but RESET when a new tool-use cycle begins.
+            // Strategy:
+            //   - Same role + new text starts with current content → replace (cumulative)
+            //   - Same role + new text is a shorter prefix → ignore (stale event)
+            //   - Same role + completely different content → new turn, push new message
+            //   - Different role → push new message
+            const role = stream as string;
+            const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+            if (lastMsg && lastMsg.role === role) {
+              if (eventText.length >= lastMsg.content.length && eventText.startsWith(lastMsg.content)) {
+                // Cumulative update within the same turn — replace
+                lastMsg.content = eventText;
+              } else if (lastMsg.content.startsWith(eventText)) {
+                // Shorter prefix of existing content — stale/duplicate, ignore
+              } else {
+                // Different content entirely — new turn after a tool-use cycle
+                msgs.push({ role, content: eventText });
+              }
+            } else {
+              msgs.push({ role, content: eventText });
+            }
+          } else if (stream === 'tool' || stream === 'tools') {
+            // Capture tool call information (name, args, result)
+            if (subData) {
+              const toolPhase = typeof subData.phase === 'string' ? subData.phase : '';
+              const toolName = typeof subData.name === 'string' ? subData.name : '';
+
+              if (toolPhase === 'start' && toolName) {
+                let toolSummary = `🔧 **${toolName}**`;
+                if (isRecord(subData.args)) {
+                  const args = subData.args as Record<string, unknown>;
+                  const command = typeof args.command === 'string' ? args.command : '';
+                  const filePath = typeof args.file_path === 'string' ? args.file_path
+                    : typeof args.path === 'string' ? args.path : '';
+                  if (command) toolSummary += `\n\`\`\`\n${command.slice(0, 500)}\n\`\`\``;
+                  else if (filePath) toolSummary += `: ${filePath}`;
+                }
+                msgs.push({ role: 'tool', content: toolSummary });
+              } else if ((toolPhase === 'end' || toolPhase === 'result')) {
+                const resultText = typeof subData.result === 'string' ? subData.result
+                  : isRecord(subData.result) ? JSON.stringify(subData.result) : '';
+                if (resultText.length > 0) {
+                  const truncated = resultText.length > 2000
+                    ? resultText.slice(0, 2000) + '\n\n... *(truncated)*'
+                    : resultText;
+                  const lastToolMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+                  if (lastToolMsg && lastToolMsg.role === 'tool') {
+                    lastToolMsg.content += '\n\n' + truncated;
+                  } else {
+                    msgs.push({ role: 'tool', content: truncated });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
       console.log('[Debug:handleAgentEvent] no sessionId, dropping event. runId:', runId, 'sessionKey:', sessionKey);
       if (runId) {
         this.enqueuePendingAgentEvent(runId, agentPayload, seq);
@@ -2131,6 +2296,14 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const toolNameRaw = typeof data.name === 'string' ? data.name.trim() : '';
     const toolName = toolNameRaw || 'Tool';
 
+    // Track orchestration parent when sessions_spawn is used
+    if (toolNameRaw === 'sessions_spawn' && phase === 'start') {
+      if (this.orchestrationParentSessionId !== sessionId) {
+        console.log(`[Orchestration] Detected sessions_spawn in session ${sessionId}, setting as orchestration parent`);
+        this.orchestrationParentSessionId = sessionId;
+      }
+    }
+
     if (toolNameRaw.toLowerCase() === 'browser') {
       const isError = Boolean(data.isError);
       // Log full data keys and values for diagnosis
@@ -2287,6 +2460,45 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     const sessionId = this.resolveSessionIdFromChatPayload(chatPayload);
     if (!sessionId) {
+      // Capture subagent session keys and collect final messages before dropping
+      if (chatSessionKey.includes('subagent:')) {
+        const agentMatch = chatSessionKey.match(/^agent:([^:]+):subagent:/);
+        if (agentMatch) {
+          const subAgentId = agentMatch[1];
+          if (!this.subagentSessionKeys.has(subAgentId)) {
+            this.subagentSessionKeys.set(subAgentId, chatSessionKey);
+            console.log(`[SubagentCapture] Captured from chat event: agentId=${subAgentId} → sessionKey=${chatSessionKey}`);
+          }
+          // Collect final message content from chat events (state=final carries the complete message)
+          if (state === 'final' && chatPayload.message && typeof chatPayload.message === 'object') {
+            const msg = chatPayload.message as Record<string, unknown>;
+            const role = typeof msg.role === 'string' ? msg.role : 'assistant';
+            let content = '';
+            if (typeof msg.content === 'string') {
+              content = msg.content;
+            } else if (Array.isArray(msg.content)) {
+              content = (msg.content as Array<Record<string, unknown>>)
+                .filter(b => b.type === 'text' && typeof b.text === 'string')
+                .map(b => b.text as string)
+                .join('\n');
+            }
+            if (content.trim()) {
+              if (!this.subagentMessages.has(subAgentId)) {
+                this.subagentMessages.set(subAgentId, []);
+              }
+              const msgs = this.subagentMessages.get(subAgentId)!;
+              // For final state, replace the last same-role message (it's the complete version)
+              const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+              if (lastMsg && lastMsg.role === role) {
+                lastMsg.content = content;
+              } else {
+                msgs.push({ role, content });
+              }
+              console.log(`[SubagentCapture] Collected ${role} message (${content.length} chars) for ${subAgentId}`);
+            }
+          }
+        }
+      }
       console.log('[Debug:handleChatEvent] no sessionId resolved, dropping event');
       return;
     }
@@ -3685,6 +3897,26 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.confirmationModeBySession.delete(sessionId);
     this.manuallyStoppedSessions.delete(sessionId);
 
+    // Delete gateway sessions (main + subagents) — fire and forget
+    const client = this.gatewayClient;
+    if (client) {
+      const keysToDelete = new Set<string>(removedKeys);
+      for (const [, subKey] of this.subagentSessionKeys) {
+        keysToDelete.add(subKey);
+      }
+      for (const key of keysToDelete) {
+        client.request('sessions.delete', { sessionKey: key }).catch(() => { /* ignore */ });
+      }
+    }
+
+    // Clean up subagent state
+    if (this.orchestrationParentSessionId === sessionId) {
+      this.orchestrationParentSessionId = null;
+    }
+    this.subagentSessionKeys.clear();
+    this.subagentMessages.clear();
+    this.subagentStatus.clear();
+
     // Propagate to channel session sync
     if (this.channelSessionSync) {
       this.channelSessionSync.onSessionDeleted(sessionId);
@@ -3929,6 +4161,181 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     });
 
     return keys;
+  }
+
+  /**
+   * Return subagent statuses, scoped to the orchestration parent session.
+   */
+  getSubagentStatuses(sessionId?: string): Record<string, 'running' | 'done'> {
+    if (sessionId) {
+      if (!this.orchestrationParentSessionId || sessionId !== this.orchestrationParentSessionId) {
+        return {};
+      }
+    }
+    return Object.fromEntries(this.subagentStatus);
+  }
+
+  /**
+   * Auto-continue orchestration when all subagents complete.
+   */
+  private maybeAutoContinueOrchestration(): void {
+    const parentSessionId = this.orchestrationParentSessionId;
+    if (!parentSessionId) return;
+
+    const runningCount = Array.from(this.subagentStatus.values()).filter(s => s === 'running').length;
+    const totalCount = this.subagentStatus.size;
+    if (runningCount > 0) {
+      console.log(`[Orchestration] ${runningCount}/${totalCount} subagents still running, waiting...`);
+      return;
+    }
+
+    if (this.activeTurns.has(parentSessionId)) {
+      console.log(`[Orchestration] All ${totalCount} subagents done, but parent has active turn. Skipping.`);
+      return;
+    }
+
+    const session = this.store.getSession(parentSessionId);
+    if (!session || (session.status !== 'completed' && session.status !== 'idle')) {
+      return;
+    }
+
+    if (this.manuallyStoppedSessions.has(parentSessionId)) {
+      return;
+    }
+
+    console.log(`[Orchestration] All ${totalCount} subagents done. Auto-continuing parent ${parentSessionId}...`);
+
+    // Do NOT clear subagentSessionKeys, subagentStatus, or subagentMessages here.
+    // The user needs to see all sub-tasks across all phases in the sidebar.
+    // New sub-agents from the next phase will be added alongside existing ones.
+    // All subagent state is only cleared on session delete (onSessionDeleted).
+
+    setTimeout(() => {
+      if (this.activeTurns.has(parentSessionId)) {
+        console.log(`[Orchestration] Auto-continue cancelled: parent already has active turn.`);
+        return;
+      }
+      const freshSession = this.store.getSession(parentSessionId);
+      if (!freshSession || freshSession.status === 'running') return;
+
+      console.log(`[Orchestration] Triggering auto-continue for ${parentSessionId}`);
+      this.continueSession(parentSessionId, '请继续执行下一阶段的任务编排。所有子任务已完成，请检查结果并继续推进。').catch((error) => {
+        console.warn(`[Orchestration] Auto-continue failed:`, error instanceof Error ? error.message : String(error));
+      });
+    }, 3000);
+  }
+
+  /**
+   * Fetch conversation history for a sub-agent session spawned from a parent session.
+   * Uses `chat.history` RPC with the session key convention `agent:<agentId>:lobsterai:<parentSessionId>`.
+   */
+  async getSubTaskHistory(parentSessionId: string, agentId: string, sessionKey?: string): Promise<Array<{ role: string; content: string }>> {
+    const client = this.gatewayClient;
+    if (!client) throw new Error('OpenClaw gateway client is unavailable.');
+
+    console.log(`[SubTaskHistory] Request: agentId=${agentId} parentSessionId=${parentSessionId} explicitKey=${sessionKey ?? 'none'}`);
+
+    // First check locally collected messages (from dropped subagent events)
+    const localMessages = this.subagentMessages.get(agentId);
+    if (localMessages && localMessages.length > 0) {
+      console.log(`[SubTaskHistory] Returning ${localMessages.length} locally collected messages for ${agentId}`);
+      return localMessages.map(m => ({ ...m })); // return copies
+    }
+
+    console.log(`[SubTaskHistory] No local messages, trying Gateway RPC. Captured keys: ${JSON.stringify(Object.fromEntries(this.subagentSessionKeys))}`);
+
+    // Step 1: Use explicit sessionKey if provided
+    // Step 2: Use captured key from event stream
+    if (!sessionKey) {
+      sessionKey = this.subagentSessionKeys.get(agentId);
+      if (sessionKey) {
+        console.log(`[SubTaskHistory] Using captured key: ${sessionKey}`);
+      }
+    }
+
+    // Step 3: Try sessions.list RPC to discover the key
+    if (!sessionKey) {
+      try {
+        const listResult = await client.request<unknown>('sessions.list', { limit: 200 });
+        console.log(`[SubTaskHistory] sessions.list raw response: ${JSON.stringify(listResult).slice(0, 500)}`);
+
+        // The response structure may vary — try different shapes
+        let sessionList: Array<Record<string, unknown>> = [];
+        if (listResult && typeof listResult === 'object') {
+          const obj = listResult as Record<string, unknown>;
+          if (Array.isArray(obj.sessions)) sessionList = obj.sessions as Array<Record<string, unknown>>;
+          else if (Array.isArray(obj.result)) sessionList = obj.result as Array<Record<string, unknown>>;
+          else if (Array.isArray(listResult)) sessionList = listResult as Array<Record<string, unknown>>;
+        }
+
+        for (const s of sessionList) {
+          const key = typeof s.key === 'string' ? s.key : (typeof s.sessionKey === 'string' ? s.sessionKey : '');
+          if (key.includes(`agent:${agentId}:subagent:`) || key.includes(`${agentId}:subagent:`)) {
+            sessionKey = key;
+            console.log(`[SubTaskHistory] Found via sessions.list: ${sessionKey}`);
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn('[SubTaskHistory] sessions.list failed:', err);
+      }
+    }
+
+    if (!sessionKey) {
+      console.warn(`[SubTaskHistory] No sessionKey found for agentId=${agentId}. Cannot fetch history.`);
+      return [];
+    }
+
+    // Fetch chat history using the resolved session key
+    console.log(`[SubTaskHistory] Calling chat.history with sessionKey=${sessionKey}`);
+    try {
+      const rawHistory = await client.request<unknown>('chat.history', {
+        sessionKey,
+        limit: 200,
+      });
+      console.log(`[SubTaskHistory] chat.history raw response: ${JSON.stringify(rawHistory).slice(0, 500)}`);
+
+      // Parse response — try different shapes
+      let messageList: unknown[] = [];
+      if (rawHistory && typeof rawHistory === 'object') {
+        const obj = rawHistory as Record<string, unknown>;
+        if (Array.isArray(obj.messages)) messageList = obj.messages;
+        else if (Array.isArray(obj.result)) messageList = obj.result;
+        else if (Array.isArray(obj.history)) messageList = obj.history;
+        else if (Array.isArray(rawHistory)) messageList = rawHistory as unknown[];
+      }
+
+      console.log(`[SubTaskHistory] Parsed ${messageList.length} messages`);
+
+      if (messageList.length === 0) return [];
+
+      // Simplify messages to { role, content } for display
+      const result: Array<{ role: string; content: string }> = [];
+      for (const raw of messageList) {
+        if (!raw || typeof raw !== 'object') continue;
+        const msg = raw as Record<string, unknown>;
+        const role = typeof msg.role === 'string' ? msg.role : 'unknown';
+
+        // Extract text content — may be a string or an array of content blocks
+        let content = '';
+        if (typeof msg.content === 'string') {
+          content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          content = (msg.content as Array<Record<string, unknown>>)
+            .filter(block => block.type === 'text' && typeof block.text === 'string')
+            .map(block => block.text as string)
+            .join('\n');
+        }
+        if (content.trim()) {
+          result.push({ role, content });
+        }
+      }
+      console.log(`[SubTaskHistory] Returning ${result.length} displayable messages`);
+      return result;
+    } catch (err) {
+      console.error(`[SubTaskHistory] chat.history RPC failed:`, err);
+      throw err;
+    }
   }
 
   /**

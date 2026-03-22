@@ -454,6 +454,8 @@ export interface CoworkAgentRecord {
   executionMode: CoworkExecutionMode;
   identity: string;
   soul: string;
+  user: string;
+  invocable?: boolean; // default true
 }
 
 export interface CoworkConfig {
@@ -1157,6 +1159,7 @@ export class CoworkStore {
         executionMode: legacyConfig.executionMode,
         identity: '',
         soul: '',
+        user: '',
       };
       this.setAgents([defaultAgent], 'main');
       return { agents: [defaultAgent], activeAgentId: 'main' };
@@ -1179,6 +1182,7 @@ export class CoworkStore {
         executionMode: legacyConfig.executionMode,
         identity: '',
         soul: '',
+        user: '',
       };
       this.setAgents([defaultAgent], 'main');
       return { agents: [defaultAgent], activeAgentId: 'main' };
@@ -1962,4 +1966,22 @@ export class CoworkStore {
       updatedAt: row.updated_at,
     };
   }
+}
+
+// ── Singleton accessor ─────────────────────────────────────────────────────────
+// Modules that need a reference to the shared CoworkStore without going through
+// the full sqliteStore initialisation chain can call getCoworkStore().
+// The instance is registered here once by sqliteStore during app startup.
+
+let _sharedCoworkStore: CoworkStore | null = null;
+
+export function registerCoworkStore(store: CoworkStore): void {
+  _sharedCoworkStore = store;
+}
+
+export function getCoworkStore(): CoworkStore {
+  if (!_sharedCoworkStore) {
+    throw new Error('CoworkStore has not been initialised yet. Call registerCoworkStore() first.');
+  }
+  return _sharedCoworkStore;
 }

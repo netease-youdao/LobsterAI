@@ -27,6 +27,8 @@ export interface CoworkMessageMetadata {
   isFinal?: boolean;
   isThinking?: boolean;
   skillIds?: string[];  // Skills used for this message
+  /** Marks this message as an orchestration log card */
+  isOrchLog?: boolean;
   [key: string]: unknown;
 }
 
@@ -64,8 +66,10 @@ export interface AgentConfig {
   workingDirectory: string;
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
-  identity: string;  // IDENTITY.md content
-  soul: string;      // SOUL.md content
+  identity: string;   // IDENTITY.md content
+  soul: string;       // SOUL.md content
+  user: string;       // USER.md content
+  invocable?: boolean; // whether this agent can be called by other agents (default: true)
 }
 
 // Cowork configuration

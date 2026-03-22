@@ -240,3 +240,12 @@ select::-ms-expand {
   0% { left: -40%; }
   100% { left: 100%; }
 }
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.2s ease-out;
+}

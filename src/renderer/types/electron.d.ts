@@ -368,7 +368,7 @@ interface IElectronAPI {
     readBootstrapFile: (filename: string) => Promise<{ success: boolean; content: string; error?: string }>;
     writeBootstrapFile: (filename: string, content: string) => Promise<{ success: boolean; error?: string }>;
     onStreamMessage: (callback: (data: { sessionId: string; message: CoworkMessage }) => void) => () => void;
-    onStreamMessageUpdate: (callback: (data: { sessionId: string; messageId: string; content: string }) => void) => () => void;
+    onStreamMessageUpdate: (callback: (data: { sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }) => void) => () => void;
     onStreamPermission: (callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void) => () => void;
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => () => void;
     onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => () => void;
@@ -376,6 +376,8 @@ interface IElectronAPI {
     onSessionsChanged: (callback: () => void) => () => void;
     getAgents: () => Promise<{ success: boolean; agents?: import('./cowork').AgentConfig[]; activeAgentId?: string; error?: string }>;
     setAgents: (options: { agents: import('./cowork').AgentConfig[]; activeAgentId: string }) => Promise<{ success: boolean; error?: string }>;
+    getSubTaskStatus: (sessionId?: string) => Promise<{ success: boolean; statuses: Record<string, 'running' | 'done'> }>;
+    getSubTaskHistory: (options: { parentSessionId: string; agentId: string; sessionKey?: string }) => Promise<{ success: boolean; messages?: Array<{ role: string; content: string }>; error?: string }>;
   };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;

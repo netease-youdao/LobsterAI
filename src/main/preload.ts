@@ -251,14 +251,18 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:agents:get'),
     setAgents: (options: { agents: any[]; activeAgentId: string }) =>
       ipcRenderer.invoke('cowork:agents:set', options),
+    // Sub-task status and history
+    getSubTaskStatus: (sessionId?: string) => ipcRenderer.invoke('cowork:subTask:status', sessionId),
+    getSubTaskHistory: (options: { parentSessionId: string; agentId: string; sessionKey?: string }) =>
+      ipcRenderer.invoke('cowork:subTask:history', options),
     // Stream event listeners
     onStreamMessage: (callback: (data: { sessionId: string; message: any }) => void) => {
       const handler = (_event: any, data: { sessionId: string; message: any }) => callback(data);
       ipcRenderer.on('cowork:stream:message', handler);
       return () => ipcRenderer.removeListener('cowork:stream:message', handler);
     },
-    onStreamMessageUpdate: (callback: (data: { sessionId: string; messageId: string; content: string }) => void) => {
-      const handler = (_event: any, data: { sessionId: string; messageId: string; content: string }) => callback(data);
+    onStreamMessageUpdate: (callback: (data: { sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }) => void) => {
+      const handler = (_event: any, data: { sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }) => callback(data);
       ipcRenderer.on('cowork:stream:messageUpdate', handler);
       return () => ipcRenderer.removeListener('cowork:stream:messageUpdate', handler);
     },

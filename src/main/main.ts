@@ -742,6 +742,7 @@ const getCoworkStore = () => {
   if (!coworkStore) {
     const sqliteStore = getStore();
     coworkStore = new CoworkStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction());
+    registerCoworkStore(coworkStore);
     const cleaned = coworkStore.autoDeleteNonPersonalMemories();
     if (cleaned > 0) {
       console.info(`[cowork-memory] Auto-deleted ${cleaned} non-personal/procedural memories`);
@@ -1041,13 +1042,13 @@ const bindCoworkRuntimeForwarder = (): void => {
     });
   });
 
-  runtime.on('messageUpdate', (sessionId: string, messageId: string, content: string) => {
+  runtime.on('messageUpdate', (sessionId: string, messageId: string, content: string, metadata?: Record<string, unknown>) => {
     const safeContent = truncateIpcString(content, IPC_UPDATE_CONTENT_MAX_CHARS);
     const windows = BrowserWindow.getAllWindows();
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
       try {
-        win.webContents.send('cowork:stream:messageUpdate', { sessionId, messageId, content: safeContent });
+        win.webContents.send('cowork:stream:messageUpdate', { sessionId, messageId, content: safeContent, metadata });
       } catch (error) {
         console.error('Failed to forward cowork message update:', error);
       }
@@ -2446,7 +2447,9 @@ if (!gotTheLock) {
       const coworkStoreInstance = getCoworkStore();
       const config = coworkStoreInstance.getConfig();
 
-      // If agentId is specified, look up the agent's config and use it
+      // If agentId is specified, look up the agent's config and use it.
+      // Agent identity/soul/user/systemPrompt take full priority over the
+      // global config so the agent's persona is always respected.
       let agentSystemPrompt = options.systemPrompt ?? config.systemPrompt;
       let agentCwd = options.cwd || config.workingDirectory || '';
       let agentExecutionMode = config.executionMode || 'local';
@@ -2454,7 +2457,33 @@ if (!gotTheLock) {
         const { agents } = coworkStoreInstance.getAgents();
         const agent = agents.find(a => a.id === options.agentId);
         if (agent) {
-          agentSystemPrompt = options.systemPrompt ?? agent.systemPrompt ?? config.systemPrompt;
+          // Compose full agent persona: identity → soul → user profile → system prompt
+          const personaSections: string[] = [];
+          if (agent.identity?.trim()) personaSections.push(agent.identity.trim());
+          if (agent.soul?.trim()) personaSections.push(agent.soul.trim());
+          if (agent.user?.trim()) personaSections.push(agent.user.trim());
+          if (agent.systemPrompt?.trim()) personaSections.push(agent.systemPrompt.trim());
+
+          // Inject available team agents so the LLM can dispatch tasks via
+          // sessions_spawn. Every agent sees its teammates — the LLM decides
+          // whether to delegate based on its own role/persona.
+          const teammates = agents.filter(a => a.id !== agent.id);
+          if (teammates.length > 0) {
+            const agentTable = teammates
+              .map(a => `- **${a.name}** (agentId: \`${a.id}\`): ${a.systemPrompt?.split('\n')[0]?.replace(/^[#\s]+/, '') || a.name}`)
+              .join('\n');
+            personaSections.push(
+              `## 团队 Agent 列表（通过 sessions_spawn 派发，runtime="subagent"）\n\n` +
+              `以下 Agent 已在当前环境中配置就绪。根据你的角色职责判断是否需要派发任务给其他 Agent。\n` +
+              `使用 \`sessions_spawn\` 工具时将 \`agentId\` 设为对应值即可，无需调用 \`agents_list\` 验证。\n\n` +
+              agentTable
+            );
+          }
+
+          // Agent persona overrides the global systemPrompt passed from renderer
+          agentSystemPrompt = personaSections.length > 0
+            ? personaSections.join('\n\n---\n\n')
+            : config.systemPrompt;
           agentCwd = options.cwd || agent.workingDirectory || config.workingDirectory || '';
           agentExecutionMode = agent.executionMode || config.executionMode || 'local';
         }
@@ -3239,6 +3268,21 @@ if (!gotTheLock) {
       }
       getCoworkStore().setAgents(agents, activeAgentId);
 
+      // Write IDENTITY.md / SOUL.md / USER.md for each agent that has a workingDirectory
+      for (const agent of agents) {
+        if (agent.workingDirectory) {
+          if (typeof agent.identity === 'string') {
+            writeBootstrapFile(agent.workingDirectory, 'IDENTITY.md', agent.identity);
+          }
+          if (typeof agent.soul === 'string') {
+            writeBootstrapFile(agent.workingDirectory, 'SOUL.md', agent.soul);
+          }
+          if (typeof agent.user === 'string') {
+            writeBootstrapFile(agent.workingDirectory, 'USER.md', agent.user);
+          }
+        }
+      }
+
       // Find active agent and sync openclaw config
       const activeAgent = agents.find((a) => a.id === activeAgentId) ?? agents[0]!;
       const previousConfig = getCoworkStore().getConfig();
@@ -3270,6 +3314,39 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set agents',
+      };
+    }
+  });
+
+  // ==================== Sub-task History IPC Handler ====================
+
+  ipcMain.handle('cowork:subTask:status', async (_event, sessionId?: string) => {
+    try {
+      if (!openClawRuntimeAdapter) {
+        return { success: true, statuses: {} };
+      }
+      const statuses = (openClawRuntimeAdapter as any).getSubagentStatuses(sessionId);
+      return { success: true, statuses };
+    } catch (error) {
+      return { success: false, statuses: {} };
+    }
+  });
+
+  ipcMain.handle('cowork:subTask:history', async (_event, options: {
+    parentSessionId: string;
+    agentId: string;
+    sessionKey?: string;
+  }) => {
+    try {
+      if (!openClawRuntimeAdapter) {
+        return { success: false, error: 'Sub-task history is only available with the OpenClaw engine.' };
+      }
+      const messages = await openClawRuntimeAdapter.getSubTaskHistory(options.parentSessionId, options.agentId, options.sessionKey);
+      return { success: true, messages };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get sub-task history',
       };
     }
   });
