@@ -40,7 +40,7 @@ const IM_GUIDE_URLS: Partial<Record<IMPlatform, string>> = {
   qq: 'https://lobsterai.youdao.com/#/docs/lobsterai_im_bot_config_guide/qqqq-bot',
   telegram: 'https://lobsterai.youdao.com/#/en/docs/lobsterai_im_bot_config_guide/telegram-bot-configuration',
   discord: 'https://lobsterai.youdao.com/#/en/docs/lobsterai_im_bot_config_guide/discord-bot-configuration',
-  popo: '',
+  popo: 'https://docs.popo.netease.com/lingxi/14e2cf6d46c34b6f81900e247481f3ec?appVersion=4.28.0&deviceType=4&popo_hidenativebar=1&popo_noindicator=1&disposable_login_token=1',
 };
 
 // Reusable guide card component for platform setup instructions
