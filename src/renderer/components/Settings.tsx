@@ -1148,7 +1148,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       minimax: {
         ...prev.minimax,
         apiKey: '',
-        authType: 'apikey',
         oauthRefreshToken: undefined,
         oauthTokenExpiresAt: undefined,
       },
