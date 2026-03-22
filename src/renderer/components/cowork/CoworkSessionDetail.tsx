@@ -1719,14 +1719,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     });
   };
 
-  const handleExportMarkdown = async (e: React.MouseEvent) => {
+  const handleExportSession = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!currentSession) return;
     closeMenu();
 
     if (!currentSession.messages || currentSession.messages.length === 0) {
       window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: i18nService.t('coworkExportMarkdownEmpty'),
+        detail: i18nService.t('coworkExportSessionEmpty'),
       }));
       return;
     }
@@ -1743,11 +1743,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (result && !result.canceled) {
       if (result.success) {
         window.dispatchEvent(new CustomEvent('app:showToast', {
-          detail: i18nService.t('coworkExportMarkdownSuccess'),
+          detail: i18nService.t('coworkExportSessionSuccess'),
         }));
       } else {
         window.dispatchEvent(new CustomEvent('app:showToast', {
-          detail: i18nService.t('coworkExportMarkdownFailed'),
+          detail: i18nService.t('coworkExportSessionFailed'),
         }));
       }
     }
@@ -2080,11 +2080,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </button>
           <button
             type="button"
-            onClick={handleExportMarkdown}
+            onClick={handleExportSession}
             className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
           >
             <ArrowDownTrayIcon className="h-4 w-4" />
-            {i18nService.t('coworkExportMarkdown')}
+            {i18nService.t('coworkExportSession')}
           </button>
           <button
             type="button"

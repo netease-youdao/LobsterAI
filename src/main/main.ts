@@ -323,7 +323,7 @@ const saveTextWithDialog = async (
   const baseDir = defaultDir || app.getPath('downloads');
   const ownerWindow = BrowserWindow.fromWebContents(webContents);
   const saveOptions = {
-    title: 'Export Markdown',
+    title: 'Export Session',
     defaultPath: path.join(baseDir, defaultFileName),
     filters: [{ name: 'Markdown', extensions: ['md'] }],
   };
