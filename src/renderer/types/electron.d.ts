@@ -301,6 +301,8 @@ interface IElectronAPI {
     deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) => Promise<{ success: boolean; error?: string }>;
     renameSession: (options: { sessionId: string; title: string }) => Promise<{ success: boolean; error?: string }>;
+    rollbackMessage: (options: { sessionId: string; messageId: string }) => Promise<{ success: boolean; deletedCount?: number; error?: string }>;
+    editAndRegenerateMessage: (options: { sessionId: string; messageId: string; newContent?: string }) => Promise<{ success: boolean; error?: string }>;
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     remoteManaged: (sessionId: string) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
     listSessions: () => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;

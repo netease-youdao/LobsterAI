@@ -515,6 +515,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly lastSystemPromptBySession = new Map<string, string>();
   private readonly gatewayHistoryCountBySession = new Map<string, number>();
   private readonly latestTurnTokenBySession = new Map<string, number>();
+  private readonly rolledBackSessionSuffixes = new Map<string, string>();
 
   private gatewayClient: GatewayClientLike | null = null;
   private gatewayClientVersion: string | null = null;
@@ -3253,6 +3254,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.gatewayHistoryCountBySession.delete(sessionId);
     this.latestTurnTokenBySession.delete(sessionId);
 
+    // Clean up rollback suffix
+    this.rolledBackSessionSuffixes.delete(sessionId);
+
     // Clean up active turn and related run-id mappings
     this.cleanupSessionTurn(sessionId);
 
@@ -3266,6 +3270,51 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (this.channelSessionSync) {
       this.channelSessionSync.onSessionDeleted(sessionId);
     }
+  }
+
+  /**
+   * Clear OpenClaw gateway history for a session.
+   * This should be called when messages are rolled back to ensure the gateway
+   * doesn't retain stale conversation history.
+   *
+   * This clears:
+   * 1. Gateway history (via chat.clear)
+   * 2. Local tracking state (bridgedSessions, fullySyncedSessions, etc.)
+   *
+   * After calling this method, the next turn will re-bridge from the local store's
+   * current messages (which should be the post-rollback state).
+   */
+  async clearSessionHistory(sessionId: string): Promise<void> {
+    const sessionKey = this.toSessionKey(sessionId);
+    const client = this.gatewayClient;
+
+    // Since OpenClaw doesn't support chat.clear, we use a different strategy:
+    // Generate a new sessionKey suffix to force OpenClaw to create a fresh session
+    const newSuffix = `rollback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.rolledBackSessionSuffixes.set(sessionId, newSuffix);
+
+    // Try to abort any active run for this session
+    const activeTurn = this.activeTurns.get(sessionId);
+    if (activeTurn && activeTurn.runId && client) {
+      try {
+        await client.request('chat.abort', {
+          sessionKey,
+          runId: activeTurn.runId,
+        });
+      } catch (error) {
+        // Abort might fail if run already completed, which is fine
+      }
+    }
+
+    // Clear local tracking for this session (similar to onSessionDeleted but without full deletion)
+    this.latestTurnTokenBySession.delete(sessionId);
+    this.lastSystemPromptBySession.delete(sessionId);
+    this.gatewayHistoryCountBySession.delete(sessionId);
+    this.fullySyncedSessions.delete(sessionId);
+    this.bridgedSessions.delete(sessionId);
+
+    // Also clear the session-to-sessionKey mapping to force a fresh session
+    this.sessionIdBySessionKey.delete(sessionKey);
   }
 
   /**
@@ -3460,7 +3509,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private toSessionKey(sessionId: string): string {
-    return buildManagedSessionKey(sessionId);
+    const baseKey = buildManagedSessionKey(sessionId);
+    const suffix = this.rolledBackSessionSuffixes.get(sessionId);
+    if (suffix) {
+      return `${baseKey}:${suffix}`;
+    }
+    return baseKey;
   }
 
   private requireGatewayClient(): GatewayClientLike {

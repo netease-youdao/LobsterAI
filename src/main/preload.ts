@@ -149,6 +149,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:pin', options),
     renameSession: (options: { sessionId: string; title: string }) =>
       ipcRenderer.invoke('cowork:session:rename', options),
+    rollbackMessage: (options: { sessionId: string; messageId: string }) =>
+      ipcRenderer.invoke('cowork:message:rollback', options),
+    editAndRegenerateMessage: (options: { sessionId: string; messageId: string; newContent?: string }) =>
+      ipcRenderer.invoke('cowork:message:editAndRegenerate', options),
     getSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:get', sessionId),
     remoteManaged: (sessionId: string) =>

@@ -8,6 +8,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
   zh: {
     // 通用
     save: '保存',
+    send: '发送',
     cancel: '取消',
     saving: '保存中...',
     create: '创建',
@@ -448,6 +449,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionContinueFailed: '发送消息失败：{error}',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
+    coworkMessageRollback: '回滚消息',
+    coworkMessageEdit: '重新编辑',
+    coworkEditMessagePlaceholder: '编辑您的消息...',
+    confirmRollback: '确认回滚',
+    coworkMessageRollbackConfirmTitle: '回滚消息',
+    coworkMessageRollbackConfirmLine1: '将对话回滚到此处。',
+    coworkMessageRollbackConfirmLine2: '这将删除此处之后的所有消息，且无法撤销。',
+    coworkMessageEditConfirmTitle: '重新编辑',
+    coworkMessageEditConfirmLine1: '确认要编辑此消息吗？',
+    coworkMessageEditConfirmLine2: '这将从此处重新生成对话，可能会改变后续回复内容。',
+    confirmEdit: '确认编辑',
 
     // Skills
     skills: '技能',
@@ -1053,6 +1065,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
   en: {
     // Common
     save: 'Save',
+    send: 'Send',
     cancel: 'Cancel',
     saving: 'Saving...',
     create: 'Create',
@@ -1493,6 +1506,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionContinueFailed: 'Failed to send message: {error}',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
+    coworkMessageRollback: 'Rollback',
+    coworkMessageEdit: 'Edit & Regenerate',
+    coworkEditMessagePlaceholder: 'Edit your message...',
+    confirmRollback: 'Confirm Rollback',
+    coworkMessageRollbackConfirmTitle: 'Rollback Message',
+    coworkMessageRollbackConfirmLine1: 'Rollback the conversation to this point.',
+    coworkMessageRollbackConfirmLine2: 'This will delete all messages after this point and cannot be undone.',
+    coworkMessageEditConfirmTitle: 'Edit & Regenerate',
+    coworkMessageEditConfirmLine1: 'Confirm to edit this message?',
+    coworkMessageEditConfirmLine2: 'This will regenerate the conversation from this point and may change subsequent replies.',
+    confirmEdit: 'Confirm Edit',
 
     // Skills
     skills: 'Skills',

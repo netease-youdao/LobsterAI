@@ -2256,6 +2256,96 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:message:rollback', async (_event, options: { sessionId: string; messageId: string }) => {
+    try {
+      const { sessionId, messageId } = options;
+      const deletedCount = getCoworkStore().deleteMessagesAfter(sessionId, messageId);
+
+      // Stop the running session to clear AI runtime context
+      try {
+        getCoworkEngineRouter().stopSession(sessionId);
+      } catch (error) {
+        // Session might not be running, which is fine
+      }
+
+      // Clear the OpenClaw gateway history to prevent it from remembering rolled-back messages
+      try {
+        await getCoworkEngineRouter().clearSessionHistory(sessionId);
+      } catch (error) {
+        // Continue anyway - the database deletion is more important
+      }
+
+      // Clear the OpenClaw claudeSessionId to force a new session creation
+      getCoworkStore().updateSession(sessionId, { claudeSessionId: null });
+
+      return { success: true, deletedCount };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to rollback message',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:message:editAndRegenerate', async (_event, options: { sessionId: string; messageId: string; newContent?: string }) => {
+    try {
+      const { sessionId, messageId, newContent } = options;
+
+      // Get the message to edit BEFORE deleting it
+      const message = getCoworkStore().getMessage(sessionId, messageId);
+      if (!message) {
+        return { success: false, error: 'Message not found' };
+      }
+
+      if (message.type !== 'user') {
+        return { success: false, error: 'Only user messages can be edited and regenerated' };
+      }
+
+      // Extract message content and attachments BEFORE deleting
+      const contentToUse = newContent || message.content;
+      const metadata = message.metadata as Record<string, unknown> | undefined;
+      const imageAttachments = (metadata?.imageAttachments ?? []) as Array<{
+        name: string;
+        mimeType: string;
+        base64Data: string;
+      }>;
+
+      // Delete the target message and all messages after it
+      getCoworkStore().deleteMessagesAfter(sessionId, messageId);
+
+      // Stop the running session to clear AI runtime context (similar to rollback)
+      try {
+        getCoworkEngineRouter().stopSession(sessionId);
+      } catch (error) {
+        // Session might not be running, which is fine
+      }
+
+      // Clear the OpenClaw gateway history to prevent it from remembering old messages
+      try {
+        await getCoworkEngineRouter().clearSessionHistory(sessionId);
+      } catch (error) {
+        // Continue anyway
+      }
+
+      // Clear the OpenClaw claudeSessionId to force a new session creation
+      getCoworkStore().updateSession(sessionId, { claudeSessionId: null });
+
+      // Continue the session with the edited content (or original if no new content provided)
+      const runtime = getCoworkEngineRouter();
+      await runtime.continueSession(sessionId, contentToUse, {
+        imageAttachments,
+      });
+
+      const session = getCoworkStore().getSession(sessionId);
+      return { success: true, session };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to edit and regenerate message',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:list', async () => {
     try {
       const sessions = getCoworkStore().listSessions();
