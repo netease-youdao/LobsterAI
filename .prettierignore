@@ -1,0 +1,9 @@
+dist/
+dist-electron/
+release/
+build/
+node_modules/
+SKILLs/
+sandbox/
+*.sqlite
+*.wasm
