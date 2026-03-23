@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CoworkSessionSummary, CoworkSessionStatus } from '../../types/cowork';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
@@ -149,20 +149,20 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     setShowConfirmDelete(false);
   };
 
-  const handleTogglePin = (e: React.MouseEvent) => {
+  const handleTogglePin = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     onTogglePin(!session.pinned);
     closeMenu();
-  };
+  }, [onTogglePin, session.pinned]);
 
-  const handleRenameClick = (e: React.MouseEvent) => {
+  const handleRenameClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     ignoreNextBlurRef.current = false;
     setIsRenaming(true);
     setShowConfirmDelete(false);
     setRenameValue(session.title);
     setMenuPosition(null);
-  };
+  }, [session.title]);
 
   const handleRenameSave = (e?: React.SyntheticEvent) => {
     e?.stopPropagation();
@@ -189,11 +189,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     handleRenameSave(event);
   };
 
-  const handleDeleteClick = (e: React.MouseEvent) => {
+  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setShowConfirmDelete(true);
     setMenuPosition(null);
-  };
+  }, []);
 
   const handleConfirmDelete = () => {
     onDelete();
@@ -205,11 +205,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     setShowConfirmDelete(false);
   };
 
-  const handleBatchClick = (e: React.MouseEvent) => {
+  const handleBatchClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     closeMenu();
     onEnterBatchMode();
-  };
+  }, [onEnterBatchMode]);
 
   useEffect(() => {
     if (!menuPosition) return;
