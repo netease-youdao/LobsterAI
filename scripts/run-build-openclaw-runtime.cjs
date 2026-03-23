@@ -27,7 +27,12 @@ function resolveBashExecutable(rootDir) {
     });
     if (result.status === 0 && result.stdout) {
       const paths = result.stdout.trim().split(/\r?\n/).map(p => p.trim()).filter(Boolean);
-      const gitBash = paths.find(p => !p.toLowerCase().includes('windowsapps'));
+      // Exclude WSL bash wrappers: WindowsApps\bash.exe and System32\bash.exe
+      // both launch WSL which cannot see Windows-installed node/npm/pnpm.
+      const gitBash = paths.find(p => {
+        const lower = p.toLowerCase();
+        return !lower.includes('windowsapps') && !lower.includes('system32\\bash');
+      });
       if (gitBash) return gitBash;
     }
   } catch {}
@@ -90,6 +95,12 @@ if (!bashExecutable) {
 const env = { ...process.env };
 if (process.platform === 'win32') {
   const nodeDir = path.dirname(process.execPath);
+  // MSYS2/Git Bash automatically converts Windows-style PATH entries
+  // (semicolon-separated, drive-letter paths) to Unix-style when inherited
+  // from the parent process environment.  We must keep PATH as a Windows-style
+  // string (semicolons, backslashes) so MSYS2's conversion works correctly.
+  // Simply prepend the node binary directory to ensure node/npm/pnpm are
+  // visible inside the bash script even through nested npm/cmd.exe chains.
   const pathEntries = Object.entries(env).filter(([k]) => k.toUpperCase() === 'PATH');
   const pathValue = pathEntries.map(([, v]) => v).join(path.delimiter);
   for (const [k] of pathEntries) delete env[k];
