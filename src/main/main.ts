@@ -2157,6 +2157,12 @@ if (!gotTheLock) {
 
   ipcMain.handle('cowork:session:delete', async (_event, sessionId: string) => {
     try {
+      // Stop the session first if it's running to clean up any in-flight operations
+      try {
+        getCoworkEngineRouter().stopSession(sessionId);
+      } catch {
+        // Router may not be initialised or session may not be running; safe to ignore.
+      }
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSession(sessionId);
       // Clean up IM session mapping so that new channel messages
@@ -2184,6 +2190,15 @@ if (!gotTheLock) {
 
   ipcMain.handle('cowork:session:deleteBatch', async (_event, sessionIds: string[]) => {
     try {
+      // Stop all sessions first if they're running to clean up any in-flight operations
+      const router = getCoworkEngineRouter();
+      for (const sessionId of sessionIds) {
+        try {
+          router.stopSession(sessionId);
+        } catch {
+          // Session may not be running; safe to ignore.
+        }
+      }
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSessions(sessionIds);
       const router = getCoworkEngineRouter();

@@ -194,6 +194,10 @@ const coworkSlice = createSlice({
       if (state.currentSessionId === sessionId) {
         state.currentSessionId = null;
         state.currentSession = null;
+        // Reset streaming state when deleting the current session
+        state.isStreaming = false;
+        // Clear any pending permissions for this session
+        state.pendingPermissions = [];
       }
     },
 
@@ -205,6 +209,10 @@ const coworkSlice = createSlice({
       if (state.currentSessionId && sessionIds.has(state.currentSessionId)) {
         state.currentSessionId = null;
         state.currentSession = null;
+        // Reset streaming state when deleting the current session
+        state.isStreaming = false;
+        // Clear any pending permissions for this session
+        state.pendingPermissions = [];
       }
     },
 
