@@ -2041,6 +2041,33 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           <div className="h-20" />
         </div>
 
+        {/* Scroll to Bottom Button */}
+        {!shouldAutoScroll && isScrollable && (
+          <button
+            type="button"
+            onClick={() => {
+              const container = scrollContainerRef.current;
+              if (container) {
+                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+                setShouldAutoScroll(true);
+              }
+            }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full
+              dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
+              border dark:border-claude-darkBorder border-claude-border
+              shadow-lg hover:shadow-xl
+              dark:text-claude-darkTextSecondary text-claude-textSecondary
+              dark:hover:text-claude-darkText hover:text-claude-text
+              dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover
+              transition-all duration-200 animate-fade-in"
+            aria-label={i18nService.t('scrollToBottom') || 'Scroll to bottom'}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" />
+            </svg>
+          </button>
+        )}
+
         {/* Turn Navigation Buttons */}
         {turns.length > 1 && isScrollable && (
           <div
