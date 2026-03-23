@@ -237,7 +237,17 @@ export function appendPythonRuntimeToEnv(env: Record<string, string | undefined>
   }
 
   if (pathEntries.length > 0) {
-    env.PATH = appendWindowsPath(env.PATH, pathEntries);
+    // Append bundled Python AFTER existing PATH so that external/system Python
+    // is preferred when available. The bundled Python serves as a fallback for
+    // users who don't have Python installed. This avoids version conflicts when
+    // users have their own Python environment with different dependencies.
+    const delimiter = ';';
+    const currentParts = (env.PATH || '').split(delimiter);
+    const seen = new Set(currentParts.map(p => p.trim().toLowerCase().replace(/[\\/]+$/, '')).filter(Boolean));
+    const toAppend = pathEntries.filter(p => !seen.has(p.toLowerCase().replace(/[\\/]+$/, '')));
+    if (toAppend.length > 0) {
+      env.PATH = [...currentParts.filter(p => p.trim()), ...toAppend].join(delimiter);
+    }
     env.LOBSTERAI_PYTHON_ROOT = pathEntries[0];
   }
 
