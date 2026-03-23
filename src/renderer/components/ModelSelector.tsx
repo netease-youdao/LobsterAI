@@ -56,12 +56,19 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkText text-claude-text transition-colors cursor-pointer ${isOpen ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover' : ''}`}
       >
-        <span className="font-medium text-sm">{selectedModel.name}</span>
+        <span className="font-medium text-sm">
+          {selectedModel.name}
+          {(selectedModel.inputPrice != null || selectedModel.outputPrice != null) && (
+            <span className="ml-1.5 font-normal text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              输入¥{selectedModel.inputPrice ?? '—'} · 输出¥{selectedModel.outputPrice ?? '—'}/百万token
+            </span>
+          )}
+        </span>
         <ChevronDownIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
       </button>
 
       {isOpen && (
-        <div className={`absolute ${dropdownPositionClass} w-52 dark:bg-claude-darkSurface bg-claude-surface rounded-xl popover-enter shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden`}>
+        <div className={`absolute ${dropdownPositionClass} w-64 dark:bg-claude-darkSurface bg-claude-surface rounded-xl popover-enter shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden`}>
           <div className="max-h-64 overflow-y-auto">
           {availableModels.map((model) => (
             <button
@@ -75,6 +82,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
                 <span className="text-sm">{model.name}</span>
                 {model.provider && (
                   <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
+                )}
+                {(model.inputPrice != null || model.outputPrice != null) && (
+                  <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary opacity-75">
+                    输入¥{model.inputPrice ?? '—'} · 输出¥{model.outputPrice ?? '—'}/百万token
+                  </span>
                 )}
               </div>
               {isSameModelIdentity(model, selectedModel) && (

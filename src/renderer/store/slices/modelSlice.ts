@@ -7,6 +7,8 @@ export interface Model {
   provider?: string; // 模型所属的提供商
   providerKey?: string; // 模型所属的提供商 key（用于唯一标识）
   supportsImage?: boolean;
+  inputPrice?: number | null; // 输入单价（元/百万 token）
+  outputPrice?: number | null; // 输出单价（元/百万 token）
 }
 
 export function getModelIdentityKey(model: Pick<Model, 'id' | 'providerKey'>): string {
@@ -40,6 +42,8 @@ function buildInitialModels(): Model[] {
             provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
             providerKey: providerName,
             supportsImage: model.supportsImage ?? false,
+            inputPrice: model.inputPrice ?? null,
+            outputPrice: model.outputPrice ?? null,
           });
         });
       }
