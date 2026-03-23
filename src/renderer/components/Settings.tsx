@@ -7,7 +7,7 @@ import { themeService } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
-import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { APP_ID, EXPORT_FORMAT_TYPE } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
 import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
@@ -434,6 +434,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [logoClickCount, setLogoClickCount] = useState(0);
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
   const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error'>('idle');
+
+  // Password modal states for export/import
+  const [showPasswordModal, setShowPasswordModal] = useState<'export' | 'import' | null>(null);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [showPasswordInput, setShowPasswordInput] = useState(false);
+  const [pendingImportPayload, setPendingImportPayload] = useState<ProvidersImportPayload | null>(null);
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -1586,14 +1594,47 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       supportsImage: model.supportsImage ?? false,
     }));
 
-  const DEFAULT_EXPORT_PASSWORD = EXPORT_PASSWORD;
+  // Reset password modal state
+  const resetPasswordModal = () => {
+    setShowPasswordModal(null);
+    setPasswordInput('');
+    setPasswordConfirm('');
+    setPasswordError(null);
+    setShowPasswordInput(false);
+    setPendingImportPayload(null);
+  };
 
-  const handleExportProviders = async () => {
+  // Show export password modal
+  const handleExportProvidersClick = () => {
+    setPasswordInput('');
+    setPasswordConfirm('');
+    setPasswordError(null);
+    setShowPasswordInput(false);
+    setShowPasswordModal('export');
+  };
+
+  // Validate and execute export with user password
+  const handleExportWithPassword = async () => {
+    // Validate password
+    if (!passwordInput) {
+      setPasswordError(i18nService.t('passwordRequired'));
+      return;
+    }
+    if (passwordInput.length < 4) {
+      setPasswordError(i18nService.t('passwordTooShort'));
+      return;
+    }
+    if (passwordInput !== passwordConfirm) {
+      setPasswordError(i18nService.t('passwordMismatch'));
+      return;
+    }
+
     setError(null);
     setIsExportingProviders(true);
+    resetPasswordModal();
 
     try {
-      const payload = await buildProvidersExport(DEFAULT_EXPORT_PASSWORD);
+      const payload = await buildProvidersExport(passwordInput);
       const json = JSON.stringify(payload, null, 2);
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -1641,9 +1682,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         return;
       }
 
-      // Check if it's version 2 (password-based encryption)
+      // Check if it's version 2 (password-based encryption) - show password modal
       if (payload.version === 2 && payload.encryption?.keySource === 'password') {
-        await processImportPayloadWithPassword(payload);
+        setPendingImportPayload(payload);
+        setPasswordInput('');
+        setPasswordConfirm('');
+        setPasswordError(null);
+        setShowPasswordInput(false);
+        setShowPasswordModal('import');
         return;
       }
 
@@ -1735,7 +1781,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }
   };
 
-  const processImportPayloadWithPassword = async (payload: ProvidersImportPayload) => {
+  // Handle import with user-provided password
+  const handleImportWithPassword = async () => {
+    if (!passwordInput) {
+      setPasswordError(i18nService.t('passwordRequired'));
+      return;
+    }
+    if (!pendingImportPayload) {
+      resetPasswordModal();
+      return;
+    }
+
+    const password = passwordInput;
+    const payload = pendingImportPayload;
+    resetPasswordModal();
+    await processImportPayloadWithPassword(payload, password);
+  };
+
+  const processImportPayloadWithPassword = async (payload: ProvidersImportPayload, password: string) => {
     if (!payload.providers) {
       return;
     }
@@ -1760,7 +1823,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           if (apiKeyObj.salt) {
             // Version 2 password-based encryption
             try {
-              apiKey = await decryptWithPassword(apiKeyObj, DEFAULT_EXPORT_PASSWORD);
+              apiKey = await decryptWithPassword(apiKeyObj, password);
             } catch (error) {
               hadDecryptFailure = true;
               console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
@@ -2246,7 +2309,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </button>
                   <button
                     type="button"
-                    onClick={handleExportProviders}
+                    onClick={handleExportProvidersClick}
                     disabled={isImportingProviders || isExportingProviders}
                     className="inline-flex items-center px-2 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                   >
@@ -3293,9 +3356,104 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               </div>
             </div>
           )}
+
+          {/* Password Modal for Export/Import */}
+          {showPasswordModal && (
+            <div
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+              onClick={(e) => { e.stopPropagation(); resetPasswordModal(); }}
+            >
+              <div
+                className="w-[400px] rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-lg p-6"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text mb-2">
+                  {showPasswordModal === 'export'
+                    ? i18nService.t('exportPasswordTitle')
+                    : i18nService.t('importPasswordTitle')}
+                </h3>
+                <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
+                  {showPasswordModal === 'export'
+                    ? i18nService.t('exportPasswordHint')
+                    : i18nService.t('importPasswordHint')}
+                </p>
+
+                <div className="space-y-3">
+                  {/* Password Input */}
+                  <div>
+                    <label className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
+                      {i18nService.t('password')}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPasswordInput ? 'text' : 'password'}
+                        value={passwordInput}
+                        onChange={(e) => {
+                          setPasswordInput(e.target.value);
+                          if (passwordError) setPasswordError(null);
+                        }}
+                        placeholder={i18nService.t('enterPassword')}
+                        className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-10 text-sm"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPasswordInput(!showPasswordInput)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText"
+                      >
+                        {showPasswordInput ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Confirm Password (Export only) */}
+                  {showPasswordModal === 'export' && (
+                    <div>
+                      <label className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
+                        {i18nService.t('confirmPassword')}
+                      </label>
+                      <input
+                        type={showPasswordInput ? 'text' : 'password'}
+                        value={passwordConfirm}
+                        onChange={(e) => {
+                          setPasswordConfirm(e.target.value);
+                          if (passwordError) setPasswordError(null);
+                        }}
+                        placeholder={i18nService.t('enterPasswordAgain')}
+                        className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm"
+                      />
+                    </div>
+                  )}
+
+                  {/* Error Message */}
+                  {passwordError && (
+                    <p className="text-xs text-red-500">{passwordError}</p>
+                  )}
+                </div>
+
+                {/* Buttons */}
+                <div className="flex justify-end space-x-2 mt-5">
+                  <button
+                    type="button"
+                    onClick={resetPasswordModal}
+                    className="px-4 py-2 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover rounded-xl border dark:border-claude-darkBorder border-claude-border transition-colors"
+                  >
+                    {i18nService.t('cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={showPasswordModal === 'export' ? handleExportWithPassword : handleImportWithPassword}
+                    className="px-4 py-2 text-sm text-white bg-claude-accent hover:bg-claude-accentHover rounded-xl transition-colors active:scale-[0.98]"
+                  >
+                    {showPasswordModal === 'export' ? i18nService.t('export') : i18nService.t('import')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
       </div>
     </div>
   );
 };
 
-export default Settings; 
+export default Settings;

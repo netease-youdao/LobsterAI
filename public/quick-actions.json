@@ -80,6 +80,26 @@
           "id": "web-survey"
         }
       ]
+    },
+    {
+      "id": "life-assistant",
+      "icon": "SparklesIcon",
+      "color": "#EC4899",
+      "skillMapping": "frontend-design",
+      "prompts": [
+        {
+          "id": "life-schedule"
+        },
+        {
+          "id": "life-travel"
+        },
+        {
+          "id": "life-recipe"
+        },
+        {
+          "id": "life-fitness"
+        }
+      ]
     }
   ]
 }

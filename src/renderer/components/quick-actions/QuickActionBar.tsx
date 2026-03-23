@@ -5,6 +5,7 @@ import GlobeAltIcon from '../icons/GlobeAltIcon';
 import DevicePhoneMobileIcon from '../icons/DevicePhoneMobileIcon';
 import ChartBarIcon from '../icons/ChartBarIcon';
 import AcademicCapIcon from '../icons/AcademicCapIcon';
+import SparklesIcon from '../icons/SparklesIcon';
 
 interface QuickActionBarProps {
   actions: LocalizedQuickAction[];
@@ -18,6 +19,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   DevicePhoneMobileIcon,
   ChartBarIcon,
   AcademicCapIcon,
+  SparklesIcon,
 };
 
 const QuickActionBar: React.FC<QuickActionBarProps> = ({ actions, onActionSelect }) => {

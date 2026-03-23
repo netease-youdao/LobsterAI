@@ -1538,11 +1538,40 @@ if (!gotTheLock) {
 
   // IPC 处理程序
   ipcMain.handle('store:get', (_event, key) => {
-    return getStore().get(key);
+    // Security: Validate key against whitelist
+    const { isKeyReadable } = require('./libs/storeKeyWhitelist');
+    if (typeof key !== 'string' || !isKeyReadable(key)) {
+      console.warn(`[Store] Blocked read access to unauthorized key: ${key}`);
+      return undefined;
+    }
+
+    const value = getStore().get(key);
+
+    // Decrypt sensitive data for providers
+    if (key === 'providers' && value && typeof value === 'object') {
+      const { decryptProviders } = require('./libs/secureStorage');
+      return decryptProviders(value as Record<string, { apiKey?: string }>);
+    }
+
+    return value;
   });
 
   ipcMain.handle('store:set', async (_event, key, value) => {
-    getStore().set(key, value);
+    // Security: Validate key against whitelist
+    const { isKeyWritable } = require('./libs/storeKeyWhitelist');
+    if (typeof key !== 'string' || !isKeyWritable(key)) {
+      console.warn(`[Store] Blocked write access to unauthorized key: ${key}`);
+      return;
+    }
+
+    // Encrypt sensitive data for providers
+    let processedValue = value;
+    if (key === 'providers' && value && typeof value === 'object') {
+      const { encryptProviders } = require('./libs/secureStorage');
+      processedValue = encryptProviders(value as Record<string, { apiKey?: string }>);
+    }
+
+    getStore().set(key, processedValue);
     if (key === 'app_config') {
       const syncResult = await syncOpenClawConfig({
         reason: 'app-config-change',
@@ -1555,6 +1584,12 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('store:remove', (_event, key) => {
+    // Security: Validate key against whitelist
+    const { isKeyDeletable } = require('./libs/storeKeyWhitelist');
+    if (typeof key !== 'string' || !isKeyDeletable(key)) {
+      console.warn(`[Store] Blocked delete access to unauthorized key: ${key}`);
+      return;
+    }
     getStore().delete(key);
   });
 
@@ -3638,6 +3673,10 @@ if (!gotTheLock) {
 
   const runAppCleanup = async (): Promise<void> => {
     console.log('[Main] App is quitting, starting cleanup...');
+
+    // Clear any pending deferred restart timers to prevent memory leaks
+    clearDeferredRestart();
+
     destroyTray();
     skillManager?.stopWatching();
 

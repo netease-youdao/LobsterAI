@@ -90,9 +90,26 @@ contextBridge.exposeInMainWorld('electron', {
   },
   ipcRenderer: {
     send: (channel: string, ...args: any[]) => {
+      // Security: Only allow specific channels for generic send
+      const allowedSendChannels = [
+        'network:status-change',
+      ];
+      if (!allowedSendChannels.includes(channel)) {
+        console.warn(`[IPC] Blocked send to unauthorized channel: ${channel}`);
+        return;
+      }
       ipcRenderer.send(channel, ...args);
     },
     on: (channel: string, func: (...args: any[]) => void) => {
+      // Security: Only allow specific channels for generic listener
+      const allowedOnChannels = [
+        'app:openSettings',
+        'app:newTask',
+      ];
+      if (!allowedOnChannels.includes(channel)) {
+        console.warn(`[IPC] Blocked listener on unauthorized channel: ${channel}`);
+        return () => {};
+      }
       const handler = (_event: any, ...args: any[]) => func(...args);
       ipcRenderer.on(channel, handler);
       return () => ipcRenderer.removeListener(channel, handler);

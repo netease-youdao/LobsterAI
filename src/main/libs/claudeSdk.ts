@@ -41,15 +41,42 @@ function getClaudeSdkPath(): string {
   return sdkPath;
 }
 
+// SECURITY NOTE: We use `new Function()` here to enable dynamic ESM import from CJS context.
+// This is a controlled usage pattern where the specifier is always a validated file:// URL
+// pointing to the bundled Claude SDK path. The path is computed from app.getAppPath() and
+// process.resourcesPath, not from user input, making this safe from injection attacks.
+// Alternative approaches (vm.Module, worker_threads) would add significant complexity.
+const createDynamicImport = (): ((specifier: string) => Promise<ClaudeSdkModule>) => {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  return new Function('specifier', 'return import(specifier)') as (
+    specifier: string
+  ) => Promise<ClaudeSdkModule>;
+};
+
+// Validate that a URL is a safe file:// URL pointing to our SDK
+const isValidSdkUrl = (url: string): boolean => {
+  if (!url.startsWith('file://')) {
+    return false;
+  }
+  // Must contain our expected SDK path parts
+  return url.includes('@anthropic-ai') && url.includes('claude-agent-sdk') && url.endsWith('sdk.mjs');
+};
+
 export function loadClaudeSdk(): Promise<ClaudeSdkModule> {
   if (!claudeSdkPromise) {
-    // Use runtime dynamic import so the CJS build can load the SDK's ESM entry.
-    const dynamicImport = new Function('specifier', 'return import(specifier)') as (
-      specifier: string
-    ) => Promise<ClaudeSdkModule>;
     const sdkPath = getClaudeSdkPath();
     const sdkUrl = pathToFileURL(sdkPath).href;
     const sdkExists = existsSync(sdkPath);
+
+    // Validate the URL before dynamic import
+    if (!isValidSdkUrl(sdkUrl)) {
+      const error = new Error(`Invalid SDK URL: ${sdkUrl}`);
+      coworkLog('ERROR', 'loadClaudeSdk', 'SDK URL validation failed', {
+        sdkUrl,
+        sdkPath,
+      });
+      return Promise.reject(error);
+    }
 
     coworkLog('INFO', 'loadClaudeSdk', 'Loading Claude SDK', {
       sdkPath,
@@ -59,6 +86,8 @@ export function loadClaudeSdk(): Promise<ClaudeSdkModule> {
       resourcesPath: process.resourcesPath,
     });
 
+    // Use runtime dynamic import so the CJS build can load the SDK's ESM entry.
+    const dynamicImport = createDynamicImport();
     claudeSdkPromise = dynamicImport(sdkUrl).catch((error) => {
       coworkLog('ERROR', 'loadClaudeSdk', 'Failed to load Claude SDK', {
         error: error instanceof Error ? error.message : String(error),

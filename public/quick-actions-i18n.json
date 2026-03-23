@@ -75,6 +75,31 @@
         }
       }
     },
+    "life-assistant": {
+      "label": "生活助手",
+      "prompts": {
+        "life-schedule": {
+          "label": "日程规划",
+          "description": "制定高效的日程安排与时间管理方案",
+          "prompt": "请帮我制定一份高效的日程规划,我的情况如下:\n\n时间范围:下周一到周五\n主要任务:\n- 完成项目报告(预计需要6小时)\n- 参加3次线上会议(周二上午、周三下午、周五上午)\n- 健身3次(每次1小时)\n- 学习英语(每天30分钟)\n- 处理日常邮件和琐事\n\n我的偏好:\n- 上午精力最好,适合做深度工作\n- 午饭后容易犯困,适合轻松任务\n- 晚上7点后希望留给家人\n\n请帮我:\n1. 合理分配每天的时间块\n2. 设置任务优先级\n3. 预留缓冲时间应对突发情况\n4. 给出提高效率的小建议"
+        },
+        "life-travel": {
+          "label": "旅行规划",
+          "description": "生成完整的旅行攻略与行程安排",
+          "prompt": "请帮我规划一次旅行,基本信息如下:\n\n目的地:云南大理\n出行时间:5天4晚\n出行人数:2人(情侣)\n预算:人均5000元左右\n出发地:上海\n\n偏好:\n- 喜欢自然风光和人文景观\n- 想体验当地特色美食\n- 不想行程太赶,希望有放松的时间\n- 希望住宿有特色(如民宿、海景房)\n\n请帮我生成:\n1. 每日详细行程安排(景点+餐饮+住宿)\n2. 交通方式建议(机票/火车+当地出行)\n3. 必吃美食和推荐餐厅\n4. 预算明细估算\n5. 行前准备清单和注意事项"
+        },
+        "life-recipe": {
+          "label": "菜谱推荐",
+          "description": "基于食材和偏好推荐菜谱做法",
+          "prompt": "请根据我现有的食材推荐今天的晚餐菜谱:\n\n冰箱里有:\n- 鸡胸肉 300g\n- 西兰花 1颗\n- 胡萝卜 2根\n- 鸡蛋 4个\n- 大米\n- 常用调料(盐、酱油、蚝油、料酒等)\n\n要求:\n- 做2-3道菜,够2人吃\n- 希望健康少油\n- 烹饪时间控制在40分钟内\n- 我是厨房新手,步骤要详细\n\n请提供:\n1. 推荐的菜品组合\n2. 每道菜的详细食材用量\n3. 分步骤的烹饪指导(带时间提示)\n4. 新手容易出错的地方和避坑提醒\n5. 营养搭配说明"
+        },
+        "life-fitness": {
+          "label": "健身计划",
+          "description": "定制个性化的运动训练方案",
+          "prompt": "请帮我制定一份个性化的健身计划:\n\n我的情况:\n- 性别:男,28岁\n- 身高体重:175cm,80kg(微胖)\n- 健身目标:减脂增肌,改善体态\n- 运动基础:偶尔跑步,没有系统训练过\n- 可用时间:每周4次,每次1小时\n- 场地:家里(有哑铃和瑜伽垫)+ 小区跑道\n\n请提供:\n1. 每周训练计划安排(具体到每天练什么)\n2. 每次训练的动作清单(含组数、次数、休息时间)\n3. 每个动作的要点说明和常见错误\n4. 配套的饮食建议\n5. 4周后的进阶调整方向\n6. 如何判断训练效果和调整计划"
+        }
+      }
+    },
     "website": {
       "label": "创建网站",
       "prompts": {
@@ -174,6 +199,31 @@
           "label": "Knowledge Explanation",
           "description": "Explain complex knowledge in simple language",
           "prompt": "Please explain the concept of \"photosynthesis\" in easy-to-understand language:\n\n1. Summarize what photosynthesis is in one sentence\n2. Explain the principle with everyday life analogies\n3. Draw a simple process of photosynthesis (text-based flowchart)\n4. Explain the importance of photosynthesis for Earth and humanity\n5. Propose 3 thinking questions to help me deepen my understanding"
+        }
+      }
+    },
+    "life-assistant": {
+      "label": "Life Assistant",
+      "prompts": {
+        "life-schedule": {
+          "label": "Schedule Planning",
+          "description": "Create efficient schedule and time management plans",
+          "prompt": "Please help me create an efficient schedule plan. Here's my situation:\n\nTime range: Next Monday to Friday\nMain tasks:\n- Complete project report (estimated 6 hours)\n- Attend 3 online meetings (Tuesday morning, Wednesday afternoon, Friday morning)\n- Work out 3 times (1 hour each)\n- Study English (30 minutes daily)\n- Handle daily emails and errands\n\nMy preferences:\n- Most energetic in the morning, suitable for deep work\n- Tend to feel sleepy after lunch, suitable for light tasks\n- Want to reserve time after 7pm for family\n\nPlease help me:\n1. Allocate time blocks reasonably for each day\n2. Set task priorities\n3. Reserve buffer time for unexpected situations\n4. Provide tips to improve efficiency"
+        },
+        "life-travel": {
+          "label": "Travel Planning",
+          "description": "Generate complete travel itinerary and guide",
+          "prompt": "Please help me plan a trip with the following details:\n\nDestination: Dali, Yunnan\nDuration: 5 days 4 nights\nTravelers: 2 people (couple)\nBudget: Around $700 per person\nDeparture: Shanghai\n\nPreferences:\n- Love natural scenery and cultural attractions\n- Want to experience local cuisine\n- Don't want a rushed itinerary, need relaxation time\n- Prefer unique accommodations (like boutique hotels, lake view rooms)\n\nPlease generate:\n1. Detailed daily itinerary (attractions + dining + accommodation)\n2. Transportation suggestions (flights/train + local transport)\n3. Must-try food and recommended restaurants\n4. Budget breakdown estimate\n5. Packing list and travel tips"
+        },
+        "life-recipe": {
+          "label": "Recipe Recommendations",
+          "description": "Recommend recipes based on ingredients and preferences",
+          "prompt": "Please recommend dinner recipes based on my available ingredients:\n\nIn my fridge:\n- Chicken breast 300g\n- Broccoli 1 head\n- Carrots 2\n- Eggs 4\n- Rice\n- Common seasonings (salt, soy sauce, oyster sauce, cooking wine, etc.)\n\nRequirements:\n- Make 2-3 dishes, enough for 2 people\n- Healthy and low-oil preferred\n- Cooking time within 40 minutes\n- I'm a kitchen beginner, need detailed steps\n\nPlease provide:\n1. Recommended dish combinations\n2. Detailed ingredient amounts for each dish\n3. Step-by-step cooking instructions (with time hints)\n4. Common mistakes beginners make and how to avoid them\n5. Nutritional balance explanation"
+        },
+        "life-fitness": {
+          "label": "Fitness Plan",
+          "description": "Create personalized workout and training plans",
+          "prompt": "Please help me create a personalized fitness plan:\n\nMy situation:\n- Gender: Male, 28 years old\n- Height/Weight: 175cm, 80kg (slightly overweight)\n- Fitness goal: Lose fat, build muscle, improve posture\n- Exercise background: Occasional jogging, no systematic training\n- Available time: 4 times per week, 1 hour each\n- Equipment: Home (dumbbells and yoga mat) + neighborhood track\n\nPlease provide:\n1. Weekly training schedule (specific exercises for each day)\n2. Exercise list for each session (sets, reps, rest time)\n3. Key points and common mistakes for each exercise\n4. Matching dietary suggestions\n5. Progression adjustments after 4 weeks\n6. How to evaluate training results and adjust the plan"
         }
       }
     },
