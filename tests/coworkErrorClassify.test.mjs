@@ -1,29 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createRequire } from 'node:module';
 
-// Mirror the ERROR_RULES from src/renderer/services/cowork.ts
-// so we can test the regex patterns without importing renderer code.
-const ERROR_RULES = [
-  [/authentication[_ ](error|fails?)|api[_ ]key.*(invalid|expired|not[_ ]valid)|invalid.*api.*key|incorrect.*api.*key|unauthorized|PERMISSION_DENIED|\b401\b/i, 'coworkErrorAuthInvalid'],
-  [/\b429\b|rate[_ ]limit|too many requests|overloaded|RESOURCE_EXHAUSTED/i, 'coworkErrorRateLimit'],
-  [/insufficient.*(balance|quota|credits)|billing|quota[_ ]exceeded|Arrearage|account.*not.*in.*good.*standing|余额不足|\b402\b/i, 'coworkErrorInsufficientBalance'],
-  [/input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
-  [/could not process pdf/i, 'coworkErrorCouldNotProcessPdf'],
-  [/model.*not.*(found|exist)/i, 'coworkErrorModelNotFound'],
-  [/gateway.*disconnect|client disconnected/i, 'coworkErrorGatewayDisconnected'],
-  [/service restart/i, 'coworkErrorServiceRestart'],
-  [/gateway.*draining|draining.*restart/i, 'coworkErrorGatewayDraining'],
-  [/DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i, 'coworkErrorContentFiltered'],
-  [/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|could not connect|connection.*refused|network.*error/i, 'coworkErrorNetworkError'],
-  [/internal.server.error|bad.gateway|service.unavailable|\b50[023]\b/i, 'coworkErrorServerError'],
-];
+const require = createRequire(import.meta.url);
+const { classifyErrorKey } = require('../dist-electron/common/coworkErrorClassify.js');
 
-const classifyError = (error) => {
-  for (const [pattern, key] of ERROR_RULES) {
-    if (pattern.test(error)) return key;
-  }
-  return error;
-};
+const classifyError = (error) => classifyErrorKey(error) ?? error;
 
 // ==================== Auth errors ====================
 

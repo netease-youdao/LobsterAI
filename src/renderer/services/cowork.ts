@@ -9,6 +9,7 @@ import {
   addMessage,
   updateMessageContent,
   setStreaming,
+  setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
   enqueuePendingPermission,
@@ -29,38 +30,11 @@ import type {
   CoworkContinueOptions,
 } from '../types/cowork';
 import { i18nService } from './i18n';
-
-const ERROR_RULES: Array<[RegExp, string]> = [
-  // Auth: Anthropic, DeepSeek, OpenAI, Gemini, HTTP 401
-  [/authentication[_ ](error|fails?)|api[_ ]key.*(invalid|expired|not[_ ]valid)|invalid.*api.*key|incorrect.*api.*key|unauthorized|PERMISSION_DENIED|\b401\b/i, 'coworkErrorAuthInvalid'],
-  // Rate limit: HTTP 429, Anthropic/DeepSeek overloaded, Gemini RESOURCE_EXHAUSTED
-  // (must precede billing so "RESOURCE_EXHAUSTED: quota exceeded" maps to rate-limit)
-  [/\b429\b|rate[_ ]limit|too many requests|overloaded|RESOURCE_EXHAUSTED/i, 'coworkErrorRateLimit'],
-  // Billing: DeepSeek 402, OpenAI, OpenRouter, Qwen, StepFun
-  [/insufficient.*(balance|quota|credits)|billing|quota[_ ]exceeded|Arrearage|account.*not.*in.*good.*standing|余额不足|\b402\b/i, 'coworkErrorInsufficientBalance'],
-  // Input too long: context length, HTTP 413, Qwen, payload too large
-  [/input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
-  // PDF processing failure
-  [/could not process pdf/i, 'coworkErrorCouldNotProcessPdf'],
-  // Model not found: standard, Qwen, Ollama
-  [/model.*not.*(found|exist)/i, 'coworkErrorModelNotFound'],
-  // Gateway / connection issues
-  [/gateway.*disconnect|client disconnected/i, 'coworkErrorGatewayDisconnected'],
-  [/service restart/i, 'coworkErrorServiceRestart'],
-  [/gateway.*draining|draining.*restart/i, 'coworkErrorGatewayDraining'],
-  // Content moderation: Qwen, StepFun 451, generic
-  [/DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i, 'coworkErrorContentFiltered'],
-  // Network errors
-  [/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|could not connect|connection.*refused|network.*error/i, 'coworkErrorNetworkError'],
-  // Server errors: HTTP 500/502/503
-  [/internal.server.error|bad.gateway|service.unavailable|\b50[023]\b/i, 'coworkErrorServerError'],
-];
+import { classifyErrorKey } from '../../common/coworkErrorClassify';
 
 const classifyError = (error: string): string => {
-  for (const [pattern, key] of ERROR_RULES) {
-    if (pattern.test(error)) return i18nService.t(key);
-  }
-  return error;
+  const key = classifyErrorKey(error);
+  return key ? i18nService.t(key) : error;
 };
 
 class CoworkService {
@@ -275,6 +249,14 @@ class CoworkService {
       this.notifyOpenClawStatus(result.engineStatus);
     }
 
+    // Show a user-visible error when session start fails
+    if (result.error) {
+      const errorContent = result.code === 'ENGINE_NOT_READY'
+        ? i18nService.t('coworkErrorEngineNotReady')
+        : classifyError(result.error);
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
+    }
+
     store.dispatch(setStreaming(false));
     console.error('Failed to start session:', result.error);
     return { session: null, error: result.error };
@@ -315,6 +297,21 @@ class CoworkService {
             },
           }));
         }
+      }
+      // Show a user-visible error message in the session
+      if (result.error) {
+        const errorContent = result.code === 'ENGINE_NOT_READY'
+          ? i18nService.t('coworkErrorEngineNotReady')
+          : classifyError(result.error);
+        store.dispatch(addMessage({
+          sessionId: options.sessionId,
+          message: {
+            id: `error-${Date.now()}`,
+            type: 'system',
+            content: errorContent,
+            timestamp: Date.now(),
+          },
+        }));
       }
       console.error('Failed to continue session:', result.error);
       return false;
@@ -469,6 +466,12 @@ class CoworkService {
       }
       store.dispatch(setCurrentSession(result.session));
       store.dispatch(setStreaming(result.session.status === 'running'));
+
+      const imResult = await cowork.remoteManaged(sessionId);
+      if (requestId === this.latestLoadSessionRequestId) {
+        store.dispatch(setRemoteManaged(imResult?.remoteManaged ?? false));
+      }
+
       return result.session;
     }
 

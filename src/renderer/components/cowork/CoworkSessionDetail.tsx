@@ -28,7 +28,7 @@ import { getScheduledReminderDisplayText } from '../../../common/scheduledRemind
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
-  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => void;
+  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
   onNavigateHome?: () => void;
   isSidebarCollapsed?: boolean;
@@ -1289,6 +1289,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
+  const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -2084,16 +2085,26 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       {/* Input Area */}
       <div className="p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
-          <CoworkPromptInput
-            onSubmit={onContinue}
-            onStop={onStop}
-            isStreaming={isStreaming}
-            placeholder={i18nService.t('coworkContinuePlaceholder')}
-            disabled={false}
-            onManageSkills={onManageSkills}
-            size="large"
-            showModelSelector={true}
-          />
+          {remoteManaged ? (
+            <div className="flex items-center gap-2 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface px-4 py-3">
+              <InformationCircleIcon className="h-5 w-5 shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+              <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('coworkRemoteManagedPlaceholder')}
+              </span>
+            </div>
+          ) : (
+            <CoworkPromptInput
+              onSubmit={onContinue}
+              onStop={onStop}
+              isStreaming={isStreaming}
+              placeholder={i18nService.t('coworkContinuePlaceholder')}
+              disabled={false}
+              onManageSkills={onManageSkills}
+              size="large"
+              showModelSelector={true}
+              sessionId={currentSession?.id}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -16,6 +16,7 @@ import type {
   XiaomifengConfig,
   WecomOpenClawConfig,
   PopoOpenClawConfig,
+  WeixinOpenClawConfig,
   IMSettings,
 } from '../../types/im';
 import {
@@ -74,6 +75,9 @@ const imSlice = createSlice({
     setPopoConfig: (state, action: PayloadAction<Partial<PopoOpenClawConfig>>) => {
       state.config.popo = { ...state.config.popo, ...action.payload };
     },
+    setWeixinConfig: (state, action: PayloadAction<Partial<WeixinOpenClawConfig>>) => {
+      state.config.weixin = { ...state.config.weixin, ...action.payload };
+    },
     setIMSettings: (state, action: PayloadAction<Partial<IMSettings>>) => {
       state.config.settings = { ...state.config.settings, ...action.payload };
     },
@@ -103,6 +107,7 @@ export const {
   setXiaomifengConfig,
   setWecomConfig,
   setPopoConfig,
+  setWeixinConfig,
   setIMSettings,
   setStatus,
   setLoading,

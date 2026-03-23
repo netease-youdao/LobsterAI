@@ -26,6 +26,30 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Timeout hint
     taskTimedOut: '[任务超时] 任务因超过最大允许时长而被自动停止。你可以继续对话以从中断处继续。',
+
+    // Feishu bot install
+    feishuVerifyCredentialsFailed: '凭证验证失败，请检查 App ID 和 App Secret 是否正确',
+    feishuVerifyFailed: '验证失败',
+
+    // Cowork error messages (shared with renderer via classifyErrorKey)
+    coworkErrorAuthInvalid: 'API 密钥无效或已过期，请检查配置。',
+    coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
+    coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
+    coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。',
+    coworkErrorModelNotFound: '请求的模型不存在或不可用。',
+    coworkErrorGatewayDisconnected: 'AI 引擎连接中断，请重试。',
+    coworkErrorServiceRestart: 'AI 引擎正在重启，请稍后重试。',
+    coworkErrorGatewayDraining: 'AI 引擎正在重启中，请稍等片刻后重试。',
+    coworkErrorNetworkError: '网络连接失败，请检查网络设置。',
+    coworkErrorRateLimit: '请求过于频繁，请稍后再试。',
+    coworkErrorContentFiltered: '内容未通过安全审核，请修改后重试。',
+    coworkErrorServerError: '服务端出现错误，请稍后重试。',
+    coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
+    coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
+    imErrorPrefix: '处理消息时出错',
+
+    // Skill manager errors
+    skillErrNoSkillMd: '来源中未找到 SKILL.md',
   },
   en: {
     // Tray menu
@@ -39,6 +63,30 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Timeout hint
     taskTimedOut: '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
+
+    // Feishu bot install
+    feishuVerifyCredentialsFailed: 'Credential validation failed. Please check your App ID and App Secret.',
+    feishuVerifyFailed: 'Verification failed',
+
+    // Cowork error messages
+    coworkErrorAuthInvalid: 'Invalid or expired API key. Please check your configuration.',
+    coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
+    coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
+    coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file.',
+    coworkErrorModelNotFound: 'The requested model does not exist or is unavailable.',
+    coworkErrorGatewayDisconnected: 'AI engine connection lost. Please retry.',
+    coworkErrorServiceRestart: 'AI engine is restarting. Please try again later.',
+    coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',
+    coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
+    coworkErrorRateLimit: 'Too many requests. Please try again later.',
+    coworkErrorContentFiltered: 'Content did not pass the safety review. Please modify and try again.',
+    coworkErrorServerError: 'Server error occurred. Please try again later.',
+    coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
+    coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
+    imErrorPrefix: 'Error processing message',
+
+    // Skill manager errors
+    skillErrNoSkillMd: 'No SKILL.md found in source',
   },
 };
 

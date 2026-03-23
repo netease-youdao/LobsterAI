@@ -69,6 +69,7 @@ export const CHANNEL_PLATFORM_MAP: Record<string, IMPlatform> = {
   'wecom-openclaw-plugin': 'wecom',
   'moltbot-popo': 'popo',
   nim: 'nim',
+  'openclaw-weixin': 'weixin',
 };
 
 /** Parse a channel sessionKey into platform + conversationId.
@@ -177,6 +178,7 @@ const CHANNEL_TITLE_PREFIX: Record<string, string> = {
   'wecom-openclaw-plugin': '[企微]',
   popo: '[POPO]',
   nim: '[云信]',
+  weixin: '[微信]',
 };
 
 export interface ChannelSessionSyncDeps {
@@ -211,8 +213,6 @@ export class OpenClawChannelSessionSync {
    * Returns the local sessionId if the sessionKey belongs to a channel, or null if not.
    */
   resolveOrCreateSession(sessionKey: string): string | null {
-    console.log('[ChannelSessionSync] resolveOrCreateSession called with key:', sessionKey);
-
     // 1. Skip LobsterAI-originated sessions
     if (isManagedSessionKey(sessionKey)) {
       console.log('[ChannelSessionSync] skipped: LobsterAI-originated session');

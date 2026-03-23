@@ -1,7 +1,7 @@
 !include "FileFunc.nsh"
 
 !macro customHeader
-  ; Request admin privileges for script execution (tar extract, warmup, etc.)
+  ; Request admin privileges for script execution (tar extract, etc.)
   ; This does NOT change the default install path — just ensures UAC elevation.
   RequestExecutionLevel admin
 
@@ -54,31 +54,23 @@
   FileWrite $2 "tar-extract-done: $5-$4-$3 $6:$7:$8 exit=$0$\r$\n"
   Delete "$INSTDIR\resources\win-resources.tar"
 
-  ; ─── V8 Compile Cache Warmup (silent) ───
-  ; After the runtime is extracted, load the gateway bundle once using
-  ; Electron's own Node runtime so V8 compiles and caches the bytecode.
-  ; This turns the user's first gateway startup from ~95s (cold V8 compile)
-  ; into ~15s (cached bytecode).
+  System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "")i'
+
+  ; ─── Windows Defender Exclusion (optional, best-effort) ───
+  ; Add the OpenClaw runtime directory to Windows Defender exclusions to avoid
+  ; real-time scanning of ~3000 JS/native files during gateway startup.
+  ; This can reduce first-launch time from ~120s to ~10s on Windows.
   ;
-  ; The warmup script is a no-op when the bundle is missing and exits 0 on
-  ; any error, so it cannot block or break the installer.
+  ; This is a best-effort optimization:
+  ; - Requires admin privileges (already elevated for installation)
+  ; - Silently skipped if Defender is not running or policy disallows it
+  ; - Only excludes the bundled runtime, not the entire application
+  ; - Common practice for developer tools (VS Code, Docker Desktop, etc.)
 
-  StrCpy $1 "$APPDATA\LobsterAI\openclaw\state\.compile-cache"
-
-  System::Call 'Kernel32::SetEnvironmentVariable(t "NODE_COMPILE_CACHE", t "$1")i'
-
-  ${GetTime} "" "L" $3 $4 $5 $6 $7 $8 $9
-  FileWrite $2 "warmup-start: $5-$4-$3 $6:$7:$8$\r$\n"
-
-  nsExec::ExecToStack '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "$INSTDIR\resources\cfmind\warmup-compile-cache.cjs" --cache-dir "$1"'
+  nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "try { Add-MpPreference -ExclusionPath $\"$INSTDIR\resources\cfmind$\" -ErrorAction Stop; Write-Output ok } catch { Write-Output skip }"'
   Pop $0
   Pop $1
-
-  ${GetTime} "" "L" $3 $4 $5 $6 $7 $8 $9
-  FileWrite $2 "warmup-done: $5-$4-$3 $6:$7:$8 exit=$0$\r$\n"
-
-  System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "")i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "NODE_COMPILE_CACHE", t "")i'
+  FileWrite $2 "defender-exclusion: exit=$0 result=$1$\r$\n"
 
   ; Clean up the unpack script — no longer needed after installation
   Delete "$INSTDIR\resources\unpack-cfmind.cjs"
@@ -88,4 +80,12 @@
   FileClose $2
 
   SetDetailsPrint both
+!macroend
+
+!macro customUnInstall
+  ; ─── Remove Windows Defender Exclusion on uninstall ───
+  ; Clean up the exclusion we added during installation.
+  nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "try { Remove-MpPreference -ExclusionPath $\"$INSTDIR\resources\cfmind$\" -ErrorAction SilentlyContinue } catch {}"'
+  Pop $0
+  Pop $1
 !macroend
