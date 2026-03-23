@@ -6,7 +6,7 @@ import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
-import { SkillsButton, ActiveSkillBadge } from '../skills';
+import { SkillsButton, ActiveSkillBadge, SlashSkillsPopover, useSlashFilteredSkills } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -144,6 +144,51 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
+
+  // --- Slash command state ---
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState('');
+  const [slashHighlight, setSlashHighlight] = useState(0);
+  const slashFilteredSkills = useSlashFilteredSkills(slashQuery, skills);
+
+  // Detect "/" input and manage slash popover state
+  const handleValueChange = useCallback((newValue: string) => {
+    setValue(newValue);
+
+    // Check if the entire value starts with "/" (slash command mode)
+    if (newValue.startsWith('/')) {
+      const query = newValue.slice(1); // text after "/"
+      setSlashQuery(query);
+      setSlashHighlight(0);
+      if (!slashOpen) setSlashOpen(true);
+    } else {
+      if (slashOpen) {
+        setSlashOpen(false);
+        setSlashQuery('');
+        setSlashHighlight(0);
+      }
+    }
+  }, [slashOpen]);
+
+  const handleSlashSelectSkill = useCallback((skill: Skill) => {
+    // Activate the skill
+    dispatch(toggleActiveSkill(skill.id));
+    // Clear the "/" text from input
+    setValue('');
+    dispatch(setDraftPrompt(''));
+    // Close the popover
+    setSlashOpen(false);
+    setSlashQuery('');
+    setSlashHighlight(0);
+    // Re-focus textarea
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [dispatch]);
+
+  const handleSlashClose = useCallback(() => {
+    setSlashOpen(false);
+    setSlashQuery('');
+    setSlashHighlight(0);
+  }, []);
 
   const isLarge = size === 'large';
   const minHeight = isLarge ? 60 : 24;
@@ -286,8 +331,40 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [onManageSkills]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to submit, Shift+Enter for new line
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+
+    // When slash popover is open, intercept navigation keys
+    if (slashOpen && slashFilteredSkills.length > 0 && !isComposing) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSlashHighlight(prev =>
+          prev < slashFilteredSkills.length - 1 ? prev + 1 : 0
+        );
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSlashHighlight(prev =>
+          prev > 0 ? prev - 1 : slashFilteredSkills.length - 1
+        );
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const selected = slashFilteredSkills[slashHighlight];
+        if (selected) {
+          handleSlashSelectSkill(selected);
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        handleSlashClose();
+        return;
+      }
+    }
+
+    // Enter to submit, Shift+Enter for new line
     if (event.key === 'Enter' && !event.shiftKey && !isComposing && !isStreaming && !disabled) {
       event.preventDefault();
       handleSubmit();
@@ -578,6 +655,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   return (
     <div className="relative">
+      <SlashSkillsPopover
+        isOpen={slashOpen}
+        searchQuery={slashQuery}
+        highlightedIndex={slashHighlight}
+        onSelectSkill={handleSlashSelectSkill}
+        onClose={handleSlashClose}
+      />
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
@@ -639,7 +723,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => handleValueChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={placeholder}
@@ -725,7 +809,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => handleValueChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={placeholder}
