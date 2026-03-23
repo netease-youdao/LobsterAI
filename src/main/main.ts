@@ -1554,11 +1554,14 @@ const scheduleReload = (reason: string, webContents?: WebContents) => {
 
 
 // 确保应用程序只有一个实例
+console.log('[Main] Requesting single instance lock, argv:', process.argv);
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
+  console.log('[Main] Another instance is already running, quitting');
   app.quit();
 } else {
+  console.log('[Main] Single instance lock acquired, isAutoLaunched:', isAutoLaunched());
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
     console.log('[Main] second-instance event', { commandLine, workingDirectory });
     // 如果尝试启动第二个实例，则聚焦到主窗口
@@ -3723,14 +3726,15 @@ if (!gotTheLock) {
     mainWindow.once('ready-to-show', () => {
       emitWindowState();
       // 开机自启时不显示窗口，仅显示托盘图标
-      if (!isAutoLaunched()) {
-        mainWindow?.show();
+      if (!isAutoLaunched() && mainWindow) {
+        mainWindow.show();
+        // Windows 11 has strict foreground window policy, need extra steps to bring window to front
+        if (isWindows) {
+          mainWindow.setAlwaysOnTop(true);
+          mainWindow.setAlwaysOnTop(false);
+        }
+        mainWindow.focus();
       }
-      // Initialize main-process i18n from stored language before creating UI elements.
-      const initLang = getStore().get<{ language?: string }>('app_config')?.language;
-      setLanguage(initLang === 'en' ? 'en' : 'zh');
-      // 窗口就绪后创建系统托盘
-      createTray(() => mainWindow);
 
       // Start cron polling after the window is ready.
       (async () => {
@@ -3761,6 +3765,14 @@ if (!gotTheLock) {
         });
       })();
     });
+
+    // Create system tray immediately after window creation (not inside ready-to-show).
+    // This ensures the tray is available even if window loading fails or is delayed,
+    // which is critical for auto-launch mode where the window stays hidden.
+    // Initialize main-process i18n from stored language before creating UI elements.
+    const initLang = getStore().get<{ language?: string }>('app_config')?.language;
+    setLanguage(initLang === 'en' ? 'en' : 'zh');
+    createTray(() => mainWindow);
   };
 
   let isCleanupFinished = false;
@@ -4035,7 +4047,9 @@ if (!gotTheLock) {
 
   // 当所有窗口关闭时退出应用
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    // On Windows/Linux, only quit if not auto-launched.
+    // When auto-launched, the app should stay running in tray mode.
+    if (process.platform !== 'darwin' && !isAutoLaunched()) {
       app.quit();
     }
   });
