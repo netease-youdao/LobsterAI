@@ -23,6 +23,8 @@ import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
+import { BookmarkButton, BookmarksPanel } from './BookmarkComponents';
+import { bookmarkService } from '../../services/bookmark';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../common/scheduledReminderText';
 
@@ -892,7 +894,7 @@ const CopyButton: React.FC<{
   );
 };
 
-export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
+export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]; sessionId?: string }> = React.memo(({ message, skills, sessionId }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
@@ -959,6 +961,13 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                   content={message.content}
                   visible={isHovered}
                 />
+                {sessionId && (
+                  <BookmarkButton
+                    sessionId={sessionId}
+                    messageId={message.id}
+                    visible={isHovered}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -987,11 +996,13 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
+  sessionId?: string;
 }> = ({
   message,
   resolveLocalFilePath,
   mapDisplayText,
   showCopyButton = false,
+  sessionId,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
@@ -1009,12 +1020,21 @@ const AssistantMessageItem: React.FC<{
           resolveLocalFilePath={resolveLocalFilePath}
         />
       </div>
-      {showCopyButton && (
+      {(showCopyButton || sessionId) && (
         <div className="flex items-center gap-1.5 mt-1">
-          <CopyButton
-            content={displayContent}
-            visible={isHovered}
-          />
+          {showCopyButton && (
+            <CopyButton
+              content={displayContent}
+              visible={isHovered}
+            />
+          )}
+          {sessionId && (
+            <BookmarkButton
+              sessionId={sessionId}
+              messageId={message.id}
+              visible={isHovered}
+            />
+          )}
         </div>
       )}
     </div>
@@ -1124,12 +1144,14 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  sessionId?: string;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  sessionId,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1227,13 +1249,15 @@ export const AssistantTurnBlock: React.FC<{
                   .some(laterItem => laterItem.type === 'tool_group');
 
                 return (
-                  <AssistantMessageItem
-                    key={item.message.id}
-                    message={item.message}
-                    resolveLocalFilePath={resolveLocalFilePath}
-                    mapDisplayText={mapDisplayText}
-                    showCopyButton={showCopyButtons && !hasToolGroupAfter}
-                  />
+                  <div key={item.message.id} data-message-id={item.message.id}>
+                    <AssistantMessageItem
+                      message={item.message}
+                      resolveLocalFilePath={resolveLocalFilePath}
+                      mapDisplayText={mapDisplayText}
+                      showCopyButton={showCopyButtons && !hasToolGroupAfter}
+                      sessionId={sessionId}
+                    />
+                  </div>
                 );
               }
 
@@ -1313,6 +1337,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+
+  // Bookmark panel state
+  const [isBookmarksPanelOpen, setIsBookmarksPanelOpen] = useState(false);
+
+  // Load bookmarks when session changes
+  useEffect(() => {
+    if (currentSession?.id) {
+      bookmarkService.load(currentSession.id);
+    }
+  }, [currentSession?.id]);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1491,6 +1525,32 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setShowConfirmDelete(true);
     setMenuPosition(null);
   };
+
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    // Find the message element by data attribute
+    const el = container.querySelector(`[data-message-id="${messageId}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Flash highlight
+      el.classList.add('bookmark-flash');
+      setTimeout(() => el.classList.remove('bookmark-flash'), 1500);
+    }
+  }, []);
+
+  // Listen for cross-session bookmark navigation events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.messageId) {
+        // Small delay to let the DOM render after session load
+        setTimeout(() => handleJumpToMessage(detail.messageId), 150);
+      }
+    };
+    window.addEventListener('cowork:jump-to-message', handler);
+    return () => window.removeEventListener('cowork:jump-to-message', handler);
+  }, [handleJumpToMessage]);
 
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1839,8 +1899,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return (
         <div key={turn.id} data-turn-index={index}>
           {turn.userMessage && (
-            <div data-export-role="user-message">
-              <UserMessageItem message={turn.userMessage} skills={skills} />
+            <div data-export-role="user-message" data-message-id={turn.userMessage.id}>
+              <UserMessageItem message={turn.userMessage} skills={skills} sessionId={currentSession.id} />
             </div>
           )}
           {showAssistantBlock && (
@@ -1851,6 +1911,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                sessionId={currentSession.id}
               />
             </div>
           )}
@@ -1921,6 +1982,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <span className="max-w-[120px] truncate text-xs">
               {truncatePath(currentSession.cwd)}
             </span>
+          </button>
+
+          {/* Bookmarks button */}
+          <button
+            type="button"
+            onClick={() => setIsBookmarksPanelOpen((v) => !v)}
+            className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+            aria-label={i18nService.t('bookmarks')}
+            title={i18nService.t('bookmarks')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-4 w-4" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" />
+            </svg>
           </button>
 
           {/* Menu button */}
@@ -2099,6 +2173,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           />
         </div>
       </div>
+
+      {/* Bookmarks Panel */}
+      <BookmarksPanel
+        sessionId={currentSession.id}
+        messages={currentSession.messages}
+        isOpen={isBookmarksPanelOpen}
+        onClose={() => setIsBookmarksPanelOpen(false)}
+        onJumpToMessage={handleJumpToMessage}
+      />
     </div>
   );
 };
