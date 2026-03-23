@@ -28,7 +28,7 @@ export const IM_GUIDE_URLS: Partial<Record<IMPlatform, string>> = {
   qq: 'https://lobsterai.youdao.com/#/docs/lobsterai_im_bot_config_guide/qqqq-bot',
   telegram: 'https://lobsterai.youdao.com/#/en/docs/lobsterai_im_bot_config_guide/telegram-bot-configuration',
   discord: 'https://lobsterai.youdao.com/#/en/docs/lobsterai_im_bot_config_guide/discord-bot-configuration',
-  weixin: '',
+  weixin: 'https://lobsterai.youdao.com/#/docs/lobsterai_im_bot_config_guide/%E5%BE%AE%E4%BF%A1-im-%E6%9C%BA%E5%99%A8%E4%BA%BA%E9%85%8D%E7%BD%AE',
   popo: '',
 };
 
@@ -41,11 +41,11 @@ export const PlatformGuide: React.FC<{
   guideUrl?: string;
   guideLabel?: string;
 }> = ({ title, steps, guideUrl, guideLabel }) => (
-  <div className="mb-3 p-3 rounded-lg bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/30">
+  <div className="mb-3 p-3 rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60">
     {title && (
-      <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed mb-1.5">{title}</p>
+      <p className="text-xs text-claude-text dark:text-claude-darkText leading-relaxed mb-1.5 font-medium">{title}</p>
     )}
-    <ol className="text-xs text-blue-500/70 dark:text-blue-400/60 space-y-1 list-decimal list-inside">
+    <ol className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary space-y-1 list-decimal list-inside">
       {steps.map((step, i) => (
         <li key={i}>{step}</li>
       ))}
@@ -58,7 +58,7 @@ export const PlatformGuide: React.FC<{
             console.error('[IM] Failed to open guide URL:', err);
           });
         }}
-        className="mt-1.5 ml-[1.5em] text-xs text-claude-accent dark:text-claude-accentLight hover:text-claude-accentHover dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
+        className="mt-2 text-xs font-medium text-claude-accentLight dark:text-claude-accentLight hover:text-claude-accent dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
       >
         {guideLabel || i18nService.t('imViewGuide')}
       </button>

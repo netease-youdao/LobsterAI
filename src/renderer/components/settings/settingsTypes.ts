@@ -176,6 +176,41 @@ export const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
 export const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
 export const ABOUT_SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
 
+// MiniMax Portal OAuth constants
+export const MINIMAX_OAUTH_CLIENT_ID = '78257093-7e40-4613-99e0-527b14b39113';
+export const MINIMAX_OAUTH_SCOPE = 'group_id profile model.completion';
+export const MINIMAX_OAUTH_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:user_code';
+export const MINIMAX_BASE_URL_CN = 'https://api.minimaxi.com/anthropic';
+export const MINIMAX_BASE_URL_GLOBAL = 'https://api.minimax.io/anthropic';
+export const MINIMAX_CODE_ENDPOINT_CN = 'https://api.minimaxi.com/oauth/code';
+export const MINIMAX_CODE_ENDPOINT_GLOBAL = 'https://api.minimax.io/oauth/code';
+export const MINIMAX_TOKEN_ENDPOINT_CN = 'https://api.minimaxi.com/oauth/token';
+export const MINIMAX_TOKEN_ENDPOINT_GLOBAL = 'https://api.minimax.io/oauth/token';
+
+export type MiniMaxRegion = 'cn' | 'global';
+export type MiniMaxOAuthPhase =
+  | { kind: 'idle' }
+  | { kind: 'requesting_code' }
+  | { kind: 'pending'; userCode: string; verificationUri: string }
+  | { kind: 'success' }
+  | { kind: 'error'; message: string };
+
+export async function generateMiniMaxPkce(): Promise<{ verifier: string; challenge: string; state: string }> {
+  const verifierArray = new Uint8Array(32);
+  crypto.getRandomValues(verifierArray);
+  const verifier = btoa(String.fromCharCode(...verifierArray))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const encoded = new TextEncoder().encode(verifier);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const stateArray = new Uint8Array(16);
+  crypto.getRandomValues(stateArray);
+  const state = btoa(String.fromCharCode(...stateArray))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  return { verifier, challenge, state };
+}
+
 export const copyTextFallback = (text: string): boolean => {
   const textarea = document.createElement('textarea');
   textarea.value = text;

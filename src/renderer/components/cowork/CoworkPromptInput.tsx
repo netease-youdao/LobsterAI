@@ -91,6 +91,8 @@ interface CoworkPromptInputProps {
   showModelSelector?: boolean;
   onManageSkills?: () => void;
   sessionId?: string;
+  /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
+  remoteManaged?: boolean;
 }
 
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
@@ -108,6 +110,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showModelSelector = false,
       onManageSkills,
       sessionId,
+      remoteManaged = false,
     } = props;
     const dispatch = useDispatch();
     const draftKey = sessionId || '__home__';
@@ -286,11 +289,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [onManageSkills]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to submit, Shift+Enter for new line
+    // Enter to submit, any modifier+Enter (Shift/Ctrl/Cmd/Alt) for new line
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
-    if (event.key === 'Enter' && !event.shiftKey && !isComposing && !isStreaming && !disabled) {
-      event.preventDefault();
-      handleSubmit();
+    if (event.key === 'Enter' && !isComposing) {
+      const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
+      if (!hasModifier && !isStreaming && !disabled) {
+        event.preventDefault();
+        handleSubmit();
+      } else if (hasModifier && !event.shiftKey) {
+        // Shift+Enter already inserts newline natively; for Ctrl/Cmd/Alt+Enter, insert via execCommand to preserve undo history
+        event.preventDefault();
+        document.execCommand('insertText', false, '\n');
+      }
     }
   };
 
@@ -679,22 +689,28 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     />
                   </>
                 )}
-                {showModelSelector && <ModelSelector dropdownDirection="up" />}
-                <button
-                  type="button"
-                  onClick={handleAddFile}
-                  className="flex items-center justify-center p-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-                  title={i18nService.t('coworkAddFile')}
-                  aria-label={i18nService.t('coworkAddFile')}
-                  disabled={disabled || isStreaming || isAddingFile}
-                >
-                  <PaperClipIcon className="h-4 w-4" />
-                </button>
-                <SkillsButton
-                  onSelectSkill={handleSelectSkill}
-                  onManageSkills={handleManageSkills}
-                />
-                <ActiveSkillBadge />
+                {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
+                {!remoteManaged && (
+                  <button
+                    type="button"
+                    onClick={handleAddFile}
+                    className="flex items-center justify-center p-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                    title={i18nService.t('coworkAddFile')}
+                    aria-label={i18nService.t('coworkAddFile')}
+                    disabled={disabled || isStreaming || isAddingFile}
+                  >
+                    <PaperClipIcon className="h-4 w-4" />
+                  </button>
+                )}
+                {!remoteManaged && (
+                  <>
+                    <SkillsButton
+                      onSelectSkill={handleSelectSkill}
+                      onManageSkills={handleManageSkills}
+                    />
+                    <ActiveSkillBadge />
+                  </>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {isStreaming ? (
@@ -734,18 +750,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               className={textareaClass}
             />
 
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={handleAddFile}
-                className="flex-shrink-0 p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-                title={i18nService.t('coworkAddFile')}
-                aria-label={i18nService.t('coworkAddFile')}
-                disabled={disabled || isStreaming || isAddingFile}
-              >
-                <PaperClipIcon className="h-4 w-4" />
-              </button>
-            </div>
+            {!remoteManaged && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleAddFile}
+                  className="flex-shrink-0 p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                  title={i18nService.t('coworkAddFile')}
+                  aria-label={i18nService.t('coworkAddFile')}
+                  disabled={disabled || isStreaming || isAddingFile}
+                >
+                  <PaperClipIcon className="h-4 w-4" />
+                </button>
+              </div>
+            )}
 
             {isStreaming ? (
               <button

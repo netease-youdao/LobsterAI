@@ -36,7 +36,7 @@ import DiscordConfig from './DiscordConfig';
 const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
-  const [activePlatform, setActivePlatform] = useState<IMPlatform>('dingtalk');
+  const [activePlatform, setActivePlatform] = useState<IMPlatform>('weixin');
   const [testingPlatform, setTestingPlatform] = useState<IMPlatform | null>(null);
   const [connectivityResults, setConnectivityResults] = useState<Partial<Record<IMPlatform, IMConnectivityTestResult>>>({});
   const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<IMPlatform | null>(null);

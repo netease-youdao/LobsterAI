@@ -2,7 +2,7 @@
  * Barrel export for all IPC handler modules.
  */
 export { type IpcContext } from './ipcContext';
-export { registerStoreAndAppIpcHandlers } from './storeAndAppIpc';
+export { registerStoreAndAppIpcHandlers, restorePreventSleep } from './storeAndAppIpc';
 export { registerCoworkIpcHandlers } from './coworkIpc';
 export { registerSkillsIpcHandlers } from './skillsIpc';
 export { registerMcpIpcHandlers } from './mcpIpc';

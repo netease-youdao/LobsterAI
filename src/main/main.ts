@@ -50,6 +50,7 @@ import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import {
   registerStoreAndAppIpcHandlers,
+  restorePreventSleep,
   registerCoworkIpcHandlers,
   registerSkillsIpcHandlers,
   registerMcpIpcHandlers,
@@ -1847,6 +1848,9 @@ if (!gotTheLock) {
       getStore().set('auto_launch_enabled', true);
       setAutoLaunchEnabled(true);
     }
+
+    // Restore prevent-sleep setting
+    restorePreventSleep(getStore());
 
     let lastLanguage = getStore().get<AppConfigSettings>('app_config')?.language;
     let lastUseSystemProxy = getUseSystemProxyFromConfig(getStore().get<AppConfigSettings>('app_config'));

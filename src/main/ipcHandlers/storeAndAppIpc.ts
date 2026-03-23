@@ -27,6 +27,22 @@ import { saveCoworkApiConfig } from '../libs/coworkConfigStore';
 import { generateSessionTitle, probeCoworkModelReadiness } from '../libs/coworkUtil';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from '../libs/appUpdateInstaller';
 
+// Module-level state for prevent-sleep feature
+let preventSleepBlockerId: number | null = null;
+
+/** Restore prevent-sleep setting on app startup */
+export function restorePreventSleep(store: { get: <T>(key: string) => T | undefined }): void {
+  const enabled = store.get<boolean>('prevent_sleep_enabled');
+  if (enabled) {
+    try {
+      const { powerSaveBlocker } = require('electron');
+      preventSleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+    } catch (err) {
+      console.error('[Main] Failed to start prevent-sleep blocker:', err);
+    }
+  }
+}
+
 export function registerStoreAndAppIpcHandlers(
   ctx: IpcContext,
   deps: {
@@ -142,6 +158,39 @@ export function registerStoreAndAppIpcHandlers(
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set auto-launch',
+      };
+    }
+  });
+
+  // ==================== Prevent Sleep ====================
+
+  ipcMain.handle('app:getPreventSleep', () => {
+    const enabled = ctx.getStore().get<boolean>('prevent_sleep_enabled') ?? false;
+    return { enabled };
+  });
+
+  ipcMain.handle('app:setPreventSleep', (_event, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      return { success: false, error: 'Invalid parameter: enabled must be boolean' };
+    }
+    try {
+      const { powerSaveBlocker } = require('electron');
+      if (enabled) {
+        if (preventSleepBlockerId === null || !powerSaveBlocker.isStarted(preventSleepBlockerId)) {
+          preventSleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+        }
+      } else {
+        if (preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId)) {
+          powerSaveBlocker.stop(preventSleepBlockerId);
+          preventSleepBlockerId = null;
+        }
+      }
+      ctx.getStore().set('prevent_sleep_enabled', enabled);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to set prevent-sleep',
       };
     }
   });
