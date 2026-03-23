@@ -11,6 +11,8 @@ export interface AppConfig {
       id: string;
       name: string;
       supportsImage?: boolean;
+      inputPrice?: number | null;
+      outputPrice?: number | null;
     }>;
     defaultModel: string;
     defaultModelProvider?: string;
@@ -27,6 +29,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     deepseek: {
@@ -38,6 +42,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     moonshot: {
@@ -51,6 +57,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     zhipu: {
@@ -64,6 +72,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     minimax: {
@@ -75,6 +85,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     youdaozhiyun: {
@@ -86,6 +98,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     qwen: {
@@ -99,6 +113,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     openrouter: {
@@ -110,6 +126,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     gemini: {
@@ -121,6 +139,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     anthropic: {
@@ -132,6 +152,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     volcengine: {
@@ -145,6 +167,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     xiaomi: {
@@ -156,6 +180,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     stepfun: {
@@ -167,6 +193,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     ollama: {
@@ -178,6 +206,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     custom: {
@@ -189,6 +219,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
     [key: string]: {
@@ -201,6 +233,8 @@ export interface AppConfig {
         id: string;
         name: string;
         supportsImage?: boolean;
+        inputPrice?: number | null;
+        outputPrice?: number | null;
       }>;
     };
   };
@@ -235,7 +269,7 @@ export const defaultConfig: AppConfig = {
   },
   model: {
     availableModels: [
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false, inputPrice: 2.03, outputPrice: 3.05 },
     ],
     defaultModel: 'deepseek-reasoner',
     defaultModelProvider: 'deepseek',
@@ -247,8 +281,8 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.openai.com',
       apiFormat: 'openai',
       models: [
-        { id: 'gpt-5.2-2025-12-11', name: 'GPT-5.2', supportsImage: true },
-        { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', supportsImage: true }
+        { id: 'gpt-5.2-2025-12-11', name: 'GPT-5.2', supportsImage: true, inputPrice: null, outputPrice: null },
+        { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', supportsImage: true, inputPrice: null, outputPrice: null }
       ]
     },
     gemini: {
@@ -257,9 +291,9 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       apiFormat: 'openai',
       models: [
-        { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true },
-        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true },
-        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', supportsImage: true }
+        { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true, inputPrice: null, outputPrice: null },
+        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true, inputPrice: null, outputPrice: null },
+        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', supportsImage: true, inputPrice: null, outputPrice: null }
       ]
     },
     anthropic: {
@@ -268,9 +302,9 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.anthropic.com',
       apiFormat: 'anthropic',
       models: [
-        { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', supportsImage: true },
-        { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', supportsImage: true },
-        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', supportsImage: true }
+        { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', supportsImage: true, inputPrice: 21.75, outputPrice: 108.75 },
+        { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', supportsImage: true, inputPrice: 21.75, outputPrice: 108.75 },
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', supportsImage: true, inputPrice: 36.25, outputPrice: 181.25 }
       ]
     },
     deepseek: {
@@ -279,7 +313,7 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.deepseek.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false, inputPrice: 2.03, outputPrice: 3.05 }
       ]
     },
     moonshot: {
@@ -289,7 +323,7 @@ export const defaultConfig: AppConfig = {
       apiFormat: 'anthropic',
       codingPlanEnabled: false,
       models: [
-        { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true }
+        { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true, inputPrice: null, outputPrice: null }
       ]
     },
     zhipu: {
@@ -299,8 +333,8 @@ export const defaultConfig: AppConfig = {
       apiFormat: 'anthropic',
       codingPlanEnabled: false,
       models: [
-        { id: 'glm-5', name: 'GLM 5', supportsImage: false },
-        { id: 'glm-4.7', name: 'GLM 4.7', supportsImage: false }
+        { id: 'glm-5', name: 'GLM 5', supportsImage: false, inputPrice: null, outputPrice: null },
+        { id: 'glm-4.7', name: 'GLM 4.7', supportsImage: false, inputPrice: null, outputPrice: null }
       ]
     },
     minimax: {
@@ -309,9 +343,9 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
-        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false },
-        { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
+        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false, inputPrice: 2.1, outputPrice: 8.4 },
+        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false, inputPrice: 2.1, outputPrice: 8.4 },
+        { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false, inputPrice: 2.1, outputPrice: 8.4 }
       ]
     },
     youdaozhiyun: {
@@ -320,10 +354,10 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://openapi.youdao.com/llmgateway/api/v1/chat/completions',
       apiFormat: 'openai',
       models: [
-        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
-        { id: 'deepseek-inhouse-chat', name: 'DeepSeek Chat (安全)', supportsImage: false },
-        { id: 'deepseek-inhouse-reasoner', name: 'DeepSeek Reasoner (安全)', supportsImage: false }
+        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false, inputPrice: null, outputPrice: null },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false, inputPrice: null, outputPrice: null },
+        { id: 'deepseek-inhouse-chat', name: 'DeepSeek Chat (安全)', supportsImage: false, inputPrice: null, outputPrice: null },
+        { id: 'deepseek-inhouse-reasoner', name: 'DeepSeek Reasoner (安全)', supportsImage: false, inputPrice: null, outputPrice: null }
       ]
     },
     qwen: {
@@ -333,8 +367,8 @@ export const defaultConfig: AppConfig = {
       apiFormat: 'anthropic',
       codingPlanEnabled: false,
       models: [
-        { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true },
-        { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus', supportsImage: false }
+        { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true, inputPrice: 0.8, outputPrice: 4.8 },
+        { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus', supportsImage: false, inputPrice: 4.0, outputPrice: 16.0 }
       ]
     },
     xiaomi: {
@@ -343,7 +377,7 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.xiaomimimo.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false }
+        { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false, inputPrice: null, outputPrice: null }
       ]
     },
     stepfun: {
@@ -352,7 +386,7 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.stepfun.com/v1',
       apiFormat: 'openai',
       models: [
-        { id: 'step-3.5-flash', name: 'Step 3.5 Flash', supportsImage: false }
+        { id: 'step-3.5-flash', name: 'Step 3.5 Flash', supportsImage: false, inputPrice: null, outputPrice: null }
       ]
     },
     volcengine: {
@@ -362,10 +396,10 @@ export const defaultConfig: AppConfig = {
       apiFormat: 'anthropic',
       codingPlanEnabled: false,
       models: [
-        { id: 'ark-code-latest', name: 'Auto', supportsImage: false },
-        { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao-Seed-2.0-pro', supportsImage: false },
-        { id: 'doubao-seed-2-0-lite-260215', name: 'Doubao-Seed-2.0-lite', supportsImage: false },
-        { id: 'doubao-seed-2-0-mini-260215', name: 'Doubao-Seed-2.0-mini', supportsImage: false }
+        { id: 'ark-code-latest', name: 'Auto', supportsImage: false, inputPrice: null, outputPrice: null },
+        { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao-Seed-2.0-pro', supportsImage: false, inputPrice: null, outputPrice: null },
+        { id: 'doubao-seed-2-0-lite-260215', name: 'Doubao-Seed-2.0-lite', supportsImage: false, inputPrice: null, outputPrice: null },
+        { id: 'doubao-seed-2-0-mini-260215', name: 'Doubao-Seed-2.0-mini', supportsImage: false, inputPrice: null, outputPrice: null }
       ]
     },
     openrouter: {
@@ -374,10 +408,10 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://openrouter.ai/api',
       apiFormat: 'anthropic',
       models: [
-        { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', supportsImage: true },
-        { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', supportsImage: true },
-        { id: 'openai/gpt-5.2-codex', name: 'GPT 5.2 Codex', supportsImage: true },
-        { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true },
+        { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', supportsImage: true, inputPrice: null, outputPrice: null },
+        { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', supportsImage: true, inputPrice: null, outputPrice: null },
+        { id: 'openai/gpt-5.2-codex', name: 'GPT 5.2 Codex', supportsImage: true, inputPrice: null, outputPrice: null },
+        { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true, inputPrice: null, outputPrice: null },
       ]
     },
     ollama: {
@@ -386,8 +420,8 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'http://localhost:11434/v1',
       apiFormat: 'openai',
       models: [
-        { id: 'qwen3-coder-next', name: 'Qwen3-Coder-Next', supportsImage: false },
-        { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false }
+        { id: 'qwen3-coder-next', name: 'Qwen3-Coder-Next', supportsImage: false, inputPrice: 0, outputPrice: 0 },
+        { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false, inputPrice: 0, outputPrice: 0 }
       ]
     },
     custom: {

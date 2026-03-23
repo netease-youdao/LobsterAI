@@ -3531,15 +3531,15 @@ if (!gotTheLock) {
     }, 30000);
 
     // 清除超时
-    mainWindow.webContents.once('did-finish-load', () => {
-      clearTimeout(loadTimeout);
-    });
-    mainWindow.webContents.on('did-finish-load', () => {
-      emitWindowState();
-      if (openClawEngineManager && !mainWindow?.isDestroyed()) {
-        mainWindow.webContents.send('openclaw:engine:onProgress', openClawEngineManager.getStatus());
-      }
-    });
+      mainWindow.webContents.once('did-finish-load', () => {
+        clearTimeout(loadTimeout);
+      });
+      mainWindow.webContents.on('did-finish-load', () => {
+       emitWindowState();
+       if (openClawEngineManager && !mainWindow?.isDestroyed()) {
+         mainWindow.webContents.send('openclaw:engine:onProgress', openClawEngineManager.getStatus());
+       }
+     });
 
     // 处理窗口关闭
     mainWindow.on('close', (e) => {

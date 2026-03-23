@@ -78,10 +78,10 @@ const REMOVED_PROVIDER_MODELS: Record<string, string[]> = {
 // on next launch. Once all users have upgraded, entries here should be removed
 // so the models follow normal user-editable behavior (same as other models).
 // position: 'start' inserts at the beginning, 'end' appends at the end.
-const ADDED_PROVIDER_MODELS: Record<string, { models: Array<{ id: string; name: string; supportsImage?: boolean }>; position: 'start' | 'end' }> = {
+const ADDED_PROVIDER_MODELS: Record<string, { models: Array<{ id: string; name: string; supportsImage?: boolean; inputPrice?: number | null; outputPrice?: number | null }>; position: 'start' | 'end' }> = {
   minimax: {
     models: [
-      { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
+      { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false, inputPrice: 2.1, outputPrice: 8.4 },
     ],
     position: 'start',
   },
@@ -102,9 +102,25 @@ class ConfigService {
               }).map(([providerKey, providerConfig]) => [
                 providerKey,
                 (() => {
+                  const defaultProvider = (defaultConfig.providers as Record<string, any>)?.[providerKey];
+                  // Build a lookup of default models by id for price merging
+                  const defaultModelsById: Record<string, any> = {};
+                  if (defaultProvider?.models) {
+                    for (const m of defaultProvider.models) {
+                      defaultModelsById[m.id] = m;
+                    }
+                  }
                   const mergedProvider = {
-                    ...(defaultConfig.providers as Record<string, any>)?.[providerKey],
+                    ...defaultProvider,
                     ...providerConfig,
+                    // Merge models per-item so defaultConfig prices are preserved
+                    // when stored models lack price fields
+                    models: providerConfig.models
+                      ? providerConfig.models.map((m: any) => ({
+                          ...defaultModelsById[m.id],
+                          ...m,
+                        }))
+                      : defaultProvider?.models,
                   };
                   // Filter out removed models
                   const removedIds = REMOVED_PROVIDER_MODELS[providerKey];
@@ -141,9 +157,14 @@ class ConfigService {
           migratedModel.defaultModel = defaultConfig.model.defaultModel;
         }
         if (migratedModel.availableModels) {
-          migratedModel.availableModels = migratedModel.availableModels.filter(
-            (m: { id: string }) => !allRemovedIds.includes(m.id)
-          );
+          // Build lookup of default availableModels prices by id
+          const defaultAvailableById: Record<string, any> = {};
+          for (const m of defaultConfig.model.availableModels) {
+            defaultAvailableById[m.id] = m;
+          }
+          migratedModel.availableModels = migratedModel.availableModels
+            .filter((m: { id: string }) => !allRemovedIds.includes(m.id))
+            .map((m: any) => ({ ...defaultAvailableById[m.id], ...m }));
         }
 
         this.config = {

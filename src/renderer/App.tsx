@@ -108,17 +108,19 @@ const App: React.FC = () => {
         apiService.setConfig(apiConfig);
 
         // 从 providers 配置中加载可用模型列表到 Redux
-        const providerModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
+        const providerModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean; inputPrice?: number | null; outputPrice?: number | null }[] = [];
         if (config.providers) {
           Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
             if (providerConfig.enabled && providerConfig.models) {
-              providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
+              providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean; inputPrice?: number | null; outputPrice?: number | null }) => {
                 providerModels.push({
                   id: model.id,
                   name: model.name,
                   provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
                   providerKey: providerName,
                   supportsImage: model.supportsImage ?? false,
+                  inputPrice: model.inputPrice ?? null,
+                  outputPrice: model.outputPrice ?? null,
                 });
               });
             }
@@ -129,6 +131,8 @@ const App: React.FC = () => {
           name: model.name,
           providerKey: undefined,
           supportsImage: model.supportsImage ?? false,
+          inputPrice: model.inputPrice ?? null,
+          outputPrice: model.outputPrice ?? null,
         }));
         const resolvedModels = providerModels.length > 0 ? providerModels : fallbackModels;
         if (resolvedModels.length > 0) {
@@ -378,16 +382,18 @@ const App: React.FC = () => {
     });
 
     if (config.providers) {
-      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
+      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean; inputPrice?: number | null; outputPrice?: number | null }[] = [];
       Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
         if (providerConfig.enabled && providerConfig.models) {
-          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
+          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean; inputPrice?: number | null; outputPrice?: number | null }) => {
             allModels.push({
               id: model.id,
               name: model.name,
               provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
               providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
+              inputPrice: model.inputPrice ?? null,
+              outputPrice: model.outputPrice ?? null,
             });
           });
         }
