@@ -1081,6 +1081,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: '网易有道LobsterAI服务协议',
     privacyDialogAccept: '我已阅读并同意',
     privacyDialogReject: '拒绝',
+
+    // IM Settings placeholders
+    imDingtalkClientIdPlaceholder: 'dingxxxxxx',
+    imQQImageServerPlaceholder: 'http://your-ip:18765',
+    imTelegramWebhookUrlPlaceholder: 'https://example.com/telegram-webhook',
+    imTelegramWebhookSecretPlaceholder: 'webhook-secret',
+    imDiscordProxyPlaceholder: 'http://proxy:port',
+    imNimAppKeyPlaceholder: 'your_app_key',
   },
   en: {
     // Common
@@ -2157,6 +2165,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
+
+    // IM Settings placeholders
+    imDingtalkClientIdPlaceholder: 'dingxxxxxx',
+    imQQImageServerPlaceholder: 'http://your-ip:18765',
+    imTelegramWebhookUrlPlaceholder: 'https://example.com/telegram-webhook',
+    imTelegramWebhookSecretPlaceholder: 'webhook-secret',
+    imDiscordProxyPlaceholder: 'http://proxy:port',
+    imNimAppKeyPlaceholder: 'your_app_key',
   }
 };
 

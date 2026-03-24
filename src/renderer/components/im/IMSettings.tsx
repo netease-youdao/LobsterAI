@@ -1181,7 +1181,7 @@ const IMSettings: React.FC = () => {
                   onChange={(e) => handleDingTalkOpenClawChange({ clientId: e.target.value })}
                   onBlur={() => handleSaveDingTalkOpenClawConfig()}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="dingxxxxxx"
+                  placeholder={i18nService.t('imDingtalkClientIdPlaceholder')}
                 />
                 {dtOpenClawConfig.clientId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
@@ -2123,7 +2123,7 @@ const IMSettings: React.FC = () => {
                     onChange={(e) => handleQQOpenClawChange({ imageServerBaseUrl: e.target.value })}
                     onBlur={() => handleSaveQQOpenClawConfig()}
                     className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                    placeholder="http://your-ip:18765"
+                    placeholder={i18nService.t('imQQImageServerPlaceholder')}
                   />
                   <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
                     {i18nService.t('imQQImageServerHint')}
@@ -2434,7 +2434,7 @@ const IMSettings: React.FC = () => {
                     onChange={(e) => handleTelegramOpenClawChange({ webhookUrl: e.target.value })}
                     onBlur={() => handleSaveTelegramOpenClawConfig()}
                     className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                    placeholder="https://example.com/telegram-webhook"
+                    placeholder={i18nService.t('imTelegramWebhookUrlPlaceholder')}
                   />
                 </div>
 
@@ -2450,7 +2450,7 @@ const IMSettings: React.FC = () => {
                       onChange={(e) => handleTelegramOpenClawChange({ webhookSecret: e.target.value })}
                       onBlur={() => handleSaveTelegramOpenClawConfig()}
                       className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                      placeholder="webhook-secret"
+                      placeholder={i18nService.t('imTelegramWebhookSecretPlaceholder')}
                     />
                   </div>
                 )}
@@ -2645,7 +2645,7 @@ const IMSettings: React.FC = () => {
                     onChange={(e) => handleDiscordOpenClawChange({ proxy: e.target.value })}
                     onBlur={() => handleSaveDiscordOpenClawConfig()}
                     className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                    placeholder="http://proxy:port"
+                    placeholder={i18nService.t('imDiscordProxyPlaceholder')}
                   />
                 </div>
 
@@ -2832,7 +2832,7 @@ const IMSettings: React.FC = () => {
                     onChange={(e) => dispatch(setNimConfig({ appKey: e.target.value }))}
                     onBlur={handleSaveConfig}
                     className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                    placeholder="your_app_key"
+                    placeholder={i18nService.t('imNimAppKeyPlaceholder')}
                   />
                 </div>
                 <div className="space-y-1.5">

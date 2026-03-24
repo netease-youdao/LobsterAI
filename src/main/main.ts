@@ -48,7 +48,7 @@ import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
 import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
-import { setLanguage } from './i18n';
+import { setLanguage, t } from './i18n';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
 import { McpStore } from './mcpStore';
 import { CronJobService } from './libs/cronJobService';
@@ -84,16 +84,34 @@ const IPC_MAX_KEYS = 80;
 const IPC_MAX_ITEMS = 40;
 const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const ENGINE_NOT_READY_CODE = 'ENGINE_NOT_READY';
-const SCHEDULED_TASK_CHANNEL_OPTIONS = [
-  { value: 'last', label: 'Last conversation' },
-  { value: 'dingtalk-connector', label: 'DingTalk' },
-  { value: 'feishu', label: 'Feishu' },
-  { value: 'telegram', label: 'Telegram' },
-  { value: 'discord', label: 'Discord' },
-  { value: 'qqbot', label: 'QQ' },
-  { value: 'wecom', label: 'WeCom' },
-  { value: 'popo', label: 'POPO' },
+const SCHEDULED_TASK_CHANNEL_VALUES = [
+  'last',
+  'dingtalk-connector',
+  'feishu',
+  'telegram',
+  'discord',
+  'qqbot',
+  'wecom',
+  'popo',
 ] as const;
+
+const SCHEDULED_TASK_CHANNEL_LABEL_KEYS: Record<string, string> = {
+  'last': 'scheduledTaskChannelLast',
+  'dingtalk-connector': 'scheduledTaskChannelDingtalk',
+  'feishu': 'scheduledTaskChannelFeishu',
+  'telegram': 'scheduledTaskChannelTelegram',
+  'discord': 'scheduledTaskChannelDiscord',
+  'qqbot': 'scheduledTaskChannelQQ',
+  'wecom': 'scheduledTaskChannelWecom',
+  'popo': 'scheduledTaskChannelPopo',
+};
+
+function getScheduledTaskChannelOptions(): Array<{ value: string; label: string }> {
+  return SCHEDULED_TASK_CHANNEL_VALUES.map((value) => ({
+    value,
+    label: t(SCHEDULED_TASK_CHANNEL_LABEL_KEYS[value]),
+  }));
+}
 const MIME_EXTENSION_MAP: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
@@ -1374,7 +1392,7 @@ function listScheduledTaskChannels(): Array<{ value: string; label: string }> {
   const manager = getIMGatewayManager();
   const config = manager?.getConfig();
   if (!config) {
-    return [...SCHEDULED_TASK_CHANNEL_OPTIONS];
+    return getScheduledTaskChannelOptions();
   }
 
   const enabledConfigKeys = new Set<string>();
@@ -1387,7 +1405,7 @@ function listScheduledTaskChannels(): Array<{ value: string; label: string }> {
     }
   }
 
-  return SCHEDULED_TASK_CHANNEL_OPTIONS.filter((option) => {
+  return getScheduledTaskChannelOptions().filter((option) => {
     if (option.value === 'last') {
       return true;
     }

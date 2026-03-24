@@ -50,6 +50,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
+
+    // Scheduled task channel labels
+    scheduledTaskChannelLast: '上一次对话',
+    scheduledTaskChannelDingtalk: '钉钉',
+    scheduledTaskChannelFeishu: '飞书',
+    scheduledTaskChannelTelegram: 'Telegram',
+    scheduledTaskChannelDiscord: 'Discord',
+    scheduledTaskChannelQQ: 'QQ',
+    scheduledTaskChannelWecom: '企业微信',
+    scheduledTaskChannelPopo: 'POPO',
   },
   en: {
     // Tray menu
@@ -87,6 +97,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
+
+    // Scheduled task channel labels
+    scheduledTaskChannelLast: 'Last conversation',
+    scheduledTaskChannelDingtalk: 'DingTalk',
+    scheduledTaskChannelFeishu: 'Feishu',
+    scheduledTaskChannelTelegram: 'Telegram',
+    scheduledTaskChannelDiscord: 'Discord',
+    scheduledTaskChannelQQ: 'QQ',
+    scheduledTaskChannelWecom: 'WeCom',
+    scheduledTaskChannelPopo: 'POPO',
   },
 };
 
