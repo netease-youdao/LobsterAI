@@ -6,7 +6,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkStore, CoworkMessage, CoworkExecutionMode } from '../coworkStore';
-import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
+import { getClaudeCodePath, getCurrentApiConfig, resolveRawApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
@@ -14,6 +14,16 @@ import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime'
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
 import { SCHEDULED_TASK_SWITCH_MESSAGE } from './scheduledTaskEnginePrompt';
 import { z } from 'zod';
+import {
+  parseCompactCommand,
+  microCompactMessages,
+  shouldAutoCompact,
+  selectMessagesForCompaction,
+  generateSummary,
+  isCompacting,
+  setCompacting,
+} from './coworkCompactor';
+import { t } from '../i18n';
 
 const ATTACHMENT_LINE_RE = /^\s*(?:[-*]\s*)?(输入文件|input\s*file)\s*[:：]\s*(.+?)\s*$/i;
 const INFERRED_FILE_REFERENCE_RE = /([^\s"'`，。！？：:；;（）()\[\]{}<>《》【】]+?\.[A-Za-z][A-Za-z0-9]{0,7})/g;
@@ -952,23 +962,33 @@ export class CoworkRunner extends EventEmitter {
     }
 
     const history = [...messages];
+    const { messages: compactedMessages, coldEntries } = microCompactMessages(history);
+    if (coldEntries.length > 0) {
+      const sessionIdForCold = coldEntries[0]?.sessionId;
+      if (sessionIdForCold) {
+        for (const entry of coldEntries) {
+          this.store.storeColdContent(entry.sessionId, entry.messageId, entry.content, entry.contentType);
+        }
+      }
+    }
+    const historyToUse = coldEntries.length > 0 ? compactedMessages : history;
     const trimmedCurrentPrompt = currentPrompt.trim();
-    const last = history[history.length - 1];
+    const last = historyToUse[historyToUse.length - 1];
     if (
       trimmedCurrentPrompt
       && last?.type === 'user'
       && last.content.trim() === trimmedCurrentPrompt
     ) {
-      history.pop();
+      historyToUse.pop();
     }
 
     const selectedFromNewest: string[] = [];
     let totalChars = 0;
-    for (let i = history.length - 1; i >= 0; i -= 1) {
+    for (let i = historyToUse.length - 1; i >= 0; i -= 1) {
       if (selectedFromNewest.length >= limits.maxMessages) {
         break;
       }
-      const block = this.formatHistoryMessage(history[i], limits.maxMessageChars);
+      const block = this.formatHistoryMessage(historyToUse[i], limits.maxMessageChars);
       if (!block) {
         continue;
       }
@@ -1494,6 +1514,50 @@ export class CoworkRunner extends EventEmitter {
 
       // If the session already has messages (restarted after stop), inject
       // conversation history so the model retains context from prior turns.
+      {
+        const sessionForCompaction = this.store.getSession(sessionId);
+        if (sessionForCompaction && !isCompacting(sessionId)) {
+          const check = shouldAutoCompact(sessionForCompaction.messages);
+          if (check.shouldCompact) {
+            const apiConfig = resolveRawApiConfig().config;
+            if (apiConfig) {
+              setCompacting(sessionId, true);
+              try {
+                // Phase 1: emit progress message
+                console.log('[Compaction] phase 1: auto-compact triggered, emitting progress message');
+                const progressMsg = this.store.addMessage(sessionId, {
+                  type: 'system',
+                  content: t('compaction.autoCompactTriggered'),
+                  metadata: { subtype: 'compaction_summary' },
+                });
+                this.emit('message', sessionId, progressMsg);
+
+                const { toCompact } = selectMessagesForCompaction(sessionForCompaction.messages);
+                console.log(`[Compaction] phase 2: calling generateSummary with ${toCompact.length} messages (auto)`);
+                const result = await generateSummary(
+                  { baseURL: apiConfig.baseURL, apiKey: apiConfig.apiKey, model: apiConfig.model, apiType: apiConfig.apiType },
+                  toCompact,
+                  { trigger: 'auto' }
+                );
+
+                // Phase 3: update message in-place with final result
+                console.log(`[Compaction] phase 3: auto-compaction ${result.success ? 'succeeded' : 'failed'}, outputChars=${result.outputChars}`);
+                const finalContent = result.success
+                  ? t('compaction.compactComplete').replace('{count}', String(result.messagesCompacted))
+                  : t('compaction.compactFailed');
+                const finalSubtype = result.success ? 'compaction_complete' : 'compaction_failed';
+                this.store.updateMessage(sessionId, progressMsg.id, {
+                  content: finalContent,
+                  metadata: { subtype: finalSubtype, summary: result.summary, compactionCount: result.compactionCount },
+                });
+                this.emit('messageUpdate', sessionId, progressMsg.id, finalContent, { subtype: finalSubtype });
+              } finally {
+                setCompacting(sessionId, false);
+              }
+            }
+          }
+        }
+      }
       const currentSession = this.store.getSession(sessionId);
       if (currentSession && currentSession.messages.length > 0) {
         effectivePrompt = this.injectLocalHistoryPrompt(sessionId, prompt, effectivePrompt);
@@ -1515,6 +1579,54 @@ export class CoworkRunner extends EventEmitter {
         systemPrompt: options.systemPrompt,
         imageAttachments: options.imageAttachments,
       });
+      return;
+    }
+
+    // Intercept /compact command before routing to SDK
+    const compactCmd = parseCompactCommand(prompt);
+    if (compactCmd.isCompact) {
+      const session = this.store.getSession(sessionId);
+      if (session) {
+        const apiConfig = resolveRawApiConfig().config;
+        if (apiConfig) {
+          // Phase 1: lock input + emit progress immediately
+          console.log('[Compaction] phase 1: manual compact started, locking input, emitting progress message');
+          this.store.updateSession(sessionId, { status: 'running' });
+          const progressMsg = this.store.addMessage(sessionId, {
+            type: 'system',
+            content: t('compaction.manualCompactStarted'),
+            metadata: { subtype: 'compaction_summary' },
+          });
+          this.emit('message', sessionId, progressMsg);
+
+          setCompacting(sessionId, true);
+          try {
+            // Filter out the progress message so it's not included in compaction input
+            const messagesToCompact = session.messages.filter(m => m.id !== progressMsg.id);
+            console.log(`[Compaction] phase 2: calling generateSummary with ${messagesToCompact.length} messages`);
+            const result = await generateSummary(
+              { baseURL: apiConfig.baseURL, apiKey: apiConfig.apiKey, model: apiConfig.model, apiType: apiConfig.apiType },
+              messagesToCompact,
+              { focusHint: compactCmd.focusHint || undefined, trigger: 'manual' }
+            );
+            // Phase 3: update message in-place with final result
+            console.log(`[Compaction] phase 3: compaction ${result.success ? 'succeeded' : 'failed'}, outputChars=${result.outputChars}, updating message in-place`);
+            const finalContent = result.success
+              ? t('compaction.compactComplete').replace('{count}', String(result.messagesCompacted))
+              : t('compaction.compactFailed');
+            const finalSubtype = result.success ? 'compaction_complete' : 'compaction_failed';
+            this.store.updateMessage(sessionId, progressMsg.id, {
+              content: finalContent,
+              metadata: { subtype: finalSubtype, summary: result.summary, compactionCount: result.compactionCount },
+            });
+            this.emit('messageUpdate', sessionId, progressMsg.id, finalContent, { subtype: finalSubtype });
+          } finally {
+            setCompacting(sessionId, false);
+            this.store.updateSession(sessionId, { status: 'idle' });
+            this.emit('complete', sessionId, null);
+          }
+        }
+      }
       return;
     }
 
@@ -2535,6 +2647,16 @@ export class CoworkRunner extends EventEmitter {
       if (subtype === 'init' && typeof payload.session_id === 'string') {
         activeSession.claudeSessionId = payload.session_id;
         this.store.updateSession(sessionId, { claudeSessionId: payload.session_id });
+      } else if (subtype === 'compact_boundary') {
+        const metadata = payload.compact_metadata as Record<string, unknown> | undefined;
+        const trigger = String(metadata?.trigger ?? 'auto');
+        const preTokens = typeof metadata?.pre_tokens === 'number' ? metadata.pre_tokens : 0;
+        const message = this.store.addMessage(sessionId, {
+          type: 'system',
+          content: t('compaction.sessionCompacted'),
+          metadata: { subtype: 'compact_boundary', trigger, preTokens },
+        });
+        this.emit('message', sessionId, message);
       }
       return;
     }

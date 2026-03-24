@@ -480,6 +480,16 @@ interface CoworkUserMemoryRow {
   last_used_at: number | null;
 }
 
+export interface ColdStorageEntry {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  content: string;
+  contentType: string;
+  originalChars: number;
+  createdAt: number;
+}
+
 export class CoworkStore {
   private db: Database;
   private saveDb: () => void;
@@ -1567,5 +1577,52 @@ export class CoworkStore {
       human: this.getLatestMessageByType(row.id, 'user'),
       assistant: this.getLatestMessageByType(row.id, 'assistant'),
     }));
+  }
+
+  storeColdContent(sessionId: string, messageId: string, content: string, contentType: string = 'tool_result'): string {
+    const id = crypto.randomUUID();
+    const createdAt = Date.now();
+    this.db.run(
+      `INSERT INTO compaction_cold_storage (id, session_id, message_id, content, content_type, original_chars, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, sessionId, messageId, content, contentType, content.length, createdAt]
+    );
+    this.saveDb();
+    return id;
+  }
+
+  retrieveColdContent(id: string): string | null {
+    const result = this.db.exec(
+      `SELECT content FROM compaction_cold_storage WHERE id = ?`,
+      [id]
+    );
+    if (!result[0]?.values?.length) return null;
+    return result[0].values[0][0] as string;
+  }
+
+  listColdContentForSession(sessionId: string): ColdStorageEntry[] {
+    const result = this.db.exec(
+      `SELECT id, session_id, message_id, content, content_type, original_chars, created_at FROM compaction_cold_storage WHERE session_id = ? ORDER BY created_at DESC`,
+      [sessionId]
+    );
+    if (!result[0]?.values?.length) return [];
+    return result[0].values.map((row) => ({
+      id: row[0] as string,
+      sessionId: row[1] as string,
+      messageId: row[2] as string,
+      content: row[3] as string,
+      contentType: row[4] as string,
+      originalChars: row[5] as number,
+      createdAt: row[6] as number,
+    }));
+  }
+
+  purgeColdContentForSession(sessionId: string): number {
+    this.db.run(
+      `DELETE FROM compaction_cold_storage WHERE session_id = ?`,
+      [sessionId]
+    );
+    const count = this.db.getRowsModified();
+    this.saveDb();
+    return count;
   }
 }

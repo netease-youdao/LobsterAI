@@ -1134,6 +1134,37 @@ export const AssistantTurnBlock: React.FC<{
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
   const renderSystemMessage = (message: CoworkMessage) => {
+    // Compaction system messages use specialized rendering
+    const subtype = message.metadata?.subtype as string | undefined;
+    if (subtype === 'compact_boundary' || subtype === 'compaction_summary' || subtype === 'compaction_complete' || subtype === 'compaction_failed') {
+      let compactionText: string;
+      if (subtype === 'compact_boundary') {
+        compactionText = i18nService.t('compaction.sessionCompacted');
+      } else if (subtype === 'compaction_complete' || subtype === 'compaction_failed') {
+        compactionText = message.content;
+      } else {
+        compactionText = i18nService.t('compaction.manualCompactStarted');
+      }
+
+      const isFailure = subtype === 'compaction_failed';
+      const textColorClass = isFailure
+        ? 'dark:text-red-400/70 text-red-500/70'
+        : 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60';
+      const lineColorClass = isFailure
+        ? 'dark:bg-red-400/30 bg-red-500/30'
+        : 'dark:bg-claude-darkBorder/40 bg-claude-border/40';
+
+      return (
+        <div className="flex items-center gap-2 py-1 px-2 my-1">
+          <div className={`flex-1 h-px ${lineColorClass}`} />
+          <span className={`text-xs ${textColorClass} whitespace-nowrap flex-shrink-0`}>
+            {compactionText}
+          </span>
+          <div className={`flex-1 h-px ${lineColorClass}`} />
+        </div>
+      );
+    }
+
     const rawContent = hasText(message.content)
       ? message.content
       : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');

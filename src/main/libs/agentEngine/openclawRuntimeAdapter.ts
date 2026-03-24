@@ -29,6 +29,14 @@ import {
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
 import { OPENCLAW_AGENT_TIMEOUT_SECONDS } from '../openclawConfigSync';
 import { t } from '../../i18n';
+import {
+  parseCompactCommand,
+  generateSummary,
+  shouldAutoCompact,
+  isCompacting,
+  setCompacting,
+} from '../coworkCompactor';
+import { getCurrentApiConfig, resolveRawApiConfig } from '../claudeSettings';
 
 const OPENCLAW_GATEWAY_TOOL_EVENTS_CAP = 'tool-events';
 const BRIDGE_MAX_MESSAGES = 20;
@@ -844,6 +852,52 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
+    // Intercept /compact command
+    const compactCmd = parseCompactCommand(prompt);
+    if (compactCmd.isCompact) {
+      const session = this.store.getSession(sessionId);
+      if (session) {
+        const apiConfig = resolveRawApiConfig().config;
+        if (apiConfig) {
+          // Phase 1: lock input + emit progress immediately
+          console.log('[Compaction] phase 1: manual compact started (OpenClaw), locking input');
+          this.store.updateSession(sessionId, { status: 'running' });
+          const progressMsg = this.store.addMessage(sessionId, {
+            type: 'system',
+            content: t('compaction.manualCompactStarted'),
+            metadata: { subtype: 'compaction_summary' },
+          });
+          this.emit('message', sessionId, progressMsg);
+
+          try {
+            // Filter out the progress message so it's not included in compaction input
+            const messagesToCompact = session.messages.filter(m => m.id !== progressMsg.id);
+            console.log(`[Compaction] phase 2: calling generateSummary with ${messagesToCompact.length} messages (OpenClaw)`);
+            const result = await generateSummary(
+              { baseURL: apiConfig.baseURL, apiKey: apiConfig.apiKey, model: apiConfig.model, apiType: apiConfig.apiType },
+              messagesToCompact,
+              { focusHint: compactCmd.focusHint || undefined, trigger: 'manual' }
+            );
+            // Phase 3: update message in-place with final result
+            console.log(`[Compaction] phase 3: compaction ${result.success ? 'succeeded' : 'failed'} (OpenClaw), outputChars=${result.outputChars}`);
+            const finalContent = result.success
+              ? t('compaction.compactComplete').replace('{count}', String(result.messagesCompacted))
+              : t('compaction.compactFailed');
+            const finalSubtype = result.success ? 'compaction_complete' : 'compaction_failed';
+            this.store.updateMessage(sessionId, progressMsg.id, {
+              content: finalContent,
+              metadata: { subtype: finalSubtype, summary: result.summary, compactionCount: result.compactionCount },
+            });
+            this.emit('messageUpdate', sessionId, progressMsg.id, finalContent, { subtype: finalSubtype });
+          } finally {
+            this.store.updateSession(sessionId, { status: 'idle' });
+            this.emit('complete', sessionId, null);
+          }
+        }
+      }
+      return;
+    }
+
     await this.runTurn(sessionId, prompt, {
       skipInitialUserMessage: false,
       systemPrompt: options.systemPrompt,
@@ -1092,7 +1146,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!hasHistory) {
       const session = this.store.getSession(sessionId);
       if (session) {
-        const bridgePrefix = this.buildBridgePrefix(session.messages, prompt);
+        const bridgePrefix = await this.buildBridgePrefix(session.messages, prompt, sessionId);
         if (bridgePrefix) {
           sections.push(bridgePrefix);
         }
@@ -1112,9 +1166,68 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     ].join('\n');
   }
 
-  private buildBridgePrefix(messages: CoworkMessage[], currentPrompt: string): string {
+  private async buildBridgePrefix(messages: CoworkMessage[], currentPrompt: string, sessionId: string): Promise<string> {
     const normalizedCurrentPrompt = currentPrompt.trim();
     if (!normalizedCurrentPrompt) return '';
+
+    // Check if compaction needed for bridge context
+    const compactionCheck = shouldAutoCompact(messages);
+    if (compactionCheck.shouldCompact && !isCompacting(sessionId)) {
+      const apiConfig = resolveRawApiConfig().config;
+      if (apiConfig) {
+        setCompacting(sessionId, true);
+        try {
+          // Phase 1: emit progress message
+          const session = this.store.getSession(sessionId);
+          let progressMsgId: string | undefined;
+          if (session) {
+            const progressMsg = this.store.addMessage(sessionId, {
+              type: 'system',
+              content: t('compaction.autoCompactTriggered'),
+              metadata: { subtype: 'compaction_summary' },
+            });
+            this.emit('message', sessionId, progressMsg);
+            progressMsgId = progressMsg.id;
+          }
+  
+          const result = await generateSummary(
+            { baseURL: apiConfig.baseURL, apiKey: apiConfig.apiKey, model: apiConfig.model, apiType: apiConfig.apiType },
+            messages,
+            { trigger: 'auto' }
+          );
+  
+          // Phase 2: update message in-place with final result
+          if (session && progressMsgId) {
+            const finalContent = result.success
+              ? t('compaction.compactComplete').replace('{count}', String(result.messagesCompacted))
+              : t('compaction.compactFailed');
+            const finalSubtype = result.success ? 'compaction_complete' : 'compaction_failed';
+            this.store.updateMessage(sessionId, progressMsgId, {
+              content: finalContent,
+              metadata: { subtype: finalSubtype, summary: result.summary, compactionCount: result.compactionCount },
+            });
+            this.emit('messageUpdate', sessionId, progressMsgId, finalContent, { subtype: finalSubtype });
+          }
+  
+          if (result.summary) {
+            // Return compact bridge instead of full history
+            const recentLines = messages.slice(-5).map(m => {
+              const role = m.type === 'user' ? 'User' : 'Assistant';
+              return `${role}: ${m.content.slice(0, 200)}`;
+            });
+            return [
+              '[Compacted conversation summary]',
+              result.summary,
+              '',
+              '[Recent messages]',
+              ...recentLines,
+            ].join('\n');
+          }
+        } finally {
+          setCompacting(sessionId, false);
+        }
+      }
+    }
 
     const source = messages
       .filter((message) => {

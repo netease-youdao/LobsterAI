@@ -48,6 +48,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
     imErrorPrefix: '处理消息时出错',
 
+    // Compaction
+    'compaction.sessionCompacted': '会话已压缩',
+    'compaction.autoCompactTriggered': '上下文接近上限，正在自动压缩...',
+    'compaction.manualCompactStarted': '正在压缩会话...',
+    'compaction.compactComplete': '压缩完成 — 已压缩 {count} 条消息',
+    'compaction.compactFailed': '压缩失败，使用标准截断',
+
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
   },
@@ -84,6 +91,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
     imErrorPrefix: 'Error processing message',
+
+    // Compaction
+    'compaction.sessionCompacted': 'Session compacted',
+    'compaction.autoCompactTriggered': 'Context approaching limit, auto-compacting...',
+    'compaction.manualCompactStarted': 'Compacting conversation...',
+    'compaction.compactComplete': 'Compaction complete — {count} messages compacted',
+    'compaction.compactFailed': 'Compaction failed, using standard truncation',
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',

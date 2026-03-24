@@ -175,6 +175,19 @@ export class SqliteStore {
       );
     `);
 
+    // Compaction cold storage table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS compaction_cold_storage (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_type TEXT NOT NULL DEFAULT 'tool_result',
+        original_chars INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists

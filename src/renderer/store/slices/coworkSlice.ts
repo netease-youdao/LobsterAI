@@ -228,17 +228,31 @@ const coworkSlice = createSlice({
       markSessionUnread(state, sessionId);
     },
 
-    updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string }>) {
-      const { sessionId, messageId, content } = action.payload;
+    updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }>) {
+      const { sessionId, messageId, content, metadata } = action.payload;
 
       if (state.currentSession?.id === sessionId) {
         const messageIndex = state.currentSession.messages.findIndex(m => m.id === messageId);
         if (messageIndex !== -1) {
-          const previousContent = state.currentSession.messages[messageIndex].content || '';
-          if (state.config.agentEngine === 'yd_cowork') {
-            state.currentSession.messages[messageIndex].content = mergeStreamingMessageContent(previousContent, content);
-          } else {
+          // When metadata includes a subtype change, this is a full content replacement (e.g. compaction result),
+          // not a streaming delta — skip merge logic and assign directly.
+          const isFullReplacement = metadata && 'subtype' in metadata;
+          if (isFullReplacement) {
+            console.debug('[CoworkSlice] full content replacement for message', messageId, 'subtype:', metadata.subtype);
             state.currentSession.messages[messageIndex].content = content;
+          } else {
+            const previousContent = state.currentSession.messages[messageIndex].content || '';
+            if (state.config.agentEngine === 'yd_cowork') {
+              state.currentSession.messages[messageIndex].content = mergeStreamingMessageContent(previousContent, content);
+            } else {
+              state.currentSession.messages[messageIndex].content = content;
+            }
+          }
+          if (metadata) {
+            state.currentSession.messages[messageIndex].metadata = {
+              ...state.currentSession.messages[messageIndex].metadata,
+              ...metadata,
+            };
           }
         }
       }
