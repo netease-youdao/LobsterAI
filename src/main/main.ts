@@ -2405,9 +2405,27 @@ if (!gotTheLock) {
         return { success: false, error: 'Session not found' };
       }
 
+      // Helper function to escape Markdown special characters
+      const escapeMarkdown = (text: string): string => {
+        return text
+          .replace(/\\/g, '\\\\')  // Escape backslashes first
+          .replace(/\*/g, '\\*')    // Escape asterisks
+          .replace(/_/g, '\\_')     // Escape underscores
+          .replace(/\[/g, '\\[')    // Escape opening brackets
+          .replace(/\]/g, '\\]')    // Escape closing brackets
+          .replace(/\(/g, '\\(')    // Escape opening parentheses
+          .replace(/\)/g, '\\)')    // Escape closing parentheses
+          .replace(/`/g, '\\`')     // Escape backticks
+          .replace(/#/g, '\\#')     // Escape hash symbols
+          .replace(/\+/g, '\\+')    // Escape plus signs
+          .replace(/-/g, '\\-')     // Escape minus signs
+          .replace(/!/g, '\\!')     // Escape exclamation marks
+          .replace(/\./g, '\\.');   // Escape dots
+      };
+
       // Build Markdown content
       const lines: string[] = [];
-      lines.push(`# ${session.title || 'Untitled Session'}`);
+      lines.push(`# ${escapeMarkdown(session.title || 'Untitled Session')}`);
       lines.push('');
       lines.push(`**Exported at**: ${new Date().toISOString()}`);
       lines.push(`**Session ID**: ${session.id}`);
@@ -2424,18 +2442,23 @@ if (!gotTheLock) {
           case 'user':
             lines.push(`## User (${timestamp})`);
             lines.push('');
-            lines.push(content);
+            lines.push(escapeMarkdown(content));
             lines.push('');
             break;
           case 'assistant':
             lines.push(`## Assistant (${timestamp})`);
             lines.push('');
-            lines.push(content);
+            lines.push(content);  // Assistant content may contain markdown, don't escape
             lines.push('');
             break;
           case 'tool_use':
-            lines.push(`### Tool: ${message.metadata?.toolName || 'Unknown'} (${timestamp})`);
+            lines.push(`### Tool: ${escapeMarkdown(message.metadata?.toolName || 'Unknown')} (${timestamp})`);
             lines.push('');
+            // Include content if present
+            if (content) {
+              lines.push(escapeMarkdown(content));
+              lines.push('');
+            }
             lines.push('**Input:**');
             lines.push('```json');
             lines.push(JSON.stringify(message.metadata?.toolInput || {}, null, 2));
@@ -2451,7 +2474,7 @@ if (!gotTheLock) {
             lines.push('');
             break;
           case 'system':
-            lines.push(`> **System** (${timestamp}): ${content}`);
+            lines.push(`> **System** (${timestamp}): ${escapeMarkdown(content)}`);
             lines.push('');
             break;
         }
@@ -2463,7 +2486,7 @@ if (!gotTheLock) {
 
       const markdownContent = lines.join('\n');
       const sanitizedFileName = sanitizeExportFileName(defaultFileName || `${session.title || 'session'}.md`);
-      const finalFileName = sanitizedFileName.endsWith('.md') ? sanitizedFileName : `${sanitizedFileName}.md`;
+      const finalFileName = sanitizedFileName.toLowerCase().endsWith('.md') ? sanitizedFileName : `${sanitizedFileName}.md`;
 
       const ownerWindow = BrowserWindow.fromWebContents(event.sender);
       const saveOptions = {
@@ -2480,7 +2503,7 @@ if (!gotTheLock) {
         return { success: true, canceled: true };
       }
 
-      const outputPath = saveResult.filePath.endsWith('.md') ? saveResult.filePath : `${saveResult.filePath}.md`;
+      const outputPath = saveResult.filePath.toLowerCase().endsWith('.md') ? saveResult.filePath : `${saveResult.filePath}.md`;
       await fs.promises.writeFile(outputPath, markdownContent, 'utf-8');
 
       return { success: true, canceled: false, path: outputPath };
@@ -2538,7 +2561,7 @@ if (!gotTheLock) {
 
       const jsonContent = JSON.stringify(exportData, null, 2);
       const sanitizedFileName = sanitizeExportFileName(defaultFileName || `${session.title || 'session'}.json`);
-      const finalFileName = sanitizedFileName.endsWith('.json') ? sanitizedFileName : `${sanitizedFileName}.json`;
+      const finalFileName = sanitizedFileName.toLowerCase().endsWith('.json') ? sanitizedFileName : `${sanitizedFileName}.json`;
 
       const ownerWindow = BrowserWindow.fromWebContents(event.sender);
       const saveOptions = {
@@ -2555,7 +2578,7 @@ if (!gotTheLock) {
         return { success: true, canceled: true };
       }
 
-      const outputPath = saveResult.filePath.endsWith('.json') ? saveResult.filePath : `${saveResult.filePath}.json`;
+      const outputPath = saveResult.filePath.toLowerCase().endsWith('.json') ? saveResult.filePath : `${saveResult.filePath}.json`;
       await fs.promises.writeFile(outputPath, jsonContent, 'utf-8');
 
       return { success: true, canceled: false, path: outputPath };

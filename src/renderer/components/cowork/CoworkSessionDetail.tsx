@@ -1666,7 +1666,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   const handleExportMarkdownClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!currentSession || isExportingMarkdown) return;
+    // 检查是否有其他导出操作正在进行
+    if (!currentSession || isExportingMarkdown || isExportingJSON || isExportingImage) return;
     closeMenu();
     setIsExportingMarkdown(true);
 
@@ -1696,7 +1697,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   const handleExportJSONClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!currentSession || isExportingJSON) return;
+    // 检查是否有其他导出操作正在进行
+    if (!currentSession || isExportingJSON || isExportingMarkdown || isExportingImage) return;
     closeMenu();
     setIsExportingJSON(true);
 
