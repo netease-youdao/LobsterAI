@@ -1,0 +1,56 @@
+src/main/main.ts
+  dc2569e19c23d4e1 61,1596-1603,3356-3360,3933-3985
+src/renderer/components/Settings.tsx
+  dc2569e19c23d4e1 60-62,415,2050-2070,3323,3338-3343
+src/main/libs/enterpriseConfigSync.ts
+  dc2569e19c23d4e1 1-455
+src/main/i18n.ts
+  dc2569e19c23d4e1 53-54,92-93
+src/renderer/components/skills/SkillsManager.tsx
+  dc2569e19c23d4e1 26-30,476,487-489,492,595,605,712,722,809,822-824,828
+src/main/libs/enterpriseConfigSync.test.ts
+  dc2569e19c23d4e1 1-109
+src/renderer/App.tsx
+  dc2569e19c23d4e1 48-50,98-102,618,654,691
+src/main/preload.ts
+  dc2569e19c23d4e1 44-46
+src/renderer/services/i18n.ts
+  dc2569e19c23d4e1 1084-1085,2162-2163
+src/renderer/types/electron.d.ts
+  dc2569e19c23d4e1 441-443
+src/renderer/components/skills/SkillsView.tsx
+  dc2569e19c23d4e1 13,16,50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "f7d4dd5c37c9b2ab699631fbcd1be62d42bbeced",
+  "prompts": {
+    "1da98c2bd0b2201a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bec531f6-491c-48e2-ad5b-ccb435a05fca",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "dc2569e19c23d4e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c97fea1-9006-41ac-83a8-7cffeee6e01d",
+        "model": "unknown"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 1846,
+      "total_deletions": 181,
+      "accepted_lines": 1690,
+      "overriden_lines": 0
+    }
+  }
+}
