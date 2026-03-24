@@ -273,7 +273,15 @@ const listAsarEntries = () => {
     listAsarEntries();
 
     fs.rmSync(path.join(runtimeRoot, 'openclaw.mjs'), { force: true });
-    fs.rmSync(path.join(runtimeRoot, 'dist'), { recursive: true, force: true });
+    // Preserve dist/control-ui/ (needed bare at runtime for gateway admin UI).
+    // Remove everything else in dist/ (JS modules are packed in gateway.asar).
+    const distDir = path.join(runtimeRoot, 'dist');
+    if (fs.existsSync(distDir)) {
+      for (const entry of fs.readdirSync(distDir)) {
+        if (entry === 'control-ui') continue;
+        fs.rmSync(path.join(distDir, entry), { recursive: true, force: true });
+      }
+    }
   } finally {
     fs.rmSync(stageDir, { recursive: true, force: true });
   }
@@ -286,8 +294,18 @@ NODE
 echo "[7/7] Verifying runtime layout"
 [[ -f "$OUT_DIR/gateway.asar" ]]
 [[ -d "$OUT_DIR/node_modules" ]]
-if [[ -f "$OUT_DIR/openclaw.mjs" || -d "$OUT_DIR/dist" ]]; then
-  echo "Expected openclaw.mjs/dist to be packed into gateway.asar, but unpacked files still exist." >&2
+if [[ -f "$OUT_DIR/openclaw.mjs" ]]; then
+  echo "Expected openclaw.mjs to be packed into gateway.asar, but unpacked file still exists." >&2
+  exit 1
+fi
+# dist/control-ui/ is intentionally kept bare (gateway serves static files from it).
+# Only fail if dist/ contains JS module files that should be in gateway.asar.
+if [[ -f "$OUT_DIR/dist/entry.js" || -f "$OUT_DIR/dist/entry.mjs" ]]; then
+  echo "Expected dist/entry.* to be packed into gateway.asar, but unpacked files still exist." >&2
+  exit 1
+fi
+if [[ ! -f "$OUT_DIR/dist/control-ui/index.html" ]]; then
+  echo "dist/control-ui/index.html is missing after asar packing. The selective cleanup may have removed it." >&2
   exit 1
 fi
 

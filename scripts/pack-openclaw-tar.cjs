@@ -62,6 +62,7 @@ const EXCLUDED_DIRS = new Set([
   'examples',
   'coverage',
   '.venv',
+  '.bin',  // node_modules/.bin contains symlinks that break tar on cross-platform builds
 ]);
 
 const EXCLUDED_ENVFILE = /^\.env(\..+)?$/i;

@@ -1,18 +1,22 @@
 import { app, utilityProcess, type UtilityProcess } from 'electron';
+import { spawn, type ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
-import { getElectronNodeRuntimePath } from './coworkUtil';
+import { getElectronNodeRuntimePath, ensureElectronNodeShim } from './coworkUtil';
 import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { applyBundledOpenClawRuntimeHotfixes } from './openclawRuntimeHotfix';
+import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
+
+type GatewayProcess = UtilityProcess | ChildProcess;
 
 const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
-const GATEWAY_BOOT_TIMEOUT_MS = 180 * 1000;
+const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
 const GATEWAY_RESTART_DELAY_MS = 3000;
 
 export type OpenClawEnginePhase =
@@ -110,8 +114,14 @@ const isPortReachable = (host: string, port: number, timeoutMs = 1200): Promise<
   });
 };
 
-const isUtilityProcessAlive = (child: UtilityProcess | null): child is UtilityProcess => {
-  return Boolean(child && typeof child.pid === 'number');
+const isGatewayProcessAlive = (child: GatewayProcess | null): child is GatewayProcess => {
+  if (!child) return false;
+  if ('pid' in child && typeof child.pid === 'number') {
+    // For ChildProcess, also check it hasn't already exited.
+    if ('exitCode' in child && child.exitCode !== null) return false;
+    return true;
+  }
+  return false;
 };
 
 const fetchWithTimeout = async (url: string, timeoutMs: number): Promise<Response> => {
@@ -142,12 +152,13 @@ export class OpenClawEngineManager extends EventEmitter {
 
   private desiredVersion: string;
   private status: OpenClawEngineStatus;
-  private gatewayProcess: UtilityProcess | null = null;
-  private readonly expectedGatewayExits = new WeakSet<UtilityProcess>();
+  private gatewayProcess: GatewayProcess | null = null;
+  private readonly expectedGatewayExits = new WeakSet<object>();
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
+  private secretEnvVars: Record<string, string> = {};
 
   constructor() {
     super();
@@ -182,6 +193,19 @@ export class OpenClawEngineManager extends EventEmitter {
           message: `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
           canRetry: true,
         };
+  }
+
+  /**
+   * Set secret environment variables to inject into the gateway process.
+   * These contain the plaintext values for `${VAR}` placeholders in openclaw.json.
+   */
+  setSecretEnvVars(vars: Record<string, string>): void {
+    this.secretEnvVars = vars;
+  }
+
+  /** Return the current secret env vars snapshot (for change detection). */
+  getSecretEnvVars(): Record<string, string> {
+    return this.secretEnvVars;
   }
 
   override on<U extends keyof OpenClawEngineManagerEvents>(
@@ -298,7 +322,7 @@ export class OpenClawEngineManager extends EventEmitter {
       return ensured;
     }
 
-    if (isUtilityProcessAlive(this.gatewayProcess)) {
+    if (isGatewayProcessAlive(this.gatewayProcess)) {
       const port = this.gatewayPort ?? this.readGatewayPort();
       if (port) {
         const healthy = await this.isGatewayHealthy(port);
@@ -333,8 +357,19 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     this.ensureBareEntryFiles(runtime.root);
-    this.applyRuntimeHotfixes(runtime.root);
     console.log(`[OpenClaw] startGateway: ensureBareEntryFiles done (${elapsed()})`);
+    // Skip hotfixes when gateway-bundle.mjs exists. The hotfixes patch individual
+    // JS files in dist/, but the bundle is a single esbuild artifact that doesn't
+    // use those files. Applying hotfixes with bundle present is wasteful (Electron's
+    // transparent asar read causes walkJsFiles to scan ~1100 files inside gateway.asar)
+    // and can take 250+ seconds on Windows due to Defender scanning.
+    const bundlePath = path.join(runtime.root, 'gateway-bundle.mjs');
+    if (fs.existsSync(bundlePath)) {
+      console.log(`[OpenClaw] startGateway: skipping applyRuntimeHotfixes (bundle exists) (${elapsed()})`);
+    } else {
+      this.applyRuntimeHotfixes(runtime.root);
+      console.log(`[OpenClaw] startGateway: applyRuntimeHotfixes done (${elapsed()})`);
+    }
 
     const openclawEntry = this.resolveOpenClawEntry(runtime.root);
     console.log(`[OpenClaw] startGateway: resolveOpenClawEntry done (${elapsed()}), entry=${openclawEntry}`);
@@ -366,6 +401,7 @@ export class OpenClawEngineManager extends EventEmitter {
     });
 
     const compileCacheDir = path.join(this.stateDir, '.compile-cache');
+    console.log(`[OpenClaw] compile cache dir: ${compileCacheDir}`);
     const electronNodeRuntimePath = getElectronNodeRuntimePath();
     const cliShimDir = this.ensureBundledCliShims();
 
@@ -386,12 +422,31 @@ export class OpenClawEngineManager extends EventEmitter {
       NODE_COMPILE_CACHE: compileCacheDir,
       LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath.replace(/\\/g, '/'),
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
+      // Inject secret values for ${VAR} placeholders in openclaw.json.
+      // This keeps plaintext credentials out of the config file on disk.
+      ...this.secretEnvVars,
     };
     if (cliShimDir) {
       // Plain object is case-sensitive: the spread key from process.env on Windows is "Path",
       // not "PATH". We must read the actual key to avoid creating a PATH with only cliShimDir.
       const currentPath = env.PATH || env.Path || '';
       env.PATH = [cliShimDir, currentPath].filter(Boolean).join(path.delimiter);
+    }
+
+    // Prepend bundled/user Python runtime paths so gateway exec commands
+    // find the LobsterAI-managed Python instead of the Windows Store stub.
+    appendPythonRuntimeToEnv(env as Record<string, string | undefined>);
+
+    // Inject node/npm/npx shims so gateway exec commands can use them.
+    // The shims wrap Electron as a Node.js runtime via ELECTRON_RUN_AS_NODE=1.
+    const npmBinDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
+      : undefined;
+    const nodeShimDir = ensureElectronNodeShim(electronNodeRuntimePath, npmBinDir);
+    if (nodeShimDir) {
+      const curPath = env.PATH || env.Path || '';
+      env.PATH = [nodeShimDir, curPath].filter(Boolean).join(path.delimiter);
+      env.LOBSTERAI_NPM_BIN_DIR = npmBinDir || '';
     }
 
     if (isSystemProxyEnabled()) {
@@ -407,17 +462,35 @@ export class OpenClawEngineManager extends EventEmitter {
 
     const forkArgs = ['gateway', '--bind', 'loopback', '--port', String(port), '--token', token, '--verbose'];
     console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs)}`);
-    const child = utilityProcess.fork(
-      openclawEntry,
-      forkArgs,
-      {
-        cwd: runtime.root,
-        env,
-        stdio: 'pipe',
-        serviceName: 'OpenClaw Gateway',
-      },
-    );
-    console.log(`[OpenClaw] startGateway: utilityProcess.fork() called (${elapsed()})`);
+
+    // On Windows, use child_process.spawn with ELECTRON_RUN_AS_NODE=1 instead of
+    // utilityProcess.fork(). Benchmark shows utilityProcess has ~5x overhead for
+    // cold ESM compilation on Windows (163s vs 34s for a 28MB bundle).
+    let child: GatewayProcess;
+    if (process.platform === 'win32') {
+      child = spawn(
+        process.execPath,
+        [openclawEntry, ...forkArgs],
+        {
+          cwd: runtime.root,
+          env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        },
+      );
+    } else {
+      child = utilityProcess.fork(
+        openclawEntry,
+        forkArgs,
+        {
+          cwd: runtime.root,
+          env,
+          stdio: 'pipe',
+          serviceName: 'OpenClaw Gateway',
+        },
+      );
+    }
+    console.log(`[OpenClaw] startGateway: gateway process created (${elapsed()}), platform=${process.platform}`);
 
     this.gatewayProcess = child;
     this.attachGatewayProcessLogs(child);
@@ -534,6 +607,19 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   private ensureBareEntryFiles(runtimeRoot: string): void {
+    const t0 = Date.now();
+
+    // Fast path: if gateway-bundle.mjs exists, skip full dist extraction.
+    // The bundle is the primary entry; dist/ modules are only needed as fallback.
+    const bundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
+    if (fs.existsSync(bundlePath)) {
+      console.log('[OpenClaw] ensureBareEntryFiles: bundle exists, skipping dist extraction');
+      this.ensureControlUiFiles(runtimeRoot);
+      console.log(`[OpenClaw] ensureBareEntryFiles: completed in ${Date.now() - t0}ms`);
+      return;
+    }
+
+    console.log('[OpenClaw] ensureBareEntryFiles: no bundle found, checking bare files');
     const bareEntry = path.join(runtimeRoot, 'openclaw.mjs');
     const bareDistEntry = path.join(runtimeRoot, 'dist', 'entry.js');
 
@@ -547,7 +633,7 @@ export class OpenClawEngineManager extends EventEmitter {
       return;
     }
 
-    console.log('[OpenClaw] Bare entry files missing, extracting from gateway.asar...');
+    console.log('[OpenClaw] ensureBareEntryFiles: extracting from gateway.asar (no bundle)');
 
     try {
       if (!fs.existsSync(bareEntry)) {
@@ -565,6 +651,32 @@ export class OpenClawEngineManager extends EventEmitter {
       console.log('[OpenClaw] Entry files extracted successfully.');
     } catch (err) {
       console.error('[OpenClaw] Failed to extract entry files from gateway.asar:', err);
+    }
+  }
+
+  /**
+   * Extract only dist/control-ui/ from gateway.asar if not already on disk.
+   * The control-ui directory contains static HTML/CSS/JS assets served by the
+   * gateway's admin UI and must exist as bare files on the filesystem.
+   */
+  private ensureControlUiFiles(runtimeRoot: string): void {
+    const controlUiIndex = path.join(runtimeRoot, 'dist', 'control-ui', 'index.html');
+    if (fs.existsSync(controlUiIndex)) {
+      return;
+    }
+
+    const asarControlUi = path.join(runtimeRoot, 'gateway.asar', 'dist', 'control-ui');
+    if (!fs.existsSync(asarControlUi)) {
+      // control-ui may already exist as bare files from the build (see build-openclaw-runtime.sh)
+      return;
+    }
+
+    console.log('[OpenClaw] Extracting dist/control-ui/ from gateway.asar...');
+    try {
+      this.copyDirFromAsar(asarControlUi, path.join(runtimeRoot, 'dist', 'control-ui'));
+      console.log('[OpenClaw] Extracted dist/control-ui/');
+    } catch (err) {
+      console.error('[OpenClaw] Failed to extract dist/control-ui/ from gateway.asar:', err);
     }
   }
 
@@ -656,6 +768,19 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   private resolveOpenClawEntry(runtimeRoot: string): string | null {
+    // Bundle fast-path via CJS launcher is only needed on Windows where
+    // utilityProcess.fork() cannot load ESM directly. On macOS/Linux,
+    // ensureBareEntryFiles already skips extraction when bundle exists,
+    // but this method falls through to gateway.asar/openclaw.mjs which
+    // ESM loads directly without a CJS wrapper.
+    if (process.platform === 'win32') {
+      const bundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
+      if (fs.existsSync(bundlePath)) {
+        console.log('[OpenClaw] resolveOpenClawEntry: using bundle fast path');
+        return this.ensureGatewayLauncherCjsForBundle(runtimeRoot);
+      }
+    }
+
     const esmEntry = findPath([
       path.join(runtimeRoot, 'openclaw.mjs'),
       path.join(runtimeRoot, 'dist', 'entry.js'),
@@ -774,6 +899,72 @@ export class OpenClawEngineManager extends EventEmitter {
     } catch (err) {
       console.error('[OpenClaw] Failed to write gateway-launcher.cjs:', err);
       return esmEntry;
+    }
+    return launcherPath;
+  }
+
+  /**
+   * Generate a simplified CJS launcher that loads gateway-bundle.mjs directly.
+   * Unlike ensureGatewayLauncherCjs(), this version does not include a fallback
+   * to dist/entry.js because the bundle is guaranteed to exist.
+   */
+  private ensureGatewayLauncherCjsForBundle(runtimeRoot: string): string {
+    const launcherPath = path.join(runtimeRoot, 'gateway-launcher.cjs');
+    const expectedContent =
+      `// Auto-generated CJS launcher for Windows — bundle-only mode.\n` +
+      `// Loads gateway-bundle.mjs directly without dist/ fallback.\n` +
+      `const { pathToFileURL } = require('node:url');\n` +
+      `const path = require('node:path');\n` +
+      `const fs = require('node:fs');\n` +
+      `const _log = (msg) => process.stderr.write('[openclaw-launcher] ' + msg + '\\n');\n` +
+      `const _t0 = Date.now();\n` +
+      `const _elapsed = () => (Date.now() - _t0) + 'ms';\n` +
+      `// ─── Compile cache setup ───\n` +
+      `try {\n` +
+      `  const { enableCompileCache, getCompileCacheDir } = require('node:module');\n` +
+      `  const _ccDir = path.join(process.env.OPENCLAW_STATE_DIR || __dirname, '.compile-cache');\n` +
+      `  enableCompileCache(_ccDir);\n` +
+      `  _log('compile-cache dir=' + getCompileCacheDir());\n` +
+      `} catch (_) {}\n` +
+      `// ─── Load bundle ───\n` +
+      `const bundlePath = path.join(__dirname, 'gateway-bundle.mjs');\n` +
+      `const _realpath = (p) => { try { return fs.realpathSync(path.resolve(p)); } catch { return path.resolve(p); } };\n` +
+      `const _launcherInArgv = process.argv[1] &&\n` +
+      `  _realpath(process.argv[1]).toLowerCase() === _realpath(__filename).toLowerCase();\n` +
+      `if (_launcherInArgv) {\n` +
+      `  process.argv[1] = bundlePath;\n` +
+      `} else {\n` +
+      `  process.argv.splice(1, 0, bundlePath);\n` +
+      `}\n` +
+      `const _keepAlive = setInterval(() => {}, 30000);\n` +
+      `const bundleUrl = pathToFileURL(bundlePath).href;\n` +
+      `_log('loading bundle (' + _elapsed() + ')');\n` +
+      `import(bundleUrl).then(() => {\n` +
+      `  _log('import ok (' + _elapsed() + ')');\n` +
+      `  try { require('node:module').flushCompileCache(); } catch (_) {}\n` +
+      `}).catch((err) => {\n` +
+      `  _log('import failed (' + _elapsed() + '): ' + (err.stack || err));\n` +
+      `  process.exit(1);\n` +
+      `});\n`;
+
+    try {
+      const existing = fs.existsSync(launcherPath) ? fs.readFileSync(launcherPath, 'utf8') : '';
+      if (existing !== expectedContent) {
+        if (existing) {
+          console.log('[OpenClaw] Overwriting existing gateway-launcher.cjs (switching to bundle-only mode)');
+        }
+        fs.writeFileSync(launcherPath, expectedContent, 'utf8');
+        console.log('[OpenClaw] Generated gateway-launcher.cjs for bundle-only mode');
+      }
+    } catch (err) {
+      console.error('[OpenClaw] Failed to write gateway-launcher.cjs:', err);
+      // Fall back to the legacy launcher generation
+      const esmEntry = findPath([
+        path.join(runtimeRoot, 'openclaw.mjs'),
+        path.join(runtimeRoot, 'gateway.asar', 'openclaw.mjs'),
+      ]);
+      if (esmEntry) return this.ensureGatewayLauncherCjs(runtimeRoot, esmEntry);
+      return launcherPath;
     }
     return launcherPath;
   }
@@ -901,10 +1092,18 @@ export class OpenClawEngineManager extends EventEmitter {
       }
     }
 
-    for (let offset = 1; offset <= GATEWAY_PORT_SCAN_LIMIT; offset += 1) {
-      const candidate = DEFAULT_GATEWAY_PORT + offset;
-      if (await isPortAvailable(candidate)) {
-        return candidate;
+    // Scan ports in parallel batches of 10 for faster resolution.
+    const BATCH_SIZE = 10;
+    for (let batch = 0; batch * BATCH_SIZE < GATEWAY_PORT_SCAN_LIMIT; batch += 1) {
+      const batchStart = DEFAULT_GATEWAY_PORT + batch * BATCH_SIZE + 1;
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, DEFAULT_GATEWAY_PORT + GATEWAY_PORT_SCAN_LIMIT + 1);
+      const portBatch = Array.from({ length: batchEnd - batchStart }, (_, i) => batchStart + i);
+      const results = await Promise.all(
+        portBatch.map(async (p) => (await isPortAvailable(p)) ? p : null),
+      );
+      const available = results.find((p) => p !== null);
+      if (available != null) {
+        return available;
       }
     }
 
@@ -1003,7 +1202,7 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  private stopGatewayProcess(child: UtilityProcess): void {
+  private stopGatewayProcess(child: GatewayProcess): void {
     this.expectedGatewayExits.add(child);
 
     try {
@@ -1013,17 +1212,17 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     setTimeout(() => {
-      if (typeof child.pid === 'number') {
-        try {
+      try {
+        if ('pid' in child && typeof child.pid === 'number') {
           child.kill();
-        } catch {
-          // ignore
         }
+      } catch {
+        // ignore
       }
     }, 1200);
   }
 
-  private attachGatewayProcessLogs(child: UtilityProcess): void {
+  private attachGatewayProcessLogs(child: GatewayProcess): void {
     ensureDir(path.dirname(this.gatewayLogPath));
     const appendLog = (chunk: Buffer | string, stream: 'stdout' | 'stderr') => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
@@ -1043,21 +1242,25 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  private attachGatewayExitHandlers(child: UtilityProcess): void {
-    child.once('error', (type, location) => {
-      console.error(`[OpenClaw] gateway process error event: type=${type}, location=${location}`);
-      if (this.expectedGatewayExits.has(child)) {
-        this.expectedGatewayExits.delete(child);
-        return;
-      }
+  private attachGatewayExitHandlers(child: GatewayProcess): void {
+    child.once('error', (...args: unknown[]) => {
+      // UtilityProcess error: (type: string, location: string)
+      // ChildProcess error: (err: Error)
+      const errorMsg = args[0] instanceof Error
+        ? args[0].message
+        : `${args[0]}${args[1] ? ` (${args[1]})` : ''}`;
+      console.error(`[OpenClaw] gateway process error event: ${errorMsg}`);
+      // Don't delete from expectedGatewayExits here — the 'exit' event always
+      // follows and handles cleanup. Deleting here would cause 'exit' to miss
+      // the expected-exit guard, triggering a spurious restart.
+      if (this.expectedGatewayExits.has(child)) return;
       if (this.shutdownRequested) return;
       this.setStatus({
         phase: 'error',
         version: this.status.version,
-        message: `OpenClaw gateway process error: ${type}${location ? ` (${location})` : ''}`,
+        message: `OpenClaw gateway process error: ${errorMsg}`,
         canRetry: true,
       });
-      this.scheduleGatewayRestart();
     });
 
     child.once('exit', (code) => {

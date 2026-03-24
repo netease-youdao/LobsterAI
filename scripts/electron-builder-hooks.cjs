@@ -147,6 +147,26 @@ function ensureBundledOpenClawRuntime(context) {
   // Verify preinstalled plugins are present in the runtime extensions directory
   verifyPreinstalledPlugins(runtimeRoot, buildHint);
 
+  // Verify gateway-bundle.mjs exists and is reasonably sized.
+  // Without it, Windows first-launch falls back to loading ~1100 ESM modules
+  // individually, causing 80-100s startup delay.
+  const gatewayBundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
+  if (!existsSync(gatewayBundlePath)) {
+    throw new Error(
+      '[electron-builder-hooks] gateway-bundle.mjs is missing from '
+      + runtimeRoot
+      + '. Run `npm run openclaw:bundle` before packaging.',
+    );
+  }
+  const gatewayBundleStat = statSync(gatewayBundlePath);
+  if (gatewayBundleStat.size < 1_000_000) {
+    throw new Error(
+      '[electron-builder-hooks] gateway-bundle.mjs is suspiciously small ('
+      + gatewayBundleStat.size
+      + ' bytes, expected ~27MB). Rebuild with: `npm run openclaw:bundle`.',
+    );
+  }
+
   const gatewayAsarPath = path.join(runtimeRoot, 'gateway.asar');
   if (existsSync(gatewayAsarPath)) {
     let entries;

@@ -253,6 +253,7 @@ export interface WecomGatewayStatus {
 
 export interface PopoOpenClawConfig {
   enabled: boolean;
+  connectionMode: 'websocket' | 'webhook';
   appKey: string;
   appSecret: string;
   token: string;
@@ -277,9 +278,29 @@ export interface PopoGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+// ==================== Weixin (微信) Types ====================
+
+export interface WeixinOpenClawConfig {
+  enabled: boolean;
+  accountId: string;
+  dmPolicy: 'open' | 'pairing' | 'allowlist' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'open' | 'allowlist' | 'disabled';
+  groupAllowFrom: string[];
+  debug: boolean;
+}
+
+export interface WeixinGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo';
+export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin';
 
 export interface IMGatewayConfig {
   dingtalk: DingTalkOpenClawConfig;
@@ -291,6 +312,7 @@ export interface IMGatewayConfig {
   xiaomifeng: XiaomifengConfig;
   wecom: WecomOpenClawConfig;
   popo: PopoOpenClawConfig;
+  weixin: WeixinOpenClawConfig;
   settings: IMSettings;
 }
 
@@ -309,6 +331,7 @@ export interface IMGatewayStatus {
   xiaomifeng: XiaomifengGatewayStatus;
   wecom: WecomGatewayStatus;
   popo: PopoGatewayStatus;
+  weixin: WeixinGatewayStatus;
 }
 
 // ==================== Media Attachment Types ====================
@@ -526,6 +549,7 @@ export const DEFAULT_WECOM_CONFIG: WecomOpenClawConfig = {
 
 export const DEFAULT_POPO_CONFIG: PopoOpenClawConfig = {
   enabled: false,
+  connectionMode: 'websocket',
   appKey: '',
   appSecret: '',
   token: '',
@@ -539,6 +563,16 @@ export const DEFAULT_POPO_CONFIG: PopoOpenClawConfig = {
   groupAllowFrom: [],
   textChunkLimit: 3000,
   richTextChunkLimit: 5000,
+  debug: true,
+};
+
+export const DEFAULT_WEIXIN_CONFIG: WeixinOpenClawConfig = {
+  enabled: false,
+  accountId: '',
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'open',
+  groupAllowFrom: [],
   debug: true,
 };
 
@@ -557,6 +591,7 @@ export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   xiaomifeng: DEFAULT_XIAOMIFENG_CONFIG,
   wecom: DEFAULT_WECOM_CONFIG,
   popo: DEFAULT_POPO_CONFIG,
+  weixin: DEFAULT_WEIXIN_CONFIG,
   settings: DEFAULT_IM_SETTINGS,
 };
 
@@ -625,6 +660,13 @@ export const DEFAULT_IM_STATUS: IMGatewayStatus = {
     lastOutboundAt: null,
   },
   popo: {
+    connected: false,
+    startedAt: null,
+    lastError: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
+  },
+  weixin: {
     connected: false,
     startedAt: null,
     lastError: null,

@@ -298,3 +298,26 @@ for (const plugin of plugins) {
 }
 
 log(`All ${plugins.length} plugin(s) installed successfully.`);
+
+// --- Post-install patch: openclaw-weixin gatewayMethods ---
+// The openclaw-weixin plugin defines loginWithQrStart/loginWithQrWait in its
+// gateway adapter but does not declare gatewayMethods on the channel plugin
+// object.  Without this declaration, the gateway's resolveWebLoginProvider()
+// cannot discover the plugin for web.login.start/web.login.wait RPC calls.
+// Patch channel.ts to inject the missing property.
+const weixinChannelPath = path.join(runtimeExtensionsDir, 'openclaw-weixin', 'src', 'channel.ts');
+if (fs.existsSync(weixinChannelPath)) {
+  let src = fs.readFileSync(weixinChannelPath, 'utf8');
+  if (!src.includes('gatewayMethods')) {
+    // Insert gatewayMethods right after the configSchema block in weixinPlugin
+    const marker = 'configSchema: {';
+    const idx = src.indexOf(marker);
+    if (idx !== -1) {
+      src = src.slice(0, idx) + 'gatewayMethods: ["web.login.start", "web.login.wait"],\n  ' + src.slice(idx);
+      fs.writeFileSync(weixinChannelPath, src);
+      log('Patched openclaw-weixin/src/channel.ts: added gatewayMethods declaration');
+    }
+  } else {
+    log('openclaw-weixin/src/channel.ts already has gatewayMethods, skipping patch');
+  }
+}
