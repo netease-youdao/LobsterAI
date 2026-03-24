@@ -198,12 +198,6 @@ export class SqliteStore {
       ON user_memories(is_explicit, status, updated_at DESC);
     `);
 
-    // MCP 服务器相关索引
-    this.db.run(`
-      CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled_name
-      ON mcp_servers(enabled, name);
-    `);
-
     // Create MCP servers table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -216,6 +210,12 @@ export class SqliteStore {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+    `);
+
+    // MCP 服务器相关索引（在表创建之后）
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled_name
+      ON mcp_servers(enabled, name);
     `);
 
     // Migrations - safely add columns if they don't exist
