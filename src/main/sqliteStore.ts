@@ -109,6 +109,27 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_id ON cowork_messages(session_id);
     `);
 
+    // 优化的复合索引 - 提升查询性能
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_sessions_pinned_updated_at
+      ON cowork_sessions(pinned DESC, updated_at DESC);
+    `);
+    
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_sequence
+      ON cowork_messages(session_id, sequence);
+    `);
+    
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_sessions_status_updated_at
+      ON cowork_sessions(status, updated_at DESC);
+    `);
+    
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_sessions_cwd
+      ON cowork_sessions(cwd);
+    `);
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS cowork_config (
         key TEXT PRIMARY KEY,
@@ -159,6 +180,28 @@ export class SqliteStore {
     this.db.run(`
       CREATE INDEX IF NOT EXISTS idx_user_memory_sources_memory_id
       ON user_memory_sources(memory_id, is_active);
+    `);
+
+    // 用户记忆相关的复合索引优化
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_user_memories_status_confidence_updated_at
+      ON user_memories(status, confidence DESC, updated_at DESC);
+    `);
+    
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_user_memories_fingerprint_status
+      ON user_memories(fingerprint, status);
+    `);
+    
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_user_memories_is_explicit_status
+      ON user_memories(is_explicit, status, updated_at DESC);
+    `);
+
+    // MCP 服务器相关索引
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled_name
+      ON mcp_servers(enabled, name);
     `);
 
     // Create MCP servers table
