@@ -650,6 +650,35 @@ export class OpenClawConfigSync {
       };
     }
 
+    // Sync Opik observability plugin config
+    const opikEnabled = coworkConfig.observabilityProviders?.includes('opik');
+    const opikCfg = coworkConfig.observabilityOpik;
+    if (isBundledPluginAvailable('opik-openclaw')) {
+      if (!managedConfig.plugins) {
+        managedConfig.plugins = { entries: {} };
+      }
+      const plugins = managedConfig.plugins as Record<string, unknown>;
+      if (!plugins.entries) {
+        plugins.entries = {};
+      }
+      const entries = plugins.entries as Record<string, Record<string, unknown>>;
+      if (opikEnabled && opikCfg?.url) {
+        entries['opik-openclaw'] = {
+          enabled: true,
+          config: {
+            enabled: true,
+            apiUrl: opikCfg.url,
+            workspaceName: opikCfg.workspace || 'default',
+            ...(opikCfg.apiKey ? { apiKey: opikCfg.apiKey } : {}),
+            projectName: opikCfg.project || 'LobsterAI',
+            tags: ['lobsterai'],
+          },
+        };
+      } else {
+        entries['opik-openclaw'] = { enabled: false };
+      }
+    }
+
     // Sync Telegram OpenClaw channel config
     const tgConfig = this.getTelegramOpenClawConfig?.();
     if (tgConfig?.enabled && tgConfig.botToken) {

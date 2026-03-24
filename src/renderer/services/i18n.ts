@@ -1081,6 +1081,20 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: '网易有道LobsterAI服务协议',
     privacyDialogAccept: '我已阅读并同意',
     privacyDialogReject: '拒绝',
+
+    // 可观测性
+    observability: '可观测性',
+    observabilityDescription: '启用可观测性平台以追踪 LLM 调用的 prompt、response、token 用量和耗时。',
+    observabilityProviders: '可观测性平台',
+    observabilityOpikUrl: 'Opik 服务地址',
+    observabilityOpikUrlPlaceholder: '例如 http://localhost:5173/api',
+    observabilityOpikWorkspace: '工作区',
+    observabilityOpikWorkspacePlaceholder: '默认 default',
+    observabilityOpikApiKey: 'API Key',
+    observabilityOpikApiKeyPlaceholder: '自部署可留空',
+    observabilityOpikProject: '项目名称',
+    observabilityOpikProjectPlaceholder: '默认 LobsterAI',
+    observabilityConfigSaved: '可观测性配置已保存',
   },
   en: {
     // Common
@@ -2157,6 +2171,20 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
+
+    // Observability
+    observability: 'Observability',
+    observabilityDescription: 'Enable observability platforms to trace LLM calls including prompts, responses, token usage, and latency.',
+    observabilityProviders: 'Observability Platforms',
+    observabilityOpikUrl: 'Opik Server URL',
+    observabilityOpikUrlPlaceholder: 'e.g. http://localhost:5173/api',
+    observabilityOpikWorkspace: 'Workspace',
+    observabilityOpikWorkspacePlaceholder: 'Default: default',
+    observabilityOpikApiKey: 'API Key',
+    observabilityOpikApiKeyPlaceholder: 'Optional for self-hosted',
+    observabilityOpikProject: 'Project Name',
+    observabilityOpikProjectPlaceholder: 'Default: LobsterAI',
+    observabilityConfigSaved: 'Observability configuration saved',
   }
 };
 

@@ -9,7 +9,7 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ChartBarIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import TrashIcon from './icons/TrashIcon';
@@ -24,6 +24,8 @@ import type {
   OpenClawEngineStatus,
   CoworkUserMemoryEntry,
   CoworkMemoryStats,
+  ObservabilityProvider,
+  ObservabilityOpikConfig,
 } from '../types/cowork';
 import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
@@ -47,7 +49,7 @@ import {
   CustomProviderIcon,
 } from './icons/providers';
 
-type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
+type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'observability' | 'shortcuts' | 'im' | 'email' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -590,14 +592,23 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [bootstrapLoaded, setBootstrapLoaded] = useState<boolean>(false);
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
 
+  const [observabilityProviders, setObservabilityProviders] = useState<ObservabilityProvider[]>(coworkConfig.observabilityProviders ?? []);
+  const [opikConfig, setOpikConfig] = useState<ObservabilityOpikConfig>(coworkConfig.observabilityOpik ?? { url: '', workspace: '', apiKey: '', project: '' });
+  const [observabilitySaving, setObservabilitySaving] = useState(false);
+  const [observabilitySaved, setObservabilitySaved] = useState(false);
+
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
+    setObservabilityProviders(coworkConfig.observabilityProviders ?? []);
+    setOpikConfig(coworkConfig.observabilityOpik ?? { url: '', workspace: '', apiKey: '', project: '' });
   }, [
     coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
+    coworkConfig.observabilityProviders,
+    coworkConfig.observabilityOpik,
   ]);
 
   useEffect(() => () => {
@@ -2052,6 +2063,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     { key: 'email',          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
     { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
     { key: 'coworkAgent',    label: i18nService.t('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
+    { key: 'observability',  label: i18nService.t('observability'),    icon: <ChartBarIcon className="h-5 w-5" /> },
     { key: 'shortcuts',      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
     { key: 'about',          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
   ], [language]);
@@ -3413,6 +3425,124 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 Copyright &copy; {new Date().getFullYear()} NetEase Youdao. All Rights Reserved.
               </p>
             </div>
+          </div>
+        );
+
+      case 'observability':
+        return (
+          <div className="space-y-6">
+            <p className="text-sm dark:text-claude-darkSecondaryText text-claude-secondaryText">
+              {i18nService.t('observabilityDescription')}
+            </p>
+
+            <div>
+              <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('observabilityProviders')}
+              </h4>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={observabilityProviders.includes('opik')}
+                  onChange={(e) => {
+                    setObservabilityProviders(
+                      e.target.checked
+                        ? [...observabilityProviders, 'opik']
+                        : observabilityProviders.filter(p => p !== 'opik')
+                    );
+                  }}
+                  className="rounded border-gray-300 dark:border-gray-600"
+                />
+                <span className="text-sm dark:text-claude-darkText text-claude-text">Opik</span>
+              </label>
+            </div>
+
+            {observabilityProviders.includes('opik') && (
+              <div className="space-y-4 pl-1 border-l-2 border-claude-border dark:border-claude-darkBorder ml-1 pl-4">
+                <div>
+                  <label className="block text-sm font-medium dark:text-claude-darkText text-claude-text mb-1">
+                    {i18nService.t('observabilityOpikUrl')}
+                  </label>
+                  <input
+                    type="text"
+                    value={opikConfig.url}
+                    onChange={(e) => setOpikConfig({ ...opikConfig, url: e.target.value })}
+                    placeholder={i18nService.t('observabilityOpikUrlPlaceholder')}
+                    className="w-full rounded-lg border border-claude-border dark:border-claude-darkBorder bg-white dark:bg-claude-darkBg px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium dark:text-claude-darkText text-claude-text mb-1">
+                    {i18nService.t('observabilityOpikWorkspace')}
+                  </label>
+                  <input
+                    type="text"
+                    value={opikConfig.workspace}
+                    onChange={(e) => setOpikConfig({ ...opikConfig, workspace: e.target.value })}
+                    placeholder={i18nService.t('observabilityOpikWorkspacePlaceholder')}
+                    className="w-full rounded-lg border border-claude-border dark:border-claude-darkBorder bg-white dark:bg-claude-darkBg px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium dark:text-claude-darkText text-claude-text mb-1">
+                    {i18nService.t('observabilityOpikApiKey')}
+                  </label>
+                  <input
+                    type="password"
+                    value={opikConfig.apiKey}
+                    onChange={(e) => setOpikConfig({ ...opikConfig, apiKey: e.target.value })}
+                    placeholder={i18nService.t('observabilityOpikApiKeyPlaceholder')}
+                    className="w-full rounded-lg border border-claude-border dark:border-claude-darkBorder bg-white dark:bg-claude-darkBg px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium dark:text-claude-darkText text-claude-text mb-1">
+                    {i18nService.t('observabilityOpikProject')}
+                  </label>
+                  <input
+                    type="text"
+                    value={opikConfig.project}
+                    onChange={(e) => setOpikConfig({ ...opikConfig, project: e.target.value })}
+                    placeholder={i18nService.t('observabilityOpikProjectPlaceholder')}
+                    className="w-full rounded-lg border border-claude-border dark:border-claude-darkBorder bg-white dark:bg-claude-darkBg px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={async () => {
+                setObservabilitySaving(true);
+                setObservabilitySaved(false);
+                try {
+                  const ok = await coworkService.updateConfig({
+                    observabilityProviders,
+                    observabilityOpik: opikConfig,
+                  });
+                  if (ok) {
+                    setObservabilitySaved(true);
+                    setTimeout(() => setObservabilitySaved(false), 2000);
+                  } else {
+                    setError(i18nService.t('failedToSaveSettings'));
+                  }
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                } finally {
+                  setObservabilitySaving(false);
+                }
+              }}
+              disabled={observabilitySaving}
+              className={`px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors ${
+                observabilitySaved
+                  ? 'bg-green-600'
+                  : 'bg-blue-600 hover:bg-blue-700 disabled:opacity-50'
+              }`}
+            >
+              {observabilitySaving
+                ? i18nService.t('saving')
+                : observabilitySaved
+                  ? '✓'
+                  : i18nService.t('save')}
+            </button>
           </div>
         );
 

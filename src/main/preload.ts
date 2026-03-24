@@ -178,6 +178,8 @@ contextBridge.exposeInMainWorld('electron', {
       memoryLlmJudgeEnabled?: boolean;
       memoryGuardLevel?: 'strict' | 'standard' | 'relaxed';
       memoryUserMemoriesMaxItems?: number;
+      observabilityProviders?: string[];
+      observabilityOpik?: { url: string; workspace: string; apiKey: string; project: string };
     }) =>
       ipcRenderer.invoke('cowork:config:set', config),
     listMemoryEntries: (input: {
