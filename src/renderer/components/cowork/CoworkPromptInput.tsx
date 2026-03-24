@@ -591,27 +591,37 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
-              <div
-                key={attachment.path}
-                className="inline-flex items-center gap-1.5 rounded-full border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface px-2.5 py-1 text-xs dark:text-claude-darkText text-claude-text max-w-full"
-                title={attachment.path}
+            <div
+              key={attachment.path}
+              className="relative group flex items-center gap-2.5 h-14 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface pr-7 overflow-hidden max-w-[220px]"
+              title={attachment.path}
+            >
+              {attachment.isImage && attachment.dataUrl ? (
+                <img
+                  src={attachment.dataUrl}
+                  alt={attachment.name}
+                  className="h-14 w-14 flex-shrink-0 object-cover"
+                />
+              ) : (
+                <div className="flex items-center justify-center h-14 w-10 flex-shrink-0 pl-3">
+                  {attachment.isImage ? (
+                    <PhotoIcon className="h-5 w-5 text-blue-500" />
+                  ) : (
+                    <PaperClipIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                  )}
+                </div>
+              )}
+              <span className="truncate text-xs dark:text-claude-darkText text-claude-text">{attachment.name}</span>
+              <button
+                type="button"
+                onClick={() => handleRemoveAttachment(attachment.path)}
+                className="absolute top-1 right-1 rounded-full p-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary opacity-0 group-hover:opacity-100 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-opacity"
+                aria-label={i18nService.t('coworkAttachmentRemove')}
+                title={i18nService.t('coworkAttachmentRemove')}
               >
-                {attachment.isImage ? (
-                  <PhotoIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
-                ) : (
-                  <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                )}
-                <span className="truncate max-w-[180px]">{attachment.name}</span>
-                <button
-                  type="button"
-                  onClick={() => handleRemoveAttachment(attachment.path)}
-                  className="ml-0.5 rounded-full p-0.5 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
-                  aria-label={i18nService.t('coworkAttachmentRemove')}
-                  title={i18nService.t('coworkAttachmentRemove')}
-                >
-                  <XMarkIcon className="h-3 w-3" />
-                </button>
-              </div>
+                <XMarkIcon className="h-3.5 w-3.5" />
+              </button>
+            </div>
           ))}
         </div>
       )}
