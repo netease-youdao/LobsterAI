@@ -186,6 +186,17 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    novita: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     custom: {
       enabled: boolean;
       apiKey: string;
@@ -398,6 +409,17 @@ export const defaultConfig: AppConfig = {
         { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false }
       ]
     },
+    novita: {
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://api.novita.ai/openai',
+      apiFormat: 'openai',
+      models: [
+        { id: 'moonshotai/kimi-k2.5', name: 'Kimi K2.5', supportsImage: true },
+        { id: 'zai-org/glm-5', name: 'GLM 5', supportsImage: false },
+        { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', supportsImage: false }
+      ]
+    },
     custom: {
       enabled: false,
       apiKey: '',
@@ -432,7 +454,7 @@ export const CONFIG_KEYS = {
 
 // 模型提供商分类
 export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama', 'custom'] as const;
-export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
+export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter', 'novita'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 
 /**

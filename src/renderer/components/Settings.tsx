@@ -44,6 +44,7 @@ import {
   VolcengineIcon,
   OpenRouterIcon,
   OllamaIcon,
+  NovitaIcon,
   CustomProviderIcon,
 } from './icons/providers';
 
@@ -74,6 +75,7 @@ const providerKeys = [
   'xiaomi',
   'openrouter',
   'ollama',
+  'novita',
   'custom',
 ] as const;
 
@@ -145,6 +147,7 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
   openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
   ollama: { label: 'Ollama', icon: <OllamaIcon /> },
+  novita: { label: 'Novita AI', icon: <NovitaIcon /> },
   custom: { label: 'Custom', icon: <CustomProviderIcon /> },
 };
 
@@ -184,6 +187,10 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   ollama: {
     anthropic: 'http://localhost:11434',
     openai: 'http://localhost:11434/v1',
+  },
+  novita: {
+    anthropic: 'https://api.novita.ai/anthropic',
+    openai: 'https://api.novita.ai/openai',
   },
   custom: {
     anthropic: '',
