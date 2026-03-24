@@ -2082,10 +2082,6 @@ if (!gotTheLock) {
 
       const runner = getCoworkRunner();
 
-      // Update session status to 'running' before starting async task
-      // This ensures the frontend receives the correct status immediately
-      coworkStoreInstance.updateSession(session.id, { status: 'running' });
-
       // Start the session asynchronously (skip initial user message since we already added it)
       const runtime = getCoworkEngineRouter();
       runtime.startSession(session.id, options.prompt, {
