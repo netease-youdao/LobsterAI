@@ -2189,6 +2189,14 @@ if (!gotTheLock) {
   ipcMain.handle('cowork:session:delete', async (_event, sessionId: string) => {
     try {
       const coworkStoreInstance = getCoworkStore();
+      // Abort any active run before deleting, so the gateway stops
+      // tool execution and token consumption.  stopSession() is a
+      // no-op when no active turn exists for this session.
+      try {
+        getCoworkEngineRouter().stopSession(sessionId);
+      } catch {
+        // Router may not be initialised yet; safe to ignore.
+      }
       coworkStoreInstance.deleteSession(sessionId);
       // Clean up IM session mapping so that new channel messages
       // create a fresh session instead of referencing a deleted one.
@@ -2216,8 +2224,17 @@ if (!gotTheLock) {
   ipcMain.handle('cowork:session:deleteBatch', async (_event, sessionIds: string[]) => {
     try {
       const coworkStoreInstance = getCoworkStore();
-      coworkStoreInstance.deleteSessions(sessionIds);
       const router = getCoworkEngineRouter();
+      // Abort any active runs before deleting so the gateway stops
+      // tool execution and token consumption.
+      for (const sessionId of sessionIds) {
+        try {
+          router.stopSession(sessionId);
+        } catch {
+          // Router may not be initialised yet; safe to ignore.
+        }
+      }
+      coworkStoreInstance.deleteSessions(sessionIds);
       for (const sessionId of sessionIds) {
         try {
           getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
