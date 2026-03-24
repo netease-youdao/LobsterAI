@@ -38,10 +38,35 @@ interface LegacyTaskRow {
 // Converters
 // ---------------------------------------------------------------------------
 
+function formatLocalTimezoneOffset(): string {
+  const offsetMinutes = -new Date().getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absMinutes = Math.abs(offsetMinutes);
+  const hours = Math.floor(absMinutes / 60).toString().padStart(2, '0');
+  const minutes = (absMinutes % 60).toString().padStart(2, '0');
+  return `${sign}${hours}:${minutes}`;
+}
+
+/**
+ * Ensure a datetime string has an explicit timezone offset.
+ * Legacy `at` datetimes were stored as local time without offset (e.g. "2026-03-17T21:30:00").
+ * The OpenClaw gateway interprets offset-less strings as UTC, causing an 8-hour drift
+ * for users in UTC+8.  Append the local timezone offset when missing.
+ */
+function ensureTimezoneOffset(datetime: string): string {
+  // Already has an offset (+HH:MM, -HH:MM) or trailing 'Z'
+  if (/(?:Z|[+-]\d{2}:\d{2})\s*$/.test(datetime)) return datetime;
+  return `${datetime}${formatLocalTimezoneOffset()}`;
+}
+
 function convertSchedule(legacy: LegacySchedule): Schedule | null {
   if (legacy.type === 'at') {
     if (!legacy.datetime) return null;
-    return { kind: 'at', at: legacy.datetime };
+    const withTz = ensureTimezoneOffset(legacy.datetime);
+    // Skip one-time tasks whose scheduled time is already in the past —
+    // the gateway rejects them and they would never fire anyway.
+    if (new Date(withTz).getTime() <= Date.now()) return null;
+    return { kind: 'at', at: withTz };
   }
   if (legacy.type === 'interval') {
     const ms = legacy.intervalMs;
@@ -95,6 +120,7 @@ function rowToInput(row: LegacyTaskRow): ScheduledTaskInput | null {
     wakeMode: 'next-heartbeat',
     payload: { kind: 'agentTurn', message: row.prompt },
     delivery: convertDelivery(row.notify_platforms_json ?? '[]'),
+    agentId: 'main',
   };
 }
 

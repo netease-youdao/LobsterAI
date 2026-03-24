@@ -11,6 +11,7 @@ import { ScheduledTasksView } from './components/scheduledTasks';
 import { McpView } from './components/mcp';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
+import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import { configService } from './services/config';
 import { apiService } from './services/api';
 import { themeService } from './services/theme';
@@ -27,6 +28,7 @@ import { i18nService } from './services/i18n';
 import { matchesShortcut } from './services/shortcuts';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
+import PrivacyDialog from './components/PrivacyDialog';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -42,6 +44,7 @@ const App: React.FC = () => {
   const [updateModalState, setUpdateModalState] = useState<'info' | 'downloading' | 'installing' | 'error'>('info');
   const [downloadProgress, setDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
   const dispatch = useDispatch();
@@ -139,6 +142,10 @@ const App: React.FC = () => {
           ) ?? resolvedModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
+
+        // 检查隐私协议是否已同意（必须在 setIsInitialized 之前）
+        const agreed = await window.electron.store.get('privacy_agreed');
+        setPrivacyAgreed(agreed === true);
 
         setIsInitialized(true);
         console.info('[App] initializeApp: shell ready');
@@ -362,6 +369,16 @@ const App: React.FC = () => {
     setUpdateModalState('info');
     setUpdateError(null);
     setDownloadProgress(null);
+  }, []);
+
+  const handlePrivacyAccept = useCallback(async () => {
+    await window.electron.store.set('privacy_agreed', true);
+    setPrivacyAgreed(true);
+  }, []);
+
+  const handlePrivacyReject = useCallback(() => {
+    // 立刻隐藏窗口，让用户感觉立即关闭
+    window.electron.window.close();
   }, []);
 
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
@@ -618,7 +635,8 @@ const App: React.FC = () => {
           updateBadge={!isSidebarCollapsed ? updateBadge : null}
         />
         <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
-          <div className="h-full min-h-0 rounded-xl dark:bg-claude-darkBg bg-claude-bg overflow-hidden">
+          <div className="relative h-full min-h-0 rounded-xl dark:bg-claude-darkBg bg-claude-bg overflow-hidden">
+            <EngineStartupOverlay />
             {mainView === 'skills' ? (
               <SkillsView
                 isSidebarCollapsed={isSidebarCollapsed}
@@ -683,6 +701,12 @@ const App: React.FC = () => {
         />
       )}
       {permissionModal}
+      {privacyAgreed === false && (
+        <PrivacyDialog
+          onAccept={handlePrivacyAccept}
+          onReject={handlePrivacyReject}
+        />
+      )}
     </div>
   );
 };

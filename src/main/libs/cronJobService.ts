@@ -275,12 +275,22 @@ export class CronJobService {
   private lastKnownRunAtMs: Map<string, number> = new Map();
   private polling = false;
   private firstPollDone = false;
+  /** Synchronous jobId → name cache, populated during polling. */
+  private jobNameCache: Map<string, string> = new Map();
 
   private static readonly POLL_INTERVAL_MS = 15_000;
 
   constructor(deps: CronJobServiceDeps) {
     this.getGatewayClient = deps.getGatewayClient;
     this.ensureGatewayReady = deps.ensureGatewayReady;
+  }
+
+  /**
+   * Look up a job name synchronously from the polling cache.
+   * Returns the job name if known, or null if the cache hasn't been populated yet.
+   */
+  getJobNameSync(jobId: string): string | null {
+    return this.jobNameCache.get(jobId) ?? null;
   }
 
   private async client(): Promise<GatewayClientLike> {
@@ -309,7 +319,9 @@ export class CronJobService {
       ...(input.agentId?.trim() ? { agentId: input.agentId.trim() } : {}),
       ...(input.sessionKey?.trim() ? { sessionKey: input.sessionKey.trim() } : {}),
     });
-    return mapGatewayJob(job);
+    const mapped = mapGatewayJob(job);
+    this.jobNameCache.set(mapped.id, mapped.name);
+    return mapped;
   }
 
   async updateJob(id: string, input: Partial<ScheduledTaskInput>): Promise<ScheduledTask> {
@@ -455,6 +467,7 @@ export class CronJobService {
     }
     this.lastKnownStates.clear();
     this.lastKnownRunAtMs.clear();
+    this.jobNameCache.clear();
     this.firstPollDone = false;
   }
 
@@ -470,6 +483,12 @@ export class CronJobService {
         limit: 200,
       });
       const jobs = Array.isArray(result.jobs) ? result.jobs : [];
+
+      // Refresh jobId → name cache for synchronous lookups (used by session naming).
+      this.jobNameCache.clear();
+      for (const job of jobs) {
+        this.jobNameCache.set(job.id, job.name);
+      }
 
       for (const job of jobs) {
         const stateHash = JSON.stringify(job.state);

@@ -9,6 +9,7 @@ import {
   addMessage,
   updateMessageContent,
   setStreaming,
+  setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
   enqueuePendingPermission,
@@ -28,6 +29,13 @@ import type {
   CoworkStartOptions,
   CoworkContinueOptions,
 } from '../types/cowork';
+import { i18nService } from './i18n';
+import { classifyErrorKey } from '../../common/coworkErrorClassify';
+
+const classifyError = (error: string): string => {
+  const key = classifyErrorKey(error);
+  return key ? i18nService.t(key) : error;
+};
 
 class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
@@ -129,8 +137,20 @@ class CoworkService {
     this.streamListenerCleanups.push(completeCleanup);
 
     // Error listener
-    const errorCleanup = cowork.onStreamError(({ sessionId }) => {
+    const errorCleanup = cowork.onStreamError(({ sessionId, error }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
+      // Surface the error as a visible message so the user knows what happened.
+      if (error) {
+        store.dispatch(addMessage({
+          sessionId,
+          message: {
+            id: `error-${Date.now()}`,
+            type: 'system',
+            content: classifyError(error),
+            timestamp: Date.now(),
+          },
+        }));
+      }
     });
     this.streamListenerCleanups.push(errorCleanup);
 
@@ -207,11 +227,11 @@ class CoworkService {
     return this.openClawStatus;
   }
 
-  async startSession(options: CoworkStartOptions): Promise<CoworkSession | null> {
+  async startSession(options: CoworkStartOptions): Promise<{ session: CoworkSession | null; error?: string }> {
     const cowork = window.electron?.cowork;
     if (!cowork) {
       console.error('Cowork API not available');
-      return null;
+      return { session: null, error: 'Cowork API not available' };
     }
 
     store.dispatch(setStreaming(true));
@@ -222,16 +242,24 @@ class CoworkService {
       if (result.session.status !== 'running') {
         store.dispatch(setStreaming(false));
       }
-      return result.session;
+      return { session: result.session };
     }
 
     if (result.engineStatus) {
       this.notifyOpenClawStatus(result.engineStatus);
     }
 
+    // Show a user-visible error when session start fails
+    if (result.error) {
+      const errorContent = result.code === 'ENGINE_NOT_READY'
+        ? i18nService.t('coworkErrorEngineNotReady')
+        : classifyError(result.error);
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
+    }
+
     store.dispatch(setStreaming(false));
     console.error('Failed to start session:', result.error);
-    return null;
+    return { session: null, error: result.error };
   }
 
   async continueSession(options: CoworkContinueOptions): Promise<boolean> {
@@ -258,6 +286,32 @@ class CoworkService {
       }
       if (result.code !== 'ENGINE_NOT_READY') {
         store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'error' }));
+        if (result.error) {
+          store.dispatch(addMessage({
+            sessionId: options.sessionId,
+            message: {
+              id: `error-${Date.now()}`,
+              type: 'system',
+              content: i18nService.t('coworkErrorSessionContinueFailed').replace('{error}', result.error),
+              timestamp: Date.now(),
+            },
+          }));
+        }
+      }
+      // Show a user-visible error message in the session
+      if (result.error) {
+        const errorContent = result.code === 'ENGINE_NOT_READY'
+          ? i18nService.t('coworkErrorEngineNotReady')
+          : classifyError(result.error);
+        store.dispatch(addMessage({
+          sessionId: options.sessionId,
+          message: {
+            id: `error-${Date.now()}`,
+            type: 'system',
+            content: errorContent,
+            timestamp: Date.now(),
+          },
+        }));
       }
       console.error('Failed to continue session:', result.error);
       return false;
@@ -412,6 +466,12 @@ class CoworkService {
       }
       store.dispatch(setCurrentSession(result.session));
       store.dispatch(setStreaming(result.session.status === 'running'));
+
+      const imResult = await cowork.remoteManaged(sessionId);
+      if (requestId === this.latestLoadSessionRequestId) {
+        store.dispatch(setRemoteManaged(imResult?.remoteManaged ?? false));
+      }
+
       return result.session;
     }
 
@@ -575,6 +635,19 @@ class CoworkService {
       return null;
     }
     const result = await engineApi.retryInstall();
+    if (result?.status) {
+      this.notifyOpenClawStatus(result.status);
+      return result.status;
+    }
+    return this.openClawStatus;
+  }
+
+  async restartOpenClawGateway(): Promise<OpenClawEngineStatus | null> {
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.restartGateway) {
+      return null;
+    }
+    const result = await engineApi.restartGateway();
     if (result?.status) {
       this.notifyOpenClawStatus(result.status);
       return result.status;

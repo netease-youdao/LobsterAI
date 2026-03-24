@@ -71,6 +71,12 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
+      /** OAuth auth type: 'apikey' (default) or 'oauth' (MiniMax Portal OAuth) */
+      authType?: 'apikey' | 'oauth';
+      /** OAuth refresh token for automatic token renewal */
+      oauthRefreshToken?: string;
+      /** OAuth token expiry as Unix timestamp in milliseconds */
+      oauthTokenExpiresAt?: number;
       models?: Array<{
         id: string;
         name: string;
@@ -197,6 +203,9 @@ export interface AppConfig {
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai';
       codingPlanEnabled?: boolean;
+      authType?: 'apikey' | 'oauth';
+      oauthRefreshToken?: string;
+      oauthTokenExpiresAt?: number;
       models?: Array<{
         id: string;
         name: string;
@@ -235,10 +244,9 @@ export const defaultConfig: AppConfig = {
   },
   model: {
     availableModels: [
-      { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
     ],
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-reasoner',
     defaultModelProvider: 'deepseek',
   },
   providers: {
@@ -280,8 +288,7 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.deepseek.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
-        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false }
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }
       ]
     },
     moonshot: {
@@ -311,8 +318,8 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false },
-        { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
+        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
+        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false }
       ]
     },
     youdaozhiyun: {

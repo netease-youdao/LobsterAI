@@ -1602,6 +1602,27 @@ export class CoworkRunner extends EventEmitter {
     this.store.updateSession(sessionId, { status: 'idle' });
   }
 
+  onSessionDeleted(sessionId: string): void {
+    try {
+      this.stopSession(sessionId);
+    } catch {
+      // stopSession may fail if the DB row is already gone; proceed with cleanup.
+    }
+    // Remove from stoppedSessions so it doesn't linger after deletion.
+    this.stoppedSessions.delete(sessionId);
+    this.lastTurnMemoryKeyBySession.delete(sessionId);
+    // Purge any queued memory updates for the deleted session.
+    const remaining: QueuedTurnMemoryUpdate[] = [];
+    for (const job of this.turnMemoryQueue) {
+      if (job.sessionId === sessionId) {
+        this.turnMemoryQueueKeys.delete(job.key);
+      } else {
+        remaining.push(job);
+      }
+    }
+    this.turnMemoryQueue = remaining;
+  }
+
   respondToPermission(requestId: string, result: PermissionResult): void {
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) return;

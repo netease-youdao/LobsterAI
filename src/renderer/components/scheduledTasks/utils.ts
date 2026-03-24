@@ -4,8 +4,142 @@ import type {
   ScheduledTaskDelivery,
   ScheduledTaskPayload,
   Schedule,
+  ScheduleCron,
   TaskLastStatus,
 } from '../../types/scheduledTask';
+
+const WEEKDAY_KEYS = [
+  'scheduledTasksFormWeekSun',
+  'scheduledTasksFormWeekMon',
+  'scheduledTasksFormWeekTue',
+  'scheduledTasksFormWeekWed',
+  'scheduledTasksFormWeekThu',
+  'scheduledTasksFormWeekFri',
+  'scheduledTasksFormWeekSat',
+] as const;
+
+/**
+ * Pad a number to 2 digits, e.g. 5 → "05".
+ */
+function pad2(n: number): string {
+  return n.toString().padStart(2, '0');
+}
+
+/**
+ * Simple template: replace `{key}` placeholders with values.
+ */
+function tpl(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? '');
+}
+
+/**
+ * Parse a single cron field: '*', a number, a step ('*' followed by '/n'), or a range ('from-to').
+ * Returns null if the field is complex (comma-separated lists, etc.) and we should
+ * fall back to raw display.
+ */
+function parseField(field: string): { type: 'any' } | { type: 'value'; value: number } | { type: 'step'; step: number } | { type: 'range'; from: number; to: number } | null {
+  if (field === '*') return { type: 'any' };
+  if (/^\d+$/.test(field)) return { type: 'value', value: Number(field) };
+  const stepMatch = field.match(/^\*\/(\d+)$/);
+  if (stepMatch) return { type: 'step', step: Number(stepMatch[1]) };
+  const rangeMatch = field.match(/^(\d+)-(\d+)$/);
+  if (rangeMatch) return { type: 'range', from: Number(rangeMatch[1]), to: Number(rangeMatch[2]) };
+  return null;
+}
+
+/**
+ * Convert a standard 5-field cron expression into a human-readable i18n string.
+ * Handles common patterns; falls back to "Cron · expr" for complex expressions.
+ */
+function formatCronExpr(schedule: ScheduleCron): string {
+  const parts = schedule.expr.trim().split(/\s+/);
+  if (parts.length !== 5) return fallbackCron(schedule);
+
+  const [minRaw, hourRaw, domRaw, monRaw, dowRaw] = parts;
+  const min = parseField(minRaw);
+  const hour = parseField(hourRaw);
+  const dom = parseField(domRaw);
+  const mon = parseField(monRaw);
+  const dow = parseField(dowRaw);
+
+  // If any field is unparseable, fall back
+  if (!min || !hour || !dom || !mon || !dow) return fallbackCron(schedule);
+
+  // --- Every N minutes: */n * * * * ---
+  if (min.type === 'step' && hour.type === 'any' && dom.type === 'any' && mon.type === 'any' && dow.type === 'any') {
+    if (min.step === 1) return i18nService.t('scheduledTasksCronEveryMinute');
+    return tpl(i18nService.t('scheduledTasksCronEveryNMinutes'), { n: String(min.step) });
+  }
+
+  // --- Every N hours: fixed-min */n * * * ---
+  if (min.type === 'value' && hour.type === 'step' && dom.type === 'any' && mon.type === 'any' && dow.type === 'any') {
+    if (hour.step === 1) return i18nService.t('scheduledTasksCronEveryHour');
+    return tpl(i18nService.t('scheduledTasksCronEveryNHours'), { n: String(hour.step) });
+  }
+
+  // From here we need a fixed time (both minute and hour are concrete values)
+  if (min.type !== 'value' || hour.type !== 'value') return fallbackCron(schedule);
+  const time = `${pad2(hour.value)}:${pad2(min.value)}`;
+
+  // --- Every day: M H * * * ---
+  if (dom.type === 'any' && mon.type === 'any' && dow.type === 'any') {
+    return tpl(i18nService.t('scheduledTasksCronAtTime'), {
+      schedule: i18nService.t('scheduledTasksCronEveryDay'),
+      time,
+    });
+  }
+
+  // --- Specific day-of-week: M H * * dow ---
+  if (dom.type === 'any' && mon.type === 'any') {
+    // Weekdays 1-5
+    if (dow.type === 'range' && dow.from === 1 && dow.to === 5) {
+      return tpl(i18nService.t('scheduledTasksCronAtTime'), {
+        schedule: i18nService.t('scheduledTasksCronWeekdays'),
+        time,
+      });
+    }
+    // Weekends 0,6 or 6-0
+    if (dow.type === 'range' && ((dow.from === 6 && dow.to === 0) || (dow.from === 0 && dow.to === 6))) {
+      return tpl(i18nService.t('scheduledTasksCronAtTime'), {
+        schedule: i18nService.t('scheduledTasksCronWeekends'),
+        time,
+      });
+    }
+    // Single weekday: M H * * 3 → "每周三 HH:MM" / "Every Wednesday at HH:MM"
+    if (dow.type === 'value' && dow.value >= 0 && dow.value <= 6) {
+      const dayName = i18nService.t(WEEKDAY_KEYS[dow.value]);
+      return tpl(i18nService.t('scheduledTasksCronAtTime'), {
+        schedule: `${i18nService.t('scheduledTasksCronEveryWeek')}${dayName}`,
+        time,
+      });
+    }
+    // Weekday range (e.g. 1-3)
+    if (dow.type === 'range' && dow.from >= 0 && dow.from <= 6 && dow.to >= 0 && dow.to <= 6) {
+      const fromName = i18nService.t(WEEKDAY_KEYS[dow.from]);
+      const toName = i18nService.t(WEEKDAY_KEYS[dow.to]);
+      return tpl(i18nService.t('scheduledTasksCronAtTime'), {
+        schedule: `${fromName}-${toName}`,
+        time,
+      });
+    }
+  }
+
+  // --- Monthly on specific day: M H dom * * ---
+  if (dom.type === 'value' && mon.type === 'any' && dow.type === 'any') {
+    return tpl(i18nService.t('scheduledTasksCronAtMonthDay'), {
+      schedule: i18nService.t('scheduledTasksCronEveryMonth'),
+      day: String(dom.value),
+      time,
+    });
+  }
+
+  return fallbackCron(schedule);
+}
+
+function fallbackCron(schedule: ScheduleCron): string {
+  const tzLabel = schedule.tz ? ` (${schedule.tz})` : '';
+  return `Cron · ${schedule.expr}${tzLabel}`;
+}
 
 export function formatScheduleLabel(schedule: Schedule): string {
   if (schedule.kind === 'at') {
@@ -27,8 +161,7 @@ export function formatScheduleLabel(schedule: Schedule): string {
     return `${i18nService.t('scheduledTasksScheduleEvery')} ${Math.max(1, Math.round(everyMs / 60_000))} ${i18nService.t('scheduledTasksFormIntervalMinutes')}`;
   }
 
-  const tzLabel = schedule.tz ? ` (${schedule.tz})` : '';
-  return `Cron · ${schedule.expr}${tzLabel}`;
+  return formatCronExpr(schedule);
 }
 
 export function formatDuration(ms: number | null): string {

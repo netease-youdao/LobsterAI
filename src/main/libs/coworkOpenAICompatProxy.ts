@@ -909,43 +909,6 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
         return '';
       }
 
-      const collectStringValues = (input: unknown, out: string[]): void => {
-        if (typeof input === 'string') {
-          out.push(input);
-          return;
-        }
-        if (Array.isArray(input)) {
-          for (const item of input) collectStringValues(item, out);
-          return;
-        }
-        if (input && typeof input === 'object') {
-          for (const value of Object.values(input as Record<string, unknown>)) {
-            collectStringValues(value, out);
-          }
-        }
-      };
-
-      const scoreDecodedJsonText = (text: string): number => {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          return -10000;
-        }
-
-        const values: string[] = [];
-        collectStringValues(parsed, values);
-        const joined = values.join('\n');
-        if (!joined) return 0;
-
-        const cjkCount = (joined.match(/[\u3400-\u9FFF]/g) || []).length;
-        const replacementCount = (joined.match(/\uFFFD/g) || []).length;
-        const mojibakeCount = (joined.match(/[ÃÂÐÑØÙÞæçèéêëìíîïðñòóôõöøùúûüýþÿ]/g) || []).length;
-        const nonAsciiCount = (joined.match(/[^\x00-\x7F]/g) || []).length;
-
-        return cjkCount * 4 + nonAsciiCount - replacementCount * 8 - mojibakeCount * 3;
-      };
-
       // BOM-aware decoding first.
       if (raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) {
         return new TextDecoder('utf-8', { fatal: false }).decode(raw.subarray(3));
@@ -976,18 +939,13 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
         }
 
         if (utf8Decoded && gbDecoded) {
-          const utf8Score = scoreDecodedJsonText(utf8Decoded);
-          const gbScore = scoreDecodedJsonText(gbDecoded);
-          // Require GB18030 to score significantly higher than UTF-8 to avoid
-          // false positives on short CJK strings (e.g. "你好" scores UTF-8=10
-          // vs GB18030=11 due to one extra non-ASCII char from misaligned
-          // multi-byte boundaries).  UTF-8 is the overwhelmingly expected
-          // encoding, so give it a comfortable margin.
-          const GB18030_SCORE_MARGIN = 5;
-          if (gbScore > utf8Score + GB18030_SCORE_MARGIN) {
-            console.warn(`[CoworkProxy] Decoded request body using gb18030 (score ${gbScore} > utf8 ${utf8Score} + ${GB18030_SCORE_MARGIN})`);
-            return gbDecoded;
-          }
+          // UTF-8 strict decode succeeded → the bytes ARE valid UTF-8.
+          // Genuine GB18030 CJK byte sequences (first byte 0xB0-0xF7,
+          // second byte 0xA1-0xFE) are almost never valid UTF-8, so if
+          // strict UTF-8 passes the body is overwhelmingly UTF-8.
+          // The previous scoring heuristic could false-positive on longer
+          // CJK strings where GB18030 reinterpretation also yields CJK
+          // characters with comparable scores.
           return utf8Decoded;
         }
 

@@ -1,7 +1,7 @@
 import { app, Tray, Menu, nativeImage, BrowserWindow } from 'electron';
 import path from 'path';
 import { APP_NAME } from './appConstants';
-import type { SqliteStore } from './sqliteStore';
+import { t } from './i18n';
 
 let tray: Tray | null = null;
 let contextMenu: Menu | null = null;
@@ -26,20 +26,17 @@ function getTrayIconPath(): string {
   return path.join(basePath, 'tray-icon.png');
 }
 
-function getLabels(store: SqliteStore): { showWindow: string; newTask: string; settings: string; quit: string } {
-  try {
-    const config = store.get<{ language?: string }>('app_config');
-    const lang = config?.language === 'en' ? 'en' : 'zh';
-    return lang === 'en'
-      ? { showWindow: 'Open LobsterAI', newTask: 'New Task', settings: 'Settings', quit: 'Quit' }
-      : { showWindow: '打开 LobsterAI', newTask: '新建任务', settings: '设置', quit: '退出' };
-  } catch {
-    return { showWindow: '打开 LobsterAI', newTask: '新建任务', settings: '设置', quit: '退出' };
-  }
+function getLabels(): { showWindow: string; newTask: string; settings: string; quit: string } {
+  return {
+    showWindow: t('trayShowWindow'),
+    newTask: t('trayNewTask'),
+    settings: t('traySettings'),
+    quit: t('trayQuit'),
+  };
 }
 
-function buildContextMenu(getWindow: () => BrowserWindow | null, store: SqliteStore): Menu {
-  const labels = getLabels(store);
+function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
+  const labels = getLabels();
 
   return Menu.buildFromTemplate([
     {
@@ -85,7 +82,7 @@ function buildContextMenu(getWindow: () => BrowserWindow | null, store: SqliteSt
   ]);
 }
 
-export function createTray(getWindow: () => BrowserWindow | null, store: SqliteStore): Tray {
+export function createTray(getWindow: () => BrowserWindow | null): Tray {
   if (tray) {
     return tray;
   }
@@ -105,7 +102,7 @@ export function createTray(getWindow: () => BrowserWindow | null, store: SqliteS
   tray = new Tray(icon);
   tray.setToolTip(APP_NAME);
 
-  contextMenu = buildContextMenu(getWindow, store);
+  contextMenu = buildContextMenu(getWindow);
 
   clickHandler = () => {
     const win = getWindow();
@@ -126,9 +123,9 @@ export function createTray(getWindow: () => BrowserWindow | null, store: SqliteS
   return tray;
 }
 
-export function updateTrayMenu(getWindow: () => BrowserWindow | null, store: SqliteStore): void {
+export function updateTrayMenu(getWindow: () => BrowserWindow | null): void {
   if (!tray) return;
-  contextMenu = buildContextMenu(getWindow, store);
+  contextMenu = buildContextMenu(getWindow);
 }
 
 export function destroyTray(): void {

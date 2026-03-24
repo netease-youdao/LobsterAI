@@ -26,7 +26,12 @@ export default defineConfig({
             outDir: 'dist-electron',
             minify: false,
             rollupOptions: {
-              external: ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'],
+              external: (id) => {
+                const staticExternals = ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'];
+                if (staticExternals.includes(id)) return true;
+                if (id.startsWith('@larksuite/openclaw-lark-tools') || id.startsWith('@larksuite/openclaw-lark')) return true;
+                return false;
+              },
               output: {
                 // Keep CJS format (default), but load via ESM loader.mjs
                 inlineDynamicImports: true,
@@ -74,11 +79,11 @@ export default defineConfig({
       port: devPort,
     },
     watch: {
-      usePolling: true,
+      usePolling: false,
     },
   },
   optimizeDeps: {
-    exclude: ['electron'],
+    exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
     esbuildOptions: {
       define: {
         __VERSION__: JSON.stringify(katexVersion),

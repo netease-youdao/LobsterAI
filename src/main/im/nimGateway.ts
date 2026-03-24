@@ -254,7 +254,7 @@ export class NimGateway extends EventEmitter {
 
   /**
    * Update runtime config without restarting the gateway.
-   * Used for hot-updating non-credential fields like accountWhitelist.
+   * Used for hot-updating non-credential fields.
    */
   updateConfig(partial: Partial<NimConfig>): void {
     if (this.config) {
@@ -378,7 +378,7 @@ export class NimGateway extends EventEmitter {
     }
 
     this.config = config;
-    this.log = config.debug ? console.log.bind(console) : () => {};
+    this.log = config.advanced?.debug ? console.log.bind(console) : () => {};
 
     this.log('[NIM Gateway] Starting NIM gateway...');
 
@@ -434,7 +434,7 @@ export class NimGateway extends EventEmitter {
           }
 
           // Activate QChat if enabled
-          if (this.config?.qchatEnabled) {
+          if (this.config?.qchat?.policy && this.config.qchat.policy !== 'disabled') {
             this.activateQChat();
           }
         } else if (loginStatus === 0) {
@@ -782,19 +782,12 @@ export class NimGateway extends EventEmitter {
         return;
       }
 
-      // Whitelist filtering: if accountWhitelist is set, only process messages from whitelisted accounts
-      if (this.config?.accountWhitelist) {
-        const whitelist = this.config.accountWhitelist
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean);
-
-        if (whitelist.length > 0) {
-          const whitelistSet = new Set(whitelist);
-          if (!whitelistSet.has(senderId)) {
-            this.log(`[NIM Gateway] Ignoring message from non-whitelisted account: ${senderId}`);
-            return;
-          }
+      // P2P allowlist filtering: if p2p.policy is "allowlist", check p2p.allowFrom
+      if (this.config?.p2p?.policy === 'allowlist' && this.config.p2p.allowFrom?.length) {
+        const whitelistSet = new Set(this.config.p2p.allowFrom.map(String));
+        if (!whitelistSet.has(senderId)) {
+          this.log(`[NIM Gateway] Ignoring message from non-whitelisted account: ${senderId}`);
+          return;
         }
       }
 
@@ -825,9 +818,8 @@ export class NimGateway extends EventEmitter {
       if (isTeam) {
         const botAccount = this.config?.account || '';
         const forcePushIds: string[] = msg.pushConfig?.forcePushAccountIds ?? [];
-        const teamPolicy: NimTeamPolicy = this.config?.teamPolicy || 'disabled';
-        const teamAllowlistStr = this.config?.teamAllowlist || '';
-        const teamAllowlist = teamAllowlistStr.split(',').map(s => s.trim()).filter(Boolean);
+        const teamPolicy: NimTeamPolicy = (this.config?.team?.policy as NimTeamPolicy) || 'disabled';
+        const teamAllowlist = (this.config?.team?.allowFrom ?? []).map(String);
 
         // Always log team message details (not gated by debug) for easier diagnostics
         console.log('[NIM Gateway] Team message check:', JSON.stringify({
@@ -1348,8 +1340,8 @@ export class NimGateway extends EventEmitter {
   private async activateQChat(): Promise<void> {
     if (!this.v2Client || !this.config) return;
 
-    const serverIdsStr = this.config.qchatServerIds || '';
-    const serverIds = serverIdsStr.split(',').map(s => s.trim()).filter(Boolean);
+    const qchatAllowFrom = this.config.qchat?.allowFrom ?? [];
+    const serverIds = qchatAllowFrom.map(String).filter(Boolean);
 
     this.log('[NIM Gateway] Activating QChat...');
 
@@ -1389,11 +1381,11 @@ export class NimGateway extends EventEmitter {
         return;
       }
 
-      // Apply whitelist if configured
-      if (this.config?.accountWhitelist) {
-        const whitelist = this.config.accountWhitelist.split(',').map(s => s.trim()).filter(Boolean);
-        if (whitelist.length > 0 && !whitelist.includes(msg.senderAccid)) {
-          this.log(`[NIM QChat] Sender ${msg.senderAccid} not in whitelist`);
+      // Apply QChat allowlist if configured
+      if (this.config?.qchat?.policy === 'allowlist' && this.config.qchat.allowFrom?.length) {
+        const allowSet = new Set(this.config.qchat.allowFrom.map(String));
+        if (!allowSet.has(msg.senderAccid)) {
+          this.log(`[NIM QChat] Sender ${msg.senderAccid} not in allowlist`);
           return;
         }
       }

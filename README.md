@@ -447,6 +447,41 @@ LobsterAI pins its OpenClaw dependency to a specific release version, declared i
 - Tailwind CSS preferred; avoid custom CSS
 - Commit messages follow `type: short imperative summary` (e.g., `feat: add artifact toolbar`)
 
+## Testing
+
+Unit tests use [Vitest](https://vitest.dev/) and are co-located with the source files they cover.
+
+```bash
+# run all tests
+npm test
+
+# run tests for a specific module (Vitest filename filter)
+npm test -- logger
+npm test -- cowork
+```
+
+New test files go next to the source file they test, using the `.test.mjs` extension:
+
+```
+src/main/
+├── foo.ts
+└── foo.test.ts
+```
+
+Example (`src/main/logger.test.ts`):
+
+```ts
+import { test, expect } from 'vitest';
+
+test('log file pattern matches daily name', () => {
+  expect(/^main-\d{4}-\d{2}-\d{2}\.log$/.test('main-2026-03-20.log')).toBe(true);
+});
+```
+
+Avoid importing Electron-only APIs (e.g. `electron-log`) in tests — inline any logic that depends on them instead.
+
+
+
 ## Contributing
 
 1. Fork this repository

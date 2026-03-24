@@ -107,12 +107,13 @@ class IMService {
   }
 
   /**
-   * Update configuration
+   * Update configuration and trigger gateway sync/restart.
+   * Used by toggleGateway and other operations that need immediate effect.
    */
   async updateConfig(config: Partial<IMGatewayConfig>): Promise<boolean> {
     try {
       store.dispatch(setLoading(true));
-      const result: IMGatewayResult = await window.electron.im.setConfig(config);
+      const result: IMGatewayResult = await window.electron.im.setConfig(config, { syncGateway: true });
       if (result.success) {
         // Reload config to get merged values
         await this.loadConfig();
@@ -127,6 +128,39 @@ class IMService {
       return false;
     } finally {
       store.dispatch(setLoading(false));
+    }
+  }
+
+  /**
+   * Persist configuration to DB without triggering gateway sync/restart.
+   * Used by onBlur handlers to save field values silently.
+   */
+  async persistConfig(config: Partial<IMGatewayConfig>): Promise<boolean> {
+    try {
+      const result: IMGatewayResult = await window.electron.im.setConfig(config, { syncGateway: false });
+      if (result.success) {
+        return true;
+      } else {
+        console.error('[IM Service] Failed to persist config:', result.error);
+        return false;
+      }
+    } catch (error) {
+      console.error('[IM Service] Failed to persist config:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Sync IM gateway config (regenerate openclaw.json and restart gateway).
+   * Called from the global Settings Save button.
+   */
+  async saveAndSyncConfig(): Promise<boolean> {
+    try {
+      const result: IMGatewayResult = await window.electron.im.syncConfig();
+      return result.success;
+    } catch (error) {
+      console.error('[IM Service] Failed to sync IM config:', error);
+      return false;
     }
   }
 
@@ -242,6 +276,21 @@ class IMService {
    */
   async rejectPairingRequest(platform: string, code: string) {
     return window.electron.im.rejectPairingRequest(platform, code);
+  }
+
+  /**
+   * Fetch the OpenClaw config schema (JSON Schema + uiHints) from the gateway.
+   */
+  async getOpenClawConfigSchema(): Promise<{ schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> } | null> {
+    try {
+      const result = await window.electron.im.getOpenClawConfigSchema();
+      if (result.success && result.result) {
+        return result.result;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 }
 

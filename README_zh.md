@@ -440,6 +440,39 @@ LobsterAI 将 OpenClaw 依赖锁定到指定的 release 版本，在 `package.js
 | `OPENCLAW_FORCE_BUILD` | 设为 `1` 强制重新构建（即使版本匹配） | — |
 | `OPENCLAW_SKIP_ENSURE` | 设为 `1` 跳过自动版本切换 | — |
 
+## 测试
+
+单元测试使用 [Vitest](https://vitest.dev/)，测试文件与被测源文件**同目录存放**。
+
+```bash
+# 运行全部测试
+npm test
+
+# 只运行指定模块的测试（按文件名过滤）
+npm test -- logger
+npm test -- cowork
+```
+
+新增测试文件放在对应源文件旁边，使用 `.test.mjs` 扩展名：
+
+```
+src/main/
+├── foo.ts
+└── foo.test.ts
+```
+
+示例（`src/main/logger.test.ts`）：
+
+```ts
+import { test, expect } from 'vitest';
+
+test('log file pattern matches daily name', () => {
+  expect(/^main-\d{4}-\d{2}-\d{2}\.log$/.test('main-2026-03-20.log')).toBe(true);
+});
+```
+
+避免在测试中引入 Electron 专属 API（如 `electron-log`），改为将相关逻辑内联到测试文件中。
+
 ## 开发规范
 
 - TypeScript 严格模式，函数式组件 + Hooks

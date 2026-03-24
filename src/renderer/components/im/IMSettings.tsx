@@ -9,11 +9,15 @@ import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangl
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { RootState } from '../../store';
 import { imService } from '../../services/im';
-import { setDingTalkConfig, setFeishuConfig, setTelegramOpenClawConfig, setQQConfig, setDiscordConfig, setNimConfig, setXiaomifengConfig, setWecomConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
+import { setDingTalkConfig, setFeishuConfig, setTelegramOpenClawConfig, setQQConfig, setDiscordConfig, setNimConfig, setXiaomifengConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
 import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, FeishuOpenClawConfig, DingTalkOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
+import { QRCodeSVG } from 'qrcode.react';
+import { ArrowPathIcon } from '@heroicons/react/24/outline';
+import { SchemaForm } from './SchemaForm';
+import type { UiHint } from './SchemaForm';
 
 // Platform metadata - logos only, labels use i18n
 const platformLogos: Record<IMPlatform, string> = {
@@ -24,6 +28,7 @@ const platformLogos: Record<IMPlatform, string> = {
   discord: 'discord.svg',
   nim: 'nim.png',
   xiaomifeng: 'xiaomifeng.png',
+  weixin: 'weixin.png',
   wecom: 'wecom.png',
   popo: 'popo.png',
 };
@@ -36,6 +41,7 @@ const IM_GUIDE_URLS: Partial<Record<IMPlatform, string>> = {
   qq: 'https://lobsterai.youdao.com/#/docs/lobsterai_im_bot_config_guide/qqqq-bot',
   telegram: 'https://lobsterai.youdao.com/#/en/docs/lobsterai_im_bot_config_guide/telegram-bot-configuration',
   discord: 'https://lobsterai.youdao.com/#/en/docs/lobsterai_im_bot_config_guide/discord-bot-configuration',
+  weixin: 'https://lobsterai.youdao.com/#/docs/lobsterai_im_bot_config_guide/%E5%BE%AE%E4%BF%A1-im-%E6%9C%BA%E5%99%A8%E4%BA%BA%E9%85%8D%E7%BD%AE',
   popo: '',
 };
 
@@ -46,11 +52,11 @@ const PlatformGuide: React.FC<{
   guideUrl?: string;
   guideLabel?: string;
 }> = ({ title, steps, guideUrl, guideLabel }) => (
-  <div className="mb-3 p-3 rounded-lg bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/30">
+  <div className="mb-3 p-3 rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60">
     {title && (
-      <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed mb-1.5">{title}</p>
+      <p className="text-xs text-claude-text dark:text-claude-darkText leading-relaxed mb-1.5 font-medium">{title}</p>
     )}
-    <ol className="text-xs text-blue-500/70 dark:text-blue-400/60 space-y-1 list-decimal list-inside">
+    <ol className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary space-y-1 list-decimal list-inside">
       {steps.map((step, i) => (
         <li key={i}>{step}</li>
       ))}
@@ -63,7 +69,7 @@ const PlatformGuide: React.FC<{
             console.error('[IM] Failed to open guide URL:', err);
           });
         }}
-        className="mt-1.5 ml-[1.5em] text-xs text-claude-accent dark:text-claude-accentLight hover:text-claude-accentHover dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
+        className="mt-2 text-xs font-medium text-claude-accentLight dark:text-claude-accentLight hover:text-claude-accent dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
       >
         {guideLabel || i18nService.t('imViewGuide')}
       </button>
@@ -99,10 +105,23 @@ function translateIMError(error: string | null): string {
   return error;
 }
 
+// Helper function to deep-set a value in nested object by dot path
+function deepSet(obj: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> {
+  const keys = path.split('.');
+  const result = { ...obj };
+  let current: Record<string, unknown> = result;
+  for (let i = 0; i < keys.length - 1; i++) {
+    current[keys[i]] = { ...(current[keys[i]] as Record<string, unknown> || {}) };
+    current = current[keys[i]] as Record<string, unknown>;
+  }
+  current[keys[keys.length - 1]] = value;
+  return result;
+}
+
 const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
-  const [activePlatform, setActivePlatform] = useState<IMPlatform>('dingtalk');
+  const [activePlatform, setActivePlatform] = useState<IMPlatform>('weixin');
   const [testingPlatform, setTestingPlatform] = useState<IMPlatform | null>(null);
   const [connectivityResults, setConnectivityResults] = useState<Partial<Record<IMPlatform, IMConnectivityTestResult>>>({});
   const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<IMPlatform | null>(null);
@@ -116,14 +135,15 @@ const IMSettings: React.FC = () => {
   // WeCom quick setup state
   const [wecomQuickSetupStatus, setWecomQuickSetupStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
   const [wecomQuickSetupError, setWecomQuickSetupError] = useState<string>('');
+  // Weixin QR login state
+  const [weixinQrStatus, setWeixinQrStatus] = useState<'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'>('idle');
+  const [weixinQrUrl, setWeixinQrUrl] = useState<string>('');
+  const [weixinQrError, setWeixinQrError] = useState<string>('');
   const [localIp, setLocalIp] = useState<string>('');
   const isMountedRef = useRef(true);
-  // Track the last-persisted NIM credentials so we can detect real changes on save
-  const savedNimConfigRef = useRef<{ appKey: string; account: string; token: string }>({
-    appKey: config.nim.appKey,
-    account: config.nim.account,
-    token: config.nim.token,
-  });
+
+  // OpenClaw config schema for schema-driven forms
+  const [openclawSchema, setOpenclawSchema] = useState<{ schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> } | null>(null);
 
   // Subscribe to language changes
   useEffect(() => {
@@ -146,11 +166,96 @@ const IMSettings: React.FC = () => {
     }).catch(() => {});
   }, []);
 
+  // Cleanup feishu QR timers on unmount
+  useEffect(() => {
+    return () => {
+      if (feishuQrPollTimerRef.current) clearInterval(feishuQrPollTimerRef.current);
+      if (feishuQrCountdownTimerRef.current) clearInterval(feishuQrCountdownTimerRef.current);
+    };
+  }, []);
+
+  // Reset feishu QR state when switching away from feishu
+  useEffect(() => {
+    if (activePlatform !== 'feishu') {
+      if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
+      if (feishuQrCountdownTimerRef.current) { clearInterval(feishuQrCountdownTimerRef.current); feishuQrCountdownTimerRef.current = null; }
+      setFeishuQrStatus('idle');
+      setFeishuQrUrl('');
+      setFeishuQrError('');
+    }
+  }, [activePlatform]);
+
+  const handleFeishuStartQr = async () => {
+    if (feishuQrPollTimerRef.current) clearInterval(feishuQrPollTimerRef.current);
+    if (feishuQrCountdownTimerRef.current) clearInterval(feishuQrCountdownTimerRef.current);
+    setFeishuQrStatus('loading');
+    setFeishuQrError('');
+    try {
+      const result = await window.electron.feishu.install.qrcode(false);
+      if (!isMountedRef.current) return;
+      setFeishuQrUrl(result.url);
+      feishuQrDeviceCodeRef.current = result.deviceCode;
+      const expireIn = result.expireIn ?? 300;
+      setFeishuQrTimeLeft(expireIn);
+      setFeishuQrStatus('showing');
+
+      // Countdown
+      feishuQrCountdownTimerRef.current = setInterval(() => {
+        setFeishuQrTimeLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(feishuQrCountdownTimerRef.current!);
+            feishuQrCountdownTimerRef.current = null;
+            if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
+            setFeishuQrStatus('error');
+            setFeishuQrError(i18nService.t('feishuBotCreateWizardQrcodeExpired'));
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      // Poll
+      const intervalMs = Math.max(result.interval ?? 5, 3) * 1000;
+      feishuQrPollTimerRef.current = setInterval(async () => {
+        try {
+          const pollResult = await window.electron.feishu.install.poll(feishuQrDeviceCodeRef.current);
+          if (!isMountedRef.current) return;
+          if (pollResult.done && pollResult.appId && pollResult.appSecret) {
+            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+            dispatch(setFeishuConfig({ appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true }));
+            await imService.updateConfig({ feishu: { ...config.feishu, appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true } });
+            if (!isMountedRef.current) return;   // re-check after async updateConfig
+            setFeishuQrStatus('success');
+          } else if (pollResult.error && pollResult.error !== 'authorization_pending' && pollResult.error !== 'slow_down') {
+            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+            setFeishuQrStatus('error');
+            setFeishuQrError(pollResult.error);
+          }
+        } catch { /* keep retrying */ }
+      }, intervalMs);
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      setFeishuQrStatus('error');
+      setFeishuQrError(err?.message || '获取二维码失败');
+    }
+  };
+
   // Reset wecom quick setup state when switching away from wecom
   useEffect(() => {
     if (activePlatform !== 'wecom') {
       setWecomQuickSetupStatus('idle');
       setWecomQuickSetupError('');
+    }
+  }, [activePlatform]);
+
+  // Reset weixin QR login state when switching away from weixin
+  useEffect(() => {
+    if (activePlatform !== 'weixin') {
+      setWeixinQrStatus('idle');
+      setWeixinQrUrl('');
+      setWeixinQrError('');
     }
   }, [activePlatform]);
 
@@ -165,6 +270,10 @@ const IMSettings: React.FC = () => {
     void imService.init().then(() => {
       if (!cancelled) {
         setConfigLoaded(true);
+        // Fetch OpenClaw config schema for schema-driven rendering
+        imService.getOpenClawConfigSchema().then(schema => {
+          if (schema && isMountedRef.current) setOpenclawSchema(schema);
+        });
       }
     });
     return () => {
@@ -173,6 +282,31 @@ const IMSettings: React.FC = () => {
       imService.destroy();
     };
   }, []);
+
+  // Extract NIM channel schema and hints from the full OpenClaw config schema
+  const nimSchemaData = useMemo(() => {
+    if (!openclawSchema) return null;
+    const { schema, uiHints } = openclawSchema;
+
+    // Find the NIM channel key — could be 'nim' or 'openclaw-nim'
+    const channelsProps = (schema as any)?.properties?.channels?.properties ?? {};
+    const channelKey = channelsProps['openclaw-nim'] ? 'openclaw-nim' : channelsProps['nim'] ? 'nim' : null;
+    if (!channelKey) return null;
+
+    const channelSchema = channelsProps[channelKey] as Record<string, unknown>;
+    if (!channelSchema) return null;
+
+    // Filter and strip prefix from uiHints
+    const prefix = `channels.${channelKey}.`;
+    const hints: Record<string, UiHint> = {};
+    for (const [key, value] of Object.entries(uiHints)) {
+      if (key.startsWith(prefix)) {
+        hints[key.slice(prefix.length)] = value as unknown as UiHint;
+      }
+    }
+
+    return { schema: channelSchema, hints };
+  }, [openclawSchema]);
 
   // Handle DingTalk OpenClaw config change
   const dtOpenClawConfig = config.dingtalk;
@@ -184,7 +318,7 @@ const IMSettings: React.FC = () => {
     const configToSave = override
       ? { ...dtOpenClawConfig, ...override }
       : dtOpenClawConfig;
-    await imService.updateConfig({ dingtalk: configToSave });
+    await imService.persistConfig({ dingtalk: configToSave });
   };
   const [dingtalkAllowedUserIdInput, setDingtalkAllowedUserIdInput] = useState('');
 
@@ -198,12 +332,21 @@ const IMSettings: React.FC = () => {
     const configToSave = override
       ? { ...fsOpenClawConfig, ...override }
       : fsOpenClawConfig;
-    await imService.updateConfig({ feishu: configToSave });
+    await imService.persistConfig({ feishu: configToSave });
   };
 
   // State for Feishu allow-from inputs
   const [feishuAllowedUserIdInput, setFeishuAllowedUserIdInput] = useState('');
   const [feishuGroupAllowIdInput, setFeishuGroupAllowIdInput] = useState('');
+  // Inline QR code state for feishu bot creation (mirroring WeCom quick-setup pattern)
+  const [feishuQrStatus, setFeishuQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
+  const [feishuQrUrl, setFeishuQrUrl] = useState<string>('');
+  const [feishuQrTimeLeft, setFeishuQrTimeLeft] = useState<number>(0);
+  const [feishuQrError, setFeishuQrError] = useState<string>('');
+  // These don't need to be state — they don't affect rendering directly
+  const feishuQrDeviceCodeRef = useRef<string>('');
+  const feishuQrPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feishuQrCountdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Pairing state for OpenClaw platforms
   const [pairingCodeInput, setPairingCodeInput] = useState<Record<string, string>>({});
@@ -228,7 +371,7 @@ const IMSettings: React.FC = () => {
     const configToSave = override
       ? { ...tgOpenClawConfig, ...override }
       : tgOpenClawConfig;
-    await imService.updateConfig({ telegram: configToSave });
+    await imService.persistConfig({ telegram: configToSave });
   };
 
   // Handle QQ OpenClaw config change
@@ -241,7 +384,7 @@ const IMSettings: React.FC = () => {
     const configToSave = override
       ? { ...qqOpenClawConfig, ...override }
       : qqOpenClawConfig;
-    await imService.updateConfig({ qq: configToSave });
+    await imService.persistConfig({ qq: configToSave });
   };
 
   // Handle Discord OpenClaw config change
@@ -254,7 +397,7 @@ const IMSettings: React.FC = () => {
     const configToSave = override
       ? { ...dcOpenClawConfig, ...override }
       : dcOpenClawConfig;
-    await imService.updateConfig({ discord: configToSave });
+    await imService.persistConfig({ discord: configToSave });
   };
 
   // State for Discord allow-from inputs
@@ -265,13 +408,6 @@ const IMSettings: React.FC = () => {
   const [popoAllowedUserIdInput, setPopoAllowedUserIdInput] = useState('');
   const [popoGroupAllowIdInput, setPopoGroupAllowIdInput] = useState('');
 
-  // Handle NIM config change
-  const handleNimChange = (
-    field: 'appKey' | 'account' | 'token' | 'accountWhitelist' | 'teamPolicy' | 'teamAllowlist' | 'qchatEnabled' | 'qchatServerIds',
-    value: string | boolean
-  ) => {
-    dispatch(setNimConfig({ [field]: value }));
-  };
 
   // Handle Xiaomifeng config change
   const handleXiaomifengChange = (field: 'clientId' | 'secret', value: string) => {
@@ -288,8 +424,11 @@ const IMSettings: React.FC = () => {
     const configToSave = override
       ? { ...wecomOpenClawConfig, ...override }
       : wecomOpenClawConfig;
-    await imService.updateConfig({ wecom: configToSave });
+    await imService.persistConfig({ wecom: configToSave });
   };
+
+  // Handle Weixin OpenClaw config
+  const weixinOpenClawConfig = config.weixin;
 
   // Handle POPO OpenClaw config change
   const popoConfig = config.popo;
@@ -301,7 +440,7 @@ const IMSettings: React.FC = () => {
     const configToSave = override
       ? { ...popoConfig, ...override }
       : popoConfig;
-    await imService.updateConfig({ popo: configToSave });
+    await imService.persistConfig({ popo: configToSave });
   };
 
   const handleWecomQuickSetup = async () => {
@@ -342,77 +481,97 @@ const IMSettings: React.FC = () => {
     }
   };
 
-  // Save config on blur — also auto-triggers NIM connectivity test when
-  // the NIM toggle is ON and credential fields have changed.
+  const handleWeixinQrLogin = async () => {
+    setWeixinQrStatus('loading');
+    setWeixinQrError('');
+    try {
+      const startResult = await window.electron.im.weixinQrLoginStart();
+      if (!isMountedRef.current) return;
+
+      if (!startResult.success || !startResult.qrDataUrl) {
+        setWeixinQrStatus('error');
+        setWeixinQrError(startResult.message || i18nService.t('imWeixinQrFailed'));
+        return;
+      }
+
+      setWeixinQrUrl(startResult.qrDataUrl);
+      setWeixinQrStatus('showing');
+
+      // Start polling for scan result
+      setWeixinQrStatus('waiting');
+      const waitResult = await window.electron.im.weixinQrLoginWait(startResult.sessionKey);
+      if (!isMountedRef.current) return;
+
+      if (waitResult.success && waitResult.connected) {
+        setWeixinQrStatus('success');
+        // Enable weixin and save config with accountId
+        const accountId = waitResult.accountId || '';
+        const fullConfig = { ...weixinOpenClawConfig, enabled: true, accountId };
+        dispatch(setWeixinConfig({ enabled: true, accountId }));
+        dispatch(clearError());
+        await imService.updateConfig({ weixin: fullConfig });
+        await imService.loadStatus();
+      } else {
+        setWeixinQrStatus('error');
+        setWeixinQrError(waitResult.message || i18nService.t('imWeixinQrFailed'));
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      setWeixinQrStatus('error');
+      setWeixinQrError(String(err));
+    }
+  };
+
+
   const handleSaveConfig = async () => {
     if (!configLoaded) return;
 
     // For Telegram, save telegram config directly
     if (activePlatform === 'telegram') {
-      await imService.updateConfig({ telegram: tgOpenClawConfig });
+      await imService.persistConfig({ telegram: tgOpenClawConfig });
       return;
     }
 
     // For Discord, save discord config directly
     if (activePlatform === 'discord') {
-      await imService.updateConfig({ discord: dcOpenClawConfig });
+      await imService.persistConfig({ discord: dcOpenClawConfig });
       return;
     }
 
     // For Feishu, save feishu config directly
     if (activePlatform === 'feishu') {
-      await imService.updateConfig({ feishu: fsOpenClawConfig });
+      await imService.persistConfig({ feishu: fsOpenClawConfig });
       return;
     }
 
     // For QQ, save qq config directly (OpenClaw mode)
     if (activePlatform === 'qq') {
-      await imService.updateConfig({ qq: qqOpenClawConfig });
+      await imService.persistConfig({ qq: qqOpenClawConfig });
       return;
     }
 
     // For WeCom, save wecom config directly (OpenClaw mode)
     if (activePlatform === 'wecom') {
-      await imService.updateConfig({ wecom: wecomOpenClawConfig });
+      await imService.persistConfig({ wecom: wecomOpenClawConfig });
+      return;
+    }
+
+    // For Weixin, save weixin config directly (OpenClaw mode)
+    if (activePlatform === 'weixin') {
+      await imService.persistConfig({ weixin: weixinOpenClawConfig });
       return;
     }
 
     // For POPO, save popo config directly (OpenClaw mode)
     if (activePlatform === 'popo') {
-      await imService.updateConfig({ popo: popoConfig });
+      await imService.persistConfig({ popo: popoConfig });
       return;
     }
 
-    await imService.updateConfig({ [activePlatform]: config[activePlatform] });
-
-    // Detect NIM credential changes while the gateway is enabled (only for NIM platform)
-    if (activePlatform === 'nim') {
-      const prev = savedNimConfigRef.current;
-      const cur = config.nim;
-      const nimCredentialsChanged =
-        cur.appKey !== prev.appKey ||
-        cur.account !== prev.account ||
-        cur.token !== prev.token;
-
-      // Update the snapshot regardless
-      savedNimConfigRef.current = { appKey: cur.appKey, account: cur.account, token: cur.token };
-
-      if (nimCredentialsChanged && cur.enabled && cur.appKey && cur.account && cur.token) {
-        // Auto-run connectivity test: stop → start → test (silently, no modal)
-        await imService.stopGateway('nim');
-        await imService.startGateway('nim');
-        await runConnectivityTest('nim', { nim: cur } as Partial<IMGatewayConfig>);
-      }
-    }
+    await imService.persistConfig({ [activePlatform]: config[activePlatform] });
   };
 
-  // Save NIM config with explicit updated fields (for select/toggle that need immediate save)
-  // This avoids the race condition where Redux state hasn't updated yet
-  const saveNimConfigWithUpdate = async (updates: Partial<typeof config.nim>) => {
-    if (!configLoaded) return;
-    const updatedNimConfig = { ...config.nim, ...updates };
-    await imService.updateConfig({ nim: updatedNimConfig });
-  };
+
 
   const getCheckTitle = (code: IMConnectivityCheck['code']): string => {
     return i18nService.t(`imConnectivityCheckTitle_${code}`);
@@ -533,6 +692,17 @@ const IMSettings: React.FC = () => {
         return;
       }
 
+      if (platform === 'weixin') {
+        const newEnabled = !weixinOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ weixin: { ...weixinOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setWeixinConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
       if (platform === 'popo') {
         const newEnabled = !popoConfig.enabled;
         const success = await imService.updateConfig({ popo: { ...popoConfig, enabled: newEnabled } });
@@ -543,8 +713,17 @@ const IMSettings: React.FC = () => {
         }
         return;
       }
+      if (platform === 'nim') {
+        const newEnabled = !config.nim.enabled;
+        const success = await imService.updateConfig({ nim: { ...config.nim, enabled: newEnabled } });
+        if (success) {
+          dispatch(setNimConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
 
-      // Non-OpenClaw platforms (nim, xiaomifeng): use startGateway/stopGateway
       const isEnabled = config[platform].enabled;
       const newEnabled = !isEnabled;
 
@@ -585,6 +764,7 @@ const IMSettings: React.FC = () => {
   const xiaomifengConnected = status.xiaomifeng?.connected ?? false;
   const qqConnected = status.qq?.connected ?? false;
   const wecomConnected = status.wecom?.connected ?? false;
+  const weixinConnected = status.weixin?.connected ?? false;
   const popoConnected = status.popo?.connected ?? false;
 
   // Compute visible platforms based on language
@@ -623,8 +803,15 @@ const IMSettings: React.FC = () => {
     if (platform === 'wecom') {
       return !!(wecomOpenClawConfig.botId && wecomOpenClawConfig.secret);
     }
+    if (platform === 'weixin') {
+      return true; // No credentials needed, connects via QR code in CLI
+    }
     if (platform === 'popo') {
-      return !!(config.popo.appKey && config.popo.appSecret && config.popo.token && config.popo.aesKey);
+      const effectiveMode = config.popo.connectionMode || (config.popo.token ? 'webhook' : 'websocket');
+      if (effectiveMode === 'webhook') {
+        return !!(config.popo.appKey && config.popo.appSecret && config.popo.token && config.popo.aesKey);
+      }
+      return !!(config.popo.appKey && config.popo.appSecret && config.popo.aesKey);
     }
     return !!(config.feishu.appId && config.feishu.appSecret);
   };
@@ -643,6 +830,7 @@ const IMSettings: React.FC = () => {
     if (platform === 'xiaomifeng') return xiaomifengConnected;
     if (platform === 'qq') return qqConnected;
     if (platform === 'wecom') return wecomConnected;
+    if (platform === 'weixin') return weixinConnected;
     if (platform === 'popo') return popoConnected;
     return feishuConnected;
   };
@@ -661,7 +849,7 @@ const IMSettings: React.FC = () => {
 
     // For Telegram, persist telegram config and test
     if (platform === 'telegram') {
-      await imService.updateConfig({ telegram: tgOpenClawConfig });
+      await imService.persistConfig({ telegram: tgOpenClawConfig });
       const result = await runConnectivityTest(platform, {
         telegram: tgOpenClawConfig,
       } as Partial<IMGatewayConfig>);
@@ -677,7 +865,7 @@ const IMSettings: React.FC = () => {
 
     // For QQ, persist qq config and test (OpenClaw mode)
     if (platform === 'qq') {
-      await imService.updateConfig({ qq: qqOpenClawConfig });
+      await imService.persistConfig({ qq: qqOpenClawConfig });
       const result = await runConnectivityTest(platform, {
         qq: qqOpenClawConfig,
       } as Partial<IMGatewayConfig>);
@@ -692,7 +880,7 @@ const IMSettings: React.FC = () => {
 
     // For WeCom, persist wecom config and test (OpenClaw mode)
     if (platform === 'wecom') {
-      await imService.updateConfig({ wecom: wecomOpenClawConfig });
+      await imService.persistConfig({ wecom: wecomOpenClawConfig });
       const result = await runConnectivityTest(platform, {
         wecom: wecomOpenClawConfig,
       } as Partial<IMGatewayConfig>);
@@ -705,9 +893,24 @@ const IMSettings: React.FC = () => {
       return;
     }
 
+    // For Weixin, persist weixin config and test (OpenClaw mode)
+    if (platform === 'weixin') {
+      await imService.persistConfig({ weixin: weixinOpenClawConfig });
+      const result = await runConnectivityTest(platform, {
+        weixin: weixinOpenClawConfig,
+      } as Partial<IMGatewayConfig>);
+      if (!weixinOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
+      return;
+    }
+
     // For Feishu, persist feishu config and test (OpenClaw mode)
     if (platform === 'feishu') {
-      await imService.updateConfig({ feishu: fsOpenClawConfig });
+      await imService.persistConfig({ feishu: fsOpenClawConfig });
       const result = await runConnectivityTest(platform, {
         feishu: fsOpenClawConfig,
       } as Partial<IMGatewayConfig>);
@@ -721,7 +924,7 @@ const IMSettings: React.FC = () => {
     }
 
     // 1. Persist latest config to backend (without changing enabled state)
-    await imService.updateConfig({
+    await imService.persistConfig({
       [platform]: config[platform],
     } as Partial<IMGatewayConfig>);
 
@@ -731,14 +934,9 @@ const IMSettings: React.FC = () => {
     // The backend's testNimConnectivity already manages the SDK lifecycle
     // (stop main → probe with temp instance → restart main) under a mutex,
     // so doing stop/start here would cause a race condition and potential crash.
-    if (isEnabled && platform !== 'nim') {
-      // For non-OpenClaw platforms (xiaomifeng), restart gateway to pick up latest credentials.
-      // OpenClaw platforms (dingtalk, discord, etc.) are already restarted by im:config:set handler
-      // via syncOpenClawConfig({ restartGatewayIfRunning: true }), so stop/start is redundant.
-      if (platform === 'xiaomifeng') {
-        await imService.stopGateway(platform);
-        await imService.startGateway(platform);
-      }
+    if (isEnabled && platform === 'xiaomifeng') {
+      await imService.stopGateway(platform);
+      await imService.startGateway(platform);
     }
     // When the gateway is OFF we skip stop/start entirely.
     // The main process testGateway → runAuthProbe will spawn an isolated
@@ -785,6 +983,7 @@ const IMSettings: React.FC = () => {
       nim: setNimConfig,
       xiaomifeng: setXiaomifengConfig,
       wecom: setWecomConfig,
+      weixin: setWeixinConfig,
       popo: setPopoConfig,
     };
     return actionMap[platform];
@@ -988,7 +1187,7 @@ const IMSettings: React.FC = () => {
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleDingTalkOpenClawChange({ clientId: '' }); void imService.updateConfig({ dingtalk: { ...dtOpenClawConfig, clientId: '' } }); }}
+                      onClick={() => { handleDingTalkOpenClawChange({ clientId: '' }); void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, clientId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1017,7 +1216,7 @@ const IMSettings: React.FC = () => {
                   {dtOpenClawConfig.clientSecret && (
                     <button
                       type="button"
-                      onClick={() => { handleDingTalkOpenClawChange({ clientSecret: '' }); void imService.updateConfig({ dingtalk: { ...dtOpenClawConfig, clientSecret: '' } }); }}
+                      onClick={() => { handleDingTalkOpenClawChange({ clientSecret: '' }); void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, clientSecret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1083,7 +1282,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...dtOpenClawConfig.allowFrom, id];
                             handleDingTalkOpenClawChange({ allowFrom: newIds });
                             setDingtalkAllowedUserIdInput('');
-                            void imService.updateConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
                           }
                         }
                       }}
@@ -1098,7 +1297,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...dtOpenClawConfig.allowFrom, id];
                           handleDingTalkOpenClawChange({ allowFrom: newIds });
                           setDingtalkAllowedUserIdInput('');
-                          void imService.updateConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -1119,7 +1318,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = dtOpenClawConfig.allowFrom.filter((x) => x !== id);
                               handleDingTalkOpenClawChange({ allowFrom: newIds });
-                              void imService.updateConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
                             }}
                             className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 transition-colors"
                           >
@@ -1278,6 +1477,65 @@ const IMSettings: React.FC = () => {
         {/* Feishu Settings */}
         {activePlatform === 'feishu' && (
           <div className="space-y-3">
+            {/* Scan QR code section */}
+            <div className="rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60 p-4 text-center space-y-3">
+              {(feishuQrStatus === 'idle' || feishuQrStatus === 'error') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleFeishuStartQr()}
+                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('feishuBotCreateWizardScanBtn')}
+                  </button>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('feishuBotCreateWizardScanHint')}
+                  </p>
+                  {feishuQrStatus === 'error' && feishuQrError && (
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                      <XCircleIcon className="h-4 w-4 flex-shrink-0" />
+                      {feishuQrError}
+                    </div>
+                  )}
+                </>
+              )}
+              {feishuQrStatus === 'loading' && (
+                <div className="flex flex-col items-center gap-2 py-2">
+                  <ArrowPathIcon className="h-7 w-7 text-claude-accent animate-spin" />
+                  <span className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">正在生成二维码…</span>
+                </div>
+              )}
+              {feishuQrStatus === 'showing' && feishuQrUrl && (
+                <div className="flex flex-col items-center gap-2">
+                  <div className="p-2 bg-white rounded-lg inline-block">
+                    <QRCodeSVG value={feishuQrUrl} size={160} />
+                  </div>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary max-w-[240px]">
+                    {i18nService.t('feishuBotCreateWizardQrcodeDesc')}
+                  </p>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {feishuQrTimeLeft}s
+                  </p>
+                </div>
+              )}
+              {feishuQrStatus === 'success' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('feishuBotCreateWizardSuccessTitle')}
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="relative flex items-center">
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+              <span className="px-3 text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary whitespace-nowrap">
+                {i18nService.t('feishuBotCreateWizardOrManual')}
+              </span>
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+            </div>
+
+            {/* Manual guide */}
             <PlatformGuide
               steps={[
                 i18nService.t('imFeishuGuideStep1'),
@@ -1303,7 +1561,7 @@ const IMSettings: React.FC = () => {
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleFeishuOpenClawChange({ appId: '' }); void imService.updateConfig({ feishu: { ...fsOpenClawConfig, appId: '' } }); }}
+                      onClick={() => { handleFeishuOpenClawChange({ appId: '' }); void imService.persistConfig({ feishu: { ...fsOpenClawConfig, appId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1332,7 +1590,7 @@ const IMSettings: React.FC = () => {
                   {fsOpenClawConfig.appSecret && (
                     <button
                       type="button"
-                      onClick={() => { handleFeishuOpenClawChange({ appSecret: '' }); void imService.updateConfig({ feishu: { ...fsOpenClawConfig, appSecret: '' } }); }}
+                      onClick={() => { handleFeishuOpenClawChange({ appSecret: '' }); void imService.persistConfig({ feishu: { ...fsOpenClawConfig, appSecret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1418,7 +1676,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...fsOpenClawConfig.allowFrom, id];
                             handleFeishuOpenClawChange({ allowFrom: newIds });
                             setFeishuAllowedUserIdInput('');
-                            void imService.updateConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
                           }
                         }
                       }}
@@ -1433,7 +1691,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...fsOpenClawConfig.allowFrom, id];
                           handleFeishuOpenClawChange({ allowFrom: newIds });
                           setFeishuAllowedUserIdInput('');
-                          void imService.updateConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -1454,7 +1712,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = fsOpenClawConfig.allowFrom.filter((uid) => uid !== id);
                               handleFeishuOpenClawChange({ allowFrom: newIds });
-                              void imService.updateConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -1504,7 +1762,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
                             handleFeishuOpenClawChange({ groupAllowFrom: newIds });
                             setFeishuGroupAllowIdInput('');
-                            void imService.updateConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                            void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
                           }
                         }
                       }}
@@ -1519,7 +1777,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
                           handleFeishuOpenClawChange({ groupAllowFrom: newIds });
                           setFeishuGroupAllowIdInput('');
-                          void imService.updateConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                          void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -1540,7 +1798,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = fsOpenClawConfig.groupAllowFrom.filter((gid) => gid !== id);
                               handleFeishuOpenClawChange({ groupAllowFrom: newIds });
-                              void imService.updateConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                              void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -1616,6 +1874,7 @@ const IMSettings: React.FC = () => {
                 {status.feishu.error}
               </div>
             )}
+
           </div>
         )}
 
@@ -1649,7 +1908,7 @@ const IMSettings: React.FC = () => {
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleQQOpenClawChange({ appId: '' }); void imService.updateConfig({ qq: { ...qqOpenClawConfig, appId: '' } }); }}
+                      onClick={() => { handleQQOpenClawChange({ appId: '' }); void imService.persistConfig({ qq: { ...qqOpenClawConfig, appId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1678,7 +1937,7 @@ const IMSettings: React.FC = () => {
                   {qqOpenClawConfig.appSecret && (
                     <button
                       type="button"
-                      onClick={() => { handleQQOpenClawChange({ appSecret: '' }); void imService.updateConfig({ qq: { ...qqOpenClawConfig, appSecret: '' } }); }}
+                      onClick={() => { handleQQOpenClawChange({ appSecret: '' }); void imService.persistConfig({ qq: { ...qqOpenClawConfig, appSecret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1747,7 +2006,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...qqOpenClawConfig.allowFrom, id];
                             handleQQOpenClawChange({ allowFrom: newIds });
                             setAllowedUserIdInput('');
-                            void imService.updateConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
                           }
                         }
                       }}
@@ -1762,7 +2021,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...qqOpenClawConfig.allowFrom, id];
                           handleQQOpenClawChange({ allowFrom: newIds });
                           setAllowedUserIdInput('');
-                          void imService.updateConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -1783,7 +2042,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = qqOpenClawConfig.allowFrom.filter((uid) => uid !== id);
                               handleQQOpenClawChange({ allowFrom: newIds });
-                              void imService.updateConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -1916,7 +2175,7 @@ const IMSettings: React.FC = () => {
                   {tgOpenClawConfig.botToken && (
                     <button
                       type="button"
-                      onClick={() => { handleTelegramOpenClawChange({ botToken: '' }); void imService.updateConfig({ telegram: { ...tgOpenClawConfig, botToken: '' } }); }}
+                      onClick={() => { handleTelegramOpenClawChange({ botToken: '' }); void imService.persistConfig({ telegram: { ...tgOpenClawConfig, botToken: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1986,7 +2245,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...tgOpenClawConfig.allowFrom, id];
                             handleTelegramOpenClawChange({ allowFrom: newIds });
                             setAllowedUserIdInput('');
-                            void imService.updateConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
                           }
                         }
                       }}
@@ -2001,7 +2260,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...tgOpenClawConfig.allowFrom, id];
                           handleTelegramOpenClawChange({ allowFrom: newIds });
                           setAllowedUserIdInput('');
-                          void imService.updateConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -2022,7 +2281,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = tgOpenClawConfig.allowFrom.filter((uid) => uid !== id);
                               handleTelegramOpenClawChange({ allowFrom: newIds });
-                              void imService.updateConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -2236,7 +2495,7 @@ const IMSettings: React.FC = () => {
                   {dcOpenClawConfig.botToken && (
                     <button
                       type="button"
-                      onClick={() => { handleDiscordOpenClawChange({ botToken: '' }); void imService.updateConfig({ discord: { ...dcOpenClawConfig, botToken: '' } }); }}
+                      onClick={() => { handleDiscordOpenClawChange({ botToken: '' }); void imService.persistConfig({ discord: { ...dcOpenClawConfig, botToken: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2306,7 +2565,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...dcOpenClawConfig.allowFrom, id];
                             handleDiscordOpenClawChange({ allowFrom: newIds });
                             setDiscordAllowedUserIdInput('');
-                            void imService.updateConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
                           }
                         }
                       }}
@@ -2321,7 +2580,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...dcOpenClawConfig.allowFrom, id];
                           handleDiscordOpenClawChange({ allowFrom: newIds });
                           setDiscordAllowedUserIdInput('');
-                          void imService.updateConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -2342,7 +2601,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = dcOpenClawConfig.allowFrom.filter((uid) => uid !== id);
                               handleDiscordOpenClawChange({ allowFrom: newIds });
-                              void imService.updateConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 transition-colors"
                           >
@@ -2428,7 +2687,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...dcOpenClawConfig.groupAllowFrom, id];
                             handleDiscordOpenClawChange({ groupAllowFrom: newIds });
                             setDiscordServerAllowIdInput('');
-                            void imService.updateConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                            void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
                           }
                         }
                       }}
@@ -2443,7 +2702,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...dcOpenClawConfig.groupAllowFrom, id];
                           handleDiscordOpenClawChange({ groupAllowFrom: newIds });
                           setDiscordServerAllowIdInput('');
-                          void imService.updateConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                          void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -2464,7 +2723,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = dcOpenClawConfig.groupAllowFrom.filter((gid) => gid !== id);
                               handleDiscordOpenClawChange({ groupAllowFrom: newIds });
-                              void imService.updateConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                              void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 transition-colors"
                           >
@@ -2539,7 +2798,6 @@ const IMSettings: React.FC = () => {
         {/* NIM (NetEase IM) Settings */}
         {activePlatform === 'nim' && (
           <div className="space-y-3">
-            {/* How to get NIM credentials */}
             <PlatformGuide
               title={i18nService.t('nimCredentialsGuide')}
               steps={[
@@ -2550,230 +2808,55 @@ const IMSettings: React.FC = () => {
               ]}
             />
 
-            {/* App Key */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                App Key
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={config.nim.appKey}
-                  onChange={(e) => handleNimChange('appKey', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="your_app_key"
-                />
-                {config.nim.appKey && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('appKey', ''); void imService.updateConfig({ nim: { ...config.nim, appKey: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                {i18nService.t('nimAppKeyHint') || '从云信控制台应用信息中获取'}
-              </p>
-            </div>
-
-            {/* Account */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                Account (accid)
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={config.nim.account}
-                  onChange={(e) => handleNimChange('account', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder={i18nService.t('nimAccountPlaceholder') || 'bot_account_id'}
-                />
-                {config.nim.account && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('account', ''); void imService.updateConfig({ nim: { ...config.nim, account: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                {i18nService.t('nimAccountHint') || '在云信控制台"账号管理"中创建的 IM 账号 ID'}
-              </p>
-            </div>
-
-            {/* Token */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                Token
-              </label>
-              <div className="relative">
-                <input
-                  type={showSecrets['nim.token'] ? 'text' : 'password'}
-                  value={config.nim.token}
-                  onChange={(e) => handleNimChange('token', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
-                  placeholder="••••••••••••"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.nim.token && (
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('token', ''); void imService.updateConfig({ nim: { ...config.nim, token: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'nim.token': !prev['nim.token'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
-                    title={showSecrets['nim.token'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['nim.token'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
+            {nimSchemaData ? (
+              <SchemaForm
+                schema={nimSchemaData.schema}
+                hints={nimSchemaData.hints}
+                value={config.nim as unknown as Record<string, unknown>}
+                onChange={(path, value) => {
+                  const updated = deepSet({ ...config.nim } as unknown as Record<string, unknown>, path, value);
+                  dispatch(setNimConfig(updated as any));
+                }}
+                onBlur={handleSaveConfig}
+                showSecrets={showSecrets}
+                onToggleSecret={(path) => setShowSecrets(prev => ({ ...prev, [path]: !prev[path] }))}
+              />
+            ) : (
+              /* Fallback: minimal credential inputs when schema not yet loaded */
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">App Key</label>
+                  <input
+                    type="text"
+                    value={config.nim.appKey}
+                    onChange={(e) => dispatch(setNimConfig({ appKey: e.target.value }))}
+                    onBlur={handleSaveConfig}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="your_app_key"
+                  />
                 </div>
-              </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                {i18nService.t('nimTokenHint') || '为该账号生成的访问凭证（建议设置为长期有效）'}
-              </p>
-            </div>
-
-            {/* Account Whitelist */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('nimAccountWhitelist') || '白名单账号'}
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={config.nim.accountWhitelist}
-                  onChange={(e) => handleNimChange('accountWhitelist', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="account1,account2"
-                />
-                {config.nim.accountWhitelist && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('accountWhitelist', ''); void imService.updateConfig({ nim: { ...config.nim, accountWhitelist: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                {i18nService.t('nimAccountWhitelistHint') || '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。'}
-              </p>
-            </div>
-
-            {/* Team Policy (群消息策略) */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('nimTeamPolicy') || '群消息策略'}
-              </label>
-              <select
-                value={config.nim.teamPolicy || 'disabled'}
-                onChange={(e) => {
-                  const newValue = e.target.value as 'disabled' | 'open' | 'allowlist';
-                  handleNimChange('teamPolicy', newValue);
-                  saveNimConfigWithUpdate({ teamPolicy: newValue });
-                }}
-                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-              >
-                <option value="disabled">{i18nService.t('nimTeamPolicyDisabled') || '禁用 - 不响应群消息'}</option>
-                <option value="open">{i18nService.t('nimTeamPolicyOpen') || '开放 - 响应所有群的@消息'}</option>
-                <option value="allowlist">{i18nService.t('nimTeamPolicyAllowlist') || '白名单 - 仅响应指定群的@消息'}</option>
-              </select>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                {i18nService.t('nimTeamPolicyHint') || '群消息仅响应@机器人的消息'}
-              </p>
-            </div>
-
-            {/* Team Allowlist - only show when policy is 'allowlist' */}
-            {config.nim.teamPolicy === 'allowlist' && (
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('nimTeamAllowlist') || '群白名单'}
-                </label>
-                <input
-                  type="text"
-                  value={config.nim.teamAllowlist || ''}
-                  onChange={(e) => handleNimChange('teamAllowlist', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                  placeholder="team_id_1,team_id_2"
-                />
-                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                  {i18nService.t('nimTeamAllowlistHint') || '填写允许响应的群ID，多个用逗号分隔'}
-                </p>
-              </div>
-            )}
-
-            {/* QChat Enable Toggle */}
-            <div className="flex items-center justify-between py-2">
-              <div>
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('nimQChatEnabled') || '启用圈组 (QChat)'}
-                </label>
-                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary mt-0.5">
-                  {i18nService.t('nimQChatEnabledHint') || '订阅圈组消息，仅响应@机器人的消息'}
-                </p>
-              </div>
-              <div
-                className={`w-10 h-5 rounded-full flex items-center transition-colors cursor-pointer ${
-                  config.nim.qchatEnabled ? 'bg-green-500' : 'dark:bg-claude-darkBorder bg-claude-border'
-                }`}
-                onClick={() => {
-                  const newValue = !config.nim.qchatEnabled;
-                  handleNimChange('qchatEnabled', newValue);
-                  saveNimConfigWithUpdate({ qchatEnabled: newValue });
-                }}
-              >
-                <div
-                  className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                    config.nim.qchatEnabled ? 'translate-x-5' : 'translate-x-0.5'
-                  }`}
-                />
-              </div>
-            </div>
-
-            {/* QChat Server IDs - only show when QChat is enabled */}
-            {config.nim.qchatEnabled && (
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('nimQChatServerIds') || '圈组服务器 ID'}
-                </label>
-                <input
-                  type="text"
-                  value={config.nim.qchatServerIds || ''}
-                  onChange={(e) => handleNimChange('qchatServerIds', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                  placeholder={i18nService.t('nimQChatServerIdsPlaceholder') || '留空自动发现所有已加入的服务器'}
-                />
-                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                  {i18nService.t('nimQChatServerIdsHint') || '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。'}
-                </p>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Account</label>
+                  <input
+                    type="text"
+                    value={config.nim.account}
+                    onChange={(e) => dispatch(setNimConfig({ account: e.target.value }))}
+                    onBlur={handleSaveConfig}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="bot_account_id"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Token</label>
+                  <input
+                    type="password"
+                    value={config.nim.token}
+                    onChange={(e) => dispatch(setNimConfig({ token: e.target.value }))}
+                    onBlur={handleSaveConfig}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="••••••••••••"
+                  />
+                </div>
               </div>
             )}
 
@@ -2781,17 +2864,15 @@ const IMSettings: React.FC = () => {
               {renderConnectivityTestButton('nim')}
             </div>
 
-            {/* Bot account display */}
             {status.nim.botAccount && (
               <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
                 Account: {status.nim.botAccount}
               </div>
             )}
 
-            {/* Error display */}
             {status.nim.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {status.nim.lastError}
+                {translateIMError(status.nim.lastError)}
               </div>
             )}
           </div>
@@ -2818,7 +2899,7 @@ const IMSettings: React.FC = () => {
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleXiaomifengChange('clientId', ''); void imService.updateConfig({ xiaomifeng: { ...config.xiaomifeng, clientId: '' } }); }}
+                      onClick={() => { handleXiaomifengChange('clientId', ''); void imService.persistConfig({ xiaomifeng: { ...config.xiaomifeng, clientId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2847,7 +2928,7 @@ const IMSettings: React.FC = () => {
                   {config.xiaomifeng.secret && (
                     <button
                       type="button"
-                      onClick={() => { handleXiaomifengChange('secret', ''); void imService.updateConfig({ xiaomifeng: { ...config.xiaomifeng, secret: '' } }); }}
+                      onClick={() => { handleXiaomifengChange('secret', ''); void imService.persistConfig({ xiaomifeng: { ...config.xiaomifeng, secret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2881,6 +2962,90 @@ const IMSettings: React.FC = () => {
             {status.xiaomifeng?.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
                 {translateIMError(status.xiaomifeng.lastError)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Weixin (微信) Settings */}
+        {activePlatform === 'weixin' && (
+          <div className="space-y-3">
+            {/* Scan QR code section */}
+            <div className="rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60 p-4 text-center space-y-3">
+              {(weixinQrStatus === 'idle' || weixinQrStatus === 'error') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleWeixinQrLogin()}
+                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('imWeixinScanBtn')}
+                  </button>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('imWeixinScanHint')}
+                  </p>
+                  {weixinQrStatus === 'error' && weixinQrError && (
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                      <XCircleIcon className="h-4 w-4 flex-shrink-0" />
+                      {weixinQrError}
+                    </div>
+                  )}
+                </>
+              )}
+              {weixinQrStatus === 'loading' && (
+                <div className="flex items-center justify-center gap-2 py-4">
+                  <ArrowPathIcon className="h-5 w-5 animate-spin text-claude-accent" />
+                  <span className="text-sm text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('imWeixinQrLoading')}
+                  </span>
+                </div>
+              )}
+              {(weixinQrStatus === 'showing' || weixinQrStatus === 'waiting') && weixinQrUrl && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('imWeixinQrScanPrompt')}
+                  </p>
+                  <div className="flex justify-center">
+                    <div className="p-3 bg-white rounded-lg border dark:border-claude-darkBorder/40 border-claude-border/40">
+                      <QRCodeSVG value={weixinQrUrl} size={192} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {weixinQrStatus === 'success' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('imWeixinQrSuccess')}
+                </div>
+              )}
+            </div>
+
+            {/* Platform Guide */}
+            <PlatformGuide
+              steps={[
+                i18nService.t('imWeixinGuideStep1'),
+                i18nService.t('imWeixinGuideStep2'),
+                i18nService.t('imWeixinGuideStep3'),
+              ]}
+              guideUrl={IM_GUIDE_URLS.weixin}
+            />
+
+            {/* Connectivity test */}
+            <div className="pt-1">
+              {renderConnectivityTestButton('weixin')}
+            </div>
+
+            {/* Account ID display */}
+            {weixinOpenClawConfig.accountId && (
+              <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                Account ID: {weixinOpenClawConfig.accountId}
+              </div>
+            )}
+
+            {/* Error display */}
+            {status.weixin?.lastError && (
+              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                {status.weixin.lastError}
               </div>
             )}
           </div>
@@ -2954,7 +3119,7 @@ const IMSettings: React.FC = () => {
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleWecomOpenClawChange({ botId: '' }); void imService.updateConfig({ wecom: { ...wecomOpenClawConfig, botId: '' } }); }}
+                      onClick={() => { handleWecomOpenClawChange({ botId: '' }); void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, botId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2983,7 +3148,7 @@ const IMSettings: React.FC = () => {
                   {wecomOpenClawConfig.secret && (
                     <button
                       type="button"
-                      onClick={() => { handleWecomOpenClawChange({ secret: '' }); void imService.updateConfig({ wecom: { ...wecomOpenClawConfig, secret: '' } }); }}
+                      onClick={() => { handleWecomOpenClawChange({ secret: '' }); void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, secret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -3053,7 +3218,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...wecomOpenClawConfig.allowFrom, id];
                             handleWecomOpenClawChange({ allowFrom: newIds });
                             setAllowedUserIdInput('');
-                            void imService.updateConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
                           }
                         }
                       }}
@@ -3068,7 +3233,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...wecomOpenClawConfig.allowFrom, id];
                           handleWecomOpenClawChange({ allowFrom: newIds });
                           setAllowedUserIdInput('');
-                          void imService.updateConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -3089,7 +3254,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = wecomOpenClawConfig.allowFrom.filter((uid) => uid !== id);
                               handleWecomOpenClawChange({ allowFrom: newIds });
-                              void imService.updateConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -3178,6 +3343,25 @@ const IMSettings: React.FC = () => {
               guideUrl={IM_GUIDE_URLS.popo}
             />
 
+            {/* Connection Mode selector */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('imPopoConnectionMode')}
+              </label>
+              <select
+                value={popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')}
+                onChange={(e) => {
+                  const update = { connectionMode: e.target.value as PopoOpenClawConfig['connectionMode'] };
+                  handlePopoChange(update);
+                  void handleSavePopoConfig(update);
+                }}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+              >
+                <option value="websocket">{i18nService.t('imPopoConnectionModeWebsocket')}</option>
+                <option value="webhook">{i18nService.t('imPopoConnectionModeWebhook')}</option>
+              </select>
+            </div>
+
             {/* Credential hint */}
             <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
               {i18nService.t('imPopoCredentialHint')}
@@ -3251,7 +3435,8 @@ const IMSettings: React.FC = () => {
               </div>
             </div>
 
-            {/* Token input */}
+            {/* Token input (webhook mode only) */}
+            {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
             <div className="space-y-1.5">
               <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Token</label>
               <div className="relative">
@@ -3288,6 +3473,7 @@ const IMSettings: React.FC = () => {
                 </div>
               </div>
             </div>
+            )}
 
             {/* AES Key input */}
             <div className="space-y-1.5">
@@ -3336,6 +3522,9 @@ const IMSettings: React.FC = () => {
                 {i18nService.t('imAdvancedSettings')}
               </summary>
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* Webhook fields (webhook mode only) */}
+                {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
+                <>
                 {/* Webhook Base URL */}
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Webhook Base URL</label>
@@ -3374,6 +3563,8 @@ const IMSettings: React.FC = () => {
                     className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
                   />
                 </div>
+                </>
+                )}
 
                 {/* DM Policy */}
                 <div className="space-y-1.5">
@@ -3417,7 +3608,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...popoConfig.allowFrom, id];
                             handlePopoChange({ allowFrom: newIds });
                             setPopoAllowedUserIdInput('');
-                            void imService.updateConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                            void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
                           }
                         }
                       }}
@@ -3432,7 +3623,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...popoConfig.allowFrom, id];
                           handlePopoChange({ allowFrom: newIds });
                           setPopoAllowedUserIdInput('');
-                          void imService.updateConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                          void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -3453,7 +3644,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = popoConfig.allowFrom.filter((uid) => uid !== id);
                               handlePopoChange({ allowFrom: newIds });
-                              void imService.updateConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                              void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -3503,7 +3694,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...popoConfig.groupAllowFrom, id];
                             handlePopoChange({ groupAllowFrom: newIds });
                             setPopoGroupAllowIdInput('');
-                            void imService.updateConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                            void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
                           }
                         }
                       }}
@@ -3518,7 +3709,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...popoConfig.groupAllowFrom, id];
                           handlePopoChange({ groupAllowFrom: newIds });
                           setPopoGroupAllowIdInput('');
-                          void imService.updateConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                          void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
@@ -3539,7 +3730,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = popoConfig.groupAllowFrom.filter((gid) => gid !== id);
                               handlePopoChange({ groupAllowFrom: newIds });
-                              void imService.updateConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                              void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
                             }}
                             className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
