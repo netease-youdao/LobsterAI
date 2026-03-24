@@ -1,107 +1,107 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import ReactMarkdown from 'react-markdown'
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
 // @ts-ignore
-import remarkGfm from 'remark-gfm'
+import remarkGfm from 'remark-gfm';
 // @ts-ignore
-import remarkMath from 'remark-math'
+import remarkMath from 'remark-math';
 // @ts-ignore
-import rehypeKatex from 'rehype-katex'
-import 'katex/dist/katex.min.css'
-import 'katex/contrib/mhchem'
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import 'katex/contrib/mhchem';
 // @ts-ignore
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 // @ts-ignore
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline'
-import { i18nService } from '../services/i18n'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { i18nService } from '../services/i18n';
 
-const CODE_BLOCK_LINE_LIMIT = 200
-const CODE_BLOCK_CHAR_LIMIT = 20000
+const CODE_BLOCK_LINE_LIMIT = 200;
+const CODE_BLOCK_CHAR_LIMIT = 20000;
 const SYNTAX_HIGHLIGHTER_STYLE = {
   margin: 0,
   borderRadius: 0,
   background: '#282c34',
-}
-const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file'])
+};
+const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file']);
 
 const encodeFileUrl = (url: string): string => {
-  const encoded = encodeURI(url)
-  return encoded.replace(/\(/g, '%28').replace(/\)/g, '%29')
-}
+  const encoded = encodeURI(url);
+  return encoded.replace(/\(/g, '%28').replace(/\)/g, '%29');
+};
 
 const encodeFileUrlDestination = (dest: string): string => {
-  const trimmed = dest.trim()
+  const trimmed = dest.trim();
   if (!/^<?file:\/\//i.test(trimmed)) {
-    return dest
+    return dest;
   }
 
-  let core = trimmed
-  let prefix = ''
-  let suffix = ''
+  let core = trimmed;
+  let prefix = '';
+  let suffix = '';
   if (core.startsWith('<') && core.endsWith('>')) {
-    prefix = '<'
-    suffix = '>'
-    core = core.slice(1, -1)
+    prefix = '<';
+    suffix = '>';
+    core = core.slice(1, -1);
   }
 
-  const encoded = encodeFileUrl(core)
-  return dest.replace(trimmed, `${prefix}${encoded}${suffix}`)
-}
+  const encoded = encodeFileUrl(core);
+  return dest.replace(trimmed, `${prefix}${encoded}${suffix}`);
+};
 
 const findMarkdownLinkEnd = (input: string, start: number): number => {
-  let depth = 1
+  let depth = 1;
   for (let i = start; i < input.length; i += 1) {
-    const char = input[i]
+    const char = input[i];
     if (char === '\\') {
-      i += 1
-      continue
+      i += 1;
+      continue;
     }
     if (char === '(') {
-      depth += 1
-      continue
+      depth += 1;
+      continue;
     }
     if (char === ')') {
-      depth -= 1
+      depth -= 1;
       if (depth === 0) {
-        return i
+        return i;
       }
     }
     if (char === '\n') {
-      return -1
+      return -1;
     }
   }
-  return -1
-}
+  return -1;
+};
 
 const encodeFileUrlsInMarkdown = (content: string): string => {
   if (!content.includes('file://')) {
-    return content
+    return content;
   }
 
-  let result = ''
-  let cursor = 0
+  let result = '';
+  let cursor = 0;
   while (cursor < content.length) {
-    const openIndex = content.indexOf('](', cursor)
+    const openIndex = content.indexOf('](', cursor);
     if (openIndex === -1) {
-      result += content.slice(cursor)
-      break
+      result += content.slice(cursor);
+      break;
     }
 
-    result += content.slice(cursor, openIndex + 2)
-    const destStart = openIndex + 2
-    const destEnd = findMarkdownLinkEnd(content, destStart)
+    result += content.slice(cursor, openIndex + 2);
+    const destStart = openIndex + 2;
+    const destEnd = findMarkdownLinkEnd(content, destStart);
     if (destEnd === -1) {
-      result += content.slice(destStart)
-      break
+      result += content.slice(destStart);
+      break;
     }
 
-    const dest = content.slice(destStart, destEnd)
-    result += encodeFileUrlDestination(dest)
-    result += ')'
-    cursor = destEnd + 1
+    const dest = content.slice(destStart, destEnd);
+    result += encodeFileUrlDestination(dest);
+    result += ')';
+    cursor = destEnd + 1;
   }
-  return result
-}
+  return result;
+};
 
 /**
  * Normalize multi-line display math blocks for remark-math compatibility.
@@ -113,109 +113,109 @@ const encodeFileUrlsInMarkdown = (content: string): string => {
 const normalizeDisplayMath = (content: string): string => {
   return content.replace(/\$\$([\s\S]+?)\$\$/g, (match, inner) => {
     if (!inner.includes('\n')) {
-      return match
+      return match;
     }
-    return `$$\n${inner.trim()}\n$$`
-  })
-}
+    return `$$\n${inner.trim()}\n$$`;
+  });
+};
 
 const safeUrlTransform = (url: string): string => {
-  const trimmed = url.trim()
-  if (!trimmed) return trimmed
+  const trimmed = url.trim();
+  if (!trimmed) return trimmed;
 
-  const match = trimmed.match(/^([a-z][a-z0-9+.-]*):/i)
+  const match = trimmed.match(/^([a-z][a-z0-9+.-]*):/i);
   if (!match) {
-    return trimmed
+    return trimmed;
   }
 
-  const protocol = match[1].toLowerCase()
+  const protocol = match[1].toLowerCase();
   if (SAFE_URL_PROTOCOLS.has(protocol)) {
-    return trimmed
+    return trimmed;
   }
 
-  return ''
-}
+  return '';
+};
 
 const getHrefProtocol = (href: string): string | null => {
-  const trimmed = href.trim()
-  const match = trimmed.match(/^([a-z][a-z0-9+.-]*):/i)
-  if (!match) return null
-  return match[1].toLowerCase()
-}
+  const trimmed = href.trim();
+  const match = trimmed.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (!match) return null;
+  return match[1].toLowerCase();
+};
 
 const isExternalHref = (href: string): boolean => {
-  const protocol = getHrefProtocol(href)
-  if (!protocol) return false
-  return protocol !== 'file'
-}
+  const protocol = getHrefProtocol(href);
+  if (!protocol) return false;
+  return protocol !== 'file';
+};
 
 const openExternalViaDefaultBrowser = async (url: string): Promise<boolean> => {
-  const openExternal = (window as any)?.electron?.shell?.openExternal
+  const openExternal = (window as any)?.electron?.shell?.openExternal;
   if (typeof openExternal !== 'function') {
-    return false
+    return false;
   }
 
   try {
-    const result = await openExternal(url)
-    return !!result?.success
+    const result = await openExternal(url);
+    return !!result?.success;
   } catch (error) {
-    console.error('Failed to open external link with system browser:', url, error)
-    return false
+    console.error('Failed to open external link with system browser:', url, error);
+    return false;
   }
-}
+};
 
 const openExternalViaAnchorFallback = (url: string): void => {
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.target = '_blank'
-  anchor.rel = 'noopener noreferrer'
-  anchor.style.display = 'none'
-  document.body.appendChild(anchor)
-  anchor.click()
-  document.body.removeChild(anchor)
-}
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.target = '_blank';
+  anchor.rel = 'noopener noreferrer';
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+};
 
 const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
-  const normalizedClassName = Array.isArray(className) ? className.join(' ') : className || ''
-  const match = /language-([\w-]+)/.exec(normalizedClassName)
-  const hasPosition = node?.position?.start?.line != null && node?.position?.end?.line != null
+  const normalizedClassName = Array.isArray(className) ? className.join(' ') : className || '';
+  const match = /language-([\w-]+)/.exec(normalizedClassName);
+  const hasPosition = node?.position?.start?.line != null && node?.position?.end?.line != null;
   const isInline =
     typeof props.inline === 'boolean'
       ? props.inline
       : hasPosition
         ? node.position.start.line === node.position.end.line
-        : !match
-  const codeText = Array.isArray(children) ? children.join('') : String(children)
-  const trimmedCodeText = codeText.replace(/\n$/, '')
+        : !match;
+  const codeText = Array.isArray(children) ? children.join('') : String(children);
+  const trimmedCodeText = codeText.replace(/\n$/, '');
   const shouldHighlight =
     !isInline &&
     match &&
     trimmedCodeText.length <= CODE_BLOCK_CHAR_LIMIT &&
-    trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT
-  const [isCopied, setIsCopied] = useState(false)
-  const copyTimeoutRef = useRef<number | null>(null)
+    trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
+  const [isCopied, setIsCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(
     () => () => {
       if (copyTimeoutRef.current != null) {
-        window.clearTimeout(copyTimeoutRef.current)
+        window.clearTimeout(copyTimeoutRef.current);
       }
     },
-    [],
-  )
+    []
+  );
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(trimmedCodeText)
-      setIsCopied(true)
+      await navigator.clipboard.writeText(trimmedCodeText);
+      setIsCopied(true);
       if (copyTimeoutRef.current != null) {
-        window.clearTimeout(copyTimeoutRef.current)
+        window.clearTimeout(copyTimeoutRef.current);
       }
-      copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 1500)
+      copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 1500);
     } catch (error) {
-      console.error('Failed to copy code block: ', error)
+      console.error('Failed to copy code block: ', error);
     }
-  }, [trimmedCodeText])
+  }, [trimmedCodeText]);
 
   if (!isInline) {
     // Simple code block without language - minimal styling
@@ -239,7 +239,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
             <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">{trimmedCodeText}</code>
           </div>
         </div>
-      )
+      );
     }
 
     // Code block with language - show header with language name
@@ -271,7 +271,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
           </div>
         )}
       </div>
-    )
+    );
   }
 
   const inlineClassName = [
@@ -279,116 +279,116 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     normalizedClassName,
   ]
     .filter(Boolean)
-    .join(' ')
+    .join(' ');
 
   return (
     <code className={inlineClassName} {...props}>
       {children}
     </code>
-  )
-}
+  );
+};
 
 const safeDecodeURIComponent = (value: string): string => {
   try {
-    return decodeURIComponent(value)
+    return decodeURIComponent(value);
   } catch {
-    return value
+    return value;
   }
-}
+};
 
-const stripHashAndQuery = (value: string): string => value.split('#')[0].split('?')[0]
+const stripHashAndQuery = (value: string): string => value.split('#')[0].split('?')[0];
 
 const stripFileProtocol = (value: string): string => {
-  let cleaned = value.replace(/^file:\/\//i, '')
+  let cleaned = value.replace(/^file:\/\//i, '');
   if (/^\/[A-Za-z]:/.test(cleaned)) {
-    cleaned = cleaned.slice(1)
+    cleaned = cleaned.slice(1);
   }
-  return cleaned
-}
+  return cleaned;
+};
 
-const hasFileExtension = (value: string): boolean => /\.[A-Za-z0-9]{1,6}$/.test(value)
+const hasFileExtension = (value: string): boolean => /\.[A-Za-z0-9]{1,6}$/.test(value);
 
 const looksLikeDirectory = (value: string): boolean => {
-  if (!value) return false
-  if (value.endsWith('/') || value.endsWith('\\')) return true
-  return !hasFileExtension(value)
-}
+  if (!value) return false;
+  if (value.endsWith('/') || value.endsWith('\\')) return true;
+  return !hasFileExtension(value);
+};
 
 const isLikelyLocalFilePath = (href: string): boolean => {
-  if (!href) return false
-  if (/^file:\/\//i.test(href)) return true
-  if (/^[A-Za-z]:[\\/]/.test(href)) return true
-  if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) return true
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false
+  if (!href) return false;
+  if (/^file:\/\//i.test(href)) return true;
+  if (/^[A-Za-z]:[\\/]/.test(href)) return true;
+  if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
 
-  const base = stripHashAndQuery(href)
-  if (base.includes('/') || base.includes('\\')) return true
+  const base = stripHashAndQuery(href);
+  if (base.includes('/') || base.includes('\\')) return true;
 
-  const extMatch = base.match(/\.([A-Za-z0-9]{1,6})$/)
-  if (!extMatch) return false
-  const ext = extMatch[1].toLowerCase()
-  const commonTlds = new Set(['com', 'net', 'org', 'io', 'cn', 'co', 'ai', 'app', 'dev', 'gov', 'edu'])
-  return !commonTlds.has(ext)
-}
+  const extMatch = base.match(/\.([A-Za-z0-9]{1,6})$/);
+  if (!extMatch) return false;
+  const ext = extMatch[1].toLowerCase();
+  const commonTlds = new Set(['com', 'net', 'org', 'io', 'cn', 'co', 'ai', 'app', 'dev', 'gov', 'edu']);
+  return !commonTlds.has(ext);
+};
 
 const toFileHref = (filePath: string): string => {
-  const normalized = filePath.replace(/\\/g, '/')
+  const normalized = filePath.replace(/\\/g, '/');
   if (/^[A-Za-z]:/.test(filePath)) {
-    return `file:///${normalized}`
+    return `file:///${normalized}`;
   }
   if (normalized.startsWith('/')) {
-    return `file://${normalized}`
+    return `file://${normalized}`;
   }
-  return `file://${normalized}`
-}
+  return `file://${normalized}`;
+};
 
 const getLocalPathFromLink = (
   href: string | null,
   text: string,
-  resolveLocalFilePath?: (href: string, text: string) => string | null,
+  resolveLocalFilePath?: (href: string, text: string) => string | null
 ): string | null => {
-  if (!href) return null
-  const resolved = resolveLocalFilePath ? resolveLocalFilePath(href, text) : null
-  if (resolved) return resolved
-  if (!isLikelyLocalFilePath(href)) return null
-  const rawPath = stripFileProtocol(stripHashAndQuery(href))
-  const decoded = safeDecodeURIComponent(rawPath)
-  return decoded || rawPath || null
-}
+  if (!href) return null;
+  const resolved = resolveLocalFilePath ? resolveLocalFilePath(href, text) : null;
+  if (resolved) return resolved;
+  if (!isLikelyLocalFilePath(href)) return null;
+  const rawPath = stripFileProtocol(stripHashAndQuery(href));
+  const decoded = safeDecodeURIComponent(rawPath);
+  return decoded || rawPath || null;
+};
 
 const findFallbackPathFromContext = (
   anchor: HTMLAnchorElement | null,
   fileName: string,
-  resolveLocalFilePath?: (href: string, text: string) => string | null,
+  resolveLocalFilePath?: (href: string, text: string) => string | null
 ): string | null => {
-  const trimmedName = fileName.trim()
+  const trimmedName = fileName.trim();
   if (!trimmedName || trimmedName.includes('/') || trimmedName.includes('\\')) {
-    return null
+    return null;
   }
 
-  if (!anchor || typeof anchor.closest !== 'function') return null
-  const container = anchor.closest('.markdown-content')
-  if (!container) return null
+  if (!anchor || typeof anchor.closest !== 'function') return null;
+  const container = anchor.closest('.markdown-content');
+  if (!container) return null;
 
-  const anchors = Array.from(container.querySelectorAll('a'))
-  const index = anchors.indexOf(anchor)
-  if (index <= 0) return null
+  const anchors = Array.from(container.querySelectorAll('a'));
+  const index = anchors.indexOf(anchor);
+  if (index <= 0) return null;
 
   for (let i = index - 1; i >= 0; i -= 1) {
-    const candidate = anchors[i] as HTMLAnchorElement
-    const candidateHref = candidate.getAttribute('href')
-    const candidateText = candidate.textContent ?? ''
-    const basePath = getLocalPathFromLink(candidateHref, candidateText, resolveLocalFilePath)
+    const candidate = anchors[i] as HTMLAnchorElement;
+    const candidateHref = candidate.getAttribute('href');
+    const candidateText = candidate.textContent ?? '';
+    const basePath = getLocalPathFromLink(candidateHref, candidateText, resolveLocalFilePath);
     if (!basePath || !looksLikeDirectory(basePath)) {
-      continue
+      continue;
     }
 
-    const normalizedBase = basePath.replace(/[\\/]+$/, '')
-    return `${normalizedBase}/${trimmedName}`
+    const normalizedBase = basePath.replace(/[\\/]+$/, '');
+    return `${normalizedBase}/${trimmedName}`;
   }
 
-  return null
-}
+  return null;
+};
 
 const createMarkdownComponents = (resolveLocalFilePath?: (href: string, text: string) => string | null) => ({
   p: ({ node, className, children, ...props }: any) => (
@@ -474,51 +474,51 @@ const createMarkdownComponents = (resolveLocalFilePath?: (href: string, text: st
   ),
   img: ({ node, className, src, alt, ...props }: any) => {
     const resolvedSrc =
-      typeof src === 'string' && src.startsWith('file://') ? src.replace(/^file:\/\//, 'localfile://') : src
-    return <img className="max-w-full h-auto rounded-xl my-4" src={resolvedSrc} alt={alt} {...props} />
+      typeof src === 'string' && src.startsWith('file://') ? src.replace(/^file:\/\//, 'localfile://') : src;
+    return <img className="max-w-full h-auto rounded-xl my-4" src={resolvedSrc} alt={alt} {...props} />;
   },
   hr: ({ node, ...props }: any) => (
     <hr className="my-5 dark:border-claude-darkBorder border-claude-border" {...props} />
   ),
   a: ({ node, href, className, children, ...props }: any) => {
     if (typeof href === 'string' && href.startsWith('#artifact-')) {
-      return null
+      return null;
     }
 
-    const hrefValue = typeof href === 'string' ? href.trim() : ''
-    const isExternalLink = !!hrefValue && isExternalHref(hrefValue)
-    const linkText = Array.isArray(children) ? children.join('') : String(children ?? '')
+    const hrefValue = typeof href === 'string' ? href.trim() : '';
+    const isExternalLink = !!hrefValue && isExternalHref(hrefValue);
+    const linkText = Array.isArray(children) ? children.join('') : String(children ?? '');
     const resolvedPath =
-      hrefValue && !isExternalLink && resolveLocalFilePath ? resolveLocalFilePath(hrefValue, linkText) : null
-    const isLocalFilePath = !!hrefValue && !isExternalLink && (resolvedPath || isLikelyLocalFilePath(hrefValue))
+      hrefValue && !isExternalLink && resolveLocalFilePath ? resolveLocalFilePath(hrefValue, linkText) : null;
+    const isLocalFilePath = !!hrefValue && !isExternalLink && (resolvedPath || isLikelyLocalFilePath(hrefValue));
 
     if (isLocalFilePath) {
-      const rawPath = resolvedPath ?? stripFileProtocol(stripHashAndQuery(hrefValue))
-      const decodedPath = safeDecodeURIComponent(rawPath)
-      const filePath = decodedPath || rawPath
+      const rawPath = resolvedPath ?? stripFileProtocol(stripHashAndQuery(hrefValue));
+      const decodedPath = safeDecodeURIComponent(rawPath);
+      const filePath = decodedPath || rawPath;
 
       const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-        e.preventDefault()
-        const anchor = e.currentTarget
+        e.preventDefault();
+        const anchor = e.currentTarget;
         try {
-          const result = await window.electron.shell.openPath(filePath)
+          const result = await window.electron.shell.openPath(filePath);
           if (result?.success) {
-            return
+            return;
           }
 
-          const fallbackPath = findFallbackPathFromContext(anchor, linkText, resolveLocalFilePath)
+          const fallbackPath = findFallbackPathFromContext(anchor, linkText, resolveLocalFilePath);
           if (fallbackPath) {
-            const fallbackResult = await window.electron.shell.openPath(fallbackPath)
+            const fallbackResult = await window.electron.shell.openPath(fallbackPath);
             if (!fallbackResult?.success) {
-              console.error('Failed to open file (fallback):', fallbackPath, fallbackResult?.error)
+              console.error('Failed to open file (fallback):', fallbackPath, fallbackResult?.error);
             }
           } else {
-            console.error('Failed to open file:', filePath, result?.error)
+            console.error('Failed to open file:', filePath, result?.error);
           }
         } catch (error) {
-          console.error('Failed to open file:', filePath, error)
+          console.error('Failed to open file:', filePath, error);
         }
-      }
+      };
 
       return (
         <a
@@ -535,22 +535,22 @@ const createMarkdownComponents = (resolveLocalFilePath?: (href: string, text: st
             <DocumentIcon className="h-3.5 w-3.5 inline" />
           )}
         </a>
-      )
+      );
     }
 
     if (isExternalLink) {
       const handleExternalClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-        const openExternal = (window as any)?.electron?.shell?.openExternal
+        const openExternal = (window as any)?.electron?.shell?.openExternal;
         if (typeof openExternal !== 'function') {
-          return
+          return;
         }
 
-        e.preventDefault()
-        const opened = await openExternalViaDefaultBrowser(hrefValue)
+        e.preventDefault();
+        const opened = await openExternalViaDefaultBrowser(hrefValue);
         if (!opened) {
-          openExternalViaAnchorFallback(hrefValue)
+          openExternalViaAnchorFallback(hrefValue);
         }
-      }
+      };
 
       return (
         <a
@@ -563,7 +563,7 @@ const createMarkdownComponents = (resolveLocalFilePath?: (href: string, text: st
         >
           {children}
         </a>
-      )
+      );
     }
 
     return (
@@ -576,20 +576,20 @@ const createMarkdownComponents = (resolveLocalFilePath?: (href: string, text: st
       >
         {children}
       </a>
-    )
+    );
   },
-})
+});
 
 interface MarkdownContentProps {
-  content: string
-  className?: string
-  resolveLocalFilePath?: (href: string, text: string) => string | null
+  content: string;
+  className?: string;
+  resolveLocalFilePath?: (href: string, text: string) => string | null;
 }
 
 const MarkdownContent: React.FC<MarkdownContentProps> = React.memo(
   ({ content, className = '', resolveLocalFilePath }) => {
-    const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath])
-    const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content])
+    const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath]);
+    const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
     return (
       <div className={`markdown-content text-[15px] leading-6 ${className}`}>
         <ReactMarkdown
@@ -601,10 +601,10 @@ const MarkdownContent: React.FC<MarkdownContentProps> = React.memo(
           {normalizedContent}
         </ReactMarkdown>
       </div>
-    )
-  },
-)
+    );
+  }
+);
 
-MarkdownContent.displayName = 'MarkdownContent'
+MarkdownContent.displayName = 'MarkdownContent';
 
-export default MarkdownContent
+export default MarkdownContent;
