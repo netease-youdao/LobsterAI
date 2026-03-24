@@ -3342,6 +3342,147 @@ if (!gotTheLock) {
     }
   });
 
+  // File browser IPC handlers
+  const HIDDEN_ENTRIES = new Set(['node_modules', '.git', '__pycache__', '.DS_Store', 'Thumbs.db', '.venv', 'dist-electron']);
+  const BINARY_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.mp3', '.mp4', '.wav', '.mov', '.avi', '.zip', '.tar', '.gz', '.rar', '.7z', '.exe', '.dll', '.so', '.dylib', '.woff', '.woff2', '.ttf', '.eot', '.pdf', '.sqlite', '.db']);
+  const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
+    '.ts': 'typescript', '.tsx': 'tsx', '.js': 'javascript', '.jsx': 'jsx',
+    '.json': 'json', '.md': 'markdown', '.html': 'html', '.css': 'css',
+    '.scss': 'scss', '.less': 'less', '.py': 'python', '.rb': 'ruby',
+    '.go': 'go', '.rs': 'rust', '.java': 'java', '.kt': 'kotlin',
+    '.swift': 'swift', '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
+    '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash', '.yml': 'yaml', '.yaml': 'yaml',
+    '.xml': 'xml', '.sql': 'sql', '.graphql': 'graphql', '.vue': 'vue',
+    '.svelte': 'svelte', '.toml': 'toml', '.ini': 'ini', '.env': 'bash',
+    '.gitignore': 'bash', '.dockerfile': 'dockerfile',
+  };
+
+  ipcMain.handle(
+    'files:listDirectory',
+    async (_event, options?: { dirPath?: string; showHidden?: boolean }) => {
+      try {
+        const config = getCoworkStore().getConfig();
+        const cwd = config.workingDirectory;
+        if (!cwd) {
+          return { success: false, error: 'No working directory configured', entries: [] };
+        }
+
+        const targetDir = options?.dirPath
+          ? path.resolve(options.dirPath)
+          : path.resolve(cwd);
+
+        // Security: ensure target is within cwd
+        const resolvedCwd = path.resolve(cwd);
+        if (!targetDir.startsWith(resolvedCwd + path.sep) && targetDir !== resolvedCwd) {
+          return { success: false, error: 'Path outside working directory', entries: [] };
+        }
+
+        const dirents = await fs.promises.readdir(targetDir, { withFileTypes: true });
+        const entries: Array<{
+          name: string;
+          path: string;
+          isDirectory: boolean;
+          size: number;
+          modifiedAt: number;
+        }> = [];
+
+        for (const dirent of dirents) {
+          if (!options?.showHidden && (dirent.name.startsWith('.') || HIDDEN_ENTRIES.has(dirent.name))) {
+            continue;
+          }
+          try {
+            const fullPath = path.join(targetDir, dirent.name);
+            const stat = await fs.promises.stat(fullPath);
+            entries.push({
+              name: dirent.name,
+              path: fullPath,
+              isDirectory: dirent.isDirectory(),
+              size: stat.size,
+              modifiedAt: stat.mtimeMs,
+            });
+          } catch {
+            // Skip entries that can't be stat'd (broken symlinks, etc.)
+          }
+        }
+
+        // Sort: directories first, then files, each group alphabetically
+        entries.sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+
+        return { success: true, entries };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error', entries: [] };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    'files:readFileContent',
+    async (_event, options?: { filePath?: string; maxSize?: number }) => {
+      try {
+        const filePath = options?.filePath;
+        if (!filePath) {
+          return { success: false, error: 'No file path provided' };
+        }
+
+        const config = getCoworkStore().getConfig();
+        const cwd = config.workingDirectory;
+        if (!cwd) {
+          return { success: false, error: 'No working directory configured' };
+        }
+
+        const resolved = path.resolve(filePath);
+        const resolvedCwd = path.resolve(cwd);
+        if (!resolved.startsWith(resolvedCwd + path.sep) && resolved !== resolvedCwd) {
+          return { success: false, error: 'Path outside working directory' };
+        }
+
+        const stat = await fs.promises.stat(resolved);
+        const maxSize = options?.maxSize ?? 512 * 1024; // 512KB default
+
+        const ext = path.extname(resolved).toLowerCase();
+        if (BINARY_EXTENSIONS.has(ext)) {
+          return {
+            success: true,
+            content: null,
+            isBinary: true,
+            size: stat.size,
+            language: null,
+          };
+        }
+
+        const isTruncated = stat.size > maxSize;
+        const buffer = Buffer.alloc(Math.min(stat.size, maxSize));
+        const fd = await fs.promises.open(resolved, 'r');
+        try {
+          await fd.read(buffer, 0, buffer.length, 0);
+        } finally {
+          await fd.close();
+        }
+
+        const content = buffer.toString('utf-8');
+        const baseName = path.basename(resolved).toLowerCase();
+        const language = EXTENSION_LANGUAGE_MAP[ext]
+          || (baseName === 'dockerfile' ? 'dockerfile' : null)
+          || (baseName === 'makefile' ? 'makefile' : null)
+          || null;
+
+        return {
+          success: true,
+          content,
+          isBinary: false,
+          size: stat.size,
+          isTruncated,
+          language,
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+      }
+    }
+  );
+
   // App update download & install
   ipcMain.handle('appUpdate:download', async (event, url: string) => {
     try {

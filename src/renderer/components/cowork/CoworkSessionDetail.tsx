@@ -15,6 +15,8 @@ import {
   PhotoIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
+import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
+import FilePanel from './FilePanel';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -1314,6 +1316,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
 
+  // File panel state
+  const [isFilePanelOpen, setIsFilePanelOpen] = useState(false);
+
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
@@ -1910,17 +1915,32 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
         {/* Right side: Folder + Menu */}
         <div className="non-draggable flex items-center gap-1">
-          {/* Folder button */}
+          {/* Folder button - toggles file panel */}
           <button
             type="button"
-            onClick={handleOpenFolder}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-            aria-label={i18nService.t('coworkOpenFolder')}
+            onClick={() => setIsFilePanelOpen(!isFilePanelOpen)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition-colors ${
+              isFilePanelOpen
+                ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text'
+                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text'
+            }`}
+            aria-label={i18nService.t('filePanelTitle')}
           >
             <FolderIcon className="h-4 w-4" />
             <span className="max-w-[120px] truncate text-xs">
               {truncatePath(currentSession.cwd)}
             </span>
+          </button>
+
+          {/* Open in system button */}
+          <button
+            type="button"
+            onClick={handleOpenFolder}
+            className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+            aria-label={i18nService.t('filePanelOpenInSystem')}
+            title={i18nService.t('filePanelOpenInSystem')}
+          >
+            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
           </button>
 
           {/* Menu button */}
@@ -2030,52 +2050,64 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         </div>
       )}
 
-      {/* Messages */}
-      <div className="relative flex-1 min-h-0">
-        <div
-          ref={scrollContainerRef}
-          onScroll={handleMessagesScroll}
-          className="h-full min-h-0 overflow-y-auto pt-3"
-        >
-          {renderConversationTurns()}
-          <div className="h-20" />
+      {/* Messages + File Panel */}
+      <div className="relative flex-1 min-h-0 flex">
+        {/* Messages */}
+        <div className="relative flex-1 min-h-0">
+          <div
+            ref={scrollContainerRef}
+            onScroll={handleMessagesScroll}
+            className="h-full min-h-0 overflow-y-auto pt-3"
+          >
+            {renderConversationTurns()}
+            <div className="h-20" />
+          </div>
+
+          {/* Turn Navigation Buttons */}
+          {turns.length > 1 && isScrollable && (
+            <div
+              className={`absolute right-6 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
+
+                dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
+                border dark:border-claude-darkBorder border-claude-border
+                ${showTurnNav ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+            >
+              <button
+                type="button"
+                onClick={() => currentTurnIndex > 0 && navigateToTurn('prev')}
+                className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
+                  ${currentTurnIndex <= 0
+                    ? 'opacity-30 cursor-default'
+                    : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+                </svg>
+              </button>
+              <div className="dark:border-claude-darkBorder border-claude-border border-t" />
+              <button
+                type="button"
+                onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurn('next')}
+                className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
+                  ${currentTurnIndex >= turns.length - 1
+                    ? 'opacity-30 cursor-default'
+                    : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Turn Navigation Buttons */}
-        {turns.length > 1 && isScrollable && (
-          <div
-            className={`absolute right-6 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
-
-              dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
-              border dark:border-claude-darkBorder border-claude-border
-              ${showTurnNav ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-          >
-            <button
-              type="button"
-              onClick={() => currentTurnIndex > 0 && navigateToTurn('prev')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex <= 0
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-              </svg>
-            </button>
-            <div className="dark:border-claude-darkBorder border-claude-border border-t" />
-            <button
-              type="button"
-              onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurn('next')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex >= turns.length - 1
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-              </svg>
-            </button>
-          </div>
+        {/* File Panel */}
+        {isFilePanelOpen && currentSession?.cwd && (
+          <FilePanel
+            cwd={currentSession.cwd}
+            onClose={() => setIsFilePanelOpen(false)}
+            onOpenInSystem={handleOpenFolder}
+          />
         )}
       </div>
 

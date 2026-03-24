@@ -258,6 +258,12 @@ contextBridge.exposeInMainWorld('electron', {
     showItemInFolder: (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   },
+  files: {
+    listDirectory: (options?: { dirPath?: string; showHidden?: boolean }) =>
+      ipcRenderer.invoke('files:listDirectory', options),
+    readFileContent: (options: { filePath: string; maxSize?: number }) =>
+      ipcRenderer.invoke('files:readFileContent', options),
+  },
   autoLaunch: {
     get: () => ipcRenderer.invoke('app:getAutoLaunch'),
     set: (enabled: boolean) => ipcRenderer.invoke('app:setAutoLaunch', enabled),
