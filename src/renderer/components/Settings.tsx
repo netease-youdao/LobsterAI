@@ -200,6 +200,41 @@ const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
 const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
 const ABOUT_SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
 
+// MiniMax Portal OAuth constants
+const MINIMAX_OAUTH_CLIENT_ID = '78257093-7e40-4613-99e0-527b14b39113';
+const MINIMAX_OAUTH_SCOPE = 'group_id profile model.completion';
+const MINIMAX_OAUTH_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:user_code';
+const MINIMAX_BASE_URL_CN = 'https://api.minimaxi.com/anthropic';
+const MINIMAX_BASE_URL_GLOBAL = 'https://api.minimax.io/anthropic';
+const MINIMAX_CODE_ENDPOINT_CN = 'https://api.minimaxi.com/oauth/code';
+const MINIMAX_CODE_ENDPOINT_GLOBAL = 'https://api.minimax.io/oauth/code';
+const MINIMAX_TOKEN_ENDPOINT_CN = 'https://api.minimaxi.com/oauth/token';
+const MINIMAX_TOKEN_ENDPOINT_GLOBAL = 'https://api.minimax.io/oauth/token';
+
+type MiniMaxRegion = 'cn' | 'global';
+type MiniMaxOAuthPhase =
+  | { kind: 'idle' }
+  | { kind: 'requesting_code' }
+  | { kind: 'pending'; userCode: string; verificationUri: string }
+  | { kind: 'success' }
+  | { kind: 'error'; message: string };
+
+async function generateMiniMaxPkce(): Promise<{ verifier: string; challenge: string; state: string }> {
+  const verifierArray = new Uint8Array(32);
+  crypto.getRandomValues(verifierArray);
+  const verifier = btoa(String.fromCharCode(...verifierArray))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const encoded = new TextEncoder().encode(verifier);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const stateArray = new Uint8Array(16);
+  crypto.getRandomValues(stateArray);
+  const state = btoa(String.fromCharCode(...stateArray))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  return { verifier, challenge, state };
+}
+
 const copyTextFallback = (text: string): boolean => {
   const textarea = document.createElement('textarea');
   textarea.value = text;
@@ -383,6 +418,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
+  const [preventSleep, setPreventSleepState] = useState(false);
+  const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(notice ?? null);
@@ -399,10 +436,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
   const [showApiKey, setShowApiKey] = useState(false);
 
+  // MiniMax OAuth state
+  const [minimaxOAuthPhase, setMinimaxOAuthPhase] = useState<MiniMaxOAuthPhase>({ kind: 'idle' });
+  const [minimaxOAuthRegion, setMinimaxOAuthRegion] = useState<MiniMaxRegion>('cn');
+  const minimaxOAuthCancelRef = useRef(false);
+
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
 
-  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled);
+  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'minimax' && providers.minimax.authType === 'oauth');
   
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
@@ -603,7 +645,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       }).catch(err => {
         console.error('Failed to load auto-launch setting:', err);
       });
-      
+
+      // Load prevent-sleep setting
+      window.electron.preventSleep.get().then(({ enabled }) => {
+        setPreventSleepState(enabled);
+      }).catch(err => {
+        console.error('Failed to load prevent-sleep setting:', err);
+      });
+
       // Set up providers based on saved config
       if (config.api) {
         // For backward compatibility with older config
@@ -943,6 +992,176 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         },
       };
     });
+  };
+
+  const handleMiniMaxDeviceLogin = async (region: MiniMaxRegion) => {
+    minimaxOAuthCancelRef.current = false;
+    setMinimaxOAuthPhase({ kind: 'requesting_code' });
+
+    const codeEndpoint = region === 'cn' ? MINIMAX_CODE_ENDPOINT_CN : MINIMAX_CODE_ENDPOINT_GLOBAL;
+    const tokenEndpoint = region === 'cn' ? MINIMAX_TOKEN_ENDPOINT_CN : MINIMAX_TOKEN_ENDPOINT_GLOBAL;
+    const defaultBaseUrl = region === 'cn' ? MINIMAX_BASE_URL_CN : MINIMAX_BASE_URL_GLOBAL;
+
+    try {
+      const { verifier, challenge, state } = await generateMiniMaxPkce();
+
+      const codeBody = [
+        'response_type=code',
+        `client_id=${encodeURIComponent(MINIMAX_OAUTH_CLIENT_ID)}`,
+        `scope=${encodeURIComponent(MINIMAX_OAUTH_SCOPE)}`,
+        `code_challenge=${encodeURIComponent(challenge)}`,
+        'code_challenge_method=S256',
+        `state=${encodeURIComponent(state)}`,
+      ].join('&');
+
+      const codeRes = await window.electron.api.fetch({
+        url: codeEndpoint,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+        },
+        body: codeBody,
+      });
+
+      if (!codeRes.ok) {
+        throw new Error(`MiniMax OAuth authorization failed: ${codeRes.status}`);
+      }
+
+      const codePayload = (codeRes.data ?? {}) as {
+        user_code?: string;
+        verification_uri?: string;
+        expired_in?: number;
+        interval?: number;
+        state?: string;
+        error?: string;
+      };
+
+      if (!codePayload.user_code || !codePayload.verification_uri) {
+        throw new Error(codePayload.error ?? 'MiniMax OAuth returned incomplete authorization payload');
+      }
+
+      if (codePayload.state !== state) {
+        throw new Error('MiniMax OAuth state mismatch: possible CSRF attack or session corruption');
+      }
+
+      try {
+        await window.electron.shell.openExternal(codePayload.verification_uri);
+      } catch { /* ignore: user can open manually */ }
+
+      setMinimaxOAuthPhase({
+        kind: 'pending',
+        userCode: codePayload.user_code,
+        verificationUri: codePayload.verification_uri,
+      });
+
+      let pollIntervalMs = codePayload.interval ?? 2000;
+      const expireTimeMs = codePayload.expired_in ?? (Date.now() + 5 * 60 * 1000);
+
+      while (Date.now() < expireTimeMs) {
+        if (minimaxOAuthCancelRef.current) {
+          setMinimaxOAuthPhase({ kind: 'idle' });
+          return;
+        }
+
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+
+        if (minimaxOAuthCancelRef.current) {
+          setMinimaxOAuthPhase({ kind: 'idle' });
+          return;
+        }
+
+        const tokenBody = [
+          `grant_type=${encodeURIComponent(MINIMAX_OAUTH_GRANT_TYPE)}`,
+          `client_id=${encodeURIComponent(MINIMAX_OAUTH_CLIENT_ID)}`,
+          `user_code=${encodeURIComponent(codePayload.user_code)}`,
+          `code_verifier=${encodeURIComponent(verifier)}`,
+        ].join('&');
+
+        const tokenRes = await window.electron.api.fetch({
+          url: tokenEndpoint,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+          },
+          body: tokenBody,
+        });
+
+        const tokenPayload = (tokenRes.data ?? {}) as {
+          status?: string;
+          access_token?: string;
+          refresh_token?: string;
+          expired_in?: number;
+          resource_url?: string;
+          notification_message?: string;
+          base_resp?: { status_code?: number; status_msg?: string };
+        };
+
+        if (tokenPayload.status === 'error') {
+          throw new Error(tokenPayload.base_resp?.status_msg ?? 'MiniMax OAuth error');
+        }
+
+        if (tokenPayload.status === 'success') {
+          if (!tokenPayload.access_token || !tokenPayload.refresh_token) {
+            throw new Error('MiniMax OAuth returned incomplete token payload');
+          }
+
+          let baseUrl = (tokenPayload.resource_url ?? '').trim();
+          if (baseUrl && !baseUrl.startsWith('http')) {
+            baseUrl = `https://${baseUrl}`;
+          }
+          if (!baseUrl) {
+            baseUrl = defaultBaseUrl;
+          }
+
+          setProviders(prev => ({
+            ...prev,
+            minimax: {
+              ...prev.minimax,
+              enabled: true,
+              apiKey: tokenPayload.access_token!,
+              baseUrl,
+              apiFormat: 'anthropic',
+              authType: 'oauth',
+              oauthRefreshToken: tokenPayload.refresh_token,
+              oauthTokenExpiresAt: tokenPayload.expired_in,
+              models: [...(defaultConfig.providers?.minimax.models ?? [])],
+            },
+          }));
+
+          setMinimaxOAuthPhase({ kind: 'success' });
+          setTimeout(() => setMinimaxOAuthPhase({ kind: 'idle' }), 1500);
+          return;
+        }
+
+        // Still pending — back off gradually
+        pollIntervalMs = Math.min(pollIntervalMs * 1.5, 10000);
+      }
+
+      throw new Error('MiniMax OAuth timed out waiting for authorization');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setMinimaxOAuthPhase({ kind: 'error', message });
+    }
+  };
+
+  const handleCancelMiniMaxLogin = () => {
+    minimaxOAuthCancelRef.current = true;
+    setMinimaxOAuthPhase({ kind: 'idle' });
+  };
+
+  const handleMiniMaxOAuthLogout = () => {
+    setProviders(prev => ({
+      ...prev,
+      minimax: {
+        ...prev.minimax,
+        apiKey: '',
+        oauthRefreshToken: undefined,
+        oauthTokenExpiresAt: undefined,
+      },
+    }));
+    setMinimaxOAuthPhase({ kind: 'idle' });
   };
 
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
@@ -1917,6 +2136,55 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               </label>
             </div>
 
+            {/* Prevent Sleep Section */}
+            <div>
+              <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('preventSleep')}
+              </h4>
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-sm dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                  {i18nService.t('preventSleepDescription')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={preventSleep}
+                  onClick={async () => {
+                    if (isUpdatingPreventSleep) return;
+                    const next = !preventSleep;
+                    setIsUpdatingPreventSleep(true);
+                    try {
+                      const result = await window.electron.preventSleep.set(next);
+                      if (result.success) {
+                        setPreventSleepState(next);
+                      } else {
+                        setError(result.error || 'Failed to update prevent-sleep setting');
+                      }
+                    } catch (err) {
+                      console.error('Failed to set prevent-sleep:', err);
+                      setError('Failed to update prevent-sleep setting');
+                    } finally {
+                      setIsUpdatingPreventSleep(false);
+                    }
+                  }}
+                  disabled={isUpdatingPreventSleep}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    isUpdatingPreventSleep ? 'opacity-50 cursor-not-allowed' : ''
+                  } ${
+                    preventSleep
+                      ? 'bg-claude-accent'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      preventSleep ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+
             {/* System proxy Section */}
             <div>
               <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
@@ -2335,7 +2603,217 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               </div>
 
-              {providerRequiresApiKey(activeProvider) && (
+              {/* MiniMax OAuth auth section */}
+              {activeProvider === 'minimax' && (
+                <div className="space-y-3">
+                  {/* Auth type tabs */}
+                  <div>
+                    <div className="flex rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border mb-3">
+                      <button
+                        type="button"
+                        onClick={() => setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'oauth' } }))}
+                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${providers.minimax.authType === 'oauth' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                      >
+                        {i18nService.t('minimaxOAuthTabOAuth')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'apikey' } }));
+                          setMinimaxOAuthPhase({ kind: 'idle' });
+                        }}
+                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${providers.minimax.authType !== 'oauth' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                      >
+                        {i18nService.t('minimaxOAuthTabApiKey')}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* API Key mode */}
+                  {providers.minimax.authType !== 'oauth' && (
+                    <div className="relative">
+                      <input
+                        type={showApiKey ? 'text' : 'password'}
+                        id="minimax-apiKey"
+                        value={providers.minimax.apiKey}
+                        onChange={(e) => handleProviderConfigChange('minimax', 'apiKey', e.target.value)}
+                        className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-xs"
+                        placeholder={i18nService.t('apiKeyPlaceholder')}
+                      />
+                      <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                        {providers.minimax.apiKey && (
+                          <button
+                            type="button"
+                            onClick={() => handleProviderConfigChange('minimax', 'apiKey', '')}
+                            className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                            title={i18nService.t('clear') || 'Clear'}
+                          >
+                            <XCircleIconSolid className="h-4 w-4" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                          className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                          title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                        >
+                          {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* OAuth mode */}
+                  {providers.minimax.authType === 'oauth' && (
+                    <div className="space-y-2">
+                      {/* Already logged in */}
+                      {minimaxOAuthPhase.kind === 'idle' && providers.minimax.apiKey && (
+                        <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20 space-y-2">
+                          <p className="text-xs text-green-600 dark:text-green-400 font-medium">
+                            {i18nService.t('minimaxOAuthLoggedIn')}
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthRelogin')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleMiniMaxOAuthLogout}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthLogout')}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Not logged in yet — show region selector + login button */}
+                      {minimaxOAuthPhase.kind === 'idle' && !providers.minimax.apiKey && (
+                        <div className="space-y-2">
+                          <div>
+                            <label className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
+                              {i18nService.t('minimaxOAuthRegionLabel')}
+                            </label>
+                            <div className="flex rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border">
+                              <button
+                                type="button"
+                                onClick={() => setMinimaxOAuthRegion('cn')}
+                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'cn' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                              >
+                                {i18nService.t('minimaxOAuthRegionCN')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMinimaxOAuthRegion('global')}
+                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'global' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                              >
+                                {i18nService.t('minimaxOAuthRegionGlobal')}
+                              </button>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
+                            className="w-full py-2 text-xs font-medium rounded-xl bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+                          >
+                            {i18nService.t('minimaxOAuthLogin')}
+                          </button>
+                          <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                            {i18nService.t('minimaxOAuthHint')}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Requesting code */}
+                      {minimaxOAuthPhase.kind === 'requesting_code' && (
+                        <div className="p-3 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border dark:border-claude-darkBorder border-claude-border">
+                          <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                            {i18nService.t('minimaxOAuthLoggingIn')}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Pending — show user code */}
+                      {minimaxOAuthPhase.kind === 'pending' && (
+                        <div className="p-3 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border dark:border-claude-darkBorder border-claude-border space-y-2">
+                          <p className="text-xs dark:text-claude-darkText text-claude-text font-medium">
+                            {i18nService.t('minimaxOAuthOpenBrowserHint')}
+                          </p>
+                          <div>
+                            <span className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                              {i18nService.t('minimaxOAuthUserCode')}:&nbsp;
+                            </span>
+                            <code className="text-xs font-mono text-claude-accent">
+                              {minimaxOAuthPhase.userCode}
+                            </code>
+                          </div>
+                          <a
+                            href={minimaxOAuthPhase.verificationUri}
+                            onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(minimaxOAuthPhase.verificationUri); }}
+                            className="block text-[11px] text-claude-accent underline truncate"
+                          >
+                            {minimaxOAuthPhase.verificationUri}
+                          </a>
+                          <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                            {i18nService.t('minimaxOAuthStatusPending')}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleCancelMiniMaxLogin}
+                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                          >
+                            {i18nService.t('minimaxOAuthCancel')}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Success */}
+                      {minimaxOAuthPhase.kind === 'success' && (
+                        <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20">
+                          <p className="text-xs text-green-600 dark:text-green-400 font-medium">
+                            {i18nService.t('minimaxOAuthStatusSuccess')}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Error */}
+                      {minimaxOAuthPhase.kind === 'error' && (
+                        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 space-y-2">
+                          <p className="text-xs text-red-600 dark:text-red-400 font-medium">
+                            {i18nService.t('minimaxOAuthStatusError')}
+                          </p>
+                          <p className="text-[11px] text-red-600/80 dark:text-red-400/80 break-words">
+                            {minimaxOAuthPhase.message}
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthRelogin')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMinimaxOAuthPhase({ kind: 'idle' })}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthCancel')}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Standard API key section for non-MiniMax providers */}
+              {providerRequiresApiKey(activeProvider) && activeProvider !== 'minimax' && (
                 <div>
                   <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                     {i18nService.t('apiKey')}
@@ -2373,6 +2851,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               )}
 
+              {!(activeProvider === 'minimax' && providers.minimax.authType === 'oauth') && (
               <div>
                 <label htmlFor={`${activeProvider}-baseUrl`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                   {i18nService.t('baseUrl')}
@@ -2465,9 +2944,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </div>
                 )}
               </div>
+              )}
 
               {/* API 格式选择器 */}
-              {shouldShowApiFormatSelector(activeProvider) && (
+              {shouldShowApiFormatSelector(activeProvider) && !(activeProvider === 'minimax' && providers.minimax.authType === 'oauth') && (
                 <div>
                   <label htmlFor={`${activeProvider}-apiFormat`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                     {i18nService.t('apiFormat')}
@@ -2619,6 +3099,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               )}
 
               {/* 测试连接按钮 */}
+              {!(activeProvider === 'minimax' && providers.minimax.authType === 'oauth') && (
               <div className="flex items-center space-x-3">
                 <button
                   type="button"
@@ -2630,6 +3111,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   {isTesting ? i18nService.t('testing') : i18nService.t('testConnection')}
                 </button>
               </div>
+              )}
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
@@ -2648,18 +3130,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
                 {/* Models List */}
                 <div className="space-y-1.5 max-h-60 overflow-y-auto">
-                  {providers[activeProvider].models?.map(model => (
+                  {(providers[activeProvider].models ?? []).map(model => (
                     <div
                       key={model.id}
                       className="dark:bg-claude-darkSurface/50 bg-claude-surface/50 p-2 rounded-xl dark:border-claude-darkBorder border-claude-border border transition-colors hover:border-claude-accent group"
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-1.5">
-                          <div className="w-1.5 h-1.5 rounded-full bg-green-400"></div>
-                          <span className="dark:text-claude-darkText text-claude-text font-medium text-[11px]">{model.name}</span>
+                      <div className="flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <div className="w-1.5 h-1.5 shrink-0 rounded-full bg-green-400"></div>
+                          <div className="min-w-0">
+                            <div className="dark:text-claude-darkText text-claude-text font-medium text-[11px] truncate">{model.name}</div>
+                            <div className="text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">{model.id}</div>
+                          </div>
                         </div>
-                        <div className="flex items-center space-x-1">
-                          <span className="text-[10px] px-1.5 py-0.5 bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover rounded-md dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.id}</span>
+                        <div className="flex items-center shrink-0 space-x-1">
                           {model.supportsImage && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
                               {i18nService.t('imageInput')}

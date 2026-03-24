@@ -2085,26 +2085,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       {/* Input Area */}
       <div className="p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
-          {remoteManaged ? (
-            <div className="flex items-center gap-2 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface px-4 py-3">
-              <InformationCircleIcon className="h-5 w-5 shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-              <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('coworkRemoteManagedPlaceholder')}
-              </span>
-            </div>
-          ) : (
-            <CoworkPromptInput
-              onSubmit={onContinue}
-              onStop={onStop}
-              isStreaming={isStreaming}
-              placeholder={i18nService.t('coworkContinuePlaceholder')}
-              disabled={false}
-              onManageSkills={onManageSkills}
-              size="large"
-              showModelSelector={true}
-              sessionId={currentSession?.id}
-            />
-          )}
+          <CoworkPromptInput
+            onSubmit={onContinue}
+            onStop={onStop}
+            isStreaming={isStreaming}
+            placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
+            disabled={remoteManaged}
+            size="large"
+            remoteManaged={remoteManaged}
+            onManageSkills={remoteManaged ? undefined : onManageSkills}
+            showModelSelector={!remoteManaged}
+            sessionId={currentSession?.id}
+          />
         </div>
       </div>
     </div>
