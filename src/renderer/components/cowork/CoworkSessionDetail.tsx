@@ -1872,6 +1872,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
 
+  // Wrap onContinue to reset auto-scroll when user sends a new message
+  const handleContinue = useCallback(
+    (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => {
+      setShouldAutoScroll(true);
+      const container = scrollContainerRef.current;
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
+      return onContinue(prompt, skillPrompt, imageAttachments);
+    },
+    [onContinue]
+  );
 
   if (!currentSession) {
     return null;
@@ -2202,7 +2214,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       <div className="p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
           <CoworkPromptInput
-            onSubmit={onContinue}
+            onSubmit={handleContinue}
             onStop={onStop}
             isStreaming={isStreaming}
             placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
