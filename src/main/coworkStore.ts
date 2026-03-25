@@ -883,12 +883,20 @@ export class CoworkStore {
     const memoryGuardLevelRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryGuardLevel']);
     const memoryUserMemoriesMaxItemsRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryUserMemoriesMaxItems']);
 
+    const executionModeRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['executionMode']);
+
     const normalizedAgentEngine = normalizeCoworkAgentEngineValue(agentEngineRow?.value);
+
+    const rawExecutionMode = executionModeRow?.value as CoworkExecutionMode | undefined;
+    const executionMode: CoworkExecutionMode =
+      rawExecutionMode === 'auto' || rawExecutionMode === 'sandbox' || rawExecutionMode === 'local'
+        ? rawExecutionMode
+        : 'local';
 
     return {
       workingDirectory: workingDirRow?.value || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
-      executionMode: 'local' as CoworkExecutionMode,
+      executionMode,
       agentEngine: normalizedAgentEngine,
       memoryEnabled: parseBooleanConfig(memoryEnabledRow?.value, DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
