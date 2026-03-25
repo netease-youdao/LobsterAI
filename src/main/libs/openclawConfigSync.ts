@@ -401,6 +401,17 @@ const buildProviderSelection = (options: {
     };
   }
 
+  // Providers that expose Anthropic-compatible endpoints but authenticate via
+  // Bearer token instead of the native Anthropic `x-api-key` header.
+  // When the selected API format is anthropic-messages AND the provider is one
+  // of these, we force `auth: 'bearer'` so OpenClaw sends
+  // `Authorization: Bearer <key>` instead of `x-api-key: <key>`.
+  const needsBearerForAnthropic = new Set(['qwen', 'volcengine', 'zhipu']);
+  const authMode: 'api-key' | 'bearer' =
+    providerApi === 'anthropic-messages' && needsBearerForAnthropic.has(providerName)
+      ? 'bearer'
+      : 'api-key';
+
   return {
     providerId: 'lobster',
     legacyModelId: options.modelId,
@@ -410,7 +421,7 @@ const buildProviderSelection = (options: {
       baseUrl: stripChatCompletionsSuffix(options.baseURL),
       api: providerApi,
       apiKey: '${LOBSTER_PROVIDER_API_KEY}',
-      auth: 'api-key',
+      auth: authMode,
       models: [
         {
           id: options.modelId,
