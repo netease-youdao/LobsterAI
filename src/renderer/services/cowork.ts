@@ -166,17 +166,19 @@ class CoworkService {
     const errorCleanup = cowork.onStreamError(({ sessionId, error }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
       // Surface the error as a visible message so the user knows what happened.
-      if (error) {
-        store.dispatch(addMessage({
-          sessionId,
-          message: {
-            id: `error-${Date.now()}`,
-            type: 'system',
-            content: classifyError(error),
-            timestamp: Date.now(),
-          },
-        }));
-      }
+      const errorContent = error
+        ? classifyError(error)
+        : i18nService.t('errorOccurred');
+      console.error('[CoworkService] Stream error:', { sessionId, rawError: error, displayError: errorContent });
+      store.dispatch(addMessage({
+        sessionId,
+        message: {
+          id: `error-${Date.now()}`,
+          type: 'system',
+          content: errorContent,
+          timestamp: Date.now(),
+        },
+      }));
     });
     this.streamListenerCleanups.push(errorCleanup);
 
@@ -276,7 +278,10 @@ class CoworkService {
     }
 
     store.dispatch(setStreaming(false));
-    console.error('Failed to start session:', result.error);
+
+    if (result.error) {
+      console.error('Failed to start session:', result.error);
+    }
     return null;
   }
 
@@ -304,6 +309,19 @@ class CoworkService {
       }
       if (result.code !== 'ENGINE_NOT_READY') {
         store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'error' }));
+        // Surface the error as a visible message so the user knows what happened.
+        const errorContent = result.error
+          ? classifyError(result.error)
+          : i18nService.t('errorOccurred');
+        store.dispatch(addMessage({
+          sessionId: options.sessionId,
+          message: {
+            id: `error-${Date.now()}`,
+            type: 'system',
+            content: errorContent,
+            timestamp: Date.now(),
+          },
+        }));
       }
       console.error('Failed to continue session:', result.error);
       return false;

@@ -1141,11 +1141,27 @@ export const AssistantTurnBlock: React.FC<{
     const content = mapDisplayText ? mapDisplayText(normalizedContent) : normalizedContent;
     if (!content.trim()) return null;
 
+    const isError = Boolean(message.metadata?.error)
+      || message.content?.startsWith('Error:')
+      || message.id?.startsWith('error-');
+
     return (
-      <div className="rounded-lg border dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/40 bg-claude-bg/60 px-3 py-2">
+      <div className={`rounded-lg border px-3 py-2 ${
+        isError
+          ? 'dark:border-red-500/30 border-red-300/70 dark:bg-red-950/30 bg-red-50/60'
+          : 'dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/40 bg-claude-bg/60'
+      }`}>
         <div className="flex items-start gap-2">
-          <InformationCircleIcon className="h-4 w-4 mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0" />
-          <div className="text-xs whitespace-pre-wrap dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          {isError ? (
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-red-500 flex-shrink-0" />
+          ) : (
+            <InformationCircleIcon className="h-4 w-4 mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0" />
+          )}
+          <div className={`text-xs whitespace-pre-wrap ${
+            isError
+              ? 'text-red-600 dark:text-red-400'
+              : 'dark:text-claude-darkTextSecondary text-claude-textSecondary'
+          }`}>
             {content}
           </div>
         </div>
