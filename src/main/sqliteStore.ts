@@ -109,6 +109,16 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_id ON cowork_messages(session_id);
     `);
 
+    // Performance indexes for session listing (#741)
+    // Session list is sorted by (pinned DESC, updated_at DESC) — cover this with a composite index.
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_sessions_pinned_updated ON cowork_sessions(pinned DESC, updated_at DESC);
+    `);
+    // Messages are often queried by session_id + sequence for ordered display.
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_messages_session_seq ON cowork_messages(session_id, sequence);
+    `);
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS cowork_config (
         key TEXT PRIMARY KEY,
