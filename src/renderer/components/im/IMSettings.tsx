@@ -139,6 +139,7 @@ const IMSettings: React.FC = () => {
   const [weixinQrStatus, setWeixinQrStatus] = useState<'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'>('idle');
   const [weixinQrUrl, setWeixinQrUrl] = useState<string>('');
   const [weixinQrError, setWeixinQrError] = useState<string>('');
+  const weixinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [localIp, setLocalIp] = useState<string>('');
   const isMountedRef = useRef(true);
 
@@ -253,6 +254,7 @@ const IMSettings: React.FC = () => {
   // Reset weixin QR login state when switching away from weixin
   useEffect(() => {
     if (activePlatform !== 'weixin') {
+      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
       setWeixinQrStatus('idle');
       setWeixinQrUrl('');
       setWeixinQrError('');
@@ -497,9 +499,18 @@ const IMSettings: React.FC = () => {
       setWeixinQrUrl(startResult.qrDataUrl);
       setWeixinQrStatus('showing');
 
+      // QR expires in ~2 minutes. Show error and let user retry.
+      if (weixinTimerRef.current) clearTimeout(weixinTimerRef.current);
+      weixinTimerRef.current = setTimeout(() => {
+        if (!isMountedRef.current) return;
+        setWeixinQrStatus('error');
+        setWeixinQrError(i18nService.t('imWeixinQrExpired'));
+      }, 120000);
+
       // Start polling for scan result
       setWeixinQrStatus('waiting');
       const waitResult = await window.electron.im.weixinQrLoginWait(startResult.sessionKey);
+      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
       if (!isMountedRef.current) return;
 
       if (waitResult.success && waitResult.connected) {
@@ -516,6 +527,7 @@ const IMSettings: React.FC = () => {
         setWeixinQrError(waitResult.message || i18nService.t('imWeixinQrFailed'));
       }
     } catch (err) {
+      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
       if (!isMountedRef.current) return;
       setWeixinQrStatus('error');
       setWeixinQrError(String(err));

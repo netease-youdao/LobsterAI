@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server-cron.ts b/src/gateway/server-cron.ts
+index 1f1cd1f535..67d4a644c0 100644
+--- a/src/gateway/server-cron.ts
++++ b/src/gateway/server-cron.ts
+@@ -291,7 +291,7 @@ export function buildGatewayCronService(params: {
+         message,
+         abortSignal,
+         agentId,
+-        sessionKey: `cron:${job.id}`,
++        sessionKey: job.sessionKey || `cron:${job.id}`,
+         lane: "cron",
+       });
+     },

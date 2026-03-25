@@ -83,8 +83,67 @@ interface ResolvedStdioCommand {
 }
 
 /**
- * Resolve a stdio MCP server command/args/env for the current platform,
- * rewriting node/npx/npm to Electron runtime when packaged.
+ * Check whether a system-installed Node.js runtime is available on the PATH.
+ * Caches the result for the lifetime of the process to avoid repeated lookups.
+ */
+let _systemNodePath: string | false | undefined;
+
+function findSystemNodePath(): string | null {
+  if (_systemNodePath !== undefined) {
+    return _systemNodePath || null;
+  }
+  try {
+    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+    const result = spawnSync(whichCmd, ['node'], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      windowsHide: true,
+    });
+    if (result.status === 0 && result.stdout) {
+      const resolved = result.stdout.trim().split(/\r?\n/)[0].trim();
+      if (resolved) {
+        _systemNodePath = resolved;
+        log('INFO', `System Node.js found: ${resolved}`);
+        return resolved;
+      }
+    }
+  } catch { /* ignore */ }
+  _systemNodePath = false;
+  log('INFO', 'System Node.js not found on PATH');
+  return null;
+}
+
+/**
+ * Check if a command is a node/npx/npm variant.
+ */
+function isNodeCommand(normalized: string): 'node' | 'npx' | 'npm' | null {
+  if (
+    normalized === 'node' || normalized === 'node.exe'
+    || normalized.endsWith('\\node.cmd') || normalized.endsWith('/node.cmd')
+  ) {
+    return 'node';
+  }
+  if (
+    normalized === 'npx' || normalized === 'npx.cmd'
+    || normalized.endsWith('\\npx.cmd') || normalized.endsWith('/npx.cmd')
+  ) {
+    return 'npx';
+  }
+  if (
+    normalized === 'npm' || normalized === 'npm.cmd'
+    || normalized.endsWith('\\npm.cmd') || normalized.endsWith('/npm.cmd')
+  ) {
+    return 'npm';
+  }
+  return null;
+}
+
+/**
+ * Resolve a stdio MCP server command/args/env for the current platform.
+ *
+ * On packaged builds, node/npx/npm commands are resolved in this order:
+ * 1. Use system-installed Node.js if available (avoids Electron stdin quirks)
+ * 2. Fall back to Electron runtime with ELECTRON_RUN_AS_NODE=1
  */
 async function resolveStdioCommand(server: McpServerRecord): Promise<ResolvedStdioCommand> {
   const stdioCommand = server.command || '';
@@ -100,45 +159,60 @@ async function resolveStdioCommand(server: McpServerRecord): Promise<ResolvedStd
 
   if (process.platform === 'win32' && app.isPackaged && effectiveCommand) {
     const normalized = effectiveCommand.trim().toLowerCase();
-    const enhancedEnv = await getEnhancedEnv();
-    const npmBinDir = enhancedEnv.LOBSTERAI_NPM_BIN_DIR;
-    const npxCliJs = npmBinDir ? path.join(npmBinDir, 'npx-cli.js') : '';
-    const npmCliJs = npmBinDir ? path.join(npmBinDir, 'npm-cli.js') : '';
+    const nodeCommandType = isNodeCommand(normalized);
 
-    const withElectronNodeEnv = (base: Record<string, string> | undefined): Record<string, string> => ({
-      ...(base || {}),
-      ELECTRON_RUN_AS_NODE: '1',
-      LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
-    });
+    if (nodeCommandType) {
+      const systemNode = findSystemNodePath();
+      if (systemNode) {
+        if (nodeCommandType === 'node') {
+          effectiveCommand = systemNode;
+          log('INFO', `"${server.name}": using system Node.js "${systemNode}" (preferred over Electron runtime)`);
+        } else {
+          const enhancedEnv = await getEnhancedEnv();
+          const npmBinDir = enhancedEnv.LOBSTERAI_NPM_BIN_DIR;
+          const cliJs = nodeCommandType === 'npx'
+            ? (npmBinDir ? path.join(npmBinDir, 'npx-cli.js') : '')
+            : (npmBinDir ? path.join(npmBinDir, 'npm-cli.js') : '');
+          if (cliJs && fs.existsSync(cliJs)) {
+            effectiveCommand = systemNode;
+            effectiveArgs = [cliJs, ...stdioArgs];
+            log('INFO', `"${server.name}": using system Node.js "${systemNode}" + ${nodeCommandType}-cli.js (preferred over Electron runtime)`);
+          } else {
+            effectiveCommand = stdioCommand;
+            log('INFO', `"${server.name}": using system "${stdioCommand}" directly`);
+          }
+        }
+      } else {
+        const enhancedEnv = await getEnhancedEnv();
+        const npmBinDir = enhancedEnv.LOBSTERAI_NPM_BIN_DIR;
+        const npxCliJs = npmBinDir ? path.join(npmBinDir, 'npx-cli.js') : '';
+        const npmCliJs = npmBinDir ? path.join(npmBinDir, 'npm-cli.js') : '';
 
-    if (
-      normalized === 'node' || normalized === 'node.exe'
-      || normalized.endsWith('\\node.cmd') || normalized.endsWith('/node.cmd')
-    ) {
-      effectiveCommand = electronNodeRuntimePath;
-      stdioEnv = withElectronNodeEnv(stdioEnv);
-      shouldInjectWindowsHide = true;
-      log('INFO', `"${server.name}": rewrote command "${stdioCommand}" → Electron runtime`);
-    } else if (
-      (normalized === 'npx' || normalized === 'npx.cmd'
-        || normalized.endsWith('\\npx.cmd') || normalized.endsWith('/npx.cmd'))
-      && npxCliJs && fs.existsSync(npxCliJs)
-    ) {
-      effectiveCommand = electronNodeRuntimePath;
-      effectiveArgs = [npxCliJs, ...stdioArgs];
-      stdioEnv = withElectronNodeEnv(stdioEnv);
-      shouldInjectWindowsHide = true;
-      log('INFO', `"${server.name}": rewrote command "${stdioCommand}" → Electron + npx-cli.js`);
-    } else if (
-      (normalized === 'npm' || normalized === 'npm.cmd'
-        || normalized.endsWith('\\npm.cmd') || normalized.endsWith('/npm.cmd'))
-      && npmCliJs && fs.existsSync(npmCliJs)
-    ) {
-      effectiveCommand = electronNodeRuntimePath;
-      effectiveArgs = [npmCliJs, ...stdioArgs];
-      stdioEnv = withElectronNodeEnv(stdioEnv);
-      shouldInjectWindowsHide = true;
-      log('INFO', `"${server.name}": rewrote command "${stdioCommand}" → Electron + npm-cli.js`);
+        const withElectronNodeEnv = (base: Record<string, string> | undefined): Record<string, string> => ({
+          ...(base || {}),
+          ELECTRON_RUN_AS_NODE: '1',
+          LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
+        });
+
+        if (nodeCommandType === 'node') {
+          effectiveCommand = electronNodeRuntimePath;
+          stdioEnv = withElectronNodeEnv(stdioEnv);
+          shouldInjectWindowsHide = true;
+          log('WARN', `"${server.name}": no system Node.js found, falling back to Electron runtime (may cause stdin issues)`);
+        } else if (nodeCommandType === 'npx' && npxCliJs && fs.existsSync(npxCliJs)) {
+          effectiveCommand = electronNodeRuntimePath;
+          effectiveArgs = [npxCliJs, ...stdioArgs];
+          stdioEnv = withElectronNodeEnv(stdioEnv);
+          shouldInjectWindowsHide = true;
+          log('WARN', `"${server.name}": no system Node.js found, falling back to Electron + npx-cli.js (may cause stdin issues)`);
+        } else if (nodeCommandType === 'npm' && npmCliJs && fs.existsSync(npmCliJs)) {
+          effectiveCommand = electronNodeRuntimePath;
+          effectiveArgs = [npmCliJs, ...stdioArgs];
+          stdioEnv = withElectronNodeEnv(stdioEnv);
+          shouldInjectWindowsHide = true;
+          log('WARN', `"${server.name}": no system Node.js found, falling back to Electron + npm-cli.js (may cause stdin issues)`);
+        }
+      }
     }
   }
 
@@ -243,6 +317,17 @@ export class McpServerManager {
       env: spawnEnv,
     });
 
+    const stderrChunks: string[] = [];
+    if (transport.stderr) {
+      transport.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString().trim();
+        if (text) {
+          stderrChunks.push(text);
+          log('WARN', `"${record.name}" stderr: ${text}`);
+        }
+      });
+    }
+
     const client = new Client(
       { name: `lobsterai-mcp-bridge`, version: '1.0.0' },
       { capabilities: {} },
@@ -252,7 +337,11 @@ export class McpServerManager {
       await client.connect(transport);
       log('INFO', `Connected to MCP server "${record.name}"`);
     } catch (error) {
-      log('ERROR', `Failed to connect to "${record.name}": ${error instanceof Error ? error.message : String(error)}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const stderrSummary = stderrChunks.length > 0
+        ? ` | stderr: ${stderrChunks.join(' ').slice(0, 500)}`
+        : '';
+      log('ERROR', `Failed to connect to "${record.name}": ${errMsg}${stderrSummary}`);
       try { await transport.close(); } catch { /* ignore */ }
       return null;
     }

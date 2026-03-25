@@ -843,6 +843,67 @@ export class CoworkStore {
     };
   }
 
+  /**
+   * Delete a message from a session.
+   * Used by reconciliation to remove duplicate or spurious messages.
+   */
+  deleteMessage(sessionId: string, messageId: string): boolean {
+    this.db.run(
+      'DELETE FROM cowork_messages WHERE id = ? AND session_id = ?',
+      [messageId, sessionId],
+    );
+    const deleted = (this.db.getRowsModified?.() || 0) > 0;
+    if (deleted) {
+      this.saveDb();
+    }
+    return deleted;
+  }
+
+  /**
+   * Replace all user/assistant messages in a session with the given list.
+   * Tool messages (tool_use, tool_result, system) are preserved in their existing positions.
+   * Used by history reconciliation to align local state with the authoritative gateway history.
+   */
+  replaceConversationMessages(
+    sessionId: string,
+    authoritative: Array<{ role: 'user' | 'assistant'; text: string }>,
+  ): void {
+    const now = Date.now();
+
+    // Delete all existing user/assistant messages for this session
+    this.db.run(
+      "DELETE FROM cowork_messages WHERE session_id = ? AND type IN ('user', 'assistant')",
+      [sessionId],
+    );
+
+    // Re-insert authoritative messages with correct sequence numbers
+    // First, get the current max sequence from remaining messages (tool_use, tool_result, system)
+    const seqRow = this.db.exec(
+      'SELECT COALESCE(MAX(sequence), 0) as max_seq FROM cowork_messages WHERE session_id = ?',
+      [sessionId],
+    );
+    let nextSeq = ((seqRow[0]?.values[0]?.[0] as number) || 0) + 1;
+
+    for (const entry of authoritative) {
+      const id = uuidv4();
+      this.db.run(`
+        INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        sessionId,
+        entry.role,
+        entry.text,
+        JSON.stringify({ isStreaming: false, isFinal: true }),
+        now,
+        nextSeq++,
+      ]);
+    }
+
+    this.db.run('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?', [now, sessionId]);
+    this.saveDb();
+  }
+
   updateMessage(sessionId: string, messageId: string, updates: { content?: string; metadata?: CoworkMessageMetadata }): void {
     const setClauses: string[] = [];
     const values: (string | null)[] = [];

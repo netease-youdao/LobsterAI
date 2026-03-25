@@ -17,7 +17,7 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter, setAuthTokensGetter, setServerBaseUrlGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
-import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy } from './libs/coworkOpenAICompatProxy';
+import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setProxyTokenRefresher } from './libs/coworkOpenAICompatProxy';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
   listPairingRequests,
@@ -4328,6 +4328,32 @@ if (!gotTheLock) {
       return tokens;
     });
     setServerBaseUrlGetter(() => getServerApiBaseUrl());
+
+    // Wire up token refresher for the OpenAI compat proxy so it can retry
+    // on 401/403 with a fresh accessToken instead of failing immediately.
+    setProxyTokenRefresher(async () => {
+      const tokens = getAuthTokens();
+      if (!tokens?.refreshToken) return null;
+      const serverBaseUrl = getServerApiBaseUrl();
+      try {
+        const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: tokens.refreshToken }),
+        });
+        if (resp.ok) {
+          const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+          if (body.code === 0 && body.data) {
+            saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
+            console.log('[Auth] proxy token refresh succeeded');
+            return body.data.accessToken;
+          }
+        }
+      } catch (err) {
+        console.warn('[Auth] proxy token refresh failed:', err);
+      }
+      return null;
+    });
 
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
