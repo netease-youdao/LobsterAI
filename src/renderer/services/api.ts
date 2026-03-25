@@ -648,13 +648,7 @@ class ApiService {
             if (data === '[DONE]') continue;
 
             try {
-              let parsed: any;
-              try {
-                parsed = JSON.parse(data);
-              } catch (err) {
-                console.error('[API] Failed to parse SSE JSON:', err, 'data:', data);
-                continue; // 跳过这条消息，继续处理下一条
-              }
+              const parsed = JSON.parse(data);
 
               if (useResponsesApi) {
                 const eventType = currentEvent || String(parsed.type || '');
