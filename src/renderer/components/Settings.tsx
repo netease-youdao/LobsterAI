@@ -428,6 +428,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [isTesting, setIsTesting] = useState(false);
   const [isImportingProviders, setIsImportingProviders] = useState(false);
   const [isExportingProviders, setIsExportingProviders] = useState(false);
+  const [passwordModalConfig, setPasswordModalConfig] = useState<{
+    title: string;
+    hint: string;
+    resolve: (password: string | null) => void;
+  } | null>(null);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState('');
   const initialThemeRef = useRef<'light' | 'dark' | 'system'>(themeService.getTheme());
   const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
   const didSaveRef = useRef(false);
@@ -1805,8 +1812,44 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       supportsImage: model.supportsImage ?? false,
     }));
 
+  const promptPassword = (title: string, hint: string): Promise<string | null> => {
+    return new Promise((resolve) => {
+      setPasswordInput('');
+      setPasswordError('');
+      setPasswordModalConfig({ title, hint, resolve });
+    });
+  };
+
+  const handlePasswordSubmit = () => {
+    if (!passwordModalConfig) return;
+    const pw = passwordInput.trim();
+    if (!pw) {
+      setPasswordError(i18nService.t('passwordRequired'));
+      return;
+    }
+    if (pw.length < 4) {
+      setPasswordError(i18nService.t('passwordTooShort'));
+      return;
+    }
+    passwordModalConfig.resolve(pw);
+    setPasswordModalConfig(null);
+    setPasswordInput('');
+    setPasswordError('');
+  };
+
+  const handlePasswordCancel = () => {
+    if (!passwordModalConfig) return;
+    passwordModalConfig.resolve(null);
+    setPasswordModalConfig(null);
+    setPasswordInput('');
+    setPasswordError('');
+  };
+
   const handleExportProviders = async () => {
-    const password = window.prompt(i18nService.t('exportPasswordPrompt'));
+    const password = await promptPassword(
+      i18nService.t('exportPasswordTitle'),
+      i18nService.t('exportPasswordHint')
+    );
     if (!password) return;
 
     setError(null);
@@ -1960,7 +2003,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       return;
     }
 
-    const password = window.prompt(i18nService.t('importPasswordPrompt'));
+    const password = await promptPassword(
+      i18nService.t('importPasswordTitle'),
+      i18nService.t('importPasswordHint')
+    );
     if (!password) return;
 
     setIsImportingProviders(true);
@@ -3518,6 +3564,64 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           </form>
 
         </div>
+
+        {passwordModalConfig && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={handlePasswordCancel}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-2xl dark:bg-claude-darkSurface bg-claude-bg dark:border-claude-darkBorder border-claude-border border shadow-modal p-4"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
+                  {passwordModalConfig.title}
+                </h4>
+                <button
+                  type="button"
+                  onClick={handlePasswordCancel}
+                  className="p-1 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mb-3">
+                {passwordModalConfig.hint}
+              </p>
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handlePasswordSubmit(); }}
+                autoFocus
+                placeholder={i18nService.t('enterPassword')}
+                className="w-full px-3 py-2 text-sm rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent/50"
+              />
+              {passwordError && (
+                <p className="mt-1.5 text-xs text-red-500">{passwordError}</p>
+              )}
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handlePasswordCancel}
+                  className="px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors active:scale-[0.98]"
+                >
+                  {i18nService.t('cancel')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePasswordSubmit}
+                  className="px-3 py-1.5 text-xs font-medium rounded-xl bg-claude-accent hover:bg-claude-accentHover text-white transition-colors active:scale-[0.98]"
+                >
+                  {i18nService.t('confirm')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isTestResultModalOpen && testResult && (
           <div
