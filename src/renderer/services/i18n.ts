@@ -149,6 +149,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     collapse: '收起',
     expand: '展开',
     featureInDevelopment: '正在开发中',
+    errorBoundaryTitle: '页面出现了问题',
+    errorBoundaryRetry: '重试',
+    errorBoundaryReload: '刷新页面',
 
     // 认证相关
     authDailyQuota: '今日额度',
@@ -1254,6 +1257,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     collapse: 'Collapse',
     expand: 'Expand',
     featureInDevelopment: 'In development',
+    errorBoundaryTitle: 'Something went wrong',
+    errorBoundaryRetry: 'Try Again',
+    errorBoundaryReload: 'Reload Page',
 
     // Auth
     authDailyQuota: 'Daily Quota',

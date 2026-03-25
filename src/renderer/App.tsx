@@ -30,6 +30,7 @@ import { matchesShortcut } from './services/shortcuts';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
 import PrivacyDialog from './components/PrivacyDialog';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -645,7 +646,8 @@ const App: React.FC = () => {
         <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
           <div className="relative h-full min-h-0 rounded-xl dark:bg-claude-darkBg bg-claude-bg overflow-hidden">
             <EngineStartupOverlay />
-            {mainView === 'skills' ? (
+            <ErrorBoundary>
+              {mainView === 'skills' ? (
               <SkillsView
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
@@ -676,6 +678,7 @@ const App: React.FC = () => {
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
               />
             )}
+            </ErrorBoundary>
           </div>
         </div>
       </div>
