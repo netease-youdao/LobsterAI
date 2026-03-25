@@ -2,8 +2,12 @@
  * McpServerManager — manages MCP server lifecycles and tool discovery
  * for the OpenClaw MCP Bridge.
  *
- * Starts enabled MCP servers as child processes via the MCP SDK stdio transport,
- * discovers available tools, and routes tool calls to the correct server.
+ * Supports three MCP transport types:
+ * - stdio: starts MCP servers as child processes via StdioClientTransport
+ * - sse: connects to remote MCP servers via SSEClientTransport (deprecated in MCP spec, kept for compatibility)
+ * - http: connects to remote MCP servers via StreamableHTTPClientTransport (preferred for remote servers)
+ *
+ * Discovers available tools and routes tool calls to the correct server.
  */
 import { app } from 'electron';
 import fs from 'fs';
@@ -11,6 +15,9 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerRecord } from '../mcpStore';
 import { getElectronNodeRuntimePath, getEnhancedEnv } from './coworkUtil';
 
@@ -24,7 +31,7 @@ export interface McpToolManifestEntry {
 interface ManagedMcpServer {
   record: McpServerRecord;
   client: Client;
-  transport: StdioClientTransport;
+  transport: Transport;
   tools: McpToolManifestEntry[];
 }
 
@@ -193,12 +200,13 @@ export class McpServerManager {
    * Start MCP servers and discover their tools.
    */
   async startServers(enabledServers: McpServerRecord[]): Promise<McpToolManifestEntry[]> {
-    // Only handle stdio servers for now
-    const stdioServers = enabledServers.filter(s => s.transportType === 'stdio');
-    log('INFO', `Starting ${stdioServers.length} stdio MCP servers`);
+    const supportedServers = enabledServers.filter(s =>
+      s.transportType === 'stdio' || s.transportType === 'sse' || s.transportType === 'http'
+    );
+    log('INFO', `Starting ${supportedServers.length} MCP servers (${supportedServers.map(s => `${s.name}:${s.transportType}`).join(', ')})`);
 
     const results = await Promise.allSettled(
-      stdioServers.map(server => this.startSingleServer(server))
+      supportedServers.map(server => this.startSingleServer(server))
     );
 
     // Collect tools from all successfully started servers
@@ -207,7 +215,7 @@ export class McpServerManager {
       if (result.status === 'fulfilled' && result.value) {
         this._toolManifest.push(...result.value.tools);
       } else if (result.status === 'rejected') {
-        log('WARN', `Failed to start MCP server "${stdioServers[i].name}": ${result.reason}`);
+        log('WARN', `Failed to start MCP server "${supportedServers[i].name}": ${result.reason}`);
       }
     }
 
@@ -216,32 +224,78 @@ export class McpServerManager {
   }
 
   private async startSingleServer(record: McpServerRecord): Promise<ManagedMcpServer | null> {
-    if (record.transportType !== 'stdio') {
-      log('WARN', `Skipping non-stdio server "${record.name}" (type=${record.transportType})`);
-      return null;
+    let transport: Transport;
+
+    switch (record.transportType) {
+      case 'stdio': {
+        const resolved = await resolveStdioCommand(record);
+        if (!resolved.command) {
+          log('WARN', `Server "${record.name}" has no command, skipping`);
+          return null;
+        }
+
+        log('INFO', `Starting "${record.name}": stdio command=${resolved.command}, args=${JSON.stringify(resolved.args)}`);
+
+        const enhancedEnv = await getEnhancedEnv();
+        const spawnEnv: Record<string, string> = {
+          ...Object.fromEntries(
+            Object.entries(enhancedEnv).filter((e): e is [string, string] => typeof e[1] === 'string'),
+          ),
+          ...(resolved.env || {}),
+        };
+
+        transport = new StdioClientTransport({
+          command: resolved.command,
+          args: resolved.args,
+          env: spawnEnv,
+        });
+        break;
+      }
+
+      case 'sse': {
+        const sseUrl = record.url;
+        if (!sseUrl) {
+          log('WARN', `Server "${record.name}" has no URL for SSE transport, skipping`);
+          return null;
+        }
+        log('INFO', `Starting "${record.name}": SSE url=${sseUrl}`);
+        const sseOpts: Record<string, unknown> = {};
+        if (record.headers && Object.keys(record.headers).length > 0) {
+          sseOpts.requestInit = { headers: record.headers };
+          sseOpts.eventSourceInit = {
+            fetch: (url: string | URL, init?: RequestInit) =>
+              fetch(url, { ...init, headers: { ...init?.headers, ...record.headers } }),
+          };
+        }
+        transport = new SSEClientTransport(
+          new URL(sseUrl),
+          sseOpts as import('@modelcontextprotocol/sdk/client/sse.js').SSEClientTransportOptions,
+        );
+        break;
+      }
+
+      case 'http': {
+        const httpUrl = record.url;
+        if (!httpUrl) {
+          log('WARN', `Server "${record.name}" has no URL for HTTP Streamable transport, skipping`);
+          return null;
+        }
+        log('INFO', `Starting "${record.name}": HTTP Streamable url=${httpUrl}`);
+        const httpOpts: Record<string, unknown> = {};
+        if (record.headers && Object.keys(record.headers).length > 0) {
+          httpOpts.requestInit = { headers: record.headers };
+        }
+        transport = new StreamableHTTPClientTransport(
+          new URL(httpUrl),
+          httpOpts as import('@modelcontextprotocol/sdk/client/streamableHttp.js').StreamableHTTPClientTransportOptions,
+        );
+        break;
+      }
+
+      default:
+        log('WARN', `Unsupported transport type "${record.transportType}" for server "${record.name}", skipping`);
+        return null;
     }
-
-    const resolved = await resolveStdioCommand(record);
-    if (!resolved.command) {
-      log('WARN', `Server "${record.name}" has no command, skipping`);
-      return null;
-    }
-
-    log('INFO', `Starting "${record.name}": command=${resolved.command}, args=${JSON.stringify(resolved.args)}`);
-
-    const enhancedEnv = await getEnhancedEnv();
-    const spawnEnv: Record<string, string> = {
-      ...Object.fromEntries(
-        Object.entries(enhancedEnv).filter((e): e is [string, string] => typeof e[1] === 'string'),
-      ),
-      ...(resolved.env || {}),
-    };
-
-    const transport = new StdioClientTransport({
-      command: resolved.command,
-      args: resolved.args,
-      env: spawnEnv,
-    });
 
     const client = new Client(
       { name: `lobsterai-mcp-bridge`, version: '1.0.0' },
@@ -250,7 +304,7 @@ export class McpServerManager {
 
     try {
       await client.connect(transport);
-      log('INFO', `Connected to MCP server "${record.name}"`);
+      log('INFO', `Connected to MCP server "${record.name}" (${record.transportType})`);
     } catch (error) {
       log('ERROR', `Failed to connect to "${record.name}": ${error instanceof Error ? error.message : String(error)}`);
       try { await transport.close(); } catch { /* ignore */ }
