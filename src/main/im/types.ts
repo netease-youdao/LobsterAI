@@ -318,6 +318,8 @@ export interface IMGatewayConfig {
 export interface IMSettings {
   systemPrompt?: string;
   skillsEnabled: boolean;
+  /** Model identity key to use for IM sessions. Overrides the global selected model when set. */
+  modelId?: string;
 }
 
 export interface IMGatewayStatus {

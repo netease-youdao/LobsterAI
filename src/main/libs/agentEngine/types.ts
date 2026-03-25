@@ -34,12 +34,16 @@ export type CoworkStartOptions = {
   workspaceRoot?: string;
   confirmationMode?: 'modal' | 'text';
   imageAttachments?: CoworkImageAttachment[];
+  /** Override the model for this session (e.g. for IM channel bot sessions). */
+  modelOverride?: string;
 };
 
 export type CoworkContinueOptions = {
   systemPrompt?: string;
   skillIds?: string[];
   imageAttachments?: CoworkImageAttachment[];
+  /** Override the model for this turn (e.g. for IM channel bot sessions). */
+  modelOverride?: string;
 };
 
 export interface CoworkRuntime {

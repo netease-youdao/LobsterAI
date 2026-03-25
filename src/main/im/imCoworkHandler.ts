@@ -243,14 +243,17 @@ export class IMCoworkHandler extends EventEmitter {
       );
     };
 
+    const imModelOverride = this.imStore.getIMSettings().modelId || undefined;
+
     if (isActive) {
-      this.coworkRuntime.continueSession(coworkSessionId, formattedContent, { systemPrompt })
+      this.coworkRuntime.continueSession(coworkSessionId, formattedContent, { systemPrompt, modelOverride: imModelOverride })
         .catch(onSessionStartError);
     } else {
       this.coworkRuntime.startSession(coworkSessionId, formattedContent, {
         workspaceRoot: session?.cwd,
         confirmationMode: 'text',
         systemPrompt,
+        modelOverride: imModelOverride,
       }).catch(onSessionStartError);
     }
 
