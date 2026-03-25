@@ -816,6 +816,79 @@ const isNpmPackageSpec = (source: string): boolean => {
 };
 
 /**
+ * Parse a clawhub.ai URL and extract the skill name.
+ * Supports: /skills/{owner}/{name} and /skills/{name}
+ */
+const parseClawhubUrl = (source: string): { name: string } | null => {
+  try {
+    const url = new URL(source);
+    if (url.hostname !== 'clawhub.ai' && url.hostname !== 'www.clawhub.ai') return null;
+    const segments = url.pathname.split('/').filter(Boolean);
+    // Format: /skills/{owner}/{name}
+    if (segments.length >= 3 && segments[0] === 'skills') {
+      return { name: segments[2] };
+    }
+    // Format: /skills/{name}
+    if (segments.length >= 2 && segments[0] === 'skills') {
+      return { name: segments[1] };
+    }
+    // Format: /{owner}/{name} (no /skills/ prefix)
+    if (segments.length >= 2) {
+      return { name: segments[1] };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Resolve the bundled npx-cli.js path for running npx commands
+ * without requiring a system Node.js installation.
+ */
+const resolveNpxCliJs = (): string | null => {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin', 'npx-cli.js')]
+    : [
+        path.join(app.getAppPath(), 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+        path.join(process.cwd(), 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+      ];
+  return candidates.find(c => fs.existsSync(c)) || null;
+};
+
+/**
+ * Download a skill from ClawHub using `npx clawhub@latest install {name}`.
+ * Prefers the bundled npx (via Electron runtime) so it works in packaged
+ * apps where system Node.js is not installed.
+ */
+const downloadClawhubSkill = async (
+  skillName: string,
+  targetDir: string,
+  env: NodeJS.ProcessEnv
+): Promise<void> => {
+  const npxCliJs = resolveNpxCliJs();
+  const electronPath = getElectronNodeRuntimePath();
+
+  let command: string;
+  let args: string[];
+  if (npxCliJs) {
+    command = electronPath;
+    args = [npxCliJs, 'clawhub@latest', 'install', skillName, '--dir', targetDir, '--no-input'];
+  } else {
+    const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    if (!hasCommand(npxCommand, env)) {
+      throw new Error('npx is not available. Please install Node.js from https://nodejs.org/');
+    }
+    command = npxCommand;
+    args = ['clawhub@latest', 'install', skillName, '--dir', targetDir, '--no-input'];
+  }
+
+  await runCommand(command, args, {
+    env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+  });
+};
+
+/**
  * Resolve the bundled npm-cli.js path for running npm commands.
  */
 const resolveNpmCliJs = (): string | null => {
@@ -1394,10 +1467,18 @@ export class SkillManager {
         cleanupPath = tempRoot;
         localSource = await downloadNpmPackage(trimmed, tempRoot);
         console.log(`[SkillManager] downloadSkill: npm package extracted to ${localSource}`);
+      } else if (parseClawhubUrl(trimmed)) {
+        const clawhubParsed = parseClawhubUrl(trimmed)!;
+        console.log(`[SkillManager] downloadSkill: detected ClawHub URL, skill name="${clawhubParsed.name}"`);
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-clawhub-'));
+        cleanupPath = tempRoot;
+        const env = buildSkillEnv();
+        await downloadClawhubSkill(clawhubParsed.name, tempRoot, env);
+        localSource = tempRoot;
       } else {
         const normalized = this.normalizeGitSource(trimmed);
         if (!normalized) {
-          return { success: false, error: 'Invalid skill source. Use owner/repo, repo URL, npm package spec, or a GitHub tree/blob URL.' };
+          return { success: false, error: t('skillErrInvalidSource') };
         }
         const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-'));
         cleanupPath = tempRoot;
@@ -2215,4 +2296,5 @@ export const __skillManagerTestUtils = {
   parseFrontmatter,
   isTruthy,
   extractDescription,
+  parseClawhubUrl,
 };

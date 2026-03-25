@@ -22,6 +22,32 @@ import ErrorMessage from '../ErrorMessage';
 import SkillSecurityReport from './SkillSecurityReport';
 
 type SkillTab = 'installed' | 'marketplace';
+type ImportSourceType = 'github' | 'clawhub';
+
+const importSourceTypes: ImportSourceType[] = ['github', 'clawhub'];
+
+const importTabConfig: Record<ImportSourceType, {
+  tabLabelKey: string;
+  descriptionKey: string;
+  urlLabelKey: string;
+  placeholderKey: string;
+  examplesKey: string;
+}> = {
+  github: {
+    tabLabelKey: 'githubTabLabel',
+    descriptionKey: 'githubImportDescription',
+    urlLabelKey: 'githubImportUrlLabel',
+    placeholderKey: 'githubSkillPlaceholder',
+    examplesKey: 'githubImportExamples',
+  },
+  clawhub: {
+    tabLabelKey: 'clawhubTabLabel',
+    descriptionKey: 'clawhubImportDescription',
+    urlLabelKey: 'clawhubImportUrlLabel',
+    placeholderKey: 'clawhubSkillPlaceholder',
+    examplesKey: 'clawhubImportExamples',
+  },
+};
 
 const SkillsManager: React.FC = () => {
   const dispatch = useDispatch();
@@ -32,7 +58,8 @@ const SkillsManager: React.FC = () => {
   const [skillActionError, setSkillActionError] = useState('');
   const [isDownloadingSkill, setIsDownloadingSkill] = useState(false);
   const [isAddSkillMenuOpen, setIsAddSkillMenuOpen] = useState(false);
-  const [isGithubImportOpen, setIsGithubImportOpen] = useState(false);
+  const [isRemoteImportOpen, setIsRemoteImportOpen] = useState(false);
+  const [importTab, setImportTab] = useState<ImportSourceType>('github');
   const [activeTab, setActiveTab] = useState<SkillTab>('installed');
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [marketTags, setMarketTags] = useState<MarketTag[]>([]);
@@ -49,7 +76,7 @@ const SkillsManager: React.FC = () => {
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
-  const githubImportInputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -111,20 +138,20 @@ const SkillsManager: React.FC = () => {
   }, [isAddSkillMenuOpen]);
 
   useEffect(() => {
-    if (!isGithubImportOpen) return;
+    if (!isRemoteImportOpen) return;
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setIsGithubImportOpen(false);
+        setIsRemoteImportOpen(false);
       }
     };
 
     document.addEventListener('keydown', handleEscape);
-    setTimeout(() => githubImportInputRef.current?.focus(), 0);
+    setTimeout(() => importInputRef.current?.focus(), 0);
     return () => {
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [isGithubImportOpen]);
+  }, [isRemoteImportOpen, importTab]);
 
   useEffect(() => {
     const hasOpenDialog = selectedSkill || selectedMarketplaceSkill;
@@ -237,7 +264,7 @@ const SkillsManager: React.FC = () => {
     }
     // Security audit returned — show report modal
     if (result.auditReport && result.pendingInstallId) {
-      setIsGithubImportOpen(false);
+      setIsRemoteImportOpen(false);
       setSecurityReport(result.auditReport);
       setPendingInstallId(result.pendingInstallId);
       return;
@@ -247,7 +274,7 @@ const SkillsManager: React.FC = () => {
     }
     setSkillDownloadSource('');
     setIsAddSkillMenuOpen(false);
-    setIsGithubImportOpen(false);
+    setIsRemoteImportOpen(false);
   };
 
   const handleUploadSkillZip = async () => {
@@ -269,13 +296,14 @@ const SkillsManager: React.FC = () => {
     }
   };
 
-  const handleOpenGithubImport = () => {
+  const handleOpenRemoteImport = () => {
     setIsAddSkillMenuOpen(false);
     setSkillActionError('');
-    setIsGithubImportOpen(true);
+    setSkillDownloadSource('');
+    setIsRemoteImportOpen(true);
   };
 
-  const handleImportFromGithub = async () => {
+  const handleImportFromDialog = async () => {
     if (isDownloadingSkill) return;
     await handleAddSkillFromSource(skillDownloadSource);
   };
@@ -330,7 +358,7 @@ const SkillsManager: React.FC = () => {
       setInstallingSkillId(null);
       setSkillDownloadSource('');
       setIsAddSkillMenuOpen(false);
-      setIsGithubImportOpen(false);
+      setIsRemoteImportOpen(false);
     }
   };
 
@@ -399,11 +427,11 @@ const SkillsManager: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={handleOpenGithubImport}
+                onClick={handleOpenRemoteImport}
                 className="w-full flex items-center gap-3 px-3 py-2.5 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
               >
                 <LinkIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-                <span>{i18nService.t('importFromGithub')}</span>
+                <span>{i18nService.t('remoteImport')}</span>
               </button>
             </div>
           )}
@@ -874,47 +902,65 @@ const SkillsManager: React.FC = () => {
         </div>
       , document.body)}
 
-      {isGithubImportOpen && createPortal(
+      {isRemoteImportOpen && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setIsGithubImportOpen(false)}
+          onClick={() => setIsRemoteImportOpen(false)}
         >
           <div
             className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between">
-              <div>
-                <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
-                  {i18nService.t('githubImportTitle')}
-                </div>
-                <p className="mt-1 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('githubImportDescription')}
-                </p>
+              <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+                {i18nService.t('remoteImportTitle')}
               </div>
               <button
                 type="button"
-                onClick={() => setIsGithubImportOpen(false)}
+                onClick={() => setIsRemoteImportOpen(false)}
                 className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
               >
                 <XMarkIcon className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="mt-5 space-y-3">
+            <div className="mt-4 flex items-center gap-1 border-b dark:border-claude-darkBorder border-claude-border">
+              {importSourceTypes.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => { setImportTab(type); setSkillDownloadSource(''); setSkillActionError(''); }}
+                  className={`px-3 py-1.5 text-sm font-medium transition-colors relative ${
+                    importTab === type
+                      ? 'dark:text-claude-darkText text-claude-text'
+                      : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                  }`}
+                >
+                  {i18nService.t(importTabConfig[type].tabLabelKey)}
+                  {importTab === type && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-claude-accent rounded-full" />
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t(importTabConfig[importTab].descriptionKey)}
+              </p>
               <div className="text-xs font-semibold tracking-wide dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('githubImportUrlLabel')}
+                {i18nService.t(importTabConfig[importTab].urlLabelKey)}
               </div>
               <input
-                ref={githubImportInputRef}
+                ref={importInputRef}
                 type="text"
                 value={skillDownloadSource}
                 onChange={(e) => setSkillDownloadSource(e.target.value)}
-                placeholder={i18nService.t('githubSkillPlaceholder')}
+                placeholder={i18nService.t(importTabConfig[importTab].placeholderKey)}
                 className="w-full px-3 py-2.5 text-sm rounded-xl dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-2 focus:ring-claude-accent"
               />
               <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('githubImportExamples')}
+                {i18nService.t(importTabConfig[importTab].examplesKey)}
               </p>
               {skillActionError && (
                 <div className="text-xs text-red-500">
@@ -923,7 +969,7 @@ const SkillsManager: React.FC = () => {
               )}
               <button
                 type="button"
-                onClick={handleImportFromGithub}
+                onClick={handleImportFromDialog}
                 disabled={isDownloadingSkill || !skillDownloadSource.trim()}
                 className="w-full py-2.5 rounded-xl bg-claude-accent text-white text-sm font-medium hover:bg-claude-accent/90 transition-colors disabled:opacity-50"
               >
