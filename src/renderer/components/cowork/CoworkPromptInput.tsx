@@ -6,7 +6,7 @@ import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
-import { SkillsButton, ActiveSkillBadge } from '../skills';
+import { SkillsButton } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -703,13 +703,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </button>
                 )}
                 {!remoteManaged && (
-                  <>
-                    <SkillsButton
-                      onSelectSkill={handleSelectSkill}
-                      onManageSkills={handleManageSkills}
-                    />
-                    <ActiveSkillBadge />
-                  </>
+                  <SkillsButton
+                    onManageSkills={handleManageSkills}
+                  />
                 )}
               </div>
               <div className="flex items-center gap-2">
