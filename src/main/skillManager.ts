@@ -1516,6 +1516,17 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
+
+      // Check for duplicate skills before installing
+      const duplicateNames = this.findDuplicateSkillNames(skillDirs);
+      if (duplicateNames.length > 0) {
+        cleanupPathSafely(cleanupPath);
+        cleanupPath = null;
+        const nameList = duplicateNames.join(', ');
+        console.log(`[SkillManager] Duplicate skill(s) detected: ${nameList}`);
+        return { success: false, error: t('skillErrDuplicate').replace('{names}', nameList) };
+      }
+
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
         let targetDir = resolveWithin(root, folderName);
@@ -1556,6 +1567,15 @@ export class SkillManager {
     if (action === 'cancel') {
       cleanupPathSafely(pending.cleanupPath);
       return { success: true };
+    }
+
+    // Check for duplicate skills before installing
+    const duplicateNames = this.findDuplicateSkillNames(pending.skillDirs);
+    if (duplicateNames.length > 0) {
+      cleanupPathSafely(pending.cleanupPath);
+      const nameList = duplicateNames.join(', ');
+      console.log(`[SkillManager] Duplicate skill(s) detected: ${nameList}`);
+      return { success: false, error: t('skillErrDuplicate').replace('{names}', nameList) };
     }
 
     // Install the skill(s)
@@ -1661,6 +1681,32 @@ export class SkillManager {
     return () => {
       this.changeListeners = this.changeListeners.filter(l => l !== listener);
     };
+  }
+
+  /**
+   * Returns the names of incoming skills that already exist among installed skills.
+   * Compares by normalized skill name from SKILL.md frontmatter.
+   */
+  private findDuplicateSkillNames(incomingSkillDirs: string[]): string[] {
+    const existingSkills = this.listSkills();
+    const existingNames = new Set(existingSkills.map(s => s.name.toLowerCase()));
+
+    const duplicates: string[] = [];
+    for (const skillDir of incomingSkillDirs) {
+      const skillFile = path.join(skillDir, SKILL_FILE_NAME);
+      if (!fs.existsSync(skillFile)) continue;
+      try {
+        const raw = fs.readFileSync(skillFile, 'utf8');
+        const { frontmatter } = parseFrontmatter(raw);
+        const name = (String(frontmatter.name || '') || path.basename(skillDir)).trim() || path.basename(skillDir);
+        if (existingNames.has(name.toLowerCase())) {
+          duplicates.push(name);
+        }
+      } catch {
+        // If we can't parse, skip duplicate check for this dir
+      }
+    }
+    return duplicates;
   }
 
   private parseSkillDir(
