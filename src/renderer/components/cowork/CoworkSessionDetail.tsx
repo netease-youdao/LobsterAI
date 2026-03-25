@@ -25,6 +25,12 @@ import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../common/scheduledReminderText';
+import { sessionToMarkdown, sessionToJson, sessionToJsonl } from '../../utils/sessionExport';
+import {
+  ArrowDownTrayIcon,
+  DocumentTextIcon,
+  CodeBracketSquareIcon,
+} from '@heroicons/react/24/outline';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
@@ -1313,6 +1319,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [showExportSubmenu, setShowExportSubmenu] = useState(false);
+  const [isExportingText, setIsExportingText] = useState(false);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1426,6 +1434,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const closeMenu = () => {
     setMenuPosition(null);
     setShowConfirmDelete(false);
+    setShowExportSubmenu(false);
   };
 
   // Open folder in Finder/Explorer
@@ -1646,6 +1655,57 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         }
       })();
     });
+  };
+
+  const handleExportText = async (format: 'markdown' | 'json' | 'jsonl') => {
+    if (!currentSession || isExportingText) return;
+    setShowExportSubmenu(false);
+    setMenuPosition(null);
+    setIsExportingText(true);
+    try {
+      let content: string;
+      let ext: string;
+      let filterName: string;
+      switch (format) {
+        case 'markdown':
+          content = sessionToMarkdown(currentSession);
+          ext = 'md';
+          filterName = 'Markdown';
+          break;
+        case 'json':
+          content = sessionToJson(currentSession);
+          ext = 'json';
+          filterName = 'JSON';
+          break;
+        case 'jsonl':
+          content = sessionToJsonl(currentSession);
+          ext = 'jsonl';
+          filterName = 'JSON Lines';
+          break;
+      }
+      const timestamp = formatExportTimestamp(new Date());
+      const baseName = sanitizeExportFileName(`${currentSession.title}-${timestamp}`);
+      const result = await window.electron.dialog.saveFile({
+        content,
+        defaultFileName: `${baseName}.${ext}`,
+        title: i18nService.t('coworkExportSession'),
+        filters: [{ name: filterName, extensions: [ext] }],
+      });
+      if (result?.success && !result.canceled) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkExportSuccess'),
+        }));
+      } else if (!result?.success) {
+        throw new Error(result?.error || 'Export failed');
+      }
+    } catch (error) {
+      console.error(`Failed to export session as ${format}:`, error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportFailed'),
+      }));
+    } finally {
+      setIsExportingText(false);
+    }
   };
 
   const handleConfirmDelete = async () => {
@@ -1964,15 +2024,58 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             />
             {currentSession.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession')}
           </button>
-          <button
-            type="button"
-            onClick={handleShareClick}
-            disabled={isExportingImage}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <ShareIcon className="h-4 w-4" />
-            {i18nService.t('coworkShareSession')}
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setShowExportSubmenu((v) => !v); }}
+              disabled={isExportingImage || isExportingText}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ArrowDownTrayIcon className="h-4 w-4" />
+              {i18nService.t('coworkExportSession')}
+              <ChevronRightIcon className={`h-3 w-3 ml-auto transition-transform ${showExportSubmenu ? 'rotate-90' : ''}`} />
+            </button>
+            {showExportSubmenu && (
+              <div className="border-t dark:border-claude-darkBorder border-claude-border">
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setShowExportSubmenu(false); handleShareClick(e); }}
+                  disabled={isExportingImage}
+                  className="w-full flex items-center gap-2 pl-7 pr-3 py-1.5 text-left text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+                >
+                  <ShareIcon className="h-3.5 w-3.5" />
+                  {i18nService.t('coworkExportAsImage')}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); void handleExportText('markdown'); }}
+                  disabled={isExportingText}
+                  className="w-full flex items-center gap-2 pl-7 pr-3 py-1.5 text-left text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+                >
+                  <DocumentTextIcon className="h-3.5 w-3.5" />
+                  {i18nService.t('coworkExportAsMarkdown')}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); void handleExportText('json'); }}
+                  disabled={isExportingText}
+                  className="w-full flex items-center gap-2 pl-7 pr-3 py-1.5 text-left text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+                >
+                  <CodeBracketSquareIcon className="h-3.5 w-3.5" />
+                  {i18nService.t('coworkExportAsJson')}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); void handleExportText('jsonl'); }}
+                  disabled={isExportingText}
+                  className="w-full flex items-center gap-2 pl-7 pr-3 py-1.5 text-left text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+                >
+                  <CodeBracketSquareIcon className="h-3.5 w-3.5" />
+                  {i18nService.t('coworkExportAsJsonl')}
+                </button>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={handleDeleteClick}

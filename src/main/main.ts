@@ -70,9 +70,19 @@ import {
   setSystemProxyEnabled,
 } from './libs/systemProxy';
 
-// 设置应用程序名称
-app.name = APP_NAME;
-app.setName(APP_NAME);
+// Set application name.
+// In some dev/packaging edge-cases Electron's `app` export can be undefined
+// during module evaluation, which would crash the whole main process.
+try {
+  if (app) {
+    // `app.name` is writable in some Electron versions, but `setName` exists
+    // in both packaged and dev runs. Try both, but never let failures stop startup.
+    app.name = APP_NAME;
+    app.setName(APP_NAME);
+  }
+} catch {
+  // Ignore and continue; missing app name does not block runtime.
+}
 
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 const MIN_MEMORY_USER_MEMORIES_MAX_ITEMS = 1;
@@ -3582,6 +3592,51 @@ if (!gotTheLock) {
           success: false,
           path: null,
           error: error instanceof Error ? error.message : 'Failed to save inline file',
+        };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    'dialog:saveFile',
+    async (
+      event,
+      options?: {
+        content?: string;
+        defaultFileName?: string;
+        title?: string;
+        filters?: { name: string; extensions: string[] }[];
+      }
+    ) => {
+      try {
+        const content = typeof options?.content === 'string' ? options.content : '';
+        if (!content) {
+          return { success: false, error: 'Missing file content' };
+        }
+        const defaultFileName = typeof options?.defaultFileName === 'string' && options.defaultFileName.trim()
+          ? options.defaultFileName.trim()
+          : `export-${Date.now()}.txt`;
+
+        const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+        const saveOptions = {
+          title: options?.title || 'Save File',
+          defaultPath: path.join(app.getPath('downloads'), defaultFileName),
+          filters: options?.filters || [{ name: 'All Files', extensions: ['*'] }],
+        };
+        const saveResult = ownerWindow
+          ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+          : await dialog.showSaveDialog(saveOptions);
+
+        if (saveResult.canceled || !saveResult.filePath) {
+          return { success: true, canceled: true };
+        }
+
+        await fs.promises.writeFile(saveResult.filePath, content, 'utf-8');
+        return { success: true, canceled: false, path: saveResult.filePath };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to save file',
         };
       }
     }
