@@ -9,6 +9,8 @@ import TaskForm from './TaskForm';
 import TaskDetail from './TaskDetail';
 import AllRunsHistory from './AllRunsHistory';
 import DeleteConfirmModal from './DeleteConfirmModal';
+import TaskStatsBar from './TaskStatsBar';
+import type { StatsFilter } from './TaskStatsBar';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -37,6 +39,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
+  const [statsFilter, setStatsFilter] = useState<StatsFilter>('all');
 
   const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
     setDeleteTaskInfo({ id: taskId, name: taskName });
@@ -69,6 +72,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
+    setStatsFilter('all');
     if (tab === 'tasks') {
       dispatch(selectTask(null));
       dispatch(setViewMode('list'));
@@ -169,7 +173,14 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           <AllRunsHistory />
         ) : (
           <>
-            {viewMode === 'list' && <TaskList onRequestDelete={handleRequestDelete} />}
+            {viewMode === 'list' && (
+              <>
+                {activeTab === 'tasks' && (
+                  <TaskStatsBar activeFilter={statsFilter} onFilterChange={setStatsFilter} />
+                )}
+                <TaskList onRequestDelete={handleRequestDelete} statsFilter={statsFilter} />
+              </>
+            )}
             {viewMode === 'create' && (
               <TaskForm
                 mode="create"

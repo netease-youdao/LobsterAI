@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { ClockIcon, EllipsisVerticalIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
@@ -6,6 +6,7 @@ import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTask } from '../../types/scheduledTask';
+import type { StatsFilter } from './TaskStatsBar';
 import { formatScheduleLabel, getStatusLabelKey, getStatusTone } from './utils';
 
 interface TaskListItemProps {
@@ -132,11 +133,27 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
 
 interface TaskListProps {
   onRequestDelete: (taskId: string, taskName: string) => void;
+  statsFilter?: StatsFilter;
 }
 
-const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
+function applyStatsFilter(tasks: ScheduledTask[], filter: StatsFilter): ScheduledTask[] {
+  if (filter === 'all') return tasks;
+  if (filter === 'running') {
+    return tasks.filter((t) => t.state.lastStatus === 'running' || t.state.runningAtMs);
+  }
+  if (filter === 'paused') {
+    return tasks.filter((t) => !t.enabled);
+  }
+  if (filter === 'failed') {
+    return tasks.filter((t) => t.enabled && t.state.lastStatus === 'error');
+  }
+  return tasks;
+}
+
+const TaskList: React.FC<TaskListProps> = ({ onRequestDelete, statsFilter = 'all' }) => {
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const loading = useSelector((state: RootState) => state.scheduledTask.loading);
+  const filteredTasks = useMemo(() => applyStatsFilter(tasks, statsFilter), [tasks, statsFilter]);
 
   if (loading) {
     return (
@@ -148,16 +165,24 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
     );
   }
 
-  if (tasks.length === 0) {
+  if (filteredTasks.length === 0) {
+    const filterEmptyKeys: Record<StatsFilter, string> = {
+      all: 'scheduledTasksEmptyState',
+      running: 'scheduledTasksEmptyRunning',
+      paused: 'scheduledTasksEmptyPaused',
+      failed: 'scheduledTasksEmptyFailed',
+    };
     return (
       <div className="flex flex-col items-center justify-center py-16 px-6">
         <ClockIcon className="h-12 w-12 dark:text-claude-darkTextSecondary/40 text-claude-textSecondary/40 mb-4" />
         <p className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
-          {i18nService.t('scheduledTasksEmptyState')}
+          {i18nService.t(filterEmptyKeys[statsFilter])}
         </p>
-        <p className="text-xs dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 text-center">
-          {i18nService.t('scheduledTasksEmptyHint')}
-        </p>
+        {statsFilter === 'all' && (
+          <p className="text-xs dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 text-center">
+            {i18nService.t('scheduledTasksEmptyHint')}
+          </p>
+        )}
       </div>
     );
   }
@@ -178,7 +203,7 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
           {i18nService.t('scheduledTasksListColMore')}
         </div>
       </div>
-      {tasks.map((task) => (
+      {filteredTasks.map((task) => (
         <TaskListItem key={task.id} task={task} onRequestDelete={onRequestDelete} />
       ))}
     </div>
