@@ -1280,26 +1280,36 @@ export class CoworkStore {
 
     const now = Date.now();
     let deleted = 0;
-    for (const row of rows) {
-      if (!shouldAutoDeleteMemoryText(row.text)) {
-        continue;
+    
+    // Use transaction to ensure data consistency
+    this.db.run('BEGIN TRANSACTION;');
+    try {
+      for (const row of rows) {
+        if (!shouldAutoDeleteMemoryText(row.text)) {
+          continue;
+        }
+        this.db.run(`
+          UPDATE user_memories
+          SET status = 'deleted', updated_at = ?
+          WHERE id = ?
+        `, [now, row.id]);
+        this.db.run(`
+          UPDATE user_memory_sources
+          SET is_active = 0
+          WHERE memory_id = ?
+        `, [row.id]);
+        deleted += 1;
       }
-      this.db.run(`
-        UPDATE user_memories
-        SET status = 'deleted', updated_at = ?
-        WHERE id = ?
-      `, [now, row.id]);
-      this.db.run(`
-        UPDATE user_memory_sources
-        SET is_active = 0
-        WHERE memory_id = ?
-      `, [row.id]);
-      deleted += 1;
+      this.db.run('COMMIT;');
+      
+      if (deleted > 0) {
+        this.saveDb();
+      }
+    } catch (error) {
+      this.db.run('ROLLBACK;');
+      throw error;
     }
-
-    if (deleted > 0) {
-      this.saveDb();
-    }
+    
     return deleted;
   }
 
