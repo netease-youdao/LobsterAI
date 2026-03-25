@@ -952,7 +952,11 @@ export class IMCoworkHandler extends EventEmitter {
    * Appends media metadata to content so AI can access the files
    */
   private formatMessageWithMedia(message: IMMessage): string {
-    let content = message.content;
+    // POPO's moltbot-popo plugin converts newlines to HTML break tags (<br />),
+    // causing raw <br /> to appear in the AI conversation instead of actual line breaks.
+    let content = message.platform === 'popo'
+      ? message.content.replace(/<br\s*\/?>/gi, '\n')
+      : message.content;
 
     if (message.attachments && message.attachments.length > 0) {
       const mediaInfo = message.attachments.map((att: IMMediaAttachment) => {
