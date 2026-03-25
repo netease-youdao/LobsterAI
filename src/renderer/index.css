@@ -2,7 +2,77 @@
 @tailwind components;
 @tailwind utilities;
 
-/* KaTeX styles */
+:root {
+  --claude-bg: #F8F9FB;
+  --claude-surface: #FFFFFF;
+  --claude-surfaceHover: #F0F1F4;
+  --claude-surfaceMuted: #F3F4F6;
+  --claude-surfaceInset: #EBEDF0;
+  --claude-border: #E0E2E7;
+  --claude-borderLight: #EBEDF0;
+  --claude-text: #1A1D23;
+  --claude-textSecondary: #6B7280;
+
+  --claude-darkBg: #0F1117;
+  --claude-darkSurface: #1A1D27;
+  --claude-darkSurfaceHover: #242830;
+  --claude-darkSurfaceMuted: #151820;
+  --claude-darkSurfaceInset: #0C0E14;
+  --claude-darkBorder: #2A2E38;
+  --claude-darkBorderLight: #1F232B;
+  --claude-darkText: #E4E5E9;
+  --claude-darkTextSecondary: #8B8FA3;
+
+  --claude-accent: #3B82F6;
+  --claude-accentHover: #2563EB;
+  --claude-accentLight: #60A5FA;
+  --claude-accentMuted: rgba(59,130,246,0.10);
+
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.6;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.dark {
+  color-scheme: dark;
+  color: var(--claude-darkText);
+  background-color: var(--claude-darkBg);
+}
+
+.light {
+  color-scheme: light;
+  color: var(--claude-text);
+  background-color: var(--claude-bg);
+}
+
+.dark #root,
+.dark .App,
+.dark main {
+  background-color: var(--claude-darkBg);
+  color: var(--claude-darkText);
+}
+
+.light #root,
+.light .App,
+.light main {
+  background-color: var(--claude-bg);
+  color: var(--claude-text);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  height: 100vh;
+}
+
 .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
@@ -15,10 +85,9 @@
 }
 
 .dark .katex {
-  color: #E4E5E9;
+  color: var(--claude-darkText);
 }
 
-/* Improve code block styles */
 pre {
   @apply dark:bg-claude-darkSurface bg-claude-surfaceHover;
   border-radius: 0.75rem !important;
@@ -31,7 +100,6 @@ code {
   font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace;
 }
 
-/* Improve table styles */
 table {
   border-collapse: collapse;
   margin: 1em 0;
@@ -48,7 +116,6 @@ th {
   font-weight: bold;
 }
 
-/* Style for blockquotes */
 blockquote {
   @apply dark:border-claude-accent border-claude-accent dark:text-claude-darkTextSecondary text-claude-textSecondary;
   border-left-width: 3px;
@@ -62,57 +129,6 @@ blockquote {
   contain-intrinsic-size: 500px;
 }
 
-:root {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.6;
-  font-weight: 400;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-/* Cold modern dark mode */
-.dark {
-  color-scheme: dark;
-  color: #E4E5E9;
-  background-color: #0F1117;
-}
-
-/* Cold modern light mode */
-.light {
-  color-scheme: light;
-  color: #1A1D23;
-  background-color: #F8F9FB;
-}
-
-/* Ensure all containers inherit theme */
-.dark #root,
-.dark .App,
-.dark main {
-  background-color: #0F1117;
-  color: #E4E5E9;
-}
-
-.light #root,
-.light .App,
-.light main {
-  background-color: #F8F9FB;
-  color: #1A1D23;
-}
-
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-#root {
-  height: 100vh;
-}
-
-/* Custom scrollbar styles - cold modern */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -130,18 +146,16 @@ body {
   @apply dark:bg-claude-darkTextSecondary bg-claude-textSecondary;
 }
 
-/* Style for select options to match theme */
 .dark option {
-  background-color: #1A1D27;
-  color: #E4E5E9;
+  background-color: var(--claude-darkSurface);
+  color: var(--claude-darkText);
 }
 
 .light option {
-  background-color: #FFFFFF;
-  color: #1A1D23;
+  background-color: var(--claude-surface);
+  color: var(--claude-text);
 }
 
-/* Ensure select elements have proper styling in Firefox */
 select {
   -moz-appearance: none;
   appearance: none;
@@ -170,12 +184,10 @@ select::-ms-expand {
   user-select: none;
 }
 
-/* Focus ring */
 .focus-ring {
   @apply focus:outline-none focus:ring-2 focus:ring-claude-accent focus:ring-offset-2 dark:focus:ring-offset-claude-darkBg focus:ring-offset-claude-bg;
 }
 
-/* Button styles */
 .btn-primary {
   @apply bg-claude-accent hover:bg-claude-accentHover text-white font-medium py-2 px-4 rounded-lg transition-colors;
 }
@@ -184,34 +196,28 @@ select::-ms-expand {
   @apply dark:bg-claude-darkSurface bg-claude-surface dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkText text-claude-text border dark:border-claude-darkBorder border-claude-border font-medium py-2 px-4 rounded-lg transition-colors;
 }
 
-/* Sidebar width transition - instant toggle, no animation */
 .sidebar-transition {
   transition: none;
 }
 
-/* Subtle separator line */
 .separator {
   @apply dark:border-claude-darkBorderLight border-claude-borderLight;
   border-top-width: 1px;
 }
 
-/* Modal backdrop */
 .modal-backdrop {
   @apply bg-black/40 backdrop-blur-sm;
   animation: fade-in 0.2s ease-out;
 }
 
-/* Modal content entrance */
 .modal-content {
   animation: scale-in 0.2s ease-out;
 }
 
-/* Popover entrance */
 .popover-enter {
   animation: fade-in-down 0.2s ease-out;
 }
 
-/* Skeleton loading */
 .skeleton {
   @apply dark:bg-claude-darkSurface bg-claude-surfaceHover rounded;
   position: relative;
@@ -226,7 +232,6 @@ select::-ms-expand {
   animation: shimmer 1.5s infinite;
 }
 
-/* Streaming activity bar */
 .streaming-bar {
   position: relative;
   height: 2px;
