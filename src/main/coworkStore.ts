@@ -1291,13 +1291,14 @@ export class CoworkStore {
       SET status = 'deleted', updated_at = ?
       WHERE id = ?
     `, [now, id]);
+    const memoryModified = (this.db.getRowsModified?.() || 0) > 0;
     this.db.run(`
       UPDATE user_memory_sources
       SET is_active = 0
       WHERE memory_id = ?
     `, [id]);
     this.saveDb();
-    return (this.db.getRowsModified?.() || 0) > 0;
+    return memoryModified;
   }
 
   getUserMemoryStats(): CoworkUserMemoryStats {
