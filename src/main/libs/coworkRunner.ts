@@ -6,6 +6,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkStore, CoworkMessage, CoworkExecutionMode } from '../coworkStore';
+import type { CoworkStartOptions, CoworkContinueOptions } from './agentEngine/types';
 import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
@@ -203,6 +204,8 @@ interface ActiveSession {
   executionMode: CoworkExecutionMode;
   /** When true, auto-approve all tool permissions (for scheduled tasks) */
   autoApprove?: boolean;
+  /** Override model id for this session (e.g. for IM channel bot sessions) */
+  modelOverride?: string;
 }
 
 interface PendingPermission {
@@ -1407,15 +1410,7 @@ export class CoworkRunner extends EventEmitter {
   async startSession(
     sessionId: string,
     prompt: string,
-    options: {
-      skipInitialUserMessage?: boolean;
-      skillIds?: string[];
-      systemPrompt?: string;
-      autoApprove?: boolean;
-      workspaceRoot?: string;
-      confirmationMode?: 'modal' | 'text';
-      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
-    } = {}
+    options: CoworkStartOptions = {}
   ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const session = this.store.getSession(sessionId);
@@ -1473,6 +1468,7 @@ export class CoworkRunner extends EventEmitter {
       hasAssistantThinkingOutput: false,
       executionMode: 'local',
       autoApprove: options.autoApprove ?? false,
+      modelOverride: options.modelOverride,
     };
     this.activeSessions.set(sessionId, activeSession);
     if (session.cwd !== sessionCwd) {
@@ -1507,7 +1503,7 @@ export class CoworkRunner extends EventEmitter {
     }
   }
 
-  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
+  async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
@@ -1516,8 +1512,13 @@ export class CoworkRunner extends EventEmitter {
         skillIds: options.skillIds,
         systemPrompt: options.systemPrompt,
         imageAttachments: options.imageAttachments,
+        modelOverride: options.modelOverride,
       });
       return;
+    }
+    // Update model override if provided for this turn
+    if (options.modelOverride !== undefined) {
+      activeSession.modelOverride = options.modelOverride;
     }
 
     // Ensure status returns to running for resumed turns on active sessions.
@@ -1665,13 +1666,16 @@ export class CoworkRunner extends EventEmitter {
     activeSession.lastStreamingTextUpdateAt = 0;
     activeSession.lastStreamingThinkingUpdateAt = 0;
 
-    const apiConfig = getCurrentApiConfig('local');
-    if (!apiConfig) {
+    const baseApiConfig = getCurrentApiConfig('local');
+    if (!baseApiConfig) {
       this.handleError(sessionId, 'API configuration not found. Please configure model settings.');
       this.clearPendingPermissions(sessionId);
       this.activeSessions.delete(sessionId);
       return;
     }
+    const apiConfig = activeSession.modelOverride
+      ? { ...baseApiConfig, model: activeSession.modelOverride }
+      : baseApiConfig;
     coworkLog('INFO', 'runClaudeCodeLocal', 'Resolved API config', {
       apiType: apiConfig.apiType,
       baseURL: apiConfig.baseURL,

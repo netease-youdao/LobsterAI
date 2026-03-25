@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
-import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { PhotoIcon, ExclamationTriangleIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
+import { CheckIcon } from '@heroicons/react/20/solid';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
@@ -9,9 +10,12 @@ import FolderSelectorPopover from './FolderSelectorPopover';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
+import { imService } from '../../services/im';
 import { RootState } from '../../store';
 import { setDraftPrompt } from '../../store/slices/coworkSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
+import { setIMSettings } from '../../store/slices/imSlice';
+import { getModelIdentityKey } from '../../store/slices/modelSlice';
 import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
 import { getCompactFolderName } from '../../utils/path';
@@ -94,6 +98,92 @@ interface CoworkPromptInputProps {
   /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
   remoteManaged?: boolean;
 }
+
+/** Inline IM model selector shown in the bottom toolbar of IM-managed sessions */
+const IMModelSelectorInline: React.FC = () => {
+  const dispatch = useDispatch();
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
+  const imSettings = useSelector((state: RootState) => state.im.config.settings);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    if (open) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const handleSelect = (modelId: string | undefined) => {
+    dispatch(setIMSettings({ modelId }));
+    void imService.persistConfig({ settings: { ...imSettings, modelId } });
+    setOpen(false);
+  };
+
+  // Show the configured IM model name, or fall back to the current global default model
+  const selectedName = imSettings.modelId
+    ? (availableModels.find(m => getModelIdentityKey(m) === imSettings.modelId)?.name ?? imSettings.modelId)
+    : (selectedModel?.name ?? i18nService.t('imModelSelectorDefault'));
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors ${open ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover' : ''}`}
+      >
+        <span className="max-w-[140px] truncate">{selectedName}</span>
+        <ChevronDownIcon className="h-3 w-3 flex-shrink-0" />
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-0 mb-1 w-56 dark:bg-claude-darkSurface bg-claude-surface rounded-xl shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden">
+          <div className="max-h-64 overflow-y-auto">
+            <button
+              onClick={() => handleSelect(undefined)}
+              className={`w-full px-4 py-2.5 text-left flex items-center justify-between dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors ${!imSettings.modelId ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`}
+            >
+              <div className="flex flex-col min-w-0">
+                <span className="text-sm dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('imModelSelectorDefault')}
+                </span>
+                {selectedModel && (
+                  <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">
+                    {selectedModel.name}
+                  </span>
+                )}
+              </div>
+              {!imSettings.modelId && <CheckIcon className="h-4 w-4 text-claude-accent flex-shrink-0 ml-2" />}
+            </button>
+            {availableModels.length > 0 && (
+              <div className="border-t dark:border-claude-darkBorder border-claude-border" />
+            )}
+            {availableModels.map(model => {
+              const key = getModelIdentityKey(model);
+              const isSelected = imSettings.modelId === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => handleSelect(key)}
+                  className={`w-full px-4 py-2.5 text-left flex items-center justify-between dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors ${isSelected ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''}`}
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-sm dark:text-claude-darkText text-claude-text truncate">{model.name}</span>
+                    {model.provider && (
+                      <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
+                    )}
+                  </div>
+                  {isSelected && <CheckIcon className="h-4 w-4 text-claude-accent flex-shrink-0 ml-2" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
   (props, ref) => {
@@ -690,6 +780,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </>
                 )}
                 {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
+                {remoteManaged && <IMModelSelectorInline />}
                 {!remoteManaged && (
                   <button
                     type="button"

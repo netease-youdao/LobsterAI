@@ -688,6 +688,7 @@ interface WeixinOpenClawConfig {
 interface IMSettings {
   systemPrompt?: string;
   skillsEnabled: boolean;
+  modelId?: string;
 }
 
 interface IMGatewayStatus {
