@@ -494,6 +494,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillInstalling: '安装中',
     skillInstallFailed: '安装失败',
     skillAlreadyInstalled: '已安装',
+    skillNameConflictTitle: '发现同名技能',
+    skillNameConflictMessage: '“{incoming}”与已安装的“{existing}”同名，但内容不同。请选择导入方式。',
+    skillConflictKeepBoth: '保留两份',
+    skillConflictReplaceExisting: '覆盖同名技能',
 
     // Security scan
     lobsterGuardEnabled: '安全防护中',
@@ -1571,6 +1575,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillInstalling: 'Installing',
     skillInstallFailed: 'Install failed',
     skillAlreadyInstalled: 'Installed',
+    skillNameConflictTitle: 'Skill Name Conflict',
+    skillNameConflictMessage: '"{incoming}" has the same name as the installed skill "{existing}", but the content is different. Choose how to continue.',
+    skillConflictKeepBoth: 'Keep Both',
+    skillConflictReplaceExisting: 'Replace Existing',
 
     // Security scan
     lobsterGuardEnabled: 'Security Active',

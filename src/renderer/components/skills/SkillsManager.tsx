@@ -17,7 +17,7 @@ import { i18nService } from '../../services/i18n';
 import { skillService, resolveLocalizedText } from '../../services/skill';
 import { setSkills } from '../../store/slices/skillSlice';
 import { RootState } from '../../store';
-import { Skill, MarketplaceSkill, MarketTag } from '../../types/skill';
+import { Skill, MarketplaceSkill, MarketTag, SkillInstallConflict } from '../../types/skill';
 import ErrorMessage from '../ErrorMessage';
 import SkillSecurityReport from './SkillSecurityReport';
 
@@ -44,6 +44,7 @@ const SkillsManager: React.FC = () => {
   const [skillPendingDelete, setSkillPendingDelete] = useState<Skill | null>(null);
   const [isDeletingSkill, setIsDeletingSkill] = useState(false);
   const [securityReport, setSecurityReport] = useState<any>(null);
+  const [installConflict, setInstallConflict] = useState<SkillInstallConflict | null>(null);
   const [pendingInstallId, setPendingInstallId] = useState<string | null>(null);
   const [isConfirmingInstall, setIsConfirmingInstall] = useState(false);
 
@@ -143,6 +144,34 @@ const SkillsManager: React.FC = () => {
     };
   }, [selectedSkill, selectedMarketplaceSkill]);
 
+  useEffect(() => {
+    if (!installConflict || !pendingInstallId) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isConfirmingInstall) {
+        void (async () => {
+          setIsConfirmingInstall(true);
+          try {
+            await skillService.confirmInstall(pendingInstallId, 'cancel');
+          } finally {
+            setInstallConflict(null);
+            setPendingInstallId(null);
+            setIsConfirmingInstall(false);
+            setInstallingSkillId(null);
+            setSkillDownloadSource('');
+            setIsAddSkillMenuOpen(false);
+            setIsGithubImportOpen(false);
+          }
+        })();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [installConflict, isConfirmingInstall, pendingInstallId]);
+
   const filteredSkills = useMemo(() => {
     const query = skillSearchQuery.toLowerCase();
     return skills.filter(skill => {
@@ -235,6 +264,12 @@ const SkillsManager: React.FC = () => {
       setSkillActionError(result.error || i18nService.t('skillDownloadFailed'));
       return;
     }
+    if (result.installConflict && result.pendingInstallId) {
+      setIsGithubImportOpen(false);
+      setInstallConflict(result.installConflict);
+      setPendingInstallId(result.pendingInstallId);
+      return;
+    }
     // Security audit returned — show report modal
     if (result.auditReport && result.pendingInstallId) {
       setIsGithubImportOpen(false);
@@ -294,6 +329,11 @@ const SkillsManager: React.FC = () => {
         setSkillActionError(result.error || i18nService.t('skillInstallFailed'));
         return;
       }
+      if (result.installConflict && result.pendingInstallId) {
+        setInstallConflict(result.installConflict);
+        setPendingInstallId(result.pendingInstallId);
+        return;
+      }
       // Security audit returned — show report modal
       if (result.auditReport && result.pendingInstallId) {
         setSecurityReport(result.auditReport);
@@ -326,6 +366,36 @@ const SkillsManager: React.FC = () => {
     } finally {
       setSecurityReport(null);
       setPendingInstallId(null);
+      setIsConfirmingInstall(false);
+      setInstallingSkillId(null);
+      setSkillDownloadSource('');
+      setIsAddSkillMenuOpen(false);
+      setIsGithubImportOpen(false);
+    }
+  };
+
+  const handleInstallConflictAction = async (action: 'keepBoth' | 'replaceExisting' | 'cancel') => {
+    if (!pendingInstallId) return;
+    setIsConfirmingInstall(true);
+    let nextPendingInstallId: string | null = null;
+    try {
+      const result = await skillService.confirmInstall(pendingInstallId, action);
+      if (result.auditReport && result.pendingInstallId) {
+        setSecurityReport(result.auditReport);
+        nextPendingInstallId = result.pendingInstallId;
+        return;
+      }
+      if (result.success && result.skills) {
+        dispatch(setSkills(result.skills));
+      }
+      if (!result.success && result.error) {
+        setSkillActionError(result.error);
+      }
+    } catch {
+      setSkillActionError(i18nService.t('skillInstallFailed'));
+    } finally {
+      setInstallConflict(null);
+      setPendingInstallId(nextPendingInstallId);
       setIsConfirmingInstall(false);
       setInstallingSkillId(null);
       setSkillDownloadSource('');
@@ -940,6 +1010,68 @@ const SkillsManager: React.FC = () => {
           onAction={handleSecurityReportAction}
           isLoading={isConfirmingInstall}
         />
+      )}
+
+      {installConflict && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => !isConfirmingInstall && handleInstallConflictAction('cancel')}
+        >
+          <div
+            className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkBg bg-white shadow-xl border dark:border-claude-darkBorder border-claude-border overflow-hidden"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+              <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+                {i18nService.t('skillNameConflictTitle')}
+              </h3>
+              <button
+                type="button"
+                onClick={() => handleInstallConflictAction('cancel')}
+                disabled={isConfirmingInstall}
+                className="p-1 rounded-lg hover:bg-claude-hover dark:hover:bg-claude-darkHover transition-colors disabled:opacity-50"
+              >
+                <XMarkIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('skillNameConflictMessage')
+                  .replace('{incoming}', installConflict.incomingSkillName)
+                  .replace('{existing}', installConflict.existingSkillName)}
+              </p>
+            </div>
+            <div className="flex items-center justify-between gap-2 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+              <button
+                type="button"
+                onClick={() => handleInstallConflictAction('cancel')}
+                disabled={isConfirmingInstall}
+                className="px-4 py-2 text-sm font-medium rounded-xl dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors border dark:border-claude-darkBorder border-claude-border active:scale-[0.98] disabled:opacity-50"
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleInstallConflictAction('keepBoth')}
+                  disabled={isConfirmingInstall}
+                  className="px-4 py-2 text-sm font-medium rounded-xl bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors active:scale-[0.98] disabled:opacity-50"
+                >
+                  {i18nService.t('skillConflictKeepBoth')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInstallConflictAction('replaceExisting')}
+                  disabled={isConfirmingInstall}
+                  className="px-4 py-2 text-sm font-medium rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-colors active:scale-[0.98] disabled:opacity-50"
+                >
+                  {i18nService.t('skillConflictReplaceExisting')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

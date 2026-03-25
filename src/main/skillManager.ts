@@ -9,8 +9,14 @@ import { SqliteStore } from './sqliteStore';
 import { cpRecursiveSync } from './fsCompat';
 import { getElectronNodeRuntimePath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
-import { scanSkillSecurity, scanMultipleSkillDirs, mergeReports } from './libs/skillSecurity/skillSecurityScanner';
+import { scanMultipleSkillDirs, mergeReports } from './libs/skillSecurity/skillSecurityScanner';
 import type { SkillSecurityReport, SecurityReportAction } from './libs/skillSecurity/skillSecurityTypes';
+import {
+  decideSkillInstall,
+  resolveSkillConflictDecision,
+  type InstalledSkillInstallTarget,
+  type SkillInstallDecision,
+} from './skillInstallIdentity';
 import { t } from './i18n';
 
 /**
@@ -254,6 +260,7 @@ const SKILL_STATE_KEY = 'skills_state';
 const WATCH_DEBOUNCE_MS = 250;
 const CLAUDE_SKILLS_DIR_NAME = '.claude';
 const CLAUDE_SKILLS_SUBDIR = 'skills';
+const PRESERVED_SKILL_ENTRY_NAMES = ['.env', 'node_modules'];
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -1086,6 +1093,7 @@ export class SkillManager {
     cleanupPath: string | null;
     root: string;
     skillDirs: string[];
+    installPlans?: Array<{ skillDir: string; decision: SkillInstallDecision }>;
     timer: NodeJS.Timeout;
   }>();
 
@@ -1291,6 +1299,207 @@ export class SkillManager {
     return skills;
   }
 
+  private collectInstalledSkillTargets(primaryRoot: string): InstalledSkillInstallTarget[] {
+    const roots = this.getSkillRoots(primaryRoot);
+    const installedSkills: InstalledSkillInstallTarget[] = [];
+
+    for (const root of roots) {
+      if (!fs.existsSync(root)) continue;
+      const writable = path.resolve(root) === path.resolve(primaryRoot);
+      const skillDirs = listSkillDirs(root);
+      for (const dir of skillDirs) {
+        installedSkills.push({
+          id: path.basename(dir),
+          dir,
+          writable,
+        });
+      }
+    }
+
+    return installedSkills;
+  }
+
+  private planSkillInstalls(primaryRoot: string, skillDirs: string[]): Array<{ skillDir: string; decision: SkillInstallDecision }> {
+    const installedSkills = this.collectInstalledSkillTargets(primaryRoot);
+    return skillDirs.map((skillDir) => {
+      const decision = decideSkillInstall({
+        candidateDir: skillDir,
+        desiredId: normalizeFolderName(path.basename(skillDir)),
+        installRoot: primaryRoot,
+        installedSkills,
+      });
+
+      if (decision.action === 'install') {
+        installedSkills.push({
+          id: decision.targetId,
+          dir: decision.targetDir,
+          writable: true,
+          fingerprint: decision.fingerprint,
+        });
+      } else if (decision.action === 'overwrite') {
+        installedSkills.push({
+          id: decision.targetId,
+          dir: decision.targetDir,
+          writable: true,
+          fingerprint: decision.fingerprint,
+        });
+      }
+
+      return { skillDir, decision };
+    });
+  }
+
+  private refreshInstalledSkill(skillDir: string, targetDir: string): void {
+    const resolvedSource = path.resolve(skillDir);
+    const resolvedTarget = path.resolve(targetDir);
+
+    if (resolvedSource === resolvedTarget) {
+      console.log(`[SkillManager] refreshInstalledSkill: source and target are the same directory, skipping refresh for ${path.basename(targetDir)}`);
+      return;
+    }
+
+    const stagedDir = `${resolvedTarget}.__replace__-${crypto.randomUUID()}`;
+
+    try {
+      cpRecursiveSync(resolvedSource, stagedDir);
+
+      for (const entryName of PRESERVED_SKILL_ENTRY_NAMES) {
+        const existingPath = path.join(resolvedTarget, entryName);
+        if (!fs.existsSync(existingPath)) continue;
+        cpRecursiveSync(existingPath, path.join(stagedDir, entryName), {
+          dereference: true,
+          force: true,
+        });
+      }
+
+      fs.rmSync(resolvedTarget, { recursive: true, force: true });
+      fs.renameSync(stagedDir, resolvedTarget);
+    } catch (error) {
+      if (fs.existsSync(stagedDir)) {
+        fs.rmSync(stagedDir, { recursive: true, force: true });
+      }
+      throw error;
+    }
+  }
+
+  private applySkillInstallPlans(plans: Array<{ skillDir: string; decision: SkillInstallDecision }>): { changed: boolean; installedIds: string[] } {
+    const installedIds: string[] = [];
+    let changed = false;
+
+    for (const { skillDir, decision } of plans) {
+      if (decision.action === 'skip') {
+        console.log(`[SkillManager] applySkillInstallPlans: skipped ${path.basename(skillDir)} (${decision.reason})`);
+        continue;
+      }
+
+      if (decision.action === 'conflict') {
+        throw new Error(`Unresolved skill name conflict for "${decision.desiredId}"`);
+      }
+
+      if (decision.action === 'overwrite') {
+        console.log(`[SkillManager] applySkillInstallPlans: refreshing existing install "${decision.targetId}"`);
+        this.refreshInstalledSkill(skillDir, decision.targetDir);
+        changed = true;
+        continue;
+      }
+
+      console.log(`[SkillManager] applySkillInstallPlans: installing "${decision.targetId}"`);
+      cpRecursiveSync(skillDir, decision.targetDir);
+      installedIds.push(decision.targetId);
+      changed = true;
+    }
+
+    return { changed, installedIds };
+  }
+
+  private getConflictPrompt(plans: Array<{ skillDir: string; decision: SkillInstallDecision }>) {
+    const conflict = plans.find(
+      (plan): plan is { skillDir: string; decision: Extract<SkillInstallDecision, { action: 'conflict' }> } => plan.decision.action === 'conflict'
+    );
+    if (!conflict) {
+      return null;
+    }
+
+    const incomingSkill = this.parseSkillDir(
+      conflict.skillDir,
+      this.loadSkillStateMap(),
+      {},
+      false
+    );
+    const existingSkill = this.listSkills().find(skill => skill.id === conflict.decision.existingId);
+
+    return {
+      incomingSkillId: conflict.decision.desiredId,
+      incomingSkillName: incomingSkill?.name || conflict.decision.desiredId,
+      existingSkillId: conflict.decision.existingId,
+      existingSkillName: existingSkill?.name || conflict.decision.existingId,
+    };
+  }
+
+  private async scanInstallPlans(
+    skillDirs: string[]
+  ): Promise<SkillSecurityReport | null> {
+    try {
+      console.log(`[SkillManager] Starting security scan for ${skillDirs.length} skill dir(s)...`);
+      const reports = await scanMultipleSkillDirs(skillDirs);
+      const auditReport = mergeReports(reports);
+      if (auditReport) {
+        console.log(`[SkillManager] Security scan complete: riskLevel=${auditReport.riskLevel}, score=${auditReport.riskScore}, findings=${auditReport.findings.length}, duration=${auditReport.scanDurationMs}ms`);
+        for (const f of auditReport.findings) {
+          console.log(`[SkillManager]   [${f.severity}] ${f.dimension} | ${f.ruleId} → ${f.file}${f.line ? ':' + f.line : ''}`);
+        }
+      }
+      return auditReport;
+    } catch (err) {
+      console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+      return null;
+    }
+  }
+
+  private resolvePendingConflictPlans(
+    pending: {
+      root: string;
+      installPlans?: Array<{ skillDir: string; decision: SkillInstallDecision }>;
+    },
+    action: 'keepBoth' | 'replaceExisting'
+  ): Array<{ skillDir: string; decision: SkillInstallDecision }> {
+    const plans = pending.installPlans ?? [];
+    return plans.map((plan) => {
+      if (plan.decision.action !== 'conflict') {
+        return plan;
+      }
+      return {
+        skillDir: plan.skillDir,
+        decision: resolveSkillConflictDecision(plan.decision, action, pending.root),
+      };
+    });
+  }
+
+  private createPendingInstall(params: {
+    tempDir: string;
+    cleanupPath: string | null;
+    root: string;
+    skillDirs: string[];
+    installPlans?: Array<{ skillDir: string; decision: SkillInstallDecision }>;
+  }): string {
+    const pendingId = crypto.randomUUID();
+    const timer = setTimeout(() => {
+      const pending = this.pendingInstalls.get(pendingId);
+      if (pending) {
+        cleanupPathSafely(pending.cleanupPath);
+        this.pendingInstalls.delete(pendingId);
+        console.log(`[SkillManager] Pending install ${pendingId} expired (TTL)`);
+      }
+    }, 5 * 60 * 1000);
+
+    this.pendingInstalls.set(pendingId, {
+      ...params,
+      timer,
+    });
+
+    return pendingId;
+  }
+
   buildAutoRoutingPrompt(): string | null {
     const skills = this.listSkills();
     const enabled = skills.filter(s => s.enabled && s.prompt);
@@ -1354,6 +1563,12 @@ export class SkillManager {
     error?: string;
     auditReport?: SkillSecurityReport;
     pendingInstallId?: string;
+    installConflict?: {
+      incomingSkillId: string;
+      incomingSkillName: string;
+      existingSkillId: string;
+      existingSkillName: string;
+    };
   }> {
     let cleanupPath: string | null = null;
     try {
@@ -1470,42 +1685,48 @@ export class SkillManager {
         return { success: false, error: t('skillErrNoSkillMd') };
       }
 
-      // Security scan before installation
-      let auditReport: SkillSecurityReport | null = null;
-      try {
-        console.log(`[SkillManager] Starting security scan for ${skillDirs.length} skill dir(s)...`);
-        const reports = await scanMultipleSkillDirs(skillDirs);
-        auditReport = mergeReports(reports);
-        if (auditReport) {
-          console.log(`[SkillManager] Security scan complete: riskLevel=${auditReport.riskLevel}, score=${auditReport.riskScore}, findings=${auditReport.findings.length}, duration=${auditReport.scanDurationMs}ms`);
-          for (const f of auditReport.findings) {
-            console.log(`[SkillManager]   [${f.severity}] ${f.dimension} | ${f.ruleId} → ${f.file}${f.line ? ':' + f.line : ''}`);
-          }
-        }
-      } catch (err) {
-        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
-      }
-
-      // If risk detected, cache for user confirmation instead of auto-installing
-      if (auditReport && auditReport.riskLevel !== 'safe') {
-        const pendingId = crypto.randomUUID();
-        console.log(`[SkillManager] Risk detected (${auditReport.riskLevel}), pending user confirmation: ${pendingId}`);
-        const timer = setTimeout(() => {
-          const pending = this.pendingInstalls.get(pendingId);
-          if (pending) {
-            cleanupPathSafely(pending.cleanupPath);
-            this.pendingInstalls.delete(pendingId);
-            console.log(`[SkillManager] Pending install ${pendingId} expired (TTL)`);
-          }
-        }, 5 * 60 * 1000);
-
-        this.pendingInstalls.set(pendingId, {
+      const installPlans = this.planSkillInstalls(root, skillDirs);
+      const conflictPrompt = this.getConflictPrompt(installPlans);
+      if (conflictPrompt) {
+        const pendingId = this.createPendingInstall({
           tempDir: localSource,
           cleanupPath,
           root,
           skillDirs,
-          timer,
+          installPlans,
         });
+
+        return {
+          success: true,
+          pendingInstallId: pendingId,
+          installConflict: conflictPrompt,
+        };
+      }
+
+      if (installPlans.every(({ decision }) => decision.action !== 'install')) {
+        const result = this.applySkillInstallPlans(installPlans);
+        cleanupPathSafely(cleanupPath);
+        cleanupPath = null;
+        if (result.changed) {
+          this.startWatching();
+          this.notifySkillsChanged();
+        }
+        return { success: true, skills: this.listSkills() };
+      }
+
+      // Security scan before installation
+      const auditReport = await this.scanInstallPlans(skillDirs);
+
+      // If risk detected, cache for user confirmation instead of auto-installing
+      if (auditReport && auditReport.riskLevel !== 'safe') {
+        const pendingId = this.createPendingInstall({
+          tempDir: localSource,
+          cleanupPath,
+          root,
+          skillDirs,
+          installPlans,
+        });
+        console.log(`[SkillManager] Risk detected (${auditReport.riskLevel}), pending user confirmation: ${pendingId}`);
 
         return {
           success: true,
@@ -1516,16 +1737,7 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
-      for (const skillDir of skillDirs) {
-        const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
-        cpRecursiveSync(skillDir, targetDir);
-      }
+      this.applySkillInstallPlans(installPlans);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -1539,10 +1751,10 @@ export class SkillManager {
     }
   }
 
-  confirmPendingInstall(
+  async confirmPendingInstall(
     pendingId: string,
-    action: SecurityReportAction
-  ): { success: boolean; skills?: SkillRecord[]; error?: string } {
+    action: SecurityReportAction | 'keepBoth' | 'replaceExisting'
+  ): Promise<{ success: boolean; skills?: SkillRecord[]; error?: string; auditReport?: SkillSecurityReport; pendingInstallId?: string }> {
     console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
     const pending = this.pendingInstalls.get(pendingId);
     if (!pending) {
@@ -1558,19 +1770,36 @@ export class SkillManager {
       return { success: true };
     }
 
-    // Install the skill(s)
-    const installedIds: string[] = [];
-    for (const skillDir of pending.skillDirs) {
-      const folderName = normalizeFolderName(path.basename(skillDir));
-      let targetDir = resolveWithin(pending.root, folderName);
-      let suffix = 1;
-      while (fs.existsSync(targetDir)) {
-        targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
-        suffix += 1;
+    if (action === 'keepBoth' || action === 'replaceExisting') {
+      const installPlans = this.resolvePendingConflictPlans(pending, action);
+      const auditReport = await this.scanInstallPlans(pending.skillDirs);
+      if (auditReport && auditReport.riskLevel !== 'safe') {
+        const nextPendingId = this.createPendingInstall({
+          tempDir: pending.tempDir,
+          cleanupPath: pending.cleanupPath,
+          root: pending.root,
+          skillDirs: pending.skillDirs,
+          installPlans,
+        });
+        return {
+          success: true,
+          auditReport,
+          pendingInstallId: nextPendingId,
+        };
       }
-      cpRecursiveSync(skillDir, targetDir);
-      installedIds.push(path.basename(targetDir));
+
+      const { changed } = this.applySkillInstallPlans(installPlans);
+      cleanupPathSafely(pending.cleanupPath);
+      if (changed) {
+        this.startWatching();
+        this.notifySkillsChanged();
+      }
+      return { success: true, skills: this.listSkills() };
     }
+
+    // Install the skill(s)
+    const installPlans = pending.installPlans ?? this.planSkillInstalls(pending.root, pending.skillDirs);
+    const { installedIds, changed } = this.applySkillInstallPlans(installPlans);
 
     cleanupPathSafely(pending.cleanupPath);
 
@@ -1585,8 +1814,10 @@ export class SkillManager {
       }
     }
 
-    this.startWatching();
-    this.notifySkillsChanged();
+    if (changed) {
+      this.startWatching();
+      this.notifySkillsChanged();
+    }
     return { success: true, skills: this.listSkills() };
   }
 

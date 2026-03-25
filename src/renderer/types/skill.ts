@@ -40,3 +40,10 @@ export interface MarketplaceSkill {
     author?: string;        // Author name
   };
 }
+
+export interface SkillInstallConflict {
+  incomingSkillId: string;
+  incomingSkillName: string;
+  existingSkillId: string;
+  existingSkillName: string;
+}
