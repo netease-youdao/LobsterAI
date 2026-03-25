@@ -4218,10 +4218,41 @@ if (!gotTheLock) {
     console.log('[Main] initApp: default project dir ensured');
 
     // 注册 localfile:// 自定义协议，用于安全加载本地文件（图片等）
-    protocol.handle('localfile', (request) => {
+    // Security: resolve symlinks and validate path stays within allowed directories
+    protocol.handle('localfile', async (request) => {
       const url = new URL(request.url);
-      const filePath = decodeURIComponent(url.pathname);
-      return net.fetch(`file://${filePath}`);
+      const rawPath = decodeURIComponent(url.pathname);
+
+      // Resolve symlinks to prevent symlink-based bypass
+      let resolvedPath: string;
+      try {
+        resolvedPath = await fs.promises.realpath(path.resolve(rawPath));
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      }
+
+      // Allow only paths under app data, temp dir, or the cowork working directory
+      const allowedRoots = [
+        app.getPath('userData'),
+        app.getPath('temp'),
+      ];
+      try {
+        const workingDir = getCoworkStore().getConfig().workingDirectory;
+        if (workingDir) {
+          allowedRoots.push(workingDir);
+        }
+      } catch {
+        // Store not yet initialized; only allow app directories
+      }
+      const isAllowed = allowedRoots.some(
+        (root) => resolvedPath.startsWith(root + path.sep) || resolvedPath === root
+      );
+      if (!isAllowed) {
+        console.warn('[Main] localfile:// blocked path traversal attempt');
+        return new Response('Forbidden', { status: 403 });
+      }
+
+      return net.fetch(`file://${resolvedPath}`);
     });
 
     console.log('[Main] initApp: starting initStore()');
