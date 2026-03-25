@@ -174,14 +174,14 @@ class ConfigService {
     return this.config;
   }
 
-  async updateConfig(newConfig: Partial<AppConfig>) {
+  async updateConfig(newConfig: Partial<AppConfig>, options?: { reason?: string }) {
     const normalizedProviders = normalizeProvidersConfig(newConfig.providers as AppConfig['providers'] | undefined);
     this.config = {
       ...this.config,
       ...newConfig,
       ...(normalizedProviders ? { providers: normalizedProviders } : {}),
     };
-    await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
+    await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config, options);
   }
 
   getApiConfig() {

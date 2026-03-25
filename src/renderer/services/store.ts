@@ -16,9 +16,9 @@ class LocalStoreService implements LocalStore {
     }
   }
 
-  async setItem<T>(key: string, value: T): Promise<void> {
+  async setItem<T>(key: string, value: T, options?: { reason?: string }): Promise<void> {
     try {
-      await window.electron.store.set(key, value);
+      await window.electron.store.set(key, value, options);
     } catch (error) {
       console.error('Failed to set item in store:', error);
       throw error;

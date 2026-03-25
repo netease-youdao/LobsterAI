@@ -212,13 +212,16 @@ const App: React.FC = () => {
     ) {
       return;
     }
-    void configService.updateConfig({
-      model: {
-        ...config.model,
-        defaultModel: selectedModel.id,
-        defaultModelProvider: selectedModel.providerKey,
+    void configService.updateConfig(
+      {
+        model: {
+          ...config.model,
+          defaultModel: selectedModel.id,
+          defaultModelProvider: selectedModel.providerKey,
+        },
       },
-    });
+      { reason: 'model-switch' }
+    );
   }, [isInitialized, selectedModel?.id, selectedModel?.providerKey]);
 
   const handleShowSettings = useCallback((options?: SettingsOpenOptions) => {

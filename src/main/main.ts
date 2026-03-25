@@ -865,7 +865,7 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
 };
 
 const syncOpenClawConfig = async (
-  options: { reason: string; restartGatewayIfRunning?: boolean } = { reason: 'unknown' },
+  options: { reason: string; restartGatewayIfRunning?: boolean; skipRestartEvenIfSecretsChanged?: boolean } = { reason: 'unknown' },
 ): Promise<{ success: boolean; changed: boolean; status?: OpenClawEngineStatus; error?: string }> => {
   // When a restart would be needed and there are active sessions, defer the
   // entire sync (including the config file write) to avoid triggering
@@ -911,7 +911,10 @@ const syncOpenClawConfig = async (
   // resolve from the process environment which is fixed at spawn time.
   const needsRestart = syncResult.changed || secretEnvVarsChanged;
 
-  if (!needsRestart || (!options.restartGatewayIfRunning && !secretEnvVarsChanged)) {
+  if (!needsRestart || (!options.restartGatewayIfRunning && !secretEnvVarsChanged) || options.skipRestartEvenIfSecretsChanged) {
+    if (options.skipRestartEvenIfSecretsChanged && secretEnvVarsChanged) {
+      console.log(`[OpenClaw] syncOpenClawConfig: skipping gateway restart despite secrets changed (reason: ${options.reason})`);
+    }
     return {
       success: true,
       changed: syncResult.changed,
@@ -1636,13 +1639,15 @@ if (!gotTheLock) {
     return getStore().get(key);
   });
 
-  ipcMain.handle('store:set', async (_event, key, value) => {
+  ipcMain.handle('store:set', async (_event, key, value, options) => {
     getStore().set(key, value);
     if (key === 'app_config') {
       refreshEndpointsTestMode(getStore());
+      const isModelSwitch = options?.reason === 'model-switch';
       const syncResult = await syncOpenClawConfig({
-        reason: 'app-config-change',
+        reason: options?.reason || 'app-config-change',
         restartGatewayIfRunning: false,
+        skipRestartEvenIfSecretsChanged: isModelSwitch,
       });
       if (!syncResult.success) {
         console.error('[OpenClaw] Failed to sync config after app_config update:', syncResult.error);

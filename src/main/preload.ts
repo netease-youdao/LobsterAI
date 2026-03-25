@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('electron', {
   arch: process.arch,
   store: {
     get: (key: string) => ipcRenderer.invoke('store:get', key),
-    set: (key: string, value: any) => ipcRenderer.invoke('store:set', key, value),
+    set: (key: string, value: any, options?: { reason?: string }) => ipcRenderer.invoke('store:set', key, value, options),
     remove: (key: string) => ipcRenderer.invoke('store:remove', key),
   },
   skills: {
