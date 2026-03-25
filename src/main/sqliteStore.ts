@@ -247,7 +247,11 @@ export class SqliteStore {
   save() {
     const data = this.db.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(this.dbPath, buffer);
+    // Atomic write: write to a temp file then rename, so a crash mid-write
+    // cannot corrupt the main database file.
+    const tmpPath = `${this.dbPath}.tmp`;
+    fs.writeFileSync(tmpPath, buffer);
+    fs.renameSync(tmpPath, this.dbPath);
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
