@@ -1,0 +1,29 @@
+src/main/libs/openclawConfigSync.test.ts
+  ec56b3c09ec4f05d 1-89
+src/main/libs/claudeSettings.ts
+  ec56b3c09ec4f05d 422-455
+docs/superpowers/specs/2026-03-25-avoid-gateway-restart-on-model-switch.md
+  ec56b3c09ec4f05d 1-108
+src/main/libs/openclawConfigSync.ts
+  ec56b3c09ec4f05d 7,80-88,336,357,390,421,1007-1018
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "ee366911e19d0e9ac07029d9a666238085428f0d",
+  "prompts": {
+    "ec56b3c09ec4f05d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "410ebd09-1074-4332-b32d-bd0e824d7ac8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 261,
+      "total_deletions": 15,
+      "accepted_lines": 257,
+      "overriden_lines": 0
+    }
+  }
+}
