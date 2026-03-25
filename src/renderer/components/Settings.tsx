@@ -7,7 +7,7 @@ import { themeService } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
-import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { APP_ID, EXPORT_FORMAT_TYPE } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
 import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
@@ -1805,14 +1805,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       supportsImage: model.supportsImage ?? false,
     }));
 
-  const DEFAULT_EXPORT_PASSWORD = EXPORT_PASSWORD;
-
   const handleExportProviders = async () => {
+    const password = window.prompt(i18nService.t('exportPasswordPrompt'));
+    if (!password) return;
+
     setError(null);
     setIsExportingProviders(true);
 
     try {
-      const payload = await buildProvidersExport(DEFAULT_EXPORT_PASSWORD);
+      const payload = await buildProvidersExport(password);
       const json = JSON.stringify(payload, null, 2);
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -1959,6 +1960,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       return;
     }
 
+    const password = window.prompt(i18nService.t('importPasswordPrompt'));
+    if (!password) return;
+
     setIsImportingProviders(true);
 
     try {
@@ -1979,7 +1983,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           if (apiKeyObj.salt) {
             // Version 2 password-based encryption
             try {
-              apiKey = await decryptWithPassword(apiKeyObj, DEFAULT_EXPORT_PASSWORD);
+              apiKey = await decryptWithPassword(apiKeyObj, password);
             } catch (error) {
               hadDecryptFailure = true;
               console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
