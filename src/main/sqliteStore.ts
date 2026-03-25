@@ -175,6 +175,52 @@ export class SqliteStore {
       );
     `);
 
+    // Skill analytics tables
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS skill_analytics_sessions (
+        session_id TEXT PRIMARY KEY,
+        skills TEXT NOT NULL DEFAULT '[]',
+        turn_count INTEGER NOT NULL DEFAULT 0,
+        error_count INTEGER NOT NULL DEFAULT 0,
+        start_time INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS skill_analytics_executions (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        turn_index INTEGER NOT NULL DEFAULT 0,
+        skill_name TEXT NOT NULL,
+        tool_name TEXT NOT NULL DEFAULT '',
+        latency_ms INTEGER NOT NULL DEFAULT 0,
+        is_error INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT NOT NULL DEFAULT '',
+        exec_category TEXT NOT NULL DEFAULT 'agent_action',
+        exec_summary TEXT NOT NULL DEFAULT '',
+        timestamp INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES skill_analytics_sessions(session_id) ON DELETE CASCADE
+      );
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_skill_analytics_executions_session
+      ON skill_analytics_executions(session_id);
+    `);
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_skill_analytics_executions_skill
+      ON skill_analytics_executions(skill_name);
+    `);
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS skill_analytics_sync_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_sync_at INTEGER NOT NULL DEFAULT 0,
+        processed_session_ids TEXT NOT NULL DEFAULT '[]'
+      );
+    `);
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists
@@ -220,6 +266,63 @@ export class SqliteStore {
       }
     } catch {
       // Column already exists or migration not needed.
+    }
+
+    // Migration: Remove unused token/cost/model/provider columns from skill_analytics tables
+    try {
+      const sessColsResult = this.db.exec("PRAGMA table_info(skill_analytics_sessions);");
+      const sessCols = sessColsResult[0]?.values.map((row) => row[1]) || [];
+      if (sessCols.includes('total_tokens')) {
+        // Old schema detected — rebuild tables without token/cost/model/provider columns
+        this.db.run('BEGIN TRANSACTION;');
+        try {
+          this.db.run(`CREATE TABLE skill_analytics_sessions_new (
+            session_id TEXT PRIMARY KEY,
+            skills TEXT NOT NULL DEFAULT '[]',
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            error_count INTEGER NOT NULL DEFAULT 0,
+            start_time INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          );`);
+          this.db.run(`INSERT INTO skill_analytics_sessions_new (session_id, skills, turn_count, error_count, start_time, updated_at)
+            SELECT session_id, skills, turn_count, error_count, start_time, updated_at FROM skill_analytics_sessions;`);
+          this.db.run('DROP TABLE skill_analytics_sessions;');
+          this.db.run('ALTER TABLE skill_analytics_sessions_new RENAME TO skill_analytics_sessions;');
+
+          this.db.run(`CREATE TABLE skill_analytics_executions_new (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            turn_index INTEGER NOT NULL DEFAULT 0,
+            skill_name TEXT NOT NULL,
+            tool_name TEXT NOT NULL DEFAULT '',
+            latency_ms INTEGER NOT NULL DEFAULT 0,
+            is_error INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT NOT NULL DEFAULT '',
+            exec_category TEXT NOT NULL DEFAULT 'agent_action',
+            exec_summary TEXT NOT NULL DEFAULT '',
+            timestamp INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES skill_analytics_sessions(session_id) ON DELETE CASCADE
+          );`);
+          this.db.run(`INSERT INTO skill_analytics_executions_new (id, session_id, turn_index, skill_name, tool_name, latency_ms, is_error, error_message, exec_category, exec_summary, timestamp)
+            SELECT id, session_id, turn_index, skill_name, tool_name, latency_ms, is_error, error_message,
+                   COALESCE(exec_category, 'agent_action'), COALESCE(exec_summary, ''), timestamp
+            FROM skill_analytics_executions;`);
+          this.db.run('DROP TABLE skill_analytics_executions;');
+          this.db.run('ALTER TABLE skill_analytics_executions_new RENAME TO skill_analytics_executions;');
+
+          this.db.run('CREATE INDEX IF NOT EXISTS idx_skill_analytics_executions_session ON skill_analytics_executions(session_id);');
+          this.db.run('CREATE INDEX IF NOT EXISTS idx_skill_analytics_executions_skill ON skill_analytics_executions(skill_name);');
+
+          this.db.run('COMMIT;');
+          this.save();
+          console.log('[SqliteStore] migrated skill_analytics tables: removed unused token/cost/model/provider columns');
+        } catch (migrationError) {
+          this.db.run('ROLLBACK;');
+          console.warn('[SqliteStore] skill_analytics migration failed, will use old schema:', migrationError);
+        }
+      }
+    } catch {
+      // Tables might not exist yet or migration not needed
     }
 
     try {

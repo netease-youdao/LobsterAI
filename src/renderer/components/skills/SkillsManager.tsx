@@ -5,6 +5,7 @@ import {
   ArrowDownTrayIcon,
   CheckCircleIcon,
   XMarkIcon,
+  BoltIcon,
 } from '@heroicons/react/24/outline';
 import SearchIcon from '../icons/SearchIcon';
 import PlusCircleIcon from '../icons/PlusCircleIcon';
@@ -22,6 +23,12 @@ import ErrorMessage from '../ErrorMessage';
 import SkillSecurityReport from './SkillSecurityReport';
 
 type SkillTab = 'installed' | 'marketplace';
+
+interface SkillStatsData {
+  totalExecutions: number;
+  completionRate: number;
+  avgScriptLatencyMs: number;
+}
 
 const SkillsManager: React.FC = () => {
   const dispatch = useDispatch();
@@ -46,6 +53,9 @@ const SkillsManager: React.FC = () => {
   const [securityReport, setSecurityReport] = useState<any>(null);
   const [pendingInstallId, setPendingInstallId] = useState<string | null>(null);
   const [isConfirmingInstall, setIsConfirmingInstall] = useState(false);
+  const [statsSkillName, setStatsSkillName] = useState<string | null>(null);
+  const [statsData, setStatsData] = useState<SkillStatsData | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
@@ -334,6 +344,37 @@ const SkillsManager: React.FC = () => {
     }
   };
 
+  const formatLatency = (ms: number): string => {
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  };
+
+  const handleOpenStats = async (skillName: string) => {
+    setStatsSkillName(skillName);
+    setStatsData(null);
+    setIsLoadingStats(true);
+    try {
+      const result = await window.electron.skillAnalytics.getSkillDetail(skillName);
+      if (result.success && result.data) {
+        const skill = result.data.skill;
+        setStatsData({
+          totalExecutions: skill.totalExecutions,
+          completionRate: skill.execSuccessRate / 100,
+          avgScriptLatencyMs: skill.avgScriptLatencyMs,
+        });
+      }
+    } catch {
+    } finally {
+      setIsLoadingStats(false);
+    }
+  };
+
+  const handleCloseStats = () => {
+    setStatsSkillName(null);
+    setStatsData(null);
+    setIsLoadingStats(false);
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -444,6 +485,7 @@ const SkillsManager: React.FC = () => {
             activeTab === 'marketplace' ? 'bg-claude-accent' : 'bg-transparent'
           }`} />
         </button>
+
       </div>
 
       {activeTab === 'installed' && (
@@ -469,6 +511,14 @@ const SkillsManager: React.FC = () => {
                   </span>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleOpenStats(skill.name); }}
+                    className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
+                    title={i18nService.t('skillAnalyticsButton')}
+                  >
+                    <BoltIcon className="h-4 w-4" />
+                  </button>
                   {!skill.isBuiltIn && (
                     <button
                       type="button"
@@ -941,7 +991,55 @@ const SkillsManager: React.FC = () => {
           isLoading={isConfirmingInstall}
         />
       )}
-    </div>
+
+      {statsSkillName && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={handleCloseStats}
+        >
+          <div
+            className="w-full max-w-xs mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-5"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text truncate">
+                {statsSkillName}
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseStats}
+                className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors flex-shrink-0"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+            {isLoadingStats ? (
+              <div className="text-center py-6 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('downloadingSkill')}
+              </div>
+            ) : statsData ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillAnalyticsExecutions')}</span>
+                  <span className="font-medium dark:text-claude-darkText text-claude-text">{statsData.totalExecutions}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillAnalyticsCompletionRate')}</span>
+                  <span className="font-medium dark:text-claude-darkText text-claude-text">{(statsData.completionRate * 100).toFixed(1)}%</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('skillAnalyticsScriptLatency')}</span>
+                  <span className="font-medium dark:text-claude-darkText text-claude-text">{formatLatency(statsData.avgScriptLatencyMs)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-6 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('skillAnalyticsNoData')}
+              </div>
+            )}
+          </div>
+        </div>
+      , document.body)}    </div>
   );
 };
 

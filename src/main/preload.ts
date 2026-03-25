@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('skills:changed', handler);
     },
   },
+  skillAnalytics: {
+    getSkillDetail: (skillName: string, timeRange?: { from: number; to: number }) => ipcRenderer.invoke('skill-analytics:getSkillDetail', skillName, timeRange),
+  },
   mcp: {
     list: () => ipcRenderer.invoke('mcp:list'),
     create: (data: any) => ipcRenderer.invoke('mcp:create', data),
