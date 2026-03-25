@@ -32,6 +32,29 @@ const mapApiTypeToOpenClawApi = (apiType: 'anthropic' | 'openai' | undefined): '
   return apiType === 'openai' ? 'openai-completions' : 'anthropic-messages';
 };
 
+/**
+ * Mask sensitive fields in provider config for safe logging.
+ * Replaces apiKey with '***' to prevent credential leakage in logs.
+ */
+const maskProviderConfigForLogging = (providers: unknown): unknown => {
+  if (!providers || typeof providers !== 'object') {
+    return providers;
+  }
+  const masked: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(providers)) {
+    if (value && typeof value === 'object') {
+      const provider = { ...value } as Record<string, unknown>;
+      if (provider.apiKey) {
+        provider.apiKey = '***';
+      }
+      masked[key] = provider;
+    } else {
+      masked[key] = value;
+    }
+  }
+  return masked;
+};
+
 const ensureDir = (dirPath: string): void => {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -943,7 +966,7 @@ export class OpenClawConfigSync {
 
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
-      providers: (managedConfig.models as Record<string, unknown>)?.providers,
+      providers: maskProviderConfigForLogging((managedConfig.models as Record<string, unknown>)?.providers),
       primaryModel: ((managedConfig.agents as Record<string, unknown>)?.defaults as Record<string, unknown>)?.model,
     });
     let currentContent = '';
