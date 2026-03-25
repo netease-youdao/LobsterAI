@@ -16,6 +16,7 @@ import {
   WecomConfig,
   WecomOpenClawConfig,
   PopoOpenClawConfig,
+  WeixinOpenClawConfig,
   IMSettings,
   IMPlatform,
   IMSessionMapping,
@@ -28,6 +29,7 @@ import {
   DEFAULT_XIAOMIFENG_CONFIG,
   DEFAULT_WECOM_CONFIG,
   DEFAULT_POPO_CONFIG,
+  DEFAULT_WEIXIN_CONFIG,
   DEFAULT_IM_SETTINGS,
 } from './types';
 
@@ -76,7 +78,7 @@ export class IMStore {
    * Migrate existing IM configs to ensure stable defaults.
    */
   private migrateDefaults(): void {
-    const platforms = ['dingtalk', 'feishu', 'telegram', 'discord', 'nim', 'xiaomifeng', 'qq', 'wecom', 'popo'] as const;
+    const platforms = ['dingtalk', 'feishu', 'telegram', 'discord', 'nim', 'xiaomifeng', 'qq', 'wecom', 'popo', 'weixin'] as const;
     let changed = false;
 
     for (const platform of platforms) {
@@ -354,6 +356,7 @@ export class IMStore {
     const qq = this.getConfigValue<QQConfig>('qq') ?? DEFAULT_QQ_CONFIG;
     const wecom = this.getConfigValue<WecomOpenClawConfig>('wecomOpenClaw') ?? DEFAULT_WECOM_CONFIG;
     const popo = this.getConfigValue<PopoOpenClawConfig>('popo') ?? DEFAULT_POPO_CONFIG;
+    const weixin = this.getConfigValue<WeixinOpenClawConfig>('weixin') ?? DEFAULT_WEIXIN_CONFIG;
     const settings = this.getConfigValue<IMSettings>('settings') ?? DEFAULT_IM_SETTINGS;
 
     // Resolve enabled field: default to false for safety
@@ -377,6 +380,7 @@ export class IMStore {
       qq: resolveEnabled(qq, DEFAULT_QQ_CONFIG),
       wecom: resolveEnabled(wecom, DEFAULT_WECOM_CONFIG),
       popo: resolveEnabled(popo, DEFAULT_POPO_CONFIG),
+      weixin: resolveEnabled(weixin, DEFAULT_WEIXIN_CONFIG),
       settings: { ...DEFAULT_IM_SETTINGS, ...settings },
     };
   }
@@ -408,6 +412,9 @@ export class IMStore {
     }
     if (config.popo) {
       this.setPopoConfig(config.popo);
+    }
+    if (config.weixin) {
+      this.setWeixinConfig(config.weixin);
     }
     if (config.settings) {
       this.setIMSettings(config.settings);
@@ -520,6 +527,18 @@ export class IMStore {
   setPopoConfig(config: Partial<PopoOpenClawConfig>): void {
     const current = this.getPopoConfig();
     this.setConfigValue('popo', { ...current, ...config });
+  }
+
+  // ==================== Weixin (微信) ====================
+
+  getWeixinConfig(): WeixinOpenClawConfig {
+    const stored = this.getConfigValue<WeixinOpenClawConfig>('weixin');
+    return { ...DEFAULT_WEIXIN_CONFIG, ...stored };
+  }
+
+  setWeixinConfig(config: Partial<WeixinOpenClawConfig>): void {
+    const current = this.getWeixinConfig();
+    this.setConfigValue('weixin', { ...current, ...config });
   }
 
   // ==================== IM Settings ====================

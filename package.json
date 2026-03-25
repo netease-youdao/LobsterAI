@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.3.21",
+  "version": "2026.3.23",
   "openclaw": {
     "version": "v2026.3.2",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -30,6 +30,11 @@
         "id": "wecom-openclaw-plugin",
         "npm": "@wecom/wecom-openclaw-plugin",
         "version": "1.0.12"
+      },
+      {
+        "id": "openclaw-weixin",
+        "npm": "@tencent-weixin/openclaw-weixin",
+        "version": "1.0.2"
       },
       {
         "id": "moltbot-popo",

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor } from 'electron';
+import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
 import type { WebContents } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -567,6 +567,7 @@ let openClawBootstrapPromise: Promise<OpenClawEngineStatus> | null = null;
 let openClawStatusForwarderBound = false;
 let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
+let preventSleepBlockerId: number | null = null;
 
 const initStore = async (): Promise<SqliteStore> => {
   if (!storeInitPromise) {
@@ -788,6 +789,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       getNimConfig: () => {
         try {
           return getIMGatewayManager().getConfig().nim;
+        } catch {
+          return null;
+        }
+      },
+      getWeixinConfig: () => {
+        try {
+          return getIMGatewayManager().getConfig().weixin;
         } catch {
           return null;
         }
@@ -1671,6 +1679,36 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set auto-launch',
+      };
+    }
+  });
+
+  ipcMain.handle('app:getPreventSleep', () => {
+    const enabled = getStore().get<boolean>('prevent_sleep_enabled') ?? false;
+    return { enabled };
+  });
+
+  ipcMain.handle('app:setPreventSleep', (_event, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      return { success: false, error: 'Invalid parameter: enabled must be boolean' };
+    }
+    try {
+      if (enabled) {
+        if (preventSleepBlockerId === null || !powerSaveBlocker.isStarted(preventSleepBlockerId)) {
+          preventSleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+        }
+      } else {
+        if (preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId)) {
+          powerSaveBlocker.stop(preventSleepBlockerId);
+          preventSleepBlockerId = null;
+        }
+      }
+      getStore().set('prevent_sleep_enabled', enabled);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to set prevent-sleep',
       };
     }
   });
@@ -2876,7 +2914,7 @@ if (!gotTheLock) {
       // Only trigger sync when explicitly requested via syncGateway flag (e.g. from
       // the global Save button), to avoid frequent gateway restarts on every field blur.
       const hasOpenClawChange = config.telegram || config.discord || config.dingtalk
-        || config.feishu || config.qq || config.wecom || config.popo;
+        || config.feishu || config.qq || config.wecom || config.popo || config.weixin;
       if (options?.syncGateway && hasOpenClawChange && getOpenClawEngineManager().getStatus().phase === 'running') {
         scheduleImConfigSync();
       }
@@ -2949,6 +2987,31 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to test gateway connectivity',
       };
+    }
+  });
+
+  // Weixin QR login
+  ipcMain.handle('im:weixin:qr-login-start', async () => {
+    try {
+      const result = await getIMGatewayManager().weixinQrLoginStart();
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Failed to start Weixin QR login' };
+    }
+  });
+
+  ipcMain.handle('im:weixin:qr-login-wait', async (_event, accountId?: string) => {
+    try {
+      const result = await getIMGatewayManager().weixinQrLoginWait(accountId);
+      if (result.connected) {
+        // Restart gateway so the plugin picks up the new token and starts
+        // a fresh monitor loop (the old one may be stuck in a session pause).
+        console.log('[IMGatewayManager] Weixin login succeeded, restarting OpenClaw gateway');
+        await getOpenClawEngineManager().restartGateway();
+      }
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, connected: false, message: error instanceof Error ? error.message : 'Weixin QR login failed' };
     }
   });
 
@@ -3957,6 +4020,16 @@ if (!gotTheLock) {
       getStore().set('auto_launch_initialized', true);
       getStore().set('auto_launch_enabled', true);
       setAutoLaunchEnabled(true);
+    }
+
+    // Restore prevent-sleep setting
+    const preventSleepEnabled = getStore().get<boolean>('prevent_sleep_enabled');
+    if (preventSleepEnabled) {
+      try {
+        preventSleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+      } catch (err) {
+        console.error('[Main] Failed to start prevent-sleep blocker:', err);
+      }
     }
 
     let lastLanguage = getStore().get<AppConfigSettings>('app_config')?.language;

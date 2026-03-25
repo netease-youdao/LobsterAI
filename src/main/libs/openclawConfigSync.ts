@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig } from '../im/types';
-import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig } from '../im/types';
+import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig } from '../im/types';
 import { resolveRawApiConfig } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
@@ -430,6 +430,7 @@ type OpenClawConfigSyncDeps = {
   getWecomConfig: () => WecomOpenClawConfig | null;
   getPopoConfig: () => PopoOpenClawConfig | null;
   getNimConfig: () => NimConfig | null;
+  getWeixinConfig: () => WeixinOpenClawConfig | null;
   getMcpBridgeConfig?: () => McpBridgeConfig | null;
   getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
 };
@@ -445,6 +446,7 @@ export class OpenClawConfigSync {
   private readonly getWecomConfig: () => WecomOpenClawConfig | null;
   private readonly getPopoConfig: () => PopoOpenClawConfig | null;
   private readonly getNimConfig: () => NimConfig | null;
+  private readonly getWeixinConfig: () => WeixinOpenClawConfig | null;
   private readonly getMcpBridgeConfig?: () => McpBridgeConfig | null;
   private readonly getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
 
@@ -459,6 +461,7 @@ export class OpenClawConfigSync {
     this.getWecomConfig = deps.getWecomConfig;
     this.getPopoConfig = deps.getPopoConfig;
     this.getNimConfig = deps.getNimConfig;
+    this.getWeixinConfig = deps.getWeixinConfig;
     this.getMcpBridgeConfig = deps.getMcpBridgeConfig;
     this.getSkillsList = deps.getSkillsList;
   }
@@ -525,8 +528,10 @@ export class OpenClawConfigSync {
     const wecomConfig = this.getWecomConfig();
 
     const popoConfig = this.getPopoConfig();
-    
+
     const nimConfig = this.getNimConfig();
+
+    const weixinConfig = this.getWeixinConfig();
 
     const hasAnyChannel = hasDingTalkOpenClaw;
 
@@ -605,6 +610,7 @@ export class OpenClawConfigSync {
                 if (id === 'wecom-openclaw-plugin') return !!(wecomConfig?.enabled && wecomConfig.botId);
                 if (id === 'moltbot-popo') return !!(popoConfig?.enabled && popoConfig.appKey);
                 if (id === 'nim') return !!(nimConfig?.enabled && nimConfig.appKey && nimConfig.account && nimConfig.token);
+                if (id === 'openclaw-weixin') return true; // Always keep enabled for QR login discovery
                 return true; // other plugins stay enabled
               })();
               return [id, { enabled: pluginEnabled }];
@@ -895,6 +901,16 @@ export class OpenClawConfigSync {
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'nim': nimChannel };
     }
 
+    // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin)
+    // Always write the channel entry — use enabled:false when disabled so the
+    // Gateway stops the channel instead of falling back to plugin defaults.
+    const weixinChannelEnabled = !!(weixinConfig?.enabled);
+    const weixinChannel: Record<string, unknown> = {
+      enabled: weixinChannelEnabled,
+      ...(weixinConfig?.accountId ? { accountId: weixinConfig.accountId } : {}),
+    };
+    managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'openclaw-weixin': weixinChannel };
+
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
     let currentContent = '';
     try {
@@ -947,15 +963,15 @@ export class OpenClawConfigSync {
 
     // Provider API Key
     const apiResolution = resolveRawApiConfig();
-    if (apiResolution.config?.apiKey) {
-      env.LOBSTER_PROVIDER_API_KEY = apiResolution.config.apiKey;
-    }
+    // Provider API Key — always set so stale openclaw.json with
+    // ${LOBSTER_PROVIDER_API_KEY} placeholder doesn't crash the gateway.
+    // OpenClaw treats empty string as "missing", so use a non-empty placeholder.
+    env.LOBSTER_PROVIDER_API_KEY = apiResolution.config?.apiKey || 'unconfigured';
 
-    // MCP Bridge Secret
+    // MCP Bridge Secret — always set so stale openclaw.json with
+    // ${LOBSTER_MCP_BRIDGE_SECRET} placeholder doesn't crash the gateway.
     const mcpBridgeCfg = this.getMcpBridgeConfig?.();
-    if (mcpBridgeCfg?.secret) {
-      env.LOBSTER_MCP_BRIDGE_SECRET = mcpBridgeCfg.secret;
-    }
+    env.LOBSTER_MCP_BRIDGE_SECRET = mcpBridgeCfg?.secret || 'unconfigured';
 
     // Telegram
     const tgConfig = this.getTelegramOpenClawConfig?.();
@@ -1007,6 +1023,11 @@ export class OpenClawConfigSync {
     }
     if (popoConfig?.enabled && popoConfig.token) {
       env.LOBSTER_POPO_TOKEN = popoConfig.token;
+    } else if (popoConfig?.enabled) {
+      // Provide non-empty fallback so stale openclaw.json files that still
+      // contain ${LOBSTER_POPO_TOKEN} from a previous webhook config
+      // don't crash the gateway with MissingEnvVarError.
+      env.LOBSTER_POPO_TOKEN = 'unconfigured';
     }
 
     // NIM
