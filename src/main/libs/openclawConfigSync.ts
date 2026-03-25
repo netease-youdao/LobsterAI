@@ -901,15 +901,17 @@ export class OpenClawConfigSync {
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'nim': nimChannel };
     }
 
-    // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin)
-    // Always write the channel entry — use enabled:false when disabled so the
-    // Gateway stops the channel instead of falling back to plugin defaults.
-    const weixinChannelEnabled = !!(weixinConfig?.enabled);
-    const weixinChannel: Record<string, unknown> = {
-      enabled: weixinChannelEnabled,
-      ...(weixinConfig?.accountId ? { accountId: weixinConfig.accountId } : {}),
-    };
-    managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'openclaw-weixin': weixinChannel };
+    // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin).
+    // Only write the channel entry when the plugin is actually installed —
+    // OpenClaw rejects unknown channel IDs and the channel key must match
+    // the id the plugin declares (which is 'weixin', not the npm package name).
+    if (isBundledPluginAvailable('openclaw-weixin') && weixinConfig?.enabled) {
+      const weixinChannel: Record<string, unknown> = {
+        enabled: true,
+        ...(weixinConfig.accountId ? { accountId: weixinConfig.accountId } : {}),
+      };
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'weixin': weixinChannel };
+    }
 
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
     let currentContent = '';
