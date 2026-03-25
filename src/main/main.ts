@@ -1821,7 +1821,48 @@ if (!gotTheLock) {
   };
 
   /**
+   * Shared token refresh with mutex lock.
+   * When multiple requests hit 401 concurrently, only the first one actually
+   * calls the refresh endpoint; subsequent callers reuse the same Promise and
+   * receive the new accessToken without consuming the refreshToken again.
+   */
+  let activeRefreshPromise: Promise<string | null> | null = null;
+
+  const refreshAccessToken = (): Promise<string | null> => {
+    if (activeRefreshPromise) return activeRefreshPromise;
+
+    activeRefreshPromise = (async () => {
+      try {
+        const tokens = getAuthTokens();
+        if (!tokens?.refreshToken) return null;
+        const serverBaseUrl = getServerApiBaseUrl();
+        const refreshResp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: tokens.refreshToken }),
+        });
+        if (!refreshResp.ok) return null;
+        const refreshBody = await refreshResp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+        if (refreshBody.code !== 0 || !refreshBody.data) return null;
+        saveAuthTokens(refreshBody.data.accessToken, refreshBody.data.refreshToken || tokens.refreshToken);
+        console.log('[Auth] token refresh succeeded (shared lock)');
+        return refreshBody.data.accessToken;
+      } catch (err) {
+        console.warn('[Auth] token refresh failed:', err);
+        return null;
+      }
+    })();
+
+    activeRefreshPromise.finally(() => {
+      activeRefreshPromise = null;
+    });
+
+    return activeRefreshPromise;
+  };
+
+  /**
    * Helper: Fetch with Bearer token, auto-refresh on 401 and retry once.
+   * Uses shared refreshAccessToken() to prevent concurrent refresh races.
    */
   const fetchWithAuth = async (url: string, options?: RequestInit): Promise<Response> => {
     const tokens = getAuthTokens();
@@ -1835,19 +1876,10 @@ if (!gotTheLock) {
 
     let resp = await doFetch(tokens.accessToken);
 
-    if (resp.status === 401 && tokens.refreshToken) {
-      const serverBaseUrl = getServerApiBaseUrl();
-      const refreshResp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: tokens.refreshToken }),
-      });
-      if (refreshResp.ok) {
-        const refreshBody = await refreshResp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-        if (refreshBody.code === 0 && refreshBody.data) {
-          saveAuthTokens(refreshBody.data.accessToken, refreshBody.data.refreshToken || tokens.refreshToken);
-          resp = await doFetch(refreshBody.data.accessToken);
-        }
+    if (resp.status === 401) {
+      const newAccessToken = await refreshAccessToken();
+      if (newAccessToken) {
+        resp = await doFetch(newAccessToken);
       }
     }
 
@@ -2014,19 +2046,9 @@ if (!gotTheLock) {
 
   ipcMain.handle('auth:refreshToken', async () => {
     try {
-      const tokens = getAuthTokens();
-      if (!tokens?.refreshToken) return { success: false };
-      const serverBaseUrl = getServerApiBaseUrl();
-      const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: tokens.refreshToken }),
-      });
-      if (!resp.ok) return { success: false };
-      const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-      if (body.code !== 0 || !body.data) return { success: false };
-      saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
-      return { success: true, accessToken: body.data.accessToken };
+      const newAccessToken = await refreshAccessToken();
+      if (!newAccessToken) return { success: false };
+      return { success: true, accessToken: newAccessToken };
     } catch {
       return { success: false };
     }
@@ -4242,34 +4264,7 @@ if (!gotTheLock) {
     // The getter proactively triggers a background token refresh when the
     // accessToken is within 5 minutes of expiry, so that the SDK always
     // gets a fresh token without blocking.
-    let refreshPromise: Promise<void> | null = null;
-    const refreshTokenAsync = async () => {
-      if (refreshPromise) return;
-      refreshPromise = (async () => {
-        try {
-          const tokens = getAuthTokens();
-          if (!tokens?.refreshToken) return;
-          const serverBaseUrl = getServerApiBaseUrl();
-          const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refreshToken: tokens.refreshToken }),
-          });
-          if (resp.ok) {
-            const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-            if (body.code === 0 && body.data) {
-              saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
-              console.log('[Auth] proactive token refresh succeeded');
-            }
-          }
-        } catch (err) {
-          console.warn('[Auth] proactive token refresh failed:', err);
-        } finally {
-          refreshPromise = null;
-        }
-      })();
-    };
-
+    // Uses the shared refreshAccessToken() to prevent concurrent refresh races.
     setAuthTokensGetter(() => {
       const tokens = getAuthTokens();
       if (!tokens) return null;
@@ -4278,7 +4273,7 @@ if (!gotTheLock) {
         const payload = JSON.parse(Buffer.from(tokens.accessToken.split('.')[1], 'base64').toString());
         const expiresAt = payload.exp * 1000;
         if (expiresAt - Date.now() < 5 * 60 * 1000) {
-          refreshTokenAsync(); // fire-and-forget
+          refreshAccessToken(); // fire-and-forget, shared mutex prevents races
         }
       } catch { /* unable to parse JWT, return token as-is */ }
       return tokens;
