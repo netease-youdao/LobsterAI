@@ -3657,6 +3657,11 @@ if (!gotTheLock) {
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     try {
+      const parsed = new URL(url);
+      const ALLOWED_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+      if (!ALLOWED_SCHEMES.has(parsed.protocol)) {
+        return { success: false, error: `Blocked URL scheme: ${parsed.protocol}` };
+      }
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
@@ -3965,7 +3970,17 @@ if (!gotTheLock) {
           },
         };
       }
-      shell.openExternal(url);
+      try {
+        const parsed = new URL(url);
+        const ALLOWED_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+        if (ALLOWED_SCHEMES.has(parsed.protocol)) {
+          shell.openExternal(url);
+        } else {
+          console.warn(`[Main] blocked window.open with disallowed scheme: ${parsed.protocol}`);
+        }
+      } catch {
+        console.warn('[Main] blocked window.open with invalid URL:', url);
+      }
       return { action: 'deny' };
     });
 
