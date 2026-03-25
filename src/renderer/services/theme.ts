@@ -54,6 +54,13 @@ class ThemeService {
     }
   }
 
+  //回收监听器
+  destroy(): void {
+    if (this.mediaQuery && this.mediaQueryListener) {
+      this.mediaQuery.removeEventListener('change', this.mediaQueryListener);
+    }
+  }
+
   // 设置主题
   setTheme(theme: ThemeType): void {
     const effectiveTheme = theme === 'system'
