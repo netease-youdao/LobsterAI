@@ -453,6 +453,25 @@ class CoworkService {
     }
   }
 
+  async copyImageToClipboard(options: {
+    pngBase64: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.copyImageToClipboard) {
+      return { success: false, error: 'Cowork copy image API not available' };
+    }
+
+    try {
+      const result = await cowork.copyImageToClipboard(options);
+      return result ?? { success: false, error: 'Failed to copy image to clipboard' };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to copy image to clipboard',
+      };
+    }
+  }
+
   async loadSession(sessionId: string): Promise<CoworkSession | null> {
     const cowork = window.electron?.cowork;
     if (!cowork) return null;

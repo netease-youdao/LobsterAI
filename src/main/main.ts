@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, clipboard, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
 import type { WebContents } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -2704,6 +2704,33 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to save session image',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:copyImageToClipboard', async (
+    _event,
+    options: { pngBase64: string }
+  ) => {
+    try {
+      const base64 = typeof options?.pngBase64 === 'string' ? options.pngBase64.trim() : '';
+      if (!base64) {
+        return { success: false, error: 'Image data is required' };
+      }
+      const pngBuffer = Buffer.from(base64, 'base64');
+      if (pngBuffer.length <= 0) {
+        return { success: false, error: 'Invalid image data' };
+      }
+      const image = nativeImage.createFromBuffer(pngBuffer);
+      if (image.isEmpty()) {
+        return { success: false, error: 'Failed to decode image' };
+      }
+      clipboard.writeImage(image);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to copy image to clipboard',
       };
     }
   });
