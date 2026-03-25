@@ -250,6 +250,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('dialog:selectFiles', options),
     saveInlineFile: (options: { dataBase64: string; fileName?: string; mimeType?: string; cwd?: string }) =>
       ipcRenderer.invoke('dialog:saveInlineFile', options),
+    saveFile: (options: { content: string; defaultFileName?: string; title?: string; filters?: { name: string; extensions: string[] }[] }) =>
+      ipcRenderer.invoke('dialog:saveFile', options),
     readFileAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('dialog:readFileAsDataUrl', filePath),
   },
