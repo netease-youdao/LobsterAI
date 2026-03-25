@@ -539,7 +539,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly manuallyStoppedSessions = new Set<string>();
   /** Session keys whose origin is "heartbeat" — discovered via polling, used to filter real-time events. */
   private readonly heartbeatSessionKeys = new Set<string>();
-  private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
+  private channelPollingTimer: ReturnType<typeof setTimeout> | null = null;
+  private channelPollInFlight: Promise<void> | null = null;
 
   private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
   private static readonly FULL_HISTORY_SYNC_LIMIT = 50;
@@ -719,20 +720,45 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
     // Already running
-    if (this.channelPollingTimer) { console.log('[ChannelSync] startChannelPolling: already running, skipping'); return; }
+    if (this.channelPollingTimer || this.channelPollInFlight) { console.log('[ChannelSync] startChannelPolling: already running, skipping'); return; }
 
     console.log('[ChannelSync] startChannelPolling: starting periodic channel session discovery');
-    // Run once immediately, then at interval
-    void this.pollChannelSessions();
-    this.channelPollingTimer = setInterval(() => {
-      void this.pollChannelSessions();
-    }, OpenClawRuntimeAdapter.CHANNEL_POLL_INTERVAL_MS);
+    void this.runChannelPollCycle();
   }
 
   stopChannelPolling(): void {
     if (this.channelPollingTimer) {
-      clearInterval(this.channelPollingTimer);
+      clearTimeout(this.channelPollingTimer);
       this.channelPollingTimer = null;
+    }
+  }
+
+  private scheduleNextChannelPoll(delayMs: number): void {
+    if (!this.channelSessionSync) return;
+    if (this.channelPollingTimer) {
+      clearTimeout(this.channelPollingTimer);
+    }
+    this.channelPollingTimer = setTimeout(() => {
+      this.channelPollingTimer = null;
+      void this.runChannelPollCycle();
+    }, delayMs);
+  }
+
+  private async runChannelPollCycle(): Promise<void> {
+    if (!this.channelSessionSync || this.channelPollInFlight) return;
+
+    const pollPromise = this.pollChannelSessions();
+    this.channelPollInFlight = pollPromise;
+
+    try {
+      await pollPromise;
+    } finally {
+      if (this.channelPollInFlight === pollPromise) {
+        this.channelPollInFlight = null;
+      }
+      if (this.channelSessionSync && this.gatewayClient) {
+        this.scheduleNextChannelPoll(OpenClawRuntimeAdapter.CHANNEL_POLL_INTERVAL_MS);
+      }
     }
   }
 

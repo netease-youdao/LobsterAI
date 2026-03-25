@@ -270,10 +270,11 @@ function extractRunTitle(summary?: string): string | undefined {
 export class CronJobService {
   private readonly getGatewayClient: () => GatewayClientLike | null;
   private readonly ensureGatewayReady: () => Promise<void>;
-  private pollingTimer: ReturnType<typeof setInterval> | null = null;
+  private pollingTimer: ReturnType<typeof setTimeout> | null = null;
   private lastKnownStates: Map<string, string> = new Map();
   private lastKnownRunAtMs: Map<string, number> = new Map();
   private polling = false;
+  private pollInFlight: Promise<void> | null = null;
   private firstPollDone = false;
   /** Synchronous jobId → name cache, populated during polling. */
   private jobNameCache: Map<string, string> = new Map();
@@ -453,22 +454,48 @@ export class CronJobService {
   startPolling(): void {
     if (this.polling) return;
     this.polling = true;
-    this.pollOnce();
-    this.pollingTimer = setInterval(() => {
-      void this.pollOnce();
-    }, CronJobService.POLL_INTERVAL_MS);
+    void this.runPollCycle();
   }
 
   stopPolling(): void {
     this.polling = false;
     if (this.pollingTimer) {
-      clearInterval(this.pollingTimer);
+      clearTimeout(this.pollingTimer);
       this.pollingTimer = null;
     }
     this.lastKnownStates.clear();
     this.lastKnownRunAtMs.clear();
     this.jobNameCache.clear();
     this.firstPollDone = false;
+  }
+
+  private scheduleNextPoll(delayMs: number): void {
+    if (!this.polling) return;
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+    }
+    this.pollingTimer = setTimeout(() => {
+      this.pollingTimer = null;
+      void this.runPollCycle();
+    }, delayMs);
+  }
+
+  private async runPollCycle(): Promise<void> {
+    if (!this.polling || this.pollInFlight) return;
+
+    const pollPromise = this.pollOnce();
+    this.pollInFlight = pollPromise;
+
+    try {
+      await pollPromise;
+    } finally {
+      if (this.pollInFlight === pollPromise) {
+        this.pollInFlight = null;
+      }
+      if (this.polling) {
+        this.scheduleNextPoll(CronJobService.POLL_INTERVAL_MS);
+      }
+    }
   }
 
   private async pollOnce(): Promise<void> {
