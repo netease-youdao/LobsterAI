@@ -183,7 +183,18 @@ export async function migrateScheduledTasksToOpenclaw(deps: MigrationDeps): Prom
 
   console.log(`[MigrateScheduledTasks] Migrating ${rows.length} task(s) to OpenClaw gateway...`);
 
-  // 4. Push each task to the OpenClaw gateway
+  // 4a. Fetch existing tasks from the gateway so we can skip duplicates.
+  //     Prevents re-creating tasks when a prior migration partially succeeded
+  //     but the idempotency flag was not set due to a transient gateway error.
+  let existingNames: Set<string>;
+  try {
+    const existingJobs = await cronJobService.listJobs();
+    existingNames = new Set(existingJobs.map((j) => j.name));
+  } catch {
+    existingNames = new Set();
+  }
+
+  // 4b. Push each task to the OpenClaw gateway, skipping duplicates by name.
   let succeeded = 0;
   let skipped = 0;
   let gatewayErrors = 0;
@@ -191,8 +202,15 @@ export async function migrateScheduledTasksToOpenclaw(deps: MigrationDeps): Prom
     const input = rowToInput(row);
     if (!input) { skipped++; continue; }
 
+    if (existingNames.has(input.name)) {
+      console.log(`[MigrateScheduledTasks] Task "${input.name}" already exists in gateway, skipping`);
+      skipped++;
+      continue;
+    }
+
     try {
       await cronJobService.addJob(input);
+      existingNames.add(input.name);
       console.log(`[MigrateScheduledTasks] Migrated task: "${row.name}"`);
       succeeded++;
     } catch (err) {
