@@ -46,6 +46,13 @@ const SkillsManager: React.FC = () => {
   const [securityReport, setSecurityReport] = useState<any>(null);
   const [pendingInstallId, setPendingInstallId] = useState<string | null>(null);
   const [isConfirmingInstall, setIsConfirmingInstall] = useState(false);
+  const [duplicateCheck, setDuplicateCheck] = useState<{
+    existingSkill: Skill;
+    existingSkillPath: string;
+    existingVersion?: string;
+    newVersion?: string;
+    pendingInstallId: string;
+  } | null>(null);
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
@@ -235,7 +242,11 @@ const SkillsManager: React.FC = () => {
       setSkillActionError(result.error || i18nService.t('skillDownloadFailed'));
       return;
     }
-    // Security audit returned — show report modal
+    if (result.duplicate && result.pendingInstallId) {
+      setIsGithubImportOpen(false);
+      setDuplicateCheck(result.duplicate);
+      return;
+    }
     if (result.auditReport && result.pendingInstallId) {
       setIsGithubImportOpen(false);
       setSecurityReport(result.auditReport);
@@ -326,6 +337,29 @@ const SkillsManager: React.FC = () => {
     } finally {
       setSecurityReport(null);
       setPendingInstallId(null);
+      setIsConfirmingInstall(false);
+      setInstallingSkillId(null);
+      setSkillDownloadSource('');
+      setIsAddSkillMenuOpen(false);
+      setIsGithubImportOpen(false);
+    }
+  };
+
+  const handleDuplicateAction = async (action: 'overwrite' | 'cancel') => {
+    if (!duplicateCheck) return;
+    setIsConfirmingInstall(true);
+    try {
+      const result = await skillService.confirmInstall(duplicateCheck.pendingInstallId, action);
+      if (result.success && result.skills) {
+        dispatch(setSkills(result.skills));
+      }
+      if (!result.success && result.error) {
+        setSkillActionError(result.error);
+      }
+    } catch {
+      setSkillActionError(i18nService.t('skillInstallFailed'));
+    } finally {
+      setDuplicateCheck(null);
       setIsConfirmingInstall(false);
       setInstallingSkillId(null);
       setSkillDownloadSource('');
@@ -941,6 +975,100 @@ const SkillsManager: React.FC = () => {
           isLoading={isConfirmingInstall}
         />
       )}
+
+      {duplicateCheck && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => !isConfirmingInstall && setDuplicateCheck(null)}
+        >
+          <div
+            className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('skillAlreadyInstalled')}
+                </div>
+                <p className="mt-1 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('skillDuplicateDescription')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isConfirmingInstall && setDuplicateCheck(null)}
+                disabled={isConfirmingInstall}
+                className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:text-claude-darkText hover:text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors disabled:opacity-50"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              <div className="rounded-xl dark:bg-claude-darkBg bg-claude-bg p-4 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('skillName')}
+                  </span>
+                  <span className="font-medium dark:text-claude-darkText text-claude-text">
+                    {duplicateCheck.existingSkill.name}
+                  </span>
+                </div>
+                {duplicateCheck.existingVersion && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('existingVersion')}
+                    </span>
+                    <span className="font-medium dark:text-claude-darkText text-claude-text">
+                      v{duplicateCheck.existingVersion}
+                    </span>
+                  </div>
+                )}
+                {duplicateCheck.newVersion && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('newVersion')}
+                    </span>
+                    <span className="font-medium dark:text-claude-darkText text-claude-text">
+                      v{duplicateCheck.newVersion}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleDuplicateAction('overwrite')}
+                  disabled={isConfirmingInstall}
+                  className="w-full py-2.5 rounded-xl bg-claude-accent text-white text-sm font-medium hover:bg-claude-accent/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isConfirmingInstall ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      {i18nService.t('installing')}
+                    </>
+                  ) : (
+                    <>
+                      <ArrowDownTrayIcon className="h-4 w-4" />
+                      {i18nService.t('overwriteInstall')}
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleDuplicateAction('cancel')}
+                  disabled={isConfirmingInstall}
+                  className="w-full py-2.5 rounded-xl dark:text-claude-darkTextSecondary text-claude-textSecondary text-sm font-medium dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors disabled:opacity-50"
+                >
+                  {i18nService.t('cancel')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      , document.body)}
     </div>
   );
 };

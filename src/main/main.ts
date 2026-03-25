@@ -1774,13 +1774,13 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
-    const validActions = ['install', 'installDisabled', 'cancel'];
+    const validActions = ['install', 'installDisabled', 'cancel', 'overwrite'];
     if (!validActions.includes(action)) {
       return { success: false, error: 'Invalid action' };
     }
     return getSkillManager().confirmPendingInstall(
       pendingId,
-      action as 'install' | 'installDisabled' | 'cancel'
+      action as 'install' | 'installDisabled' | 'cancel' | 'overwrite'
     );
   });
 
