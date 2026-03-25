@@ -16,6 +16,7 @@ interface CoworkState {
   unreadSessionIds: string[];
   isCoworkActive: boolean;
   isStreaming: boolean;
+  isOptimizingContext: boolean;
   remoteManaged: boolean;
   pendingPermissions: CoworkPermissionRequest[];
   config: CoworkConfig;
@@ -29,6 +30,7 @@ const initialState: CoworkState = {
   unreadSessionIds: [],
   isCoworkActive: false,
   isStreaming: false,
+  isOptimizingContext: false,
   remoteManaged: false,
   pendingPermissions: [],
   config: {
@@ -41,6 +43,7 @@ const initialState: CoworkState = {
     memoryLlmJudgeEnabled: false,
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
+    contextManagementEnabled: true,
   },
 };
 
@@ -167,8 +170,8 @@ const coworkSlice = createSlice({
       markSessionRead(state, action.payload.id);
     },
 
-    updateSessionStatus(state, action: PayloadAction<{ sessionId: string; status: CoworkSessionStatus }>) {
-      const { sessionId, status } = action.payload;
+    updateSessionStatus(state, action: PayloadAction<{ sessionId: string; status: CoworkSessionStatus; turnCount?: number }>) {
+      const { sessionId, status, turnCount } = action.payload;
 
       // Update in sessions list
       const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
@@ -183,6 +186,10 @@ const coworkSlice = createSlice({
         state.currentSession.updatedAt = Date.now();
         // Streaming state is tied to the currently opened session only
         state.isStreaming = status === 'running';
+        // Sync turnCount from main process so context warning banner can react
+        if (turnCount !== undefined) {
+          state.currentSession.turnCount = turnCount;
+        }
       }
     },
 
@@ -248,6 +255,13 @@ const coworkSlice = createSlice({
 
     setStreaming(state, action: PayloadAction<boolean>) {
       state.isStreaming = action.payload;
+    },
+
+    setOptimizingContext(state, action: PayloadAction<{ sessionId: string; isOptimizing: boolean }>) {
+      const { sessionId, isOptimizing } = action.payload;
+      if (state.currentSession?.id === sessionId) {
+        state.isOptimizingContext = isOptimizing;
+      }
     },
 
     setRemoteManaged(state, action: PayloadAction<boolean>) {
@@ -331,6 +345,7 @@ export const {
   addMessage,
   updateMessageContent,
   setStreaming,
+  setOptimizingContext,
   setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,

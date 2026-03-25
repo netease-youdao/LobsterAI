@@ -28,6 +28,10 @@ interface CoworkSession {
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
+  turnCount: number;
+  contextSummary: string | null;
+  summaryUpToTurn: number;
+  migratedFromSessionId: string | null;
 }
 
 interface CoworkMessage {
@@ -57,6 +61,7 @@ interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: 'strict' | 'standard' | 'relaxed';
   memoryUserMemoriesMaxItems: number;
+  contextManagementEnabled: boolean;
 }
 
 type CoworkConfigUpdate = Partial<Pick<
@@ -318,6 +323,7 @@ interface IElectronAPI {
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) => Promise<{ success: boolean; error?: string }>;
     renameSession: (options: { sessionId: string; title: string }) => Promise<{ success: boolean; error?: string }>;
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
+    migrateSession: (oldSessionId: string) => Promise<{ success: boolean; newSessionId?: string; error?: string }>;
     remoteManaged: (sessionId: string) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
     listSessions: () => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
     exportResultImage: (options: {
@@ -353,7 +359,8 @@ interface IElectronAPI {
     onStreamMessage: (callback: (data: { sessionId: string; message: CoworkMessage }) => void) => () => void;
     onStreamMessageUpdate: (callback: (data: { sessionId: string; messageId: string; content: string }) => void) => () => void;
     onStreamPermission: (callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void) => () => void;
-    onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => () => void;
+    onStreamContextOptimizing: (callback: (data: { sessionId: string; isOptimizing: boolean }) => void) => () => void;
+    onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null; turnCount?: number }) => void) => () => void;
     onStreamError: (callback: (data: { sessionId: string; error: string }) => void) => () => void;
     onSessionsChanged: (callback: () => void) => () => void;
   };

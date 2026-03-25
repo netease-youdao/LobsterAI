@@ -341,6 +341,10 @@ export interface CoworkSession {
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
+  turnCount: number;
+  contextSummary: string | null;
+  summaryUpToTurn: number;
+  migratedFromSessionId: string | null;
 }
 
 export interface CoworkSessionSummary {
@@ -409,6 +413,17 @@ export interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: CoworkMemoryGuardLevel;
   memoryUserMemoriesMaxItems: number;
+  contextManagementEnabled: boolean;
+}
+
+export interface ContextManagementConfig {
+  enabled: boolean;
+  compressionInterval: number;
+  summaryTriggerTurn: number;
+  summaryFullWindow: number;
+  summaryUseLlm: boolean;
+  migrationSuggestTurn: number;
+  contextSizeThreshold: number;
 }
 
 export type CoworkConfigUpdate = Partial<Pick<
@@ -544,6 +559,10 @@ export class CoworkStore {
       messages: [],
       createdAt: now,
       updatedAt: now,
+      turnCount: 0,
+      contextSummary: null,
+      summaryUpToTurn: 0,
+      migratedFromSessionId: null,
     };
   }
 
@@ -560,10 +579,14 @@ export class CoworkStore {
       active_skill_ids?: string | null;
       created_at: number;
       updated_at: number;
+      turn_count?: number | null;
+      context_summary?: string | null;
+      summary_up_to_turn?: number | null;
+      migrated_from_session_id?: string | null;
     }
 
     const row = this.getOne<SessionRow>(`
-      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, created_at, updated_at
+      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, created_at, updated_at, turn_count, context_summary, summary_up_to_turn, migrated_from_session_id
       FROM cowork_sessions
       WHERE id = ?
     `, [id]);
@@ -594,12 +617,16 @@ export class CoworkStore {
       messages,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      turnCount: row.turn_count ?? 0,
+      contextSummary: row.context_summary ?? null,
+      summaryUpToTurn: row.summary_up_to_turn ?? 0,
+      migratedFromSessionId: row.migrated_from_session_id ?? null,
     };
   }
 
   updateSession(
     id: string,
-    updates: Partial<Pick<CoworkSession, 'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'executionMode'>>
+    updates: Partial<Pick<CoworkSession, 'title' | 'claudeSessionId' | 'status' | 'cwd' | 'systemPrompt' | 'executionMode' | 'turnCount' | 'contextSummary' | 'summaryUpToTurn' | 'migratedFromSessionId'>>
   ): void {
     const now = Date.now();
     const setClauses: string[] = ['updated_at = ?'];
@@ -628,6 +655,22 @@ export class CoworkStore {
     if (updates.executionMode !== undefined) {
       setClauses.push('execution_mode = ?');
       values.push(updates.executionMode);
+    }
+    if (updates.turnCount !== undefined) {
+      setClauses.push('turn_count = ?');
+      values.push(updates.turnCount);
+    }
+    if (updates.contextSummary !== undefined) {
+      setClauses.push('context_summary = ?');
+      values.push(updates.contextSummary);
+    }
+    if (updates.summaryUpToTurn !== undefined) {
+      setClauses.push('summary_up_to_turn = ?');
+      values.push(updates.summaryUpToTurn);
+    }
+    if (updates.migratedFromSessionId !== undefined) {
+      setClauses.push('migrated_from_session_id = ?');
+      values.push(updates.migratedFromSessionId);
     }
 
     values.push(id);
@@ -885,6 +928,8 @@ export class CoworkStore {
 
     const normalizedAgentEngine = normalizeCoworkAgentEngineValue(agentEngineRow?.value);
 
+    const ctxEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['contextManagement.enabled']);
+
     return {
       workingDirectory: workingDirRow?.value || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
@@ -901,6 +946,28 @@ export class CoworkStore {
       ),
       memoryGuardLevel: normalizeMemoryGuardLevel(memoryGuardLevelRow?.value),
       memoryUserMemoriesMaxItems: clampMemoryUserMemoriesMaxItems(Number(memoryUserMemoriesMaxItemsRow?.value)),
+      contextManagementEnabled: parseBooleanConfig(ctxEnabledRow?.value, true),
+    };
+  }
+
+  getContextManagementConfig(): ContextManagementConfig {
+    interface ConfigRow {
+      value: string;
+    }
+
+    const getValue = (key: string): string | undefined => {
+      const row = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', [`contextManagement.${key}`]);
+      return row?.value;
+    };
+
+    return {
+      enabled: parseBooleanConfig(getValue('enabled'), true),
+      compressionInterval: Number(getValue('compressionInterval')) || 10,
+      summaryTriggerTurn: Number(getValue('summaryTriggerTurn')) || 30,
+      summaryFullWindow: Number(getValue('summaryFullWindow')) || 15,
+      summaryUseLlm: parseBooleanConfig(getValue('summaryUseLlm'), false),
+      migrationSuggestTurn: Number(getValue('migrationSuggestTurn')) || 50,
+      contextSizeThreshold: Number(getValue('contextSizeThreshold')) || 150_000,
     };
   }
 

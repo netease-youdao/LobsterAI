@@ -16,6 +16,7 @@ export interface CoworkRuntimeEvents {
   message: (sessionId: string, message: CoworkMessage) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string) => void;
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
+  contextOptimizing: (sessionId: string, isOptimizing: boolean) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
 }

@@ -1012,11 +1012,25 @@ const bindCoworkRuntimeForwarder = (): void => {
     });
   });
 
-  runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
+  runtime.on('contextOptimizing', (sessionId: string, isOptimizing: boolean) => {
     const windows = BrowserWindow.getAllWindows();
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
-      win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId });
+      win.webContents.send('cowork:stream:contextOptimizing', { sessionId, isOptimizing });
+    });
+  });
+
+  runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
+    // Read latest turnCount from store to forward to renderer
+    let turnCount = 0;
+    try {
+      const session = getCoworkStore().getSession(sessionId);
+      turnCount = session?.turnCount ?? 0;
+    } catch { /* ignore */ }
+    const windows = BrowserWindow.getAllWindows();
+    windows.forEach((win) => {
+      if (win.isDestroyed()) return;
+      win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId, turnCount });
     });
     // If session used a server model, notify renderer to refresh quota
     try {
@@ -2599,6 +2613,19 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get session',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:migrate', async (_event, oldSessionId: string) => {
+    try {
+      const runner = getCoworkRunner();
+      const result = await runner.migrateSession(oldSessionId);
+      return { success: true, newSessionId: result.newSessionId };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to migrate session',
       };
     }
   });

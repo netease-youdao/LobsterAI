@@ -13,6 +13,8 @@ import { coworkLog, getCoworkLogPath } from './coworkLogger';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
 import { SCHEDULED_TASK_SWITCH_MESSAGE } from './scheduledTaskEnginePrompt';
+import { generateRuleBasedSummary, generateLlmSummary } from './coworkContextSummary';
+import { resolveCurrentApiConfig } from './claudeSettings';
 import { setCoworkProxySessionId } from './coworkOpenAICompatProxy';
 import { z } from 'zod';
 
@@ -52,6 +54,18 @@ const TOOL_INPUT_PREVIEW_MAX_DEPTH = 5;
 const TOOL_INPUT_PREVIEW_MAX_KEYS = 60;
 const TOOL_INPUT_PREVIEW_MAX_ITEMS = 30;
 const TASK_WORKSPACE_CONTAINER_DIR = '.lobsterai-tasks';
+
+// Context management constants (defaults, overridden by contextManagement.* config)
+const COMPRESSION_CHECK_INTERVAL = 10;
+const TIER_RECENT_TURNS = 5;
+const TIER_MEDIUM_MAX_CHARS = 8_000;
+const TIER_OLD_MAX_CHARS = 2_000;
+const CONTEXT_SIZE_THRESHOLD = 150_000;
+const SUMMARY_TRIGGER_TURN = 30;
+const SUMMARY_FULL_WINDOW_SIZE = 15;
+const SUMMARY_REFRESH_INTERVAL = 10;
+const SUMMARY_MAX_CHARS = 4_000;
+const MIGRATION_SUGGEST_TURN = 50;
 const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
@@ -203,6 +217,8 @@ interface ActiveSession {
   executionMode: CoworkExecutionMode;
   /** When true, auto-approve all tool permissions (for scheduled tasks) */
   autoApprove?: boolean;
+  /** Turn counter for context management — incremented on each startSession/continueSession */
+  turnCount: number;
 }
 
 interface PendingPermission {
@@ -926,6 +942,31 @@ export class CoworkRunner extends EventEmitter {
     return { emit: false, now };
   }
 
+  /**
+   * Estimate total context size (in characters) for a session's messages.
+   */
+  private estimateContextSize(sessionId: string): number {
+    const session = this.store.getSession(sessionId);
+    if (!session) return 0;
+    return session.messages.reduce((sum, msg) => sum + msg.content.length, 0);
+  }
+
+  /**
+   * Assign a turn number to each message. A "turn" starts with each user message.
+   * Returns an array of turn numbers corresponding to each message index.
+   */
+  private assignMessageTurns(messages: CoworkMessage[]): number[] {
+    const turns: number[] = [];
+    let currentTurn = 0;
+    for (const msg of messages) {
+      if (msg.type === 'user') {
+        currentTurn += 1;
+      }
+      turns.push(currentTurn);
+    }
+    return turns;
+  }
+
   private formatHistoryMessage(message: CoworkMessage, maxChars: number): string | null {
     const raw = (message.content || '').replace(/\u0000/g, '').trim();
     if (!raw) {
@@ -933,7 +974,7 @@ export class CoworkRunner extends EventEmitter {
     }
     const content = raw.length <= maxChars
       ? raw
-      : `${raw.slice(0, maxChars)}\n...[truncated ${raw.length - maxChars} chars]`;
+      : `${raw.slice(0, maxChars)}\n...[compressed: originally ${raw.length} chars]`;
 
     let role: string = message.type;
     if (message.type === 'assistant' && message.metadata?.isThinking) {
@@ -946,7 +987,13 @@ export class CoworkRunner extends EventEmitter {
   private buildHistoryBlocks(
     messages: CoworkMessage[],
     currentPrompt: string,
-    limits: { maxMessages: number; maxTotalChars: number; maxMessageChars: number }
+    limits: { maxMessages: number; maxTotalChars: number; maxMessageChars: number },
+    compression?: {
+      currentTurn: number;
+      recentTurnsWindow: number;
+      mediumMaxChars: number;
+      oldMaxChars: number;
+    }
   ): string[] {
     if (messages.length === 0) {
       return [];
@@ -963,13 +1010,34 @@ export class CoworkRunner extends EventEmitter {
       history.pop();
     }
 
+    // If compression is enabled, pre-compute turn numbers for age-based limits
+    let messageTurns: number[] | null = null;
+    if (compression) {
+      messageTurns = this.assignMessageTurns(history);
+    }
+
     const selectedFromNewest: string[] = [];
     let totalChars = 0;
     for (let i = history.length - 1; i >= 0; i -= 1) {
       if (selectedFromNewest.length >= limits.maxMessages) {
         break;
       }
-      const block = this.formatHistoryMessage(history[i], limits.maxMessageChars);
+
+      // Determine per-message char limit based on turn age
+      let messageMaxChars = limits.maxMessageChars;
+      if (compression && messageTurns) {
+        const messageTurn = messageTurns[i];
+        const turnsAgo = compression.currentTurn - messageTurn;
+        if (turnsAgo <= compression.recentTurnsWindow) {
+          messageMaxChars = limits.maxMessageChars; // Full content for recent turns
+        } else if (turnsAgo <= compression.recentTurnsWindow + 10) {
+          messageMaxChars = compression.mediumMaxChars; // 6-15 turns ago
+        } else {
+          messageMaxChars = compression.oldMaxChars; // 16+ turns ago
+        }
+      }
+
+      const block = this.formatHistoryMessage(history[i], messageMaxChars);
       if (!block) {
         continue;
       }
@@ -999,24 +1067,52 @@ export class CoworkRunner extends EventEmitter {
    * Inject conversation history into a local-mode prompt when the session is
    * restarted after a stop (subprocess was killed, no SDK session to resume).
    */
-  private injectLocalHistoryPrompt(sessionId: string, currentPrompt: string, effectivePrompt: string): string {
+  private async injectLocalHistoryPrompt(sessionId: string, currentPrompt: string, effectivePrompt: string): Promise<string> {
     const session = this.store.getSession(sessionId);
     if (!session) {
       return effectivePrompt;
+    }
+
+    // Build compression parameters if turn count warrants it
+    const ctxConfig = this.store.getContextManagementConfig();
+    const turnCount = session.turnCount;
+    let compression: { currentTurn: number; recentTurnsWindow: number; mediumMaxChars: number; oldMaxChars: number } | undefined;
+    if (ctxConfig.enabled && turnCount > ctxConfig.compressionInterval) {
+      compression = {
+        currentTurn: turnCount,
+        recentTurnsWindow: TIER_RECENT_TURNS,
+        mediumMaxChars: TIER_MEDIUM_MAX_CHARS,
+        oldMaxChars: TIER_OLD_MAX_CHARS,
+      };
     }
 
     const historyBlocks = this.buildHistoryBlocks(session.messages, currentPrompt, {
       maxMessages: LOCAL_HISTORY_MAX_MESSAGES,
       maxTotalChars: LOCAL_HISTORY_MAX_TOTAL_CHARS,
       maxMessageChars: LOCAL_HISTORY_MAX_MESSAGE_CHARS,
-    });
+    }, compression);
     if (historyBlocks.length === 0) {
       return effectivePrompt;
     }
 
-    return [
+    // For T2 sessions (30+ turns), generate or reuse a session summary
+    const summaryBlock = await this.getOrGenerateSessionSummary(session, ctxConfig);
+
+    const parts: string[] = [
       'The session was interrupted and restarted. Continue using the conversation history below.',
       'Use this context for continuity and do not quote it unless necessary.',
+    ];
+
+    if (summaryBlock) {
+      parts.push(
+        '<session_summary>',
+        summaryBlock,
+        '</session_summary>',
+        '',
+      );
+    }
+
+    parts.push(
       '<conversation_history>',
       ...historyBlocks,
       '</conversation_history>',
@@ -1024,7 +1120,100 @@ export class CoworkRunner extends EventEmitter {
       '<current_user_request>',
       effectivePrompt,
       '</current_user_request>',
-    ].join('\n');
+    );
+
+    return parts.join('\n');
+  }
+
+  /**
+   * Generate or retrieve a cached session summary for context management.
+   * Returns the summary text, or null if summarization is not applicable.
+   */
+  private async getOrGenerateSessionSummary(
+    session: { id: string; turnCount: number; contextSummary: string | null; summaryUpToTurn: number; messages: CoworkMessage[] },
+    ctxConfig: { enabled: boolean; summaryTriggerTurn: number; summaryFullWindow: number; summaryUseLlm?: boolean }
+  ): Promise<string | null> {
+    if (!ctxConfig.enabled || session.turnCount < ctxConfig.summaryTriggerTurn) {
+      return null;
+    }
+
+    const upToTurn = Math.max(1, session.turnCount - ctxConfig.summaryFullWindow);
+
+    // Check if cached summary is still fresh enough
+    if (
+      session.contextSummary &&
+      session.summaryUpToTurn > 0 &&
+      (upToTurn - session.summaryUpToTurn) <= SUMMARY_REFRESH_INTERVAL
+    ) {
+      return session.contextSummary;
+    }
+
+    let summary: string | null = null;
+    let method = 'rule-based';
+
+    // Try LLM-assisted summary if enabled
+    if (ctxConfig.summaryUseLlm) {
+      try {
+        const { config: apiConfig } = resolveCurrentApiConfig();
+        if (apiConfig) {
+          summary = await generateLlmSummary(session.messages, upToTurn, SUMMARY_MAX_CHARS, apiConfig);
+          if (summary) {
+            method = 'llm';
+          }
+        }
+      } catch (error) {
+        console.warn('[ContextManager] LLM summary failed, falling back to rule-based:', error);
+      }
+    }
+
+    // Fall back to rule-based summary
+    if (!summary) {
+      summary = generateRuleBasedSummary(session.messages, upToTurn, SUMMARY_MAX_CHARS);
+    }
+
+    if (!summary) return null;
+
+    // Cache it
+    this.store.updateSession(session.id, {
+      contextSummary: summary,
+      summaryUpToTurn: upToTurn,
+    });
+
+    console.log('[ContextManager] generated session summary', {
+      sessionId: session.id,
+      summarizedTurns: upToTurn,
+      summaryChars: summary.length,
+      method,
+    });
+
+    return summary;
+  }
+
+  /**
+   * Emit a migration suggestion system message when turnCount first reaches migrationSuggestTurn.
+   * Only emits once per session by checking if the suggestion was already sent.
+   */
+  private migrationSuggestedSessions = new Set<string>();
+
+  private emitMigrationSuggestionIfNeeded(sessionId: string, turnCount: number): void {
+    if (this.migrationSuggestedSessions.has(sessionId)) return;
+
+    const ctxConfig = this.store.getContextManagementConfig();
+    if (!ctxConfig.enabled || turnCount < ctxConfig.migrationSuggestTurn) return;
+
+    this.migrationSuggestedSessions.add(sessionId);
+
+    const migrationMessage: CoworkMessage = {
+      id: `migration-suggest-${Date.now()}`,
+      type: 'system',
+      content: `💡 This session has reached ${turnCount} turns. For the best AI experience, consider starting a new session with context carried forward. Use the "New Session with Context" button in the banner above, or continue if you prefer.`,
+      timestamp: Date.now(),
+    };
+
+    this.store.addMessage(sessionId, migrationMessage);
+    this.emit('message', sessionId, migrationMessage);
+
+    console.log('[ContextManager] emitted migration suggestion', { sessionId, turnCount });
   }
 
   private normalizeWorkspaceRoot(workspaceRoot: string, cwd: string): string {
@@ -1473,8 +1662,10 @@ export class CoworkRunner extends EventEmitter {
       hasAssistantThinkingOutput: false,
       executionMode: 'local',
       autoApprove: options.autoApprove ?? false,
+      turnCount: 1,
     };
     this.activeSessions.set(sessionId, activeSession);
+    this.store.updateSession(sessionId, { turnCount: 1 });
     if (session.cwd !== sessionCwd) {
       this.store.updateSession(sessionId, { cwd: sessionCwd });
     }
@@ -1497,7 +1688,7 @@ export class CoworkRunner extends EventEmitter {
       // conversation history so the model retains context from prior turns.
       const currentSession = this.store.getSession(sessionId);
       if (currentSession && currentSession.messages.length > 0) {
-        effectivePrompt = this.injectLocalHistoryPrompt(sessionId, prompt, effectivePrompt);
+        effectivePrompt = await this.injectLocalHistoryPrompt(sessionId, prompt, effectivePrompt);
       }
 
       setCoworkProxySessionId(sessionId);
@@ -1518,6 +1709,59 @@ export class CoworkRunner extends EventEmitter {
         imageAttachments: options.imageAttachments,
       });
       return;
+    }
+
+    // Legacy session turn count estimation: if turnCount is 0 but messages exist,
+    // estimate from user message count before incrementing.
+    if (activeSession.turnCount === 0) {
+      const existingSession = this.store.getSession(sessionId);
+      if (existingSession && existingSession.messages.length > 0) {
+        activeSession.turnCount = existingSession.messages.filter(m => m.type === 'user').length;
+      }
+    }
+
+    // Increment turn count and persist
+    activeSession.turnCount += 1;
+    this.store.updateSession(sessionId, { turnCount: activeSession.turnCount });
+
+    // Context compression check: periodically restart SDK with compressed history
+    const ctxConfig = this.store.getContextManagementConfig();
+    if (ctxConfig.enabled) {
+      const shouldCompress =
+        (activeSession.turnCount % ctxConfig.compressionInterval === 0) ||
+        (this.estimateContextSize(sessionId) > ctxConfig.contextSizeThreshold);
+
+      if (shouldCompress && activeSession.turnCount > ctxConfig.compressionInterval) {
+        const beforeChars = this.estimateContextSize(sessionId);
+        console.log('[ContextManager] compression triggered, restarting SDK with compressed history', {
+          sessionId, turnCount: activeSession.turnCount, estimatedContextChars: beforeChars,
+        });
+
+        // Notify renderer that context optimization has started
+        this.emit('contextOptimizing', sessionId, true);
+
+        // Stop current SDK subprocess and restart with compressed history
+        this.activeSessions.delete(sessionId);
+        try { activeSession.abortController.abort(); } catch { /* ignore */ }
+
+        await this.startSession(sessionId, prompt, {
+          skillIds: options.skillIds,
+          systemPrompt: options.systemPrompt,
+          imageAttachments: options.imageAttachments,
+          skipInitialUserMessage: false,
+        });
+
+        // Log compression metrics after restart
+        const afterChars = this.estimateContextSize(sessionId);
+        const compressionRatio = beforeChars > 0 ? ((beforeChars - afterChars) / beforeChars * 100).toFixed(1) : '0';
+        console.log('[ContextManager] compression complete', {
+          sessionId, beforeChars, afterChars, compressionRatio: `${compressionRatio}%`,
+        });
+
+        // Notify renderer that context optimization has finished
+        this.emit('contextOptimizing', sessionId, false);
+        return;
+      }
     }
 
     // Ensure status returns to running for resumed turns on active sessions.
@@ -1604,6 +1848,116 @@ export class CoworkRunner extends EventEmitter {
     this.clearPendingPermissions(sessionId);
     this.store.updateSession(sessionId, { status: 'idle' });
     setCoworkProxySessionId(null);
+  }
+
+  /**
+   * Migrate to a new session with context carried forward.
+   * Creates a new session pre-loaded with summary + memories from the old session.
+   */
+  async migrateSession(oldSessionId: string): Promise<{ newSessionId: string }> {
+    const oldSession = this.store.getSession(oldSessionId);
+    if (!oldSession) {
+      throw new Error(`Session ${oldSessionId} not found`);
+    }
+
+    // Stop the old session if active
+    this.stopSession(oldSessionId);
+
+    // Generate or retrieve session summary
+    const ctxConfig = this.store.getContextManagementConfig();
+    const summary = (await this.getOrGenerateSessionSummary(oldSession, ctxConfig)) || '';
+
+    // Load active user memories
+    const memories = this.store.listUserMemories({ status: 'created', limit: 30 });
+    const memoryTexts = memories.map(m => `- ${m.text}`).join('\n');
+
+    // Extract recent files from tool_use messages in last few turns
+    const recentFiles = this.extractRecentModifiedFiles(oldSession.messages);
+
+    // Find the last user message
+    const lastUserMsg = [...oldSession.messages].reverse().find(m => m.type === 'user');
+
+    // Build migration prompt
+    const migrationParts: string[] = [
+      'You are continuing a task from a previous session. Here is the context:',
+    ];
+
+    if (summary) {
+      migrationParts.push('', '<previous_session_summary>', summary, '</previous_session_summary>');
+    }
+
+    if (memoryTexts) {
+      migrationParts.push('', '<user_memories>', memoryTexts, '</user_memories>');
+    }
+
+    migrationParts.push(
+      '',
+      '<working_state>',
+      `- Working directory: ${oldSession.cwd}`,
+      recentFiles.length > 0 ? `- Last modified files: ${recentFiles.join(', ')}` : '',
+      '</working_state>',
+    );
+
+    if (lastUserMsg) {
+      migrationParts.push(
+        '',
+        'The user would like to continue their work. Their most recent request was:',
+        lastUserMsg.content,
+      );
+    }
+
+    const migrationPrompt = migrationParts.filter(Boolean).join('\n');
+
+    // Create new session with old session's config
+    const newSession = this.store.createSession(
+      `${oldSession.title} (continued)`,
+      oldSession.cwd,
+      oldSession.systemPrompt,
+      oldSession.executionMode,
+      oldSession.activeSkillIds
+    );
+
+    // Link new session to old
+    this.store.updateSession(newSession.id, {
+      migratedFromSessionId: oldSessionId,
+    });
+
+    console.log('[ContextManager] session migration created', {
+      oldSessionId,
+      newSessionId: newSession.id,
+      summaryChars: summary.length,
+      memoriesCount: memories.length,
+    });
+
+    // Start the new session with migration prompt
+    await this.startSession(newSession.id, migrationPrompt, {
+      systemPrompt: oldSession.systemPrompt,
+      skipInitialUserMessage: false,
+    });
+
+    return { newSessionId: newSession.id };
+  }
+
+  /**
+   * Extract recently modified file paths from tool_use messages.
+   */
+  private extractRecentModifiedFiles(messages: CoworkMessage[]): string[] {
+    const files = new Set<string>();
+    // Look at the last 20 messages
+    const recent = messages.slice(-20);
+    for (const msg of recent) {
+      if (msg.type !== 'tool_use') continue;
+      const toolInput = msg.metadata?.toolInput as Record<string, unknown> | undefined;
+      if (toolInput) {
+        for (const key of ['file_path', 'path', 'target_file', 'file', 'filename']) {
+          const val = toolInput[key];
+          if (typeof val === 'string' && val.includes('.')) {
+            files.add(val);
+          }
+        }
+      }
+    }
+    return [...files].slice(0, 10);
   }
 
   onSessionDeleted(sessionId: string): void {
@@ -2399,6 +2753,9 @@ export class CoworkRunner extends EventEmitter {
         this.store.updateSession(sessionId, { status: 'completed' });
         this.applyTurnMemoryUpdatesForSession(sessionId);
         this.emit('complete', sessionId, activeSession.claudeSessionId);
+
+        // Auto-suggest migration when turn count reaches the threshold
+        this.emitMigrationSuggestionIfNeeded(sessionId, activeSession.turnCount);
       }
     } catch (error) {
       // Clean up startup timer if still pending
