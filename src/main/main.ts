@@ -699,6 +699,21 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
 const ensureOpenClawRunningForCowork = async () => {
   const manager = getOpenClawEngineManager();
   const status = manager.getStatus();
+
+  // If secret env vars changed since the last gateway spawn (e.g. model switch),
+  // we need to restart so the new process picks up the updated env vars and
+  // a fresh openclaw.json is written atomically with the restart.
+  if (status.phase === 'running' && manager.consumePendingEnvRestart()) {
+    console.log('[OpenClaw] ensureRunning: pending env restart — performing silent restart');
+    if (openClawRuntimeAdapter) {
+      openClawRuntimeAdapter.disconnectGatewayClient();
+    }
+    await manager.stopGateway({ silent: true });
+    getOpenClawConfigSync().sync('ensureRunning:pendingEnvRestart');
+    const restarted = await manager.startGateway({ silent: true });
+    return restarted;
+  }
+
   if (status.phase === 'running') {
     return status;
   }
@@ -885,6 +900,31 @@ const syncOpenClawConfig = async (
     }
   }
 
+  // Pre-flight: when the caller does NOT want a synchronous restart (e.g.
+  // model switch via app_config), peek at whether secret env vars will change.
+  // If they will, we must NOT write openclaw.json yet — OpenClaw's file watcher
+  // would hot-reload the new provider config while the running process still
+  // has stale env vars, causing 401s.  Instead, schedule a deferred restart
+  // that will write + restart atomically.
+  if (!options.restartGatewayIfRunning) {
+    const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
+    const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
+    const secretEnvVarsChanged = JSON.stringify(nextSecretEnvVars) !== JSON.stringify(prevSecretEnvVars);
+
+    if (secretEnvVarsChanged) {
+      const manager = getOpenClawEngineManager();
+      manager.setSecretEnvVars(nextSecretEnvVars);
+      if (manager.getStatus().phase === 'running') {
+        console.log(`[OpenClaw] syncOpenClawConfig: secret env vars changed, deferring config write + restart until next session start (reason: ${options.reason})`);
+        manager.markPendingEnvRestart();
+        return {
+          success: true,
+          changed: true,
+        };
+      }
+    }
+  }
+
   const syncResult = getOpenClawConfigSync().sync(options.reason);
   if (!syncResult.ok) {
     const status = getOpenClawEngineManager().setExternalError(
@@ -904,17 +944,21 @@ const syncOpenClawConfig = async (
   const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
   const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
   const secretEnvVarsChanged = JSON.stringify(nextSecretEnvVars) !== JSON.stringify(prevSecretEnvVars);
+  // Always cache the latest env vars so the next gateway spawn picks them up.
   getOpenClawEngineManager().setSecretEnvVars(nextSecretEnvVars);
 
-  // When secret env vars change, the running gateway must be restarted even if
-  // the caller didn't request it — the ${VAR} placeholders in openclaw.json
-  // resolve from the process environment which is fixed at spawn time.
+  // When secret env vars change, the running gateway process needs a restart
+  // because its environment is fixed at spawn time.  However, if the caller
+  // did NOT request a restart (e.g. the change is just a model switch via
+  // app_config), we only mark the env as dirty and skip the immediate restart.
+  // The next ensureOpenClawRunningForCowork() call (at session start) will
+  // detect the stale env and restart the gateway just-in-time.
   const needsRestart = syncResult.changed || secretEnvVarsChanged;
 
-  if (!needsRestart || (!options.restartGatewayIfRunning && !secretEnvVarsChanged)) {
+  if (!needsRestart || !options.restartGatewayIfRunning) {
     return {
       success: true,
-      changed: syncResult.changed,
+      changed: syncResult.changed || secretEnvVarsChanged,
     };
   }
 
