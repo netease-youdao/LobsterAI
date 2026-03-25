@@ -159,6 +159,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   private secretEnvVars: Record<string, string> = {};
+  private pendingEnvRestart = false;
 
   constructor() {
     super();
@@ -206,6 +207,18 @@ export class OpenClawEngineManager extends EventEmitter {
   /** Return the current secret env vars snapshot (for change detection). */
   getSecretEnvVars(): Record<string, string> {
     return this.secretEnvVars;
+  }
+
+  /** Mark that the gateway needs a restart due to env var changes. */
+  markPendingEnvRestart(): void {
+    this.pendingEnvRestart = true;
+  }
+
+  /** Check and consume the pending env restart flag. */
+  consumePendingEnvRestart(): boolean {
+    if (!this.pendingEnvRestart) return false;
+    this.pendingEnvRestart = false;
+    return true;
   }
 
   override on<U extends keyof OpenClawEngineManagerEvents>(
@@ -300,18 +313,19 @@ export class OpenClawEngineManager extends EventEmitter {
     return this.getStatus();
   }
 
-  async startGateway(): Promise<OpenClawEngineStatus> {
+  async startGateway(options?: { silent?: boolean }): Promise<OpenClawEngineStatus> {
     if (this.startGatewayPromise) {
       console.log('[OpenClaw] startGateway: already in progress, reusing existing promise');
       return this.startGatewayPromise;
     }
-    this.startGatewayPromise = this.doStartGateway().finally(() => {
+    this.startGatewayPromise = this.doStartGateway(options).finally(() => {
       this.startGatewayPromise = null;
     });
     return this.startGatewayPromise;
   }
 
-  private async doStartGateway(): Promise<OpenClawEngineStatus> {
+  private async doStartGateway(options?: { silent?: boolean }): Promise<OpenClawEngineStatus> {
+    const silent = options?.silent ?? false;
     this.shutdownRequested = false;
     const t0 = Date.now();
     const elapsed = () => `${Date.now() - t0}ms`;
@@ -392,13 +406,15 @@ export class OpenClawEngineManager extends EventEmitter {
     this.ensureConfigFile();
     console.log(`[OpenClaw] startGateway: pre-fork setup done (${elapsed()})`);
 
-    this.setStatus({
-      phase: 'starting',
-      version: runtime.version,
-      progressPercent: 10,
-      message: 'Starting OpenClaw gateway...',
-      canRetry: false,
-    });
+    if (!silent) {
+      this.setStatus({
+        phase: 'starting',
+        version: runtime.version,
+        progressPercent: 10,
+        message: 'Starting OpenClaw gateway...',
+        canRetry: false,
+      });
+    }
 
     const compileCacheDir = path.join(this.stateDir, '.compile-cache');
     console.log(`[OpenClaw] compile cache dir: ${compileCacheDir}`);
@@ -501,7 +517,7 @@ export class OpenClawEngineManager extends EventEmitter {
       console.log(`[OpenClaw] gateway process spawned (${elapsed()}), pid=${child.pid}`);
     });
 
-    const ready = await this.waitForGatewayReady(port, GATEWAY_BOOT_TIMEOUT_MS);
+    const ready = await this.waitForGatewayReady(port, GATEWAY_BOOT_TIMEOUT_MS, { silent });
     console.log(`[OpenClaw] startGateway: waitForGatewayReady returned (${elapsed()}), ready=${ready}`);
     if (!ready) {
       this.setStatus({
@@ -526,7 +542,8 @@ export class OpenClawEngineManager extends EventEmitter {
     return this.getStatus();
   }
 
-  async stopGateway(): Promise<void> {
+  async stopGateway(options?: { silent?: boolean }): Promise<void> {
+    const silent = options?.silent ?? false;
     this.shutdownRequested = true;
 
     if (this.gatewayRestartTimer) {
@@ -539,15 +556,17 @@ export class OpenClawEngineManager extends EventEmitter {
       this.gatewayProcess = null;
     }
 
-    const runtime = this.resolveRuntimeMetadata();
-    this.setStatus({
-      phase: runtime.root ? 'ready' : 'not_installed',
-      version: runtime.version,
-      message: runtime.root
-        ? 'OpenClaw runtime is ready. Gateway is stopped.'
-        : `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
-      canRetry: !runtime.root,
-    });
+    if (!silent) {
+      const runtime = this.resolveRuntimeMetadata();
+      this.setStatus({
+        phase: runtime.root ? 'ready' : 'not_installed',
+        version: runtime.version,
+        message: runtime.root
+          ? 'OpenClaw runtime is ready. Gateway is stopped.'
+          : `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
+        canRetry: !runtime.root,
+      });
+    }
   }
 
   async restartGateway(): Promise<OpenClawEngineStatus> {
@@ -1144,7 +1163,8 @@ export class OpenClawEngineManager extends EventEmitter {
     return healthy;
   }
 
-  private waitForGatewayReady(port: number, timeoutMs: number): Promise<boolean> {
+  private waitForGatewayReady(port: number, timeoutMs: number, options?: { silent?: boolean }): Promise<boolean> {
+    const silent = options?.silent ?? false;
     const startedAt = Date.now();
     let pollCount = 0;
     return new Promise((resolve) => {
@@ -1181,13 +1201,15 @@ export class OpenClawEngineManager extends EventEmitter {
 
         // Update progress from 10% → 90% during the wait, so the UI shows meaningful feedback.
         const progress = Math.min(90, 10 + Math.round((elapsedMs / timeoutMs) * 80));
-        this.setStatus({
-          phase: 'starting',
-          version: this.status.version,
-          progressPercent: progress,
-          message: `Starting OpenClaw gateway... (${Math.round(elapsedMs / 1000)}s)`,
-          canRetry: false,
-        });
+        if (!silent) {
+          this.setStatus({
+            phase: 'starting',
+            version: this.status.version,
+            progressPercent: progress,
+            message: `Starting OpenClaw gateway... (${Math.round(elapsedMs / 1000)}s)`,
+            canRetry: false,
+          });
+        }
 
         if (pollCount % 5 === 0) {
           console.log(`[OpenClaw] waitForGatewayReady: poll #${pollCount}, elapsed=${elapsedMs}ms, progress=${progress}%`);
