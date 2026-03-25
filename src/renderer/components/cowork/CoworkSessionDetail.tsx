@@ -13,6 +13,9 @@ import {
   ExclamationTriangleIcon,
   ChevronRightIcon,
   PhotoIcon,
+  XMarkIcon,
+  ArrowDownTrayIcon,
+  ClipboardDocumentIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
@@ -77,6 +80,117 @@ const domRectToCaptureRect = (rect: DOMRect): CaptureRect => ({
   width: Math.max(0, Math.round(rect.width)),
   height: Math.max(0, Math.round(rect.height)),
 });
+
+const loadImageFromSrc = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = src;
+  });
+
+const EXPORT_HEADER_HEIGHT = 72;
+const EXPORT_FOOTER_HEIGHT = 64;
+
+/**
+ * Draw a branded header (title + date) onto the canvas context.
+ */
+const drawExportHeader = (
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  title: string,
+  dateStr: string,
+  isDark: boolean,
+) => {
+  // Background
+  ctx.fillStyle = isDark ? '#1a1a2e' : '#f8f8fc';
+  ctx.fillRect(0, 0, width, EXPORT_HEADER_HEIGHT);
+
+  // Bottom border
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  ctx.fillRect(0, EXPORT_HEADER_HEIGHT - 1, width, 1);
+
+  // Title
+  ctx.fillStyle = isDark ? '#e8e8ee' : '#1a1a2e';
+  ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+  ctx.textBaseline = 'middle';
+  const maxTitleWidth = width - 240;
+  let displayTitle = title;
+  while (ctx.measureText(displayTitle).width > maxTitleWidth && displayTitle.length > 1) {
+    displayTitle = displayTitle.slice(0, -1);
+  }
+  if (displayTitle !== title) displayTitle += '…';
+  ctx.fillText(displayTitle, 24, EXPORT_HEADER_HEIGHT / 2 - 2);
+
+  // Date (right side)
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.4)';
+  ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+  const dateWidth = ctx.measureText(dateStr).width;
+  ctx.fillText(dateStr, width - dateWidth - 24, EXPORT_HEADER_HEIGHT / 2 - 2);
+};
+
+/**
+ * Draw a branded footer (logo + app name + tagline) onto the canvas context.
+ */
+const drawExportFooter = (
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  yOffset: number,
+  logoImg: HTMLImageElement | null,
+  isDark: boolean,
+) => {
+  // Background
+  ctx.fillStyle = isDark ? '#1a1a2e' : '#f8f8fc';
+  ctx.fillRect(0, yOffset, width, EXPORT_FOOTER_HEIGHT);
+
+  // Top border
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  ctx.fillRect(0, yOffset, width, 1);
+
+  const centerY = yOffset + EXPORT_FOOTER_HEIGHT / 2;
+  let curX = 0;
+
+  // Compute total width of logo + texts to center them
+  const logoSize = 28;
+  const gap1 = 10; // gap between logo and app name
+  const gap2 = 8;  // gap between app name and separator
+  const gap3 = 8;  // gap between separator and tagline
+
+  ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+  const appName = 'LobsterAI — 全场景个人助理 Agent';
+  const appNameWidth = ctx.measureText(appName).width;
+
+  ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+  const tagline = '7×24 小时帮你干活的全场景个人助理，由网易有道开发';
+  const taglineWidth = ctx.measureText(tagline).width;
+
+  const sepWidth = 1;
+  const totalWidth = (logoImg ? logoSize + gap1 : 0) + appNameWidth + gap2 + sepWidth + gap3 + taglineWidth;
+  curX = (width - totalWidth) / 2;
+
+  // Logo
+  if (logoImg) {
+    ctx.drawImage(logoImg, curX, centerY - logoSize / 2, logoSize, logoSize);
+    curX += logoSize + gap1;
+  }
+
+  // App name
+  ctx.fillStyle = isDark ? '#e8e8ee' : '#1a1a2e';
+  ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(appName, curX, centerY);
+  curX += appNameWidth + gap2;
+
+  // Separator
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)';
+  ctx.fillRect(curX, centerY - 8, sepWidth, 16);
+  curX += sepWidth + gap3;
+
+  // Tagline
+  ctx.fillStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)';
+  ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+  ctx.fillText(tagline, curX, centerY);
+};
 
 // PushPinIcon component for pin/unpin functionality
 const PushPinIcon: React.FC<React.SVGProps<SVGSVGElement> & { slashed?: boolean }> = ({
@@ -1317,6 +1431,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [isShareSelecting, setIsShareSelecting] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [previewImageDataUrl, setPreviewImageDataUrl] = useState<string | null>(null);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1498,30 +1615,74 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setMenuPosition(null);
   };
 
+  // Enter share selection mode (default: all messages selected)
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!currentSession || isExportingImage) return;
     closeMenu();
+    setSelectedMessageIds(getAllSelectableMessageIds());
+    setIsShareSelecting(true);
+  };
+
+  const handleShareToggleMessage = (messageId: string) => {
+    setSelectedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  };
+
+  const handleShareSelectAll = () => setSelectedMessageIds(getAllSelectableMessageIds());
+  const handleShareDeselectAll = () => setSelectedMessageIds(new Set());
+
+  const handleShareCancel = () => {
+    setIsShareSelecting(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  // Perform actual export with only selected messages visible
+  const handleShareExport = () => {
+    if (!currentSession || isExportingImage) return;
+    if (selectedMessageIds.size === 0) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkShareNoSelection'),
+      }));
+      return;
+    }
     setIsExportingImage(true);
 
     window.requestAnimationFrame(() => {
       void (async () => {
+        const scrollContainer = scrollContainerRef.current;
+        // Temporarily hide unselected messages and all share-checkboxes before capture
+        const hiddenEls: HTMLElement[] = [];
+        if (scrollContainer) {
+          scrollContainer.querySelectorAll<HTMLElement>('[data-message-id]').forEach((el) => {
+            const msgId = el.getAttribute('data-message-id') || '';
+            if (msgId && !selectedMessageIds.has(msgId)) {
+              el.style.display = 'none';
+              hiddenEls.push(el);
+            }
+          });
+          scrollContainer.querySelectorAll<HTMLElement>('[data-share-checkbox]').forEach((el) => {
+            el.style.display = 'none';
+            hiddenEls.push(el);
+          });
+        }
+
         try {
-          const scrollContainer = scrollContainerRef.current;
-          if (!scrollContainer) {
-            throw new Error('Capture target not found');
-          }
+          if (!scrollContainer) throw new Error('Capture target not found');
           const initialScrollTop = scrollContainer.scrollTop;
           try {
+            await waitForNextFrame();
+            await waitForNextFrame();
+
             const scrollRect = domRectToCaptureRect(scrollContainer.getBoundingClientRect());
-            if (scrollRect.width <= 0 || scrollRect.height <= 0) {
-              throw new Error('Invalid capture area');
-            }
+            if (scrollRect.width <= 0 || scrollRect.height <= 0) throw new Error('Invalid capture area');
 
             const scrollContentHeight = Math.max(scrollContainer.scrollHeight, scrollContainer.clientHeight);
-            if (scrollContentHeight <= 0) {
-              throw new Error('Invalid content height');
-            }
+            if (scrollContentHeight <= 0) throw new Error('Invalid content height');
 
             const toContentY = (viewportY: number): number => {
               const y = scrollContainer.scrollTop + (viewportY - scrollRect.y);
@@ -1554,28 +1715,32 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
             const outputHeight = contentEnd - contentStart;
 
-            if (outputHeight > MAX_EXPORT_CANVAS_HEIGHT) {
-              throw new Error(`Export image is too tall (${outputHeight}px)`);
-            }
+            if (outputHeight > MAX_EXPORT_CANVAS_HEIGHT) throw new Error(`Export image is too tall (${outputHeight}px)`);
 
             const segmentsEstimate = Math.ceil(outputHeight / Math.max(1, scrollRect.height)) + 1;
-            if (segmentsEstimate > MAX_EXPORT_SEGMENTS) {
-              throw new Error('Export image is too long');
+            if (segmentsEstimate > MAX_EXPORT_SEGMENTS) throw new Error('Export image is too long');
+
+            // Load logo for footer
+            let logoImg: HTMLImageElement | null = null;
+            try {
+              logoImg = await loadImageFromSrc('./logo.png');
+            } catch {
+              // Logo not critical, continue without it
             }
 
-            const canvas = document.createElement('canvas');
-            canvas.width = scrollRect.width;
-            canvas.height = outputHeight;
-            const context = canvas.getContext('2d');
-            if (!context) {
-              throw new Error('Canvas context unavailable');
-            }
+            // Detect dark mode
+            const isDark = document.documentElement.classList.contains('dark');
+
+            // Capture content into a temporary canvas
+            const contentCanvas = document.createElement('canvas');
+            contentCanvas.width = scrollRect.width;
+            contentCanvas.height = outputHeight;
+            const contentCtx = contentCanvas.getContext('2d');
+            if (!contentCtx) throw new Error('Canvas context unavailable');
 
             const captureAndLoad = async (rect: CaptureRect): Promise<HTMLImageElement> => {
               const chunk = await coworkService.captureSessionImageChunk({ rect });
-              if (!chunk.success || !chunk.pngBase64) {
-                throw new Error(chunk.error || 'Failed to capture image chunk');
-              }
+              if (!chunk.success || !chunk.pngBase64) throw new Error(chunk.error || 'Failed to capture image chunk');
               return loadImageFromBase64(chunk.pngBase64);
             };
 
@@ -1594,9 +1759,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               const chunkImage = await captureAndLoad(scrollRect);
               const sourceYOffset = Math.max(0, contentOffset - targetScrollTop);
               const drawableHeight = Math.min(scrollRect.height - sourceYOffset, contentEnd - contentOffset);
-              if (drawableHeight <= 0) {
-                throw new Error('Failed to stitch export image');
-              }
+              if (drawableHeight <= 0) throw new Error('Failed to stitch export image');
               const scaleY = chunkImage.naturalHeight / scrollRect.height;
               const sourceYInImage = Math.max(0, Math.round(sourceYOffset * scaleY));
               const sourceHeightInImage = Math.max(1, Math.min(
@@ -1604,41 +1767,42 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 Math.round(drawableHeight * scaleY),
               ));
 
-              context.drawImage(
-                chunkImage,
-                0,
-                sourceYInImage,
-                chunkImage.naturalWidth,
-                sourceHeightInImage,
-                0,
-                contentOffset - contentStart,
-                scrollRect.width,
-                drawableHeight,
+              contentCtx.drawImage(
+                chunkImage, 0, sourceYInImage, chunkImage.naturalWidth, sourceHeightInImage,
+                0, contentOffset - contentStart, scrollRect.width, drawableHeight,
               );
-
               contentOffset += drawableHeight;
             }
 
-            const pngDataUrl = canvas.toDataURL('image/png');
-            const base64Index = pngDataUrl.indexOf(',');
-            if (base64Index < 0) {
-              throw new Error('Failed to encode export image');
-            }
+            // Compose final canvas: header + content + footer
+            const finalCanvas = document.createElement('canvas');
+            finalCanvas.width = scrollRect.width;
+            finalCanvas.height = EXPORT_HEADER_HEIGHT + outputHeight + EXPORT_FOOTER_HEIGHT;
+            const finalCtx = finalCanvas.getContext('2d');
+            if (!finalCtx) throw new Error('Canvas context unavailable');
 
-            const timestamp = formatExportTimestamp(new Date());
-            const saveResult = await coworkService.saveSessionResultImage({
-              pngBase64: pngDataUrl.slice(base64Index + 1),
-              defaultFileName: sanitizeExportFileName(`${currentSession.title}-${timestamp}.png`),
-            });
-            if (saveResult.success && !saveResult.canceled) {
-              window.dispatchEvent(new CustomEvent('app:showToast', {
-                detail: i18nService.t('coworkExportImageSuccess'),
-              }));
-              return;
-            }
-            if (!saveResult.success) {
-              throw new Error(saveResult.error || 'Failed to export image');
-            }
+            // Format date
+            const now = new Date();
+            const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
+            const sessionTitle = currentSession.title || i18nService.t('coworkNewSession');
+
+            // Draw header
+            drawExportHeader(finalCtx, finalCanvas.width, sessionTitle, dateStr, isDark);
+
+            // Draw content
+            finalCtx.drawImage(contentCanvas, 0, EXPORT_HEADER_HEIGHT);
+
+            // Draw footer
+            drawExportFooter(finalCtx, finalCanvas.width, EXPORT_HEADER_HEIGHT + outputHeight, logoImg, isDark);
+
+            const pngDataUrl = finalCanvas.toDataURL('image/png');
+            const base64Index = pngDataUrl.indexOf(',');
+            if (base64Index < 0) throw new Error('Failed to encode export image');
+
+            // Show preview modal instead of saving directly
+            setPreviewImageDataUrl(pngDataUrl);
+            setIsShareSelecting(false);
+            setSelectedMessageIds(new Set());
           } finally {
             scrollContainer.scrollTop = initialScrollTop;
           }
@@ -1648,6 +1812,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             detail: i18nService.t('coworkExportImageFailed'),
           }));
         } finally {
+          hiddenEls.forEach((el) => { el.style.display = ''; });
           setIsExportingImage(false);
         }
       })();
@@ -1666,6 +1831,54 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const handleCancelDelete = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     setShowConfirmDelete(false);
+  };
+
+  // Preview modal handlers
+  const handlePreviewClose = () => {
+    setPreviewImageDataUrl(null);
+  };
+
+  const handlePreviewCopyImage = async () => {
+    if (!previewImageDataUrl) return;
+    try {
+      const base64Index = previewImageDataUrl.indexOf(',');
+      if (base64Index < 0) throw new Error('Invalid image data');
+      const result = await coworkService.copyImageToClipboard({
+        pngBase64: previewImageDataUrl.slice(base64Index + 1),
+      });
+      if (result.success) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkShareCopyImageSuccess'),
+        }));
+      } else {
+        throw new Error(result.error || 'Failed to copy image');
+      }
+    } catch (error) {
+      console.error('Failed to copy image to clipboard:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkShareCopyImageFailed'),
+      }));
+    }
+  };
+
+  const handlePreviewDownloadImage = async () => {
+    if (!previewImageDataUrl || !currentSession) return;
+    const base64Index = previewImageDataUrl.indexOf(',');
+    if (base64Index < 0) return;
+    const timestamp = formatExportTimestamp(new Date());
+    const saveResult = await coworkService.saveSessionResultImage({
+      pngBase64: previewImageDataUrl.slice(base64Index + 1),
+      defaultFileName: sanitizeExportFileName(`${currentSession.title}-${timestamp}.png`),
+    });
+    if (saveResult.success && !saveResult.canceled) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportImageSuccess'),
+      }));
+    } else if (!saveResult.success) {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportImageFailed'),
+      }));
+    }
   };
 
   const handleMessagesScroll = useCallback(() => {
@@ -1790,6 +2003,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
+  // Build all selectable message IDs from current turns
+  const getAllSelectableMessageIds = useCallback((): Set<string> => {
+    const ids = new Set<string>();
+    for (const turn of turns) {
+      if (turn.userMessage) ids.add(`${turn.id}:user`);
+      if (turn.assistantItems.length > 0) ids.add(`${turn.id}:assistant`);
+    }
+    return ids;
+  }, [turns]);
+
+  const totalSelectableCount = useMemo(() => {
+    let count = 0;
+    for (const turn of turns) {
+      if (turn.userMessage) count++;
+      if (turn.assistantItems.length > 0) count++;
+    }
+    return count;
+  }, [turns]);
+
   // Cache turn DOM elements when turns change
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -1896,27 +2128,68 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       );
     }
 
+    const renderShareCheckbox = (messageId: string, variant: 'user' | 'assistant') => {
+      const isChecked = selectedMessageIds.has(messageId);
+      // Align checkbox center with the first line text center of each message type:
+      // User message: py-2 (8px) + bubble py-2.5 (10px) + ~half line (8px) = ~26px → top = 26 - 10 = 16px
+      // Assistant message: py-2 (8px) + inner py-3 (12px) + ~half line (10px) = ~30px → top = 30 - 10 = 20px
+      const topClass = variant === 'user' ? 'top-[16px]' : 'top-[20px]';
+      return (
+        <button
+          type="button"
+          data-share-checkbox
+          onClick={() => handleShareToggleMessage(messageId)}
+          className={`absolute left-2 ${topClass} z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors shrink-0
+            ${isChecked
+              ? 'bg-claude-accent border-claude-accent text-white'
+              : 'dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:hover:border-claude-accent/60 hover:border-claude-accent/60'}`}
+        >
+          {isChecked && (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+              <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+            </svg>
+          )}
+        </button>
+      );
+    };
+
     return turns.map((turn, index) => {
       const isLastTurn = index === turns.length - 1;
       const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
       const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+      const userMsgId = `${turn.id}:user`;
+      const assistantMsgId = `${turn.id}:assistant`;
+      const isUserSelected = selectedMessageIds.has(userMsgId);
+      const isAssistantSelected = selectedMessageIds.has(assistantMsgId);
 
       return (
         <div key={turn.id} data-turn-index={index}>
           {turn.userMessage && (
-            <div data-export-role="user-message">
-              <UserMessageItem message={turn.userMessage} skills={skills} />
+            <div data-export-role="user-message" data-message-id={userMsgId} className="relative">
+              {isShareSelecting && renderShareCheckbox(userMsgId, 'user')}
+              <div
+                className={isShareSelecting ? 'transition-opacity duration-150' : ''}
+                style={isShareSelecting && !isUserSelected ? { opacity: 0.35 } : undefined}
+              >
+                <UserMessageItem message={turn.userMessage} skills={skills} />
+              </div>
             </div>
           )}
           {showAssistantBlock && (
-            <div data-export-role="assistant-block">
-              <AssistantTurnBlock
-                turn={turn}
-                resolveLocalFilePath={resolveLocalFilePath}
-                mapDisplayText={mapDisplayText}
-                showTypingIndicator={showTypingIndicator}
-                showCopyButtons={!isStreaming}
-              />
+            <div data-export-role="assistant-block" data-message-id={assistantMsgId} className="relative">
+              {isShareSelecting && renderShareCheckbox(assistantMsgId, 'assistant')}
+              <div
+                className={isShareSelecting ? 'transition-opacity duration-150' : ''}
+                style={isShareSelecting && !isAssistantSelected ? { opacity: 0.35 } : undefined}
+              >
+                <AssistantTurnBlock
+                  turn={turn}
+                  resolveLocalFilePath={resolveLocalFilePath}
+                  mapDisplayText={mapDisplayText}
+                  showTypingIndicator={showTypingIndicator}
+                  showCopyButtons={!isStreaming}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -2091,6 +2364,104 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 {i18nService.t('deleteSession')}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Image Preview Modal */}
+      {previewImageDataUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
+          onClick={handlePreviewClose}
+        >
+          <div
+            className="w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
+              <h2 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkSharePreviewTitle')}
+              </h2>
+              <button
+                type="button"
+                onClick={handlePreviewClose}
+                className="p-1 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Image Preview */}
+            <div className="flex-1 overflow-auto p-4 min-h-0">
+              <img
+                src={previewImageDataUrl}
+                alt="Share preview"
+                className="w-full h-auto rounded-lg border dark:border-claude-darkBorder border-claude-border"
+              />
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border shrink-0">
+              <button
+                type="button"
+                onClick={handlePreviewCopyImage}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border transition-colors"
+              >
+                <ClipboardDocumentIcon className="h-4 w-4" />
+                {i18nService.t('coworkShareCopyImage')}
+              </button>
+              <button
+                type="button"
+                onClick={handlePreviewDownloadImage}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-claude-accent hover:bg-claude-accent/90 text-white transition-colors"
+              >
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                {i18nService.t('coworkShareDownloadImage')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Selection Toolbar */}
+      {isShareSelecting && (
+        <div className="flex items-center justify-between px-4 py-2 border-b dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/80 bg-claude-surface/80 backdrop-blur-sm shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+              {i18nService.t('coworkShareSelectMessages')}
+            </span>
+            <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              ({selectedMessageIds.size}/{totalSelectableCount})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={selectedMessageIds.size === totalSelectableCount ? handleShareDeselectAll : handleShareSelectAll}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border transition-colors"
+            >
+              {selectedMessageIds.size === totalSelectableCount
+                ? i18nService.t('coworkShareDeselectAll')
+                : i18nService.t('coworkShareSelectAll')}
+            </button>
+            <button
+              type="button"
+              onClick={handleShareCancel}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border transition-colors"
+            >
+              {i18nService.t('coworkShareCancel')}
+            </button>
+            <button
+              type="button"
+              onClick={handleShareExport}
+              disabled={isExportingImage || selectedMessageIds.size === 0}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-claude-accent hover:bg-claude-accent/90 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isExportingImage
+                ? i18nService.t('coworkExportImageInProgress')
+                : i18nService.t('coworkShareExport')}
+            </button>
           </div>
         </div>
       )}
