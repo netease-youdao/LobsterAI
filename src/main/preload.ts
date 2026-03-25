@@ -151,6 +151,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:rename', options),
     getSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:get', sessionId),
+    migrateSession: (oldSessionId: string) =>
+      ipcRenderer.invoke('cowork:session:migrate', oldSessionId),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
     listSessions: () =>
@@ -226,8 +228,13 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('cowork:stream:permission', handler);
       return () => ipcRenderer.removeListener('cowork:stream:permission', handler);
     },
-    onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => {
-      const handler = (_event: any, data: { sessionId: string; claudeSessionId: string | null }) => callback(data);
+    onStreamContextOptimizing: (callback: (data: { sessionId: string; isOptimizing: boolean }) => void) => {
+      const handler = (_event: any, data: { sessionId: string; isOptimizing: boolean }) => callback(data);
+      ipcRenderer.on('cowork:stream:contextOptimizing', handler);
+      return () => ipcRenderer.removeListener('cowork:stream:contextOptimizing', handler);
+    },
+    onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null; turnCount?: number }) => void) => {
+      const handler = (_event: any, data: { sessionId: string; claudeSessionId: string | null; turnCount?: number }) => callback(data);
       ipcRenderer.on('cowork:stream:complete', handler);
       return () => ipcRenderer.removeListener('cowork:stream:complete', handler);
     },

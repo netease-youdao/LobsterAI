@@ -1110,6 +1110,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: '网易有道LobsterAI服务协议',
     privacyDialogAccept: '我已阅读并同意',
     privacyDialogReject: '拒绝',
+
+    // 上下文管理
+    'cowork.contextWarning.long': '当前会话已达 {turnCount} 轮，较早的上下文可能被AI忽略，建议注意质量变化。',
+    'cowork.contextWarning.veryLong': '当前会话已达 {turnCount} 轮，建议开启新会话以获得最佳效果。',
+    'cowork.contextWarning.overflow': '上下文长度已超出限制，请开启新会话继续工作。',
+    'cowork.contextWarning.newSessionWithContext': '携带上下文开启新会话',
+    'cowork.contextWarning.optimizingContext': '正在优化上下文...',
+    'cowork.contextWarning.dismiss': '关闭',
   },
   en: {
     // Common
@@ -2214,6 +2222,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
+
+    // Context Management
+    'cowork.contextWarning.long': 'This session has reached {turnCount} turns. AI quality may degrade for earlier context.',
+    'cowork.contextWarning.veryLong': 'This session has reached {turnCount} turns. Consider starting a new session for best results.',
+    'cowork.contextWarning.overflow': 'Context limit reached. Please start a new session.',
+    'cowork.contextWarning.newSessionWithContext': 'New Session with Context',
+    'cowork.contextWarning.optimizingContext': 'Optimizing context...',
+    'cowork.contextWarning.dismiss': 'Dismiss',
   }
 };
 

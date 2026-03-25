@@ -648,6 +648,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         messages,
         createdAt: now,
         updatedAt: now,
+        turnCount: 0,
+        contextSummary: null,
+        summaryUpToTurn: 0,
+        migratedFromSessionId: null,
       };
     } catch (error) {
       console.error('[OpenClawRuntime] fetchSessionByKey: failed to fetch history:', error);
@@ -835,6 +839,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   async startSession(sessionId: string, prompt: string, options: CoworkStartOptions = {}): Promise<void> {
+    // Initialize turn count for new sessions
+    this.store.updateSession(sessionId, { turnCount: 1 });
     await this.runTurn(sessionId, prompt, {
       skipInitialUserMessage: options.skipInitialUserMessage,
       skillIds: options.skillIds,
@@ -845,6 +851,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
+    // Increment turn count
+    const session = this.store.getSession(sessionId);
+    const currentTurnCount = session?.turnCount ?? 0;
+    const newTurnCount = currentTurnCount + 1;
+    this.store.updateSession(sessionId, { turnCount: newTurnCount });
+    console.log(`[OpenClawRuntime] session ${sessionId} turn count: ${newTurnCount}`);
     await this.runTurn(sessionId, prompt, {
       skipInitialUserMessage: false,
       systemPrompt: options.systemPrompt,
@@ -1095,7 +1107,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!hasHistory) {
       const session = this.store.getSession(sessionId);
       if (session) {
-        const bridgePrefix = this.buildBridgePrefix(session.messages, prompt);
+        const bridgePrefix = this.buildBridgePrefix(session.messages, prompt, session.contextSummary);
         if (bridgePrefix) {
           sections.push(bridgePrefix);
         }
@@ -1115,9 +1127,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     ].join('\n');
   }
 
-  private buildBridgePrefix(messages: CoworkMessage[], currentPrompt: string): string {
+  private buildBridgePrefix(messages: CoworkMessage[], currentPrompt: string, sessionSummary?: string | null): string {
     const normalizedCurrentPrompt = currentPrompt.trim();
     if (!normalizedCurrentPrompt) return '';
+
+    // Use configurable bridge limits
+    const ctxConfig = this.store.getContextManagementConfig();
+    const bridgeMaxMessages = ctxConfig.enabled
+      ? (Number(this.getConfigValue('contextManagement.openclawBridgeMaxMessages')) || BRIDGE_MAX_MESSAGES)
+      : BRIDGE_MAX_MESSAGES;
+    const bridgeMaxMessageChars = ctxConfig.enabled
+      ? (Number(this.getConfigValue('contextManagement.openclawBridgeMaxMessageChars')) || BRIDGE_MAX_MESSAGE_CHARS)
+      : BRIDGE_MAX_MESSAGE_CHARS;
 
     const source = messages
       .filter((message) => {
@@ -1146,21 +1167,39 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       source.pop();
     }
 
-    const recent = source.slice(-BRIDGE_MAX_MESSAGES);
-    if (recent.length === 0) {
+    const recent = source.slice(-bridgeMaxMessages);
+    if (recent.length === 0 && !sessionSummary) {
       return '';
+    }
+
+    const parts: string[] = [
+      '[Context bridge from previous LobsterAI conversation]',
+      'Use this prior context for continuity. Focus your final answer on the current request.',
+    ];
+
+    // Prepend session summary if available
+    if (sessionSummary) {
+      parts.push('', '<session_summary>', sessionSummary, '</session_summary>', '');
     }
 
     const lines = recent.map((entry) => {
       const role = entry.type === 'user' ? 'User' : 'Assistant';
-      return `${role}: ${truncate(entry.content, BRIDGE_MAX_MESSAGE_CHARS)}`;
+      return `${role}: ${truncate(entry.content, bridgeMaxMessageChars)}`;
     });
+    parts.push(...lines);
 
-    return [
-      '[Context bridge from previous LobsterAI conversation]',
-      'Use this prior context for continuity. Focus your final answer on the current request.',
-      ...lines,
-    ].join('\n');
+    return parts.join('\n');
+  }
+
+  private getConfigValue(key: string): string | undefined {
+    try {
+      const db = (this.store as unknown as { db: { exec: (sql: string, params: unknown[]) => { values: unknown[][] }[] } }).db;
+      if (!db) return undefined;
+      const result = db.exec('SELECT value FROM cowork_config WHERE key = ?', [key]);
+      return result?.[0]?.values?.[0]?.[0] as string | undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async ensureGatewayClientReady(): Promise<void> {

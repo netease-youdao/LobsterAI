@@ -53,6 +53,10 @@ export interface CoworkSession {
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
+  turnCount: number;
+  contextSummary: string | null;
+  summaryUpToTurn: number;
+  migratedFromSessionId: string | null;
 }
 
 // Cowork configuration
@@ -66,6 +70,7 @@ export interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: 'strict' | 'standard' | 'relaxed';
   memoryUserMemoriesMaxItems: number;
+  contextManagementEnabled: boolean;
 }
 
 export type CoworkConfigUpdate = Partial<Pick<

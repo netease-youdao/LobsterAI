@@ -228,6 +228,34 @@ export class SqliteStore {
       // Column might not exist yet.
     }
 
+    // Migration: Add context management columns to cowork_sessions
+    try {
+      const sessionColsResult = this.db.exec("PRAGMA table_info(cowork_sessions);");
+      const sessionColumns = sessionColsResult[0]?.values.map((row) => row[1]) || [];
+
+      if (!sessionColumns.includes('turn_count')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN turn_count INTEGER DEFAULT 0;');
+        this.save();
+      }
+
+      if (!sessionColumns.includes('context_summary')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN context_summary TEXT DEFAULT NULL;');
+        this.save();
+      }
+
+      if (!sessionColumns.includes('summary_up_to_turn')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN summary_up_to_turn INTEGER DEFAULT 0;');
+        this.save();
+      }
+
+      if (!sessionColumns.includes('migrated_from_session_id')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN migrated_from_session_id TEXT DEFAULT NULL;');
+        this.save();
+      }
+    } catch {
+      // Context management columns already exist or migration not needed.
+    }
+
     try {
       this.db.run(`UPDATE cowork_sessions SET execution_mode = 'local' WHERE execution_mode = 'container';`);
       this.db.run(`

@@ -204,6 +204,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         systemPrompt: '',
         executionMode: config.executionMode || 'local',
         activeSkillIds: sessionSkillIds,
+        turnCount: 0,
+        contextSummary: null,
+        summaryUpToTurn: 0,
+        migratedFromSessionId: null,
         messages: [
           {
             id: `msg-${now}`,

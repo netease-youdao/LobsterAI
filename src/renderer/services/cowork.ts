@@ -9,6 +9,7 @@ import {
   addMessage,
   updateMessageContent,
   setStreaming,
+  setOptimizingContext,
   setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
@@ -130,9 +131,15 @@ class CoworkService {
     });
     this.streamListenerCleanups.push(permissionCleanup);
 
+    // Context optimizing listener
+    const contextOptimizingCleanup = cowork.onStreamContextOptimizing(({ sessionId, isOptimizing }) => {
+      store.dispatch(setOptimizingContext({ sessionId, isOptimizing }));
+    });
+    this.streamListenerCleanups.push(contextOptimizingCleanup);
+
     // Complete listener
-    const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
-      store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
+    const completeCleanup = cowork.onStreamComplete(({ sessionId, turnCount }) => {
+      store.dispatch(updateSessionStatus({ sessionId, status: 'completed', turnCount }));
     });
     this.streamListenerCleanups.push(completeCleanup);
 
@@ -361,6 +368,22 @@ class CoworkService {
 
     console.error('Failed to batch delete sessions:', result.error);
     return false;
+  }
+
+  async migrateToNewSession(oldSessionId: string): Promise<string | null> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.migrateSession) return null;
+
+    const result = await cowork.migrateSession(oldSessionId);
+    if (result.success && result.newSessionId) {
+      // Reload session list and switch to the new session
+      await this.loadSessions();
+      await this.loadSession(result.newSessionId);
+      return result.newSessionId;
+    }
+
+    console.error('Failed to migrate session:', result.error);
+    return null;
   }
 
   async setSessionPinned(sessionId: string, pinned: boolean): Promise<boolean> {

@@ -23,6 +23,7 @@ import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
+import ContextWarningBanner from './ContextWarningBanner';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../common/scheduledReminderText';
 
@@ -1290,7 +1291,21 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
   const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
+  const coworkConfig = useSelector((state: RootState) => state.cowork.config);
   const skills = useSelector((state: RootState) => state.skill.skills);
+
+  // Detect if session has encountered an inputTooLong / context overflow error
+  const hasContextOverflow = useMemo(() => {
+    if (!currentSession?.messages) return false;
+    const inputTooLongPatterns = [
+      'input too long', 'context length exceeded', 'payload too large',
+      '输入内容过长', '超出模型上下文限制',
+    ];
+    return currentSession.messages.some(m =>
+      m.type === 'system' && inputTooLongPatterns.some(p => m.content.toLowerCase().includes(p))
+    );
+  }, [currentSession?.messages]);
+
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
@@ -2093,6 +2108,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Context Warning Banner */}
+      {coworkConfig.contextManagementEnabled && (
+        <ContextWarningBanner
+          sessionId={currentSession.id}
+          turnCount={currentSession.turnCount ?? 0}
+          hasContextOverflow={hasContextOverflow}
+          onMigrateSession={() => {
+            if (currentSession?.id) {
+              coworkService.migrateToNewSession(currentSession.id);
+            }
+          }}
+        />
       )}
 
       {/* Messages */}
