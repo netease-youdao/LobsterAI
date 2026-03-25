@@ -75,8 +75,49 @@ let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
 let upstreamConfig: OpenAICompatUpstreamConfig | null = null;
 let lastProxyError: string | null = null;
+let currentCoworkSessionId: string | null = null;
 const toolCallExtraContentById = new Map<string, unknown>();
+
+export function setCoworkProxySessionId(sessionId: string | null): void {
+  currentCoworkSessionId = sessionId;
+}
 const MAX_TOOL_CALL_EXTRA_CONTENT_CACHE = 1024;
+
+// Regex to strip Claude SDK-injected time context prefix from user messages
+const TIME_CONTEXT_PREFIX_RE = /^\[.*?\]\s*##\s*Local Time Context[\s\S]*?(?=\n\S|$)/;
+// Regex to strip "Sender (untrusted metadata):" JSON block prefix
+const METADATA_PREFIX_RE = /^Sender \(untrusted metadata\):\s*```json\s*\{[^}]*}\s*```\s*/s;
+
+function extractLastUserMessageText(body: unknown): string | null {
+  const obj = toOptionalObject(body);
+  if (!obj) return null;
+  const messages = obj.messages;
+  if (!Array.isArray(messages)) return null;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = toOptionalObject(messages[i]);
+    if (!msg || msg.role !== 'user') continue;
+
+    let text: string | null = null;
+    if (typeof msg.content === 'string') {
+      text = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        const b = toOptionalObject(block);
+        if (b && b.type === 'text' && typeof b.text === 'string') {
+          text = b.text;
+          break;
+        }
+      }
+    }
+    if (text) {
+      text = text.replace(METADATA_PREFIX_RE, '').replace(TIME_CONTEXT_PREFIX_RE, '').trim();
+      if (text.length > 100) text = text.substring(0, 100);
+      return text || null;
+    }
+  }
+  return null;
+}
 
 function toOptionalObject(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -2196,6 +2237,16 @@ async function handleRequest(
 
   const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
   const openAIRequest = anthropicToOpenAI(parsedRequestBody);
+
+  // Inject session_id and user_message for server-side logging
+  if (currentCoworkSessionId) {
+    openAIRequest.session_id = currentCoworkSessionId;
+  }
+  const extractedUserMessage = extractLastUserMessageText(parsedRequestBody);
+  if (extractedUserMessage) {
+    openAIRequest.user_message = extractedUserMessage;
+  }
+
   if (!openAIRequest.model) {
     openAIRequest.model = upstreamConfig.model;
   }

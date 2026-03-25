@@ -44,6 +44,22 @@ LobsterAI is an Electron + React desktop application with two primary modes:
 
 Uses strict process isolation with IPC communication.
 
+### Authentication Flow
+
+1. **登录：** 打开系统浏览器 → Portal 登录页 → URS 登录成功 → deep link `lobsterai://auth/callback?code=<authCode>`
+2. **换取令牌：** `POST /api/auth/exchange` 消费一次性 authCode → 返回 `accessToken`(2h) + `refreshToken`(30d)
+3. **持久化：** SQLite kv store `auth_tokens` 存储双 token，应用重启后自动恢复登录态
+4. **请求认证：** `fetchWithAuth()` 在每个 API 请求附加 `Authorization: Bearer <accessToken>`
+5. **被动刷新：** 收到 HTTP 401 → 使用 refreshToken 调用 `POST /api/auth/refresh` → 获取新 accessToken → 重试原请求
+6. **主动刷新：** 定期检查 accessToken 距 exp < 5 分钟 → 后台静默刷新，避免请求失败
+7. **滚动续期：** 每次 refresh 签发新 refreshToken（新 30 天有效期），连续使用不掉线
+8. **退出条件：** 连续 30 天不使用（refreshToken 过期）→ 清除本地 token → 用户需重新登录
+
+**关键文件：**
+- Token 存储与请求：`src/renderer/services/api.ts`（`fetchWithAuth()`、token 管理）
+- 登录流程：`src/main/main.ts`（deep link 处理 `lobsterai://` 协议）
+- 持久化：`src/main/sqliteStore.ts`（kv 表存储 `auth_tokens`）
+
 ### Process Model
 
 **Main Process** (`src/main/main.ts`):

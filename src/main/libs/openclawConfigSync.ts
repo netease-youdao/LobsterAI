@@ -306,6 +306,36 @@ const buildProviderSelection = (options: {
   const providerName = options.providerName ?? '';
   const codingPlanEnabled = !!options.codingPlanEnabled;
 
+  // lobsterai-server: route through the LobsterAI server proxy
+  if (providerName === 'lobsterai-server') {
+    const strippedBaseUrl = stripChatCompletionsSuffix(options.baseURL);
+    console.log('[OpenClawConfigSync] buildProviderSelection lobsterai-server:', {
+      inputBaseURL: options.baseURL,
+      strippedBaseUrl,
+      modelId: options.modelId,
+      primaryModel: `lobsterai-server/${options.modelId}`,
+      api: 'openai-completions',
+    });
+    return {
+      providerId: 'lobsterai-server',
+      legacyModelId: options.modelId,
+      sessionModelId: options.modelId,
+      primaryModel: `lobsterai-server/${options.modelId}`,
+      providerConfig: {
+        baseUrl: strippedBaseUrl,
+        api: 'openai-completions',
+        apiKey: options.apiKey,
+        auth: 'api-key',
+        models: [{
+          id: options.modelId,
+          name: providerModelName,
+          api: 'openai-completions',
+          input: modelInput,
+        }],
+      },
+    };
+  }
+
   if (providerName === 'moonshot' && codingPlanEnabled) {
     return {
       providerId: 'kimi-coding',
@@ -912,6 +942,10 @@ export class OpenClawConfigSync {
     managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'openclaw-weixin': weixinChannel };
 
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
+    console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
+      providers: (managedConfig.models as Record<string, unknown>)?.providers,
+      primaryModel: ((managedConfig.agents as Record<string, unknown>)?.defaults as Record<string, unknown>)?.model,
+    });
     let currentContent = '';
     try {
       currentContent = fs.readFileSync(configPath, 'utf8');

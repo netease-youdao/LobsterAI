@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from './store';
+import { RootState, store } from './store';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import Toast from './components/Toast';
@@ -16,6 +16,7 @@ import { configService } from './services/config';
 import { apiService } from './services/api';
 import { themeService } from './services/theme';
 import { coworkService } from './services/cowork';
+import { authService } from './services/auth';
 import { scheduledTaskService } from './services/scheduledTask';
 import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
 import { defaultConfig } from './config';
@@ -100,7 +101,11 @@ const App: React.FC = () => {
         // 初始化语言
         console.info('[App] initializeApp: i18nService.initialize');
         await waitWithTimeout(i18nService.initialize(), 5000, 'i18nService.initialize');
-        
+
+        // 初始化认证服务（恢复登录状态）
+        console.info('[App] initializeApp: authService.init');
+        await authService.init();
+
         console.info('[App] initializeApp: configService.getConfig');
         const config = await configService.getConfig();
         
@@ -136,10 +141,13 @@ const App: React.FC = () => {
         const resolvedModels = providerModels.length > 0 ? providerModels : fallbackModels;
         if (resolvedModels.length > 0) {
           dispatch(setAvailableModels(resolvedModels));
-          const preferredModel = resolvedModels.find(
+          // Search all available models (including server models loaded by authService)
+          // so that a previously selected server model is correctly restored.
+          const allModels = store.getState().model.availableModels;
+          const preferredModel = allModels.find(
             model => model.id === config.model.defaultModel
               && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
-          ) ?? resolvedModels[0];
+          ) ?? allModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
 
