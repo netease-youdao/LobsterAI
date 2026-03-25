@@ -1,0 +1,23 @@
+src/main/libs/agentEngine/openclawRuntimeAdapter.ts
+  ec56b3c09ec4f05d 2410-2412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "10ac89c03ed8d0e6b736f8518709a2168baf7277",
+  "prompts": {
+    "ec56b3c09ec4f05d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "410ebd09-1074-4332-b32d-bd0e824d7ac8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 1,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
