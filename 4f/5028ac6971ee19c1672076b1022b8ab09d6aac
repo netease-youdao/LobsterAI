@@ -1,0 +1,23 @@
+src/main/libs/cronJobService.ts
+  2aa8a0fec456b607 478
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.19",
+  "base_commit_sha": "4f5028ac6971ee19c1672076b1022b8ab09d6aac",
+  "prompts": {
+    "2aa8a0fec456b607": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "14ed2bf2-b655-45ea-8dfd-e165ec59108e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 5,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
