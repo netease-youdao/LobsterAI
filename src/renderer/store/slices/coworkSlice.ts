@@ -57,19 +57,35 @@ const markSessionUnread = (state: CoworkState, sessionId: string) => {
 
 const STREAMING_MERGE_PROBE_CHARS = 512;
 
-const computeStreamingSuffixPrefixOverlap = (left: string, right: string): number => {
+export const computeStreamingSuffixPrefixOverlap = (left: string, right: string): number => {
   const leftProbe = left.slice(-STREAMING_MERGE_PROBE_CHARS);
   const rightProbe = right.slice(0, STREAMING_MERGE_PROBE_CHARS);
-  const maxOverlap = Math.min(leftProbe.length, rightProbe.length);
-  for (let size = maxOverlap; size > 0; size -= 1) {
-    if (leftProbe.slice(-size) === rightProbe.slice(0, size)) {
-      return size;
+  if (leftProbe.length === 0 || rightProbe.length === 0) return 0;
+
+  // KMP failure-function approach: O(n + m) instead of O(n * m).
+  // Concatenate rightProbe + sentinel + leftProbe and compute the failure
+  // table. The last entry gives the longest prefix of rightProbe that equals
+  // a suffix of leftProbe — exactly the overlap we need.
+  const sentinel = '\x00';
+  const combined = rightProbe + sentinel + leftProbe;
+  const len = combined.length;
+  const fail = new Int32Array(len);
+
+  for (let i = 1; i < len; i++) {
+    let j = fail[i - 1];
+    while (j > 0 && combined[i] !== combined[j]) {
+      j = fail[j - 1];
     }
+    if (combined[i] === combined[j]) {
+      j++;
+    }
+    fail[i] = j;
   }
-  return 0;
+
+  return fail[len - 1];
 };
 
-const mergeStreamingMessageContent = (previousContent: string, incomingContent: string): string => {
+export const mergeStreamingMessageContent = (previousContent: string, incomingContent: string): string => {
   if (!incomingContent) return previousContent;
   if (!previousContent) return incomingContent;
   if (incomingContent === previousContent) return previousContent;
