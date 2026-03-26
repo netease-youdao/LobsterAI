@@ -270,12 +270,33 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         base64Lengths: imageAtts.map(a => a.base64Data.length),
       });
     }
-    const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
-    if (result === false) return;
+    // Save original values for potential restore
+    const originalValue = value;
+    const originalAttachments = [...attachments];
+
+    // Clear the input immediately for instant feedback, before awaiting onSubmit
     setValue('');
     dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
     setAttachments([]);
     setImageVisionHint(false);
+
+    let result: boolean | void;
+    try {
+      result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
+    } catch (error) {
+      console.error('[CoworkPromptInput] onSubmit threw an error, restoring input:', error);
+      // Restore input and attachments so user can retry
+      setValue(originalValue);
+      dispatch(setDraftPrompt({ sessionId: draftKey, draft: originalValue }));
+      setAttachments(originalAttachments);
+      return;
+    }
+    if (result === false) {
+      // onSubmit explicitly rejected, restore input and attachments so user can retry
+      setValue(originalValue);
+      dispatch(setDraftPrompt({ sessionId: draftKey, draft: originalValue }));
+      setAttachments(originalAttachments);
+    }
   }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);
 
   const handleSelectSkill = useCallback((skill: Skill) => {

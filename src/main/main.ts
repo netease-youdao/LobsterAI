@@ -2558,8 +2558,7 @@ if (!gotTheLock) {
         });
       });
 
-      const session = getCoworkStore().getSession(options.sessionId);
-      return { success: true, session };
+      return { success: true };
     } catch (error) {
       return {
         success: false,

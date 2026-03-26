@@ -232,13 +232,20 @@ const coworkSlice = createSlice({
       const { sessionId, messageId, content } = action.payload;
 
       if (state.currentSession?.id === sessionId) {
-        const messageIndex = state.currentSession.messages.findIndex(m => m.id === messageId);
+        const messages = state.currentSession.messages;
+        // Optimization: streaming usually updates the last message, check it first
+        let messageIndex = -1;
+        if (messages.length > 0 && messages[messages.length - 1].id === messageId) {
+          messageIndex = messages.length - 1;
+        } else {
+          messageIndex = messages.findIndex(m => m.id === messageId);
+        }
         if (messageIndex !== -1) {
-          const previousContent = state.currentSession.messages[messageIndex].content || '';
+          const previousContent = messages[messageIndex].content || '';
           if (state.config.agentEngine === 'yd_cowork') {
-            state.currentSession.messages[messageIndex].content = mergeStreamingMessageContent(previousContent, content);
+            messages[messageIndex].content = mergeStreamingMessageContent(previousContent, content);
           } else {
-            state.currentSession.messages[messageIndex].content = content;
+            messages[messageIndex].content = content;
           }
         }
       }
