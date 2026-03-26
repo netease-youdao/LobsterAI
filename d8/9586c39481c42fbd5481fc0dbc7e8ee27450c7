@@ -1,0 +1,23 @@
+scripts/apply-openclaw-patches.cjs
+  6366cdaefdac676a 83,101,133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.19",
+  "base_commit_sha": "d89586c39481c42fbd5481fc0dbc7e8ee27450c7",
+  "prompts": {
+    "6366cdaefdac676a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d1377ba-3ce9-4cb0-9606-ccfbac5dc027",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 3,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}

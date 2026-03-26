@@ -1,0 +1,23 @@
+src/main/main.ts
+  89623e7a571d2cd7 1287-1291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.19",
+  "base_commit_sha": "3dd227e9b6fff27f3f2969aa4c2e2a4dcc8ecd64",
+  "prompts": {
+    "89623e7a571d2cd7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "697b738b-395c-4992-a7b5-3062dc7d0650",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 5,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}

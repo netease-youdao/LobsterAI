@@ -1,0 +1,66 @@
+src/main/libs/agentEngine/openclawRuntimeAdapter.ts
+  932a2b4cc28e62a0 788
+  6ec1ba8929569836 2940
+  4e97fcf20b0aeb9b 2866
+AGENTS.md
+  48a493d76051f475 215-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "a020a3bd921d07a5aa8fd79cc40d2a41e39a4276",
+  "prompts": {
+    "48a493d76051f475": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f030b6adffe4k4QsJ97QbI2Wt-e714e2cb-73c9-410d-b862-691a27a90ae1",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 49,
+      "total_deletions": 0,
+      "accepted_lines": 49,
+      "overriden_lines": 0
+    },
+    "4e97fcf20b0aeb9b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f030b6adffe4k4QsJ97QbI2Wt-46a24959-9ac4-43e3-8dbe-f2fd00a8b712",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "6ec1ba8929569836": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f030b6adffe4k4QsJ97QbI2Wt-441063ac-11a7-4844-bc45-1ae2c8795fad",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 15,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "932a2b4cc28e62a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f030b6adffe4k4QsJ97QbI2Wt-c4481644-104a-4822-8fcd-818478edb175",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 5,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

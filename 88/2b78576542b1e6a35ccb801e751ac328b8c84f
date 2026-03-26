@@ -1,0 +1,141 @@
+src/main/libs/agentEngine/openclawRuntimeAdapter.ts
+  2b5e1682106ee2be 4,624,666-742,744-761
+  85d7c7adb8e93d00 743
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.19",
+  "base_commit_sha": "882b78576542b1e6a35ccb801e751ac328b8c84f",
+  "prompts": {
+    "0b547a7b68f28648": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e1fc4150ffeVWr6fdcaktHue5-311f8c0e-2e52-44b7-8054-dd8a8724e945",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "2b5e1682106ee2be": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "13140a77-8ad3-4c52-afec-b918838c0916",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 98,
+      "total_deletions": 1,
+      "accepted_lines": 97,
+      "overriden_lines": 0
+    },
+    "4e97fcf20b0aeb9b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f030b6adffe4k4QsJ97QbI2Wt-46a24959-9ac4-43e3-8dbe-f2fd00a8b712",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "6ec1ba8929569836": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f030b6adffe4k4QsJ97QbI2Wt-441063ac-11a7-4844-bc45-1ae2c8795fad",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 15,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "85d7c7adb8e93d00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7f3ebc38-d97e-4ade-ab75-ba50d4d6e41b",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "932a2b4cc28e62a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f030b6adffe4k4QsJ97QbI2Wt-c4481644-104a-4822-8fcd-818478edb175",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 5,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "9bcf8777dc448c8d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1acab4a5-7129-47b4-86bd-031903bd3609",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 9,
+      "total_deletions": 4,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "ac265deeec6db4fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e96a6233-4b93-4948-9d6d-e217e6b733f0",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 3,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "cb24b1f606115c72": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-7e9c33ec-db5d-41dd-b1fb-14a75826542f",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    },
+    "d2fe6774f3dc54ad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e1fc4150ffeVWr6fdcaktHue5-859a1eb0-8971-44c0-96ab-ef5a52b4a35d",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 18,
+      "overriden_lines": 0
+    }
+  }
+}

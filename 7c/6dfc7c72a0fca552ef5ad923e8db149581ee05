@@ -1,0 +1,37 @@
+src/main/im/types.ts
+  409356c13b524217 448-451
+  b176c69391de6b00 21-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "7c6dfc7c72a0fca552ef5ad923e8db149581ee05",
+  "prompts": {
+    "409356c13b524217": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f97b2533ffe761XFD3c95eB0g-b45cec06-51f8-4198-b3a2-8114bc3c72b7",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 9,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "b176c69391de6b00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f97b2533ffe761XFD3c95eB0g-494a3f23-3c2a-4c7f-bb91-6b68511c2c71",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 0,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}

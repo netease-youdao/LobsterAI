@@ -1,0 +1,33 @@
+src/main/main.ts
+  6fb9d197fb0c017b 61,1619
+electron-tsconfig.json
+  6fb9d197fb0c017b 18-19
+README_zh.md
+  6fb9d197fb0c017b 443-475
+src/main/logger.ts
+  6fb9d197fb0c017b 6-13,16-17,20-33,39-44,47,89-90,98-117,119,125-145
+README.md
+  6fb9d197fb0c017b 450-484
+AGENTS.md
+  6fb9d197fb0c017b 217-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "af6c0ff7c67a7ab71cc8d642e54db987d9f1d430",
+  "prompts": {
+    "6fb9d197fb0c017b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f5f2f12-0953-4255-a167-f2aff2ef60bd",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1100,
+      "total_deletions": 485,
+      "accepted_lines": 1072,
+      "overriden_lines": 1
+    }
+  }
+}

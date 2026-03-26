@@ -1,0 +1,23 @@
+src/main/libs/agentEngine/openclawRuntimeAdapter.ts
+  2b5e1682106ee2be 4,619,660-754
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.19",
+  "base_commit_sha": "0e68af9fc96bf6addeabfba8a7e221f6acb74e29",
+  "prompts": {
+    "2b5e1682106ee2be": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "13140a77-8ad3-4c52-afec-b918838c0916",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 98,
+      "total_deletions": 1,
+      "accepted_lines": 98,
+      "overriden_lines": 0
+    }
+  }
+}
