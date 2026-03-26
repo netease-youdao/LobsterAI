@@ -75,6 +75,7 @@ let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
 let upstreamConfig: OpenAICompatUpstreamConfig | null = null;
 let lastProxyError: string | null = null;
+let tokenRefresher: (() => Promise<string | null>) | null = null;
 let currentCoworkSessionId: string | null = null;
 const toolCallExtraContentById = new Map<string, unknown>();
 
@@ -2323,6 +2324,26 @@ async function handleRequest(
   }
 
   if (!upstreamResponse.ok) {
+    // 401/403 from lobsterai-server likely means the JWT accessToken expired.
+    // Refresh the token and retry once before falling through to other error handling.
+    if ((upstreamResponse.status === 401 || upstreamResponse.status === 403) && tokenRefresher) {
+      console.log(`[CoworkProxy] Got ${upstreamResponse.status}, attempting token refresh and retry...`);
+      try {
+        const newToken = await tokenRefresher();
+        if (newToken) {
+          headers.Authorization = `Bearer ${newToken}`;
+          if (upstreamConfig) {
+            upstreamConfig.apiKey = newToken;
+          }
+          upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
+          const retryDuration = Date.now() - fetchStartTime;
+          console.log(`[CoworkProxy] Token refresh retry: status=${upstreamResponse.status}, ok=${upstreamResponse.ok}, fetchTime=${retryDuration}ms`);
+        }
+      } catch (refreshError) {
+        console.warn('[CoworkProxy] Token refresh retry failed:', refreshError);
+      }
+    }
+
     if (upstreamResponse.status === 404 && targetURLs.length > 1) {
       for (let i = 1; i < targetURLs.length; i += 1) {
         const retryURL = targetURLs[i];
@@ -2541,6 +2562,14 @@ export function configureCoworkOpenAICompatProxy(config: OpenAICompatUpstreamCon
     apiKey: config.apiKey?.trim(),
   };
   lastProxyError = null;
+}
+
+/**
+ * Set a callback that refreshes the auth token and returns the new accessToken.
+ * Called by the proxy on 401/403 to retry with a fresh token.
+ */
+export function setProxyTokenRefresher(refresher: () => Promise<string | null>): void {
+  tokenRefresher = refresher;
 }
 
 export function getCoworkOpenAICompatProxyBaseURL(target: OpenAICompatProxyTarget = 'local'): string | null {

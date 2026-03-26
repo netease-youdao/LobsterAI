@@ -6,6 +6,8 @@ import type { Model } from '../store/slices/modelSlice';
 class AuthService {
   private unsubCallback: (() => void) | null = null;
   private unsubQuotaChanged: (() => void) | null = null;
+  private unsubWindowState: (() => void) | null = null;
+  private lastRefreshTime = 0;
 
   /**
    * Initialize: try to restore login state from persisted token.
@@ -35,6 +37,19 @@ class AuthService {
     // Listen for quota changes (e.g. after cowork session using server model)
     this.unsubQuotaChanged = window.electron.auth.onQuotaChanged(() => {
       this.refreshQuota();
+      this.loadServerModels();
+    });
+
+    // Refresh quota and models when Electron window gains focus — user may have purchased on portal
+    this.unsubWindowState = window.electron.window.onStateChanged((state) => {
+      if (state.isFocused && store.getState().auth.isLoggedIn) {
+        const now = Date.now();
+        if (now - this.lastRefreshTime > 30_000) {
+          this.lastRefreshTime = now;
+          this.refreshQuota();
+          this.loadServerModels();
+        }
+      }
     });
   }
 
@@ -139,6 +154,8 @@ class AuthService {
     this.unsubCallback = null;
     this.unsubQuotaChanged?.();
     this.unsubQuotaChanged = null;
+    this.unsubWindowState?.();
+    this.unsubWindowState = null;
   }
 
   /**
