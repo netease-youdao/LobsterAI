@@ -3657,6 +3657,19 @@ if (!gotTheLock) {
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     try {
+      if (typeof url !== 'string' || !url.trim()) {
+        return { success: false, error: 'Missing URL' };
+      }
+      const ALLOWED_PROTOCOLS = ['https:', 'http:', 'mailto:'];
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return { success: false, error: 'Invalid URL' };
+      }
+      if (!ALLOWED_PROTOCOLS.includes(parsed.protocol)) {
+        return { success: false, error: `Blocked protocol: ${parsed.protocol}` };
+      }
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
