@@ -1,7 +1,7 @@
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import type { CoworkConfig, CoworkExecutionMode } from '../coworkStore';
+import type { CoworkConfig } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig } from '../im/types';
 import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig } from '../im/types';
 import { resolveRawApiConfig } from './claudeSettings';
@@ -9,17 +9,13 @@ import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import type { McpToolManifestEntry } from './mcpServerManager';
 import { hasBundledOpenClawExtension } from './openclawLocalExtensions';
+import { mapExecutionModeToSandboxMode } from './coworkExecutionMode';
 import { buildScheduledTaskEnginePrompt } from './scheduledTaskEnginePrompt';
 
 export type McpBridgeConfig = {
   callbackUrl: string;
   secret: string;
   tools: McpToolManifestEntry[];
-};
-
-const mapExecutionModeToSandboxMode = (_mode: CoworkExecutionMode): 'off' | 'non-main' | 'all' => {
-  // Sandbox mode disabled — always run locally
-  return 'off';
 };
 
 /**
