@@ -235,7 +235,7 @@ interface IElectronAPI {
   arch: string;
   store: {
     get: (key: string) => Promise<any>;
-    set: (key: string, value: any) => Promise<void>;
+    set: (key: string, value: any, options?: { reason?: string }) => Promise<void>;
     remove: (key: string) => Promise<void>;
   };
   skills: {

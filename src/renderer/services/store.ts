@@ -1,7 +1,7 @@
 // 删除重复的类型声明，使用全局类型定义
 export interface LocalStore {
   getItem<T>(key: string): Promise<T | null>;
-  setItem<T>(key: string, value: T): Promise<void>;
+  setItem<T>(key: string, value: T, options?: { reason?: string }): Promise<void>;
   removeItem(key: string): Promise<void>;
 }
 

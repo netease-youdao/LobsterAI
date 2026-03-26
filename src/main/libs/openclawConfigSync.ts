@@ -4,7 +4,7 @@ import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig } from '../im/types';
 import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig } from '../im/types';
-import { resolveRawApiConfig } from './claudeSettings';
+import { resolveRawApiConfig, resolveAllProviderApiKeys } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import type { McpToolManifestEntry } from './mcpServerManager';
@@ -43,6 +43,15 @@ const normalizeModelName = (modelId: string): string => {
   if (!trimmed) return 'default-model';
   const slashIndex = trimmed.lastIndexOf('/');
   return slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
+};
+
+/**
+ * Generate environment variable placeholder for a provider's API key.
+ * Each provider references its own env var to enable model switching without restart.
+ */
+const providerApiKeyEnvVar = (providerName: string): string => {
+  const normalized = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  return `\${LOBSTER_APIKEY_${normalized}}`;
 };
 
 const MANAGED_OWNER_ALLOW_FROM = [
@@ -324,7 +333,7 @@ const buildProviderSelection = (options: {
       providerConfig: {
         baseUrl: strippedBaseUrl,
         api: 'openai-completions',
-        apiKey: options.apiKey,
+        apiKey: providerApiKeyEnvVar('SERVER'),
         auth: 'api-key',
         models: [{
           id: options.modelId,
@@ -345,7 +354,7 @@ const buildProviderSelection = (options: {
       providerConfig: {
         baseUrl: normalizeKimiCodingBaseUrl(options.baseURL),
         api: 'anthropic-messages',
-        apiKey: '${LOBSTER_PROVIDER_API_KEY}',
+        apiKey: providerApiKeyEnvVar('MOONSHOT'),
         auth: 'api-key',
         models: [
           {
@@ -378,7 +387,7 @@ const buildProviderSelection = (options: {
       providerConfig: {
         baseUrl: normalizeMoonshotBaseUrl(options.baseURL),
         api: 'openai-completions',
-        apiKey: '${LOBSTER_PROVIDER_API_KEY}',
+        apiKey: providerApiKeyEnvVar('MOONSHOT'),
         auth: 'api-key',
         models: [
           {
@@ -401,6 +410,8 @@ const buildProviderSelection = (options: {
     };
   }
 
+  // Default: custom provider - use provider-specific env var based on providerName
+  const customProviderName = providerName || 'CUSTOM';
   return {
     providerId: 'lobster',
     legacyModelId: options.modelId,
@@ -409,7 +420,7 @@ const buildProviderSelection = (options: {
     providerConfig: {
       baseUrl: stripChatCompletionsSuffix(options.baseURL),
       api: providerApi,
-      apiKey: '${LOBSTER_PROVIDER_API_KEY}',
+      apiKey: providerApiKeyEnvVar(customProviderName),
       auth: 'api-key',
       models: [
         {
@@ -995,11 +1006,12 @@ export class OpenClawConfigSync {
   collectSecretEnvVars(): Record<string, string> {
     const env: Record<string, string> = {};
 
-    // Provider API Key
+    // Provider API Keys - pre-register ALL providers to enable model switching without restart
+    const allProviderKeys = resolveAllProviderApiKeys();
+    Object.assign(env, allProviderKeys);
+
+    // Legacy fallback - active provider's key for backward compatibility with old configs
     const apiResolution = resolveRawApiConfig();
-    // Provider API Key — always set so stale openclaw.json with
-    // ${LOBSTER_PROVIDER_API_KEY} placeholder doesn't crash the gateway.
-    // OpenClaw treats empty string as "missing", so use a non-empty placeholder.
     env.LOBSTER_PROVIDER_API_KEY = apiResolution.config?.apiKey || 'unconfigured';
 
     // MCP Bridge Secret — always set so stale openclaw.json with

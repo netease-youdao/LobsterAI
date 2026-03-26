@@ -429,3 +429,52 @@ export function buildEnvForConfig(config: CoworkApiConfig): Record<string, strin
 
   return baseEnv;
 }
+
+/**
+ * Generate environment variable name for a provider's API key.
+ * Formula: LOBSTER_APIKEY_ + providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_')
+ */
+function providerApiKeyEnvVar(providerName: string): string {
+  const normalized = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  return `LOBSTER_APIKEY_${normalized}`;
+}
+
+/**
+ * Resolve API keys for ALL configured providers.
+ * Returns a map of env var names to API key values.
+ * Used to pre-register all provider keys at gateway startup, enabling
+ * model switching without gateway restart.
+ */
+export function resolveAllProviderApiKeys(): Record<string, string> {
+  const result: Record<string, string> = {};
+  const sqliteStore = getStore();
+  if (!sqliteStore) {
+    return result;
+  }
+
+  // 1. lobsterai-server: get from auth tokens
+  const tokens = authTokensGetter?.();
+  if (tokens?.accessToken) {
+    result['LOBSTER_APIKEY_SERVER'] = tokens.accessToken;
+  }
+
+  // 2. All configured providers from app_config
+  const appConfig = sqliteStore.get<AppConfig>('app_config');
+  if (appConfig?.providers) {
+    for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
+      if (!providerConfig?.enabled) {
+        continue;
+      }
+      const apiKey = providerConfig.apiKey?.trim() || '';
+      // For providers that don't require API key (like ollama), use a placeholder
+      const effectiveApiKey = apiKey
+        || (!providerRequiresApiKey(providerName) ? 'sk-lobsterai-local' : '');
+      if (effectiveApiKey) {
+        const envVarName = providerApiKeyEnvVar(providerName);
+        result[envVarName] = effectiveApiKey;
+      }
+    }
+  }
+
+  return result;
+}
