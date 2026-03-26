@@ -19,6 +19,7 @@ interface CoworkState {
   sessions: CoworkSessionSummary[];
   currentSessionId: string | null;
   currentSession: CoworkSession | null;
+  tempSession: CoworkSession | null;
   draftPrompts: Record<string, string>;
   /** Keyed by draftKey (sessionId or '__home__'), stores pending attachments */
   draftAttachments: Record<string, DraftAttachment[]>;
@@ -34,6 +35,7 @@ const initialState: CoworkState = {
   sessions: [],
   currentSessionId: null,
   currentSession: null,
+  tempSession: null,
   draftPrompts: {},
   draftAttachments: {},
   unreadSessionIds: [],
@@ -338,6 +340,14 @@ const coworkSlice = createSlice({
     clearDraftAttachments(state, action: PayloadAction<string>) {
       delete state.draftAttachments[action.payload];
     },
+
+    setTempSession(state, action: PayloadAction<CoworkSession | null>) {
+      state.tempSession = action.payload;
+    },
+
+    clearTempSession(state) {
+      state.tempSession = null;
+    },
   },
 });
 
@@ -365,6 +375,8 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  setTempSession,
+  clearTempSession,
 } = coworkSlice.actions;
 
 export default coworkSlice.reducer;
