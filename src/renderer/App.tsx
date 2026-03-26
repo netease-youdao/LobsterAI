@@ -644,6 +644,7 @@ const App: React.FC = () => {
           onShowMcp={handleShowMcp}
           onShowAgents={handleShowAgents}
           onNewChat={handleNewChat}
+          onNewTempSession={() => {}}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
           updateBadge={!isSidebarCollapsed ? updateBadge : null}

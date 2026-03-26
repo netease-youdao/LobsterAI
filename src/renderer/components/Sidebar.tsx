@@ -26,10 +26,26 @@ interface SidebarProps {
   onShowMcp: () => void;
   onShowAgents: () => void;
   onNewChat: () => void;
+  onNewTempSession: () => void;
+  isTempSessionActive?: boolean;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   updateBadge?: React.ReactNode;
 }
+
+const BoltIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    {...props}
+  >
+    <path d="M13 2L4.09 12.96a.5.5 0 0 0 .41.54H11l-1 8.5 8.91-10.96a.5.5 0 0 0-.41-.54H13l1-8.5z" />
+  </svg>
+);
 
 const Sidebar: React.FC<SidebarProps> = ({
   onShowSettings,
@@ -40,6 +56,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowMcp,
   onShowAgents,
   onNewChat,
+  onNewTempSession,
+  isTempSessionActive = false,
   isCollapsed,
   onToggleCollapse,
   updateBadge,
@@ -155,18 +173,33 @@ const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
         <div className="mt-3 space-y-1 px-3">
-          <button
-            type="button"
-            onClick={onNewChat}
-            className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
-              activeView === 'cowork'
-                ? 'bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
-            }`}
-          >
-            <ComposeIcon className="h-4 w-4" />
-            {i18nService.t('newChat')}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onNewChat}
+              className={`flex-1 inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+                activeView === 'cowork' && !isTempSessionActive
+                  ? 'bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20'
+                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+              }`}
+            >
+              <ComposeIcon className="h-4 w-4" />
+              {i18nService.t('newChat')}
+            </button>
+            <button
+              type="button"
+              onClick={onNewTempSession}
+              title={i18nService.t('tempSession')}
+              className={`h-8 w-8 inline-flex items-center justify-center rounded-lg border border-dashed transition-colors flex-shrink-0 ${
+                isTempSessionActive
+                  ? 'border-claude-accent text-claude-accent bg-claude-accent/10'
+                  : 'dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+              }`}
+              aria-label={i18nService.t('tempSession')}
+            >
+              <BoltIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => {
