@@ -36,6 +36,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
   // Track if we're starting a session to prevent duplicate submissions
   const isStartingRef = useRef(false);
+  // Track if we're continuing a session to prevent duplicate submissions (#757)
+  const isContinuingRef = useRef(false);
   // Track pending start request so stop can cancel delayed startup.
   const pendingStartRef = useRef<{ requestId: number; cancelled: boolean } | null>(null);
   const startRequestIdRef = useRef(0);
@@ -290,43 +292,50 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   const handleContinueSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => {
     if (!currentSession) return;
-    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
-      return false;
+    if (isContinuingRef.current) return;
+    isContinuingRef.current = true;
+
+    try {
+      if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
+        window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
+        return false;
+      }
+
+      console.log('[CoworkView] handleContinueSession called', {
+        hasImageAttachments: !!imageAttachments,
+        imageAttachmentsCount: imageAttachments?.length ?? 0,
+        imageAttachmentsNames: imageAttachments?.map(a => a.name),
+        imageAttachmentsBase64Lengths: imageAttachments?.map(a => a.base64Data.length),
+      });
+
+      // Capture active skill IDs before clearing
+      const sessionSkillIds = [...activeSkillIds];
+
+      // Clear active skills after capturing so they don't persist to next message
+      if (sessionSkillIds.length > 0) {
+        dispatch(clearActiveSkills());
+      }
+
+      // Combine skill prompt with system prompt for continuation
+      // If no manual skill selected, use auto-routing prompt
+      let effectiveSkillPrompt = skillPrompt;
+      if (!skillPrompt) {
+        effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
+      }
+      const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
+        .filter(p => p?.trim())
+        .join('\n\n') || undefined;
+
+      await coworkService.continueSession({
+        sessionId: currentSession.id,
+        prompt,
+        systemPrompt: combinedSystemPrompt,
+        activeSkillIds: sessionSkillIds.length > 0 ? sessionSkillIds : undefined,
+        imageAttachments,
+      });
+    } finally {
+      isContinuingRef.current = false;
     }
-
-    console.log('[CoworkView] handleContinueSession called', {
-      hasImageAttachments: !!imageAttachments,
-      imageAttachmentsCount: imageAttachments?.length ?? 0,
-      imageAttachmentsNames: imageAttachments?.map(a => a.name),
-      imageAttachmentsBase64Lengths: imageAttachments?.map(a => a.base64Data.length),
-    });
-
-    // Capture active skill IDs before clearing
-    const sessionSkillIds = [...activeSkillIds];
-
-    // Clear active skills after capturing so they don't persist to next message
-    if (sessionSkillIds.length > 0) {
-      dispatch(clearActiveSkills());
-    }
-
-    // Combine skill prompt with system prompt for continuation
-    // If no manual skill selected, use auto-routing prompt
-    let effectiveSkillPrompt = skillPrompt;
-    if (!skillPrompt) {
-      effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
-    }
-    const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
-      .filter(p => p?.trim())
-      .join('\n\n') || undefined;
-
-    await coworkService.continueSession({
-      sessionId: currentSession.id,
-      prompt,
-      systemPrompt: combinedSystemPrompt,
-      activeSkillIds: sessionSkillIds.length > 0 ? sessionSkillIds : undefined,
-      imageAttachments,
-    });
   };
 
   const handleStopSession = async () => {
