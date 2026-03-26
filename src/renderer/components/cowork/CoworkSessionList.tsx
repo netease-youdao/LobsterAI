@@ -34,6 +34,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
 }) => {
   const unreadSessionIds = useSelector((state: RootState) => state.cowork.unreadSessionIds);
   const unreadSessionIdSet = useMemo(() => new Set(unreadSessionIds), [unreadSessionIds]);
+  const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
 
   const sortedSessions = useMemo(() => {
     const sortByRecentActivity = (a: CoworkSessionSummary, b: CoworkSessionSummary) => {
@@ -70,6 +71,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           session={session}
           hasUnread={unreadSessionIdSet.has(session.id)}
           isActive={session.id === currentSessionId}
+          isRemoteManaged={session.id === currentSessionId && remoteManaged}
           isBatchMode={isBatchMode}
           isSelected={selectedIds.has(session.id)}
           showBatchOption={showBatchOption}

@@ -394,6 +394,25 @@ class CoworkService {
     return false;
   }
 
+  async cloneSession(sessionId: string): Promise<{ success: boolean; session?: CoworkSession; error?: string }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.cloneSession) return { success: false, error: 'Clone API not available' };
+
+    try {
+      const result = await cowork.cloneSession(sessionId);
+      if (result.success && result.session) {
+        store.dispatch(addSession(result.session));
+        await this.loadSession(result.session.id);
+        return { success: true, session: result.session };
+      }
+      return { success: false, error: result.error ?? 'Clone failed' };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Failed to clone session';
+      console.error('[CoworkService] cloneSession failed:', error);
+      return { success: false, error: msg };
+    }
+  }
+
   async exportSessionResultImage(options: {
     rect: { x: number; y: number; width: number; height: number };
     defaultFileName?: string;
