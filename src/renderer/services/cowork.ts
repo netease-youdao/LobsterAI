@@ -394,6 +394,36 @@ class CoworkService {
     return false;
   }
 
+  async rollbackMessage(sessionId: string, messageId: string): Promise<{ success: boolean; error?: string }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.rollbackMessage) {
+      return { success: false, error: 'Rollback API not available' };
+    }
+
+    const result = await cowork.rollbackMessage({ sessionId, messageId });
+    if (result.success) {
+      return { success: true };
+    }
+
+    console.error('Failed to rollback message:', result.error);
+    return { success: false, error: result.error };
+  }
+
+  async editAndRegenerateMessage(sessionId: string, messageId: string, newContent?: string): Promise<{ success: boolean; error?: string }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.editAndRegenerateMessage) {
+      return { success: false, error: 'Edit & regenerate API not available' };
+    }
+
+    const result = await cowork.editAndRegenerateMessage({ sessionId, messageId, newContent });
+    if (result.success) {
+      return { success: true };
+    }
+
+    console.error('Failed to edit and regenerate message:', result.error);
+    return { success: false, error: result.error };
+  }
+
   async exportSessionResultImage(options: {
     rect: { x: number; y: number; width: number; height: number };
     defaultFileName?: string;

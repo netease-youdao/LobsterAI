@@ -59,4 +59,5 @@ export interface CoworkRuntime {
   isSessionActive(sessionId: string): boolean;
   getSessionConfirmationMode(sessionId: string): 'modal' | 'text' | null;
   onSessionDeleted?(sessionId: string): void;
+  clearSessionHistory?(sessionId: string): Promise<void>;
 }

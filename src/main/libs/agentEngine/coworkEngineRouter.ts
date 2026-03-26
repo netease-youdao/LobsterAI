@@ -135,6 +135,16 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     }
   }
 
+  async clearSessionHistory(sessionId: string): Promise<void> {
+    const engine = this.safeResolveEngine();
+    try {
+      await this.runtimeByEngine[engine].clearSessionHistory?.(sessionId);
+    } catch (error) {
+      console.warn('[CoworkEngineRouter] clearSessionHistory failed for session:', sessionId, 'error:', error);
+      throw error;
+    }
+  }
+
   handleEngineConfigChanged(nextEngine: CoworkAgentEngine): void {
     if (nextEngine === this.currentEngine) {
       return;

@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
+import { setCurrentSession } from '../../store/slices/coworkSlice';
 import { i18nService } from '../../services/i18n';
 import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
@@ -892,9 +893,41 @@ const CopyButton: React.FC<{
   );
 };
 
-export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
+export const UserMessageItem: React.FC<{
+  message: CoworkMessage;
+  skills: Skill[];
+  onRollback?: (messageId: string) => void;
+  onEdit?: (messageId: string, content: string) => void;
+  onStartEdit?: (messageId: string | null) => void;
+  editingMessageId?: string | null;
+  isFirstMessage?: boolean;
+}> = React.memo(({ message, skills, onRollback, onEdit, onStartEdit, editingMessageId, isFirstMessage = false }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const isEditing = editingMessageId === message.id;
+  const [editContent, setEditContent] = useState(message.content);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-focus textarea when entering edit mode
+  useEffect(() => {
+    if (isEditing && textareaRef.current) {
+      // Small delay to ensure DOM is fully updated
+      setTimeout(() => {
+        if (textareaRef.current) {
+          const len = textareaRef.current.value.length;
+          textareaRef.current.focus();
+          textareaRef.current.setSelectionRange(len, len);
+        }
+      }, 0);
+    }
+  }, [isEditing]);
+
+  // Reset edit content when message changes or when editing another message
+  useEffect(() => {
+    if (!isEditing) {
+      setEditContent(message.content);
+    }
+  }, [message.content, isEditing]);
 
   // Get skills used for this message
   const messageSkillIds = (message.metadata as CoworkMessageMetadata)?.skillIds || [];
@@ -904,6 +937,36 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
 
   // Get image attachments from metadata
   const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
+
+  const handleStartEdit = useCallback(() => {
+    // Request parent to set editingMessageId
+    if (onStartEdit) {
+      onStartEdit(message.id);
+    }
+  }, [message.id, onStartEdit]);
+
+  const handleCancelEdit = useCallback(() => {
+    // Request parent to clear editingMessageId
+    if (onStartEdit) {
+      onStartEdit(null); // Passing null should clear the editing state
+    }
+  }, [onStartEdit]);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+    if (event.key === 'Enter' && !event.shiftKey && !isComposing) {
+      event.preventDefault();
+      if (onEdit) {
+        onEdit(message.id, editContent);
+      }
+    }
+  };
+
+  const handleConfirmEdit = useCallback(() => {
+    if (onEdit) {
+      onEdit(message.id, editContent);
+    }
+  }, [message.id, editContent, onEdit]);
 
   return (
     <div
@@ -915,30 +978,59 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
         <div className="pl-4 sm:pl-8 md:pl-12">
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
-              <div className="w-fit max-w-[42rem] rounded-2xl px-4 py-2.5 dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text shadow-subtle">
-                {message.content?.trim() && (
-                  <MarkdownContent
-                    content={message.content}
-                    className="max-w-none whitespace-pre-wrap break-words"
-                  />
-                )}
-                {imageAttachments.length > 0 && (
-                  <div className={`flex flex-wrap gap-2 ${message.content?.trim() ? 'mt-2' : ''}`}>
-                    {imageAttachments.map((img, idx) => (
-                      <div key={idx} className="relative group">
-                        <img
-                          src={`data:${img.mimeType};base64,${img.base64Data}`}
-                          alt={img.name}
-                          className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border dark:border-claude-darkBorder/50 border-claude-border/50 hover:border-claude-accent/50 transition-colors"
-                          title={img.name}
-                          onClick={() => setExpandedImage(`data:${img.mimeType};base64,${img.base64Data}`)}
-                        />
-                        <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
-                          <PhotoIcon className="h-3 w-3 flex-shrink-0" />
-                          <span className="truncate">{img.name}</span>
-                        </div>
+              <div className={isEditing ? "w-full" : "w-fit max-w-[42rem]"}>
+                {isEditing ? (
+                  <div className="rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-subtle p-3">
+                    <textarea
+                      ref={textareaRef}
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      className="w-full bg-transparent dark:text-claude-darkText text-claude-text resize-none outline-none whitespace-pre-wrap break-words min-h-[40px]"
+                      rows={2}
+                    />
+                    <div className="flex items-center justify-end gap-2 mt-2">
+                      <button
+                        onClick={handleCancelEdit}
+                        className="px-3 py-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-all duration-200 text-sm dark:text-claude-darkText text-claude-text"
+                      >
+                        {i18nService.t('cancel')}
+                      </button>
+                      <button
+                        onClick={handleConfirmEdit}
+                        className="px-3 py-1.5 rounded-md bg-claude-accent hover:bg-claude-accentHover text-white transition-all duration-200 text-sm"
+                      >
+                        {i18nService.t('send')}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl px-4 py-2.5 dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text shadow-subtle">
+                    {message.content?.trim() && (
+                      <MarkdownContent
+                        content={message.content}
+                        className="max-w-none whitespace-pre-wrap break-words"
+                      />
+                    )}
+                    {imageAttachments.length > 0 && (
+                      <div className={`flex flex-wrap gap-2 ${message.content?.trim() ? 'mt-2' : ''}`}>
+                        {imageAttachments.map((img, idx) => (
+                          <div key={idx} className="relative group">
+                            <img
+                              src={`data:${img.mimeType};base64,${img.base64Data}`}
+                              alt={img.name}
+                              className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border dark:border-claude-darkBorder/50 border-claude-border/50 hover:border-claude-accent/50 transition-colors"
+                              title={img.name}
+                              onClick={() => setExpandedImage(`data:${img.mimeType};base64,${img.base64Data}`)}
+                            />
+                            <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
+                              <PhotoIcon className="h-3 w-3 flex-shrink-0" />
+                              <span className="truncate">{img.name}</span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
                 )}
               </div>
@@ -955,10 +1047,38 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                     </span>
                   </div>
                 ))}
-                <CopyButton
-                  content={message.content}
-                  visible={isHovered}
-                />
+                {!isEditing && (
+                  <>
+                    <CopyButton
+                      content={message.content}
+                      visible={isHovered}
+                    />
+                    {!isFirstMessage && onRollback && (
+                      <button
+                        onClick={() => onRollback(message.id)}
+                        className={`p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-all duration-200 ${
+                          isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                        }`}
+                        title={i18nService.t('coworkMessageRollback')}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-[var(--icon-secondary)]">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                        </svg>
+                      </button>
+                    )}
+                    {!isFirstMessage && onEdit && (
+                      <button
+                        onClick={handleStartEdit}
+                        className={`p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-all duration-200 ${
+                          isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                        }`}
+                        title={i18nService.t('coworkMessageEdit')}
+                      >
+                        <PencilSquareIcon className="w-4 h-4 text-[var(--icon-secondary)]" />
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -1286,6 +1406,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onNewChat,
   updateBadge,
 }) => {
+  const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
@@ -1317,12 +1438,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
+  const [pendingRollbackMessageId, setPendingRollbackMessageId] = useState<string | null>(null);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const ignoreNextBlurRef = useRef(false);
+
+  // Edit message state
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [showEditConfirm, setShowEditConfirm] = useState(false);
+  const [pendingEditMessage, setPendingEditMessage] = useState<{ messageId: string; newContent: string } | null>(null);
 
   // Reset rename value when session changes
   useEffect(() => {
@@ -1489,6 +1617,80 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (!currentSession) return;
     await coworkService.setSessionPinned(currentSession.id, !currentSession.pinned);
     closeMenu();
+  };
+
+  // Message rollback handler
+  const handleRollbackMessage = (messageId: string) => {
+    if (!currentSession) return;
+    setPendingRollbackMessageId(messageId);
+    setShowRollbackConfirm(true);
+  };
+
+  const handleConfirmRollback = async () => {
+    if (!pendingRollbackMessageId || !currentSession) return;
+    const result = await coworkService.rollbackMessage(currentSession.id, pendingRollbackMessageId);
+    if (result.success) {
+      // Reload session to update UI
+      await coworkService.loadSession(currentSession.id);
+    } else {
+      console.error('Failed to rollback message:', result.error);
+    }
+    setShowRollbackConfirm(false);
+    setPendingRollbackMessageId(null);
+  };
+
+  const handleCancelRollback = () => {
+    setShowRollbackConfirm(false);
+    setPendingRollbackMessageId(null);
+  };
+
+  // Message edit handler
+  const handleStartEditMessage = (messageId: string | null) => {
+    setEditingMessageId(messageId);
+  };
+
+  const handleEditMessageConfirm = async (messageId: string, newContent: string) => {
+    if (!currentSession) return;
+    // Show confirmation dialog instead of directly editing
+    setPendingEditMessage({ messageId, newContent });
+    setShowEditConfirm(true);
+  };
+
+  const handleConfirmEditMessage = async () => {
+    if (!pendingEditMessage || !currentSession) return;
+    const { messageId, newContent } = pendingEditMessage;
+
+    // Immediately hide edit box and confirmation dialog
+    setEditingMessageId(null);
+    setShowEditConfirm(false);
+
+    // Optimistic update: Remove the message and all messages after it from UI immediately
+    const messageIndex = currentSession.messages.findIndex(m => m.id === messageId);
+    if (messageIndex !== -1) {
+      // Get the messages to keep (before the target message)
+      const messagesToKeep = currentSession.messages.slice(0, messageIndex);
+
+      // Dispatch using the imported action creator for type safety
+      dispatch(setCurrentSession({
+        ...currentSession,
+        messages: messagesToKeep,
+        updatedAt: Date.now(),
+      }));
+    }
+
+    const result = await coworkService.editAndRegenerateMessage(currentSession.id, messageId, newContent);
+    if (!result.success) {
+      console.error('Failed to edit and regenerate message:', result.error);
+      // If failed, reload to restore the original state before optimistic update
+      await coworkService.loadSession(currentSession.id);
+    }
+
+    setPendingEditMessage(null);
+  };
+
+  const handleCancelEditMessage = () => {
+    setShowEditConfirm(false);
+    setPendingEditMessage(null);
   };
 
   // Delete handlers
@@ -1905,7 +2107,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         <div key={turn.id} data-turn-index={index}>
           {turn.userMessage && (
             <div data-export-role="user-message">
-              <UserMessageItem message={turn.userMessage} skills={skills} />
+              <UserMessageItem
+                message={turn.userMessage}
+                skills={skills}
+                onRollback={handleRollbackMessage}
+                onEdit={handleEditMessageConfirm}
+                onStartEdit={handleStartEditMessage}
+                editingMessageId={editingMessageId}
+                isFirstMessage={index === 0}
+              />
             </div>
           )}
           {showAssistantBlock && (
@@ -2089,6 +2299,104 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
               >
                 {i18nService.t('deleteSession')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rollback Confirmation Modal */}
+      {showRollbackConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
+          onClick={handleCancelRollback}
+        >
+          <div
+            className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center gap-3 px-5 py-4">
+              <div className="p-2 rounded-full bg-orange-100 dark:bg-orange-900/30">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-5 w-5 text-orange-600 dark:text-orange-500">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                </svg>
+              </div>
+              <h2 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkMessageRollbackConfirmTitle')}
+              </h2>
+            </div>
+
+            {/* Content */}
+            <div className="px-5 pb-4">
+              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('coworkMessageRollbackConfirmLine1')}
+                <br />
+                {i18nService.t('coworkMessageRollbackConfirmLine2')}
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+              <button
+                onClick={handleCancelRollback}
+                className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                onClick={handleConfirmRollback}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 text-white transition-colors"
+              >
+                {i18nService.t('confirmRollback')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Message Confirmation Modal */}
+      {showEditConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
+          onClick={handleCancelEditMessage}
+        >
+          <div
+            className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center gap-3 px-5 py-4">
+              <div className="p-2 rounded-full bg-blue-100 dark:bg-blue-900/30">
+                <PencilSquareIcon className="h-5 w-5 text-blue-600 dark:text-blue-500" />
+              </div>
+              <h2 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkMessageEditConfirmTitle')}
+              </h2>
+            </div>
+
+            {/* Content */}
+            <div className="px-5 pb-4">
+              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('coworkMessageEditConfirmLine1')}
+                <br />
+                {i18nService.t('coworkMessageEditConfirmLine2')}
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+              <button
+                onClick={handleCancelEditMessage}
+                className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                onClick={handleConfirmEditMessage}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-500 hover:bg-blue-600 text-white transition-colors"
+              >
+                {i18nService.t('confirmEdit')}
               </button>
             </div>
           </div>

@@ -930,6 +930,58 @@ export class CoworkStore {
     this.saveDb();
   }
 
+  /**
+   * Delete all messages after a specific message (for rollback functionality).
+   * Returns the number of messages deleted.
+   */
+  deleteMessagesAfter(sessionId: string, messageId: string): number {
+    // First, get the sequence number of the target message
+    const targetRow = this.db.exec(
+      'SELECT sequence FROM cowork_messages WHERE id = ? AND session_id = ?',
+      [messageId, sessionId],
+    );
+
+    if (!targetRow[0]?.values[0]) {
+      return 0;
+    }
+
+    const targetSequence = targetRow[0].values[0][0] as number;
+
+    // Delete all messages with sequence >= targetSequence (including the target message itself)
+    this.db.run(
+      'DELETE FROM cowork_messages WHERE session_id = ? AND sequence >= ?',
+      [sessionId, targetSequence]
+    );
+
+    // Read rowsModified before saveDb to avoid potential overwrite by saveDb internals
+    const changes = this.db.getRowsModified?.() || 0;
+    this.saveDb();
+
+    return changes;
+  }
+
+  /**
+   * Get a user message by ID for edit & regenerate functionality.
+   */
+  getMessage(sessionId: string, messageId: string): CoworkMessage | null {
+    const rows = this.getAll<CoworkMessageRow>(`
+      SELECT id, type, content, metadata, created_at, sequence
+      FROM cowork_messages
+      WHERE session_id = ? AND id = ?
+    `, [sessionId, messageId]);
+
+    if (rows.length === 0) return null;
+
+    const row = rows[0];
+    return {
+      id: row.id,
+      type: row.type as CoworkMessageType,
+      content: row.content,
+      timestamp: row.created_at,
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+    };
+  }
+
   // Config operations
   getConfig(): CoworkConfig {
     interface ConfigRow {
