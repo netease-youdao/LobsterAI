@@ -21,6 +21,7 @@ import { RootState } from '../store';
 import ThemedSelect from './ui/ThemedSelect';
 import type {
   CoworkAgentEngine,
+  CoworkExecutionMode,
   OpenClawEngineStatus,
   CoworkUserMemoryEntry,
   CoworkMemoryStats,
@@ -575,6 +576,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
 
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
+  const [coworkExecutionMode, setCoworkExecutionMode] = useState<CoworkExecutionMode>(coworkConfig.executionMode || 'auto');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
@@ -592,10 +594,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
+    setCoworkExecutionMode(coworkConfig.executionMode || 'auto');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
   }, [
     coworkConfig.agentEngine,
+    coworkConfig.executionMode,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
@@ -1165,6 +1169,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
+    || coworkExecutionMode !== coworkConfig.executionMode
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
   const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
@@ -1429,6 +1434,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       if (hasCoworkConfigChanges) {
         const updated = await coworkService.updateConfig({
           agentEngine: coworkAgentEngine,
+          executionMode: coworkExecutionMode,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
@@ -2393,6 +2399,37 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               </div>
             )}
+
+            <div className="space-y-3">
+              <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkExecutionModeTitle')}
+              </div>
+              <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('coworkExecutionModeHint')}
+              </div>
+              {(['auto', 'local', 'sandbox'] as const).map((mode) => (
+                <label
+                  key={mode}
+                  className="flex items-start gap-3 rounded-xl border px-3 py-2 text-sm cursor-pointer dark:border-claude-darkBorder border-claude-border hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                >
+                  <input
+                    type="radio"
+                    name="executionMode"
+                    checked={coworkExecutionMode === mode}
+                    onChange={() => setCoworkExecutionMode(mode)}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t(`coworkExecutionMode_${mode}`)}
+                    </span>
+                    <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t(`coworkExecutionMode_${mode}_hint`)}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
         );
 

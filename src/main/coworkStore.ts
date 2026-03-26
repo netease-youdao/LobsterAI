@@ -307,6 +307,15 @@ function normalizeCoworkAgentEngineValue(value?: string | null): CoworkAgentEngi
   return COWORK_AGENT_ENGINE;
 }
 
+const VALID_EXECUTION_MODES: ReadonlySet<string> = new Set(['auto', 'local', 'sandbox']);
+
+function normalizeExecutionMode(value?: string | null): CoworkExecutionMode {
+  if (value && VALID_EXECUTION_MODES.has(value)) {
+    return value as CoworkExecutionMode;
+  }
+  return 'auto';
+}
+
 export interface CoworkMessageMetadata {
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -938,6 +947,7 @@ export class CoworkStore {
 
     const workingDirRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['workingDirectory']);
     const agentEngineRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['agentEngine']);
+    const executionModeRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['executionMode']);
     const memoryEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryEnabled']);
     const memoryImplicitUpdateEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryImplicitUpdateEnabled']);
     const memoryLlmJudgeEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryLlmJudgeEnabled']);
@@ -945,11 +955,12 @@ export class CoworkStore {
     const memoryUserMemoriesMaxItemsRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryUserMemoriesMaxItems']);
 
     const normalizedAgentEngine = normalizeCoworkAgentEngineValue(agentEngineRow?.value);
+    const normalizedExecutionMode = normalizeExecutionMode(executionModeRow?.value);
 
     return {
       workingDirectory: workingDirRow?.value || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
-      executionMode: 'local' as CoworkExecutionMode,
+      executionMode: normalizedExecutionMode,
       agentEngine: normalizedAgentEngine,
       memoryEnabled: parseBooleanConfig(memoryEnabledRow?.value, DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(

@@ -1471,7 +1471,7 @@ export class CoworkRunner extends EventEmitter {
       lastStreamingThinkingUpdateAt: 0,
       hasAssistantTextOutput: false,
       hasAssistantThinkingOutput: false,
-      executionMode: 'local',
+      executionMode: session.executionMode || 'local',
       autoApprove: options.autoApprove ?? false,
     };
     this.activeSessions.set(sessionId, activeSession);
@@ -2458,8 +2458,6 @@ export class CoworkRunner extends EventEmitter {
 
     const effectivePrompt = this.augmentPromptWithReferencedWorkspaceFiles(prompt, resolvedCwd);
 
-    activeSession.executionMode = 'local';
-    this.store.updateSession(sessionId, { executionMode: 'local' });
     await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
   }
 
