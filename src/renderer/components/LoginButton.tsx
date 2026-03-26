@@ -94,7 +94,7 @@ const CreditItemRow: React.FC<{ item: CreditItem; isEn: boolean }> = ({ item, is
   );
 };
 
-const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+const UserMenu: React.FC<{ onClose: () => void; onShowFavorites?: () => void }> = ({ onClose, onShowFavorites }) => {
   const user = useSelector((state: RootState) => state.auth.user);
   const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
   const [creditsExpanded, setCreditsExpanded] = useState(false);
@@ -117,6 +117,11 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const handleLearnMore = async () => {
     const { getPortalProfileUrl } = await import('../services/endpoints');
     await window.electron.shell.openExternal(getPortalProfileUrl());
+  };
+
+  const handleShowFavorites = () => {
+    onShowFavorites?.();
+    onClose();
   };
 
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
@@ -206,6 +211,16 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         </button>
         <button
           type="button"
+          onClick={handleShowFavorites}
+          className="w-full px-4 py-2 text-left text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors cursor-pointer flex items-center gap-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+            <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
+          </svg>
+          {i18nService.t('favorites')}
+        </button>
+        <button
+          type="button"
           onClick={handleLogout}
           className="w-full px-4 py-2 text-left text-sm text-red-500 dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors cursor-pointer flex items-center gap-2"
         >
@@ -221,7 +236,7 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   );
 };
 
-const LoginButton: React.FC = () => {
+const LoginButton: React.FC<{ onShowFavorites?: () => void }> = ({ onShowFavorites }) => {
   const { isLoggedIn, isLoading, user } = useSelector((state: RootState) => state.auth);
   const [showMenu, setShowMenu] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -277,7 +292,7 @@ const LoginButton: React.FC = () => {
           </>
         )}
       </button>
-      {showMenu && <UserMenu onClose={() => setShowMenu(false)} />}
+      {showMenu && <UserMenu onClose={() => setShowMenu(false)} onShowFavorites={onShowFavorites} />}
     </div>
   );
 };

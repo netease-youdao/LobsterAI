@@ -302,16 +302,30 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       imageAttachmentsBase64Lengths: imageAttachments?.map(a => a.base64Data.length),
     });
 
-    // Capture active skill IDs before clearing
     const sessionSkillIds = [...activeSkillIds];
 
-    // Clear active skills after capturing so they don't persist to next message
     if (sessionSkillIds.length > 0) {
       dispatch(clearActiveSkills());
     }
 
-    // Combine skill prompt with system prompt for continuation
-    // If no manual skill selected, use auto-routing prompt
+    // Optimistic update: show user message in chat immediately and mark session
+    // as running so the input clears without waiting for the IPC round-trip
+    // (which may block while the OpenClaw gateway silently restarts).
+    const optimisticMessage = {
+      id: `optimistic-${Date.now()}`,
+      type: 'user' as const,
+      content: prompt,
+      timestamp: Date.now(),
+      metadata: (sessionSkillIds.length > 0 || (imageAttachments && imageAttachments.length > 0))
+        ? {
+          ...(sessionSkillIds.length > 0 ? { skillIds: sessionSkillIds } : {}),
+          ...(imageAttachments && imageAttachments.length > 0 ? { imageAttachments } : {}),
+        }
+        : undefined,
+    };
+    dispatch(addMessage({ sessionId: currentSession.id, message: optimisticMessage }));
+    dispatch(setStreaming(true));
+
     let effectiveSkillPrompt = skillPrompt;
     if (!skillPrompt) {
       effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
@@ -320,12 +334,14 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       .filter(p => p?.trim())
       .join('\n\n') || undefined;
 
-    await coworkService.continueSession({
+    coworkService.continueSession({
       sessionId: currentSession.id,
       prompt,
       systemPrompt: combinedSystemPrompt,
       activeSkillIds: sessionSkillIds.length > 0 ? sessionSkillIds : undefined,
       imageAttachments,
+    }).catch((error) => {
+      console.error('[CoworkView] continueSession failed:', error);
     });
   };
 

@@ -47,6 +47,17 @@ interface CoworkSessionSummary {
   updatedAt: number;
 }
 
+interface CoworkFavoriteItem {
+  id: string;
+  sessionId: string;
+  sessionTitle: string;
+  messageId: string;
+  messageType: string;
+  messageContent: string;
+  note: string;
+  createdAt: number;
+}
+
 interface CoworkConfig {
   workingDirectory: string;
   systemPrompt: string;
@@ -320,6 +331,12 @@ interface IElectronAPI {
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     remoteManaged: (sessionId: string) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
     listSessions: () => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
+    addFavorite: (options: { sessionId: string; messageId: string; note?: string }) => Promise<{ success: boolean; id?: string; createdAt?: number; error?: string }>;
+    removeFavorite: (messageId: string) => Promise<{ success: boolean; error?: string }>;
+    removeFavoriteById: (favoriteId: string) => Promise<{ success: boolean; error?: string }>;
+    listFavorites: () => Promise<{ success: boolean; favorites?: CoworkFavoriteItem[]; error?: string }>;
+    isFavorited: (messageId: string) => Promise<{ success: boolean; favorited?: boolean; error?: string }>;
+    getSessionFavorites: (sessionId: string) => Promise<{ success: boolean; messageIds?: string[]; error?: string }>;
     exportResultImage: (options: {
       rect: { x: number; y: number; width: number; height: number };
       defaultFileName?: string;

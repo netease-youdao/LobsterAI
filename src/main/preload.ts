@@ -155,6 +155,20 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
     listSessions: () =>
       ipcRenderer.invoke('cowork:session:list'),
+
+    addFavorite: (options: { sessionId: string; messageId: string; note?: string }) =>
+      ipcRenderer.invoke('cowork:favorite:add', options),
+    removeFavorite: (messageId: string) =>
+      ipcRenderer.invoke('cowork:favorite:remove', messageId),
+    removeFavoriteById: (favoriteId: string) =>
+      ipcRenderer.invoke('cowork:favorite:removeById', favoriteId),
+    listFavorites: () =>
+      ipcRenderer.invoke('cowork:favorite:list'),
+    isFavorited: (messageId: string) =>
+      ipcRenderer.invoke('cowork:favorite:isFavorited', messageId),
+    getSessionFavorites: (sessionId: string) =>
+      ipcRenderer.invoke('cowork:favorite:getSessionFavorites', sessionId),
+
     exportResultImage: (options: { rect: { x: number; y: number; width: number; height: number }; defaultFileName?: string }) =>
       ipcRenderer.invoke('cowork:session:exportResultImage', options),
     captureImageChunk: (options: { rect: { x: number; y: number; width: number; height: number } }) =>

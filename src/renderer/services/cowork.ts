@@ -31,6 +31,14 @@ import type {
 } from '../types/cowork';
 import { i18nService } from './i18n';
 import { classifyErrorKey } from '../../common/coworkErrorClassify';
+import {
+  setFavorites as setFavoritesAction,
+  addFavoritedMessageId as addFavoritedMessageIdAction,
+  removeFavoritedMessageId as removeFavoritedMessageIdAction,
+  removeFavoriteItem as removeFavoriteItemAction,
+  removeFavoriteItemById as removeFavoriteItemByIdAction,
+  setSessionFavoritedIds as setSessionFavoritedIdsAction,
+} from '../store/slices/favoritesSlice';
 
 const classifyError = (error: string): string => {
   const key = classifyErrorKey(error);
@@ -671,6 +679,59 @@ class CoworkService {
 
   clearSession(): void {
     store.dispatch(clearCurrentSession());
+  }
+
+  async loadFavorites(): Promise<void> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.listFavorites) return;
+    const result = await cowork.listFavorites();
+    if (result.success && result.favorites) {
+      store.dispatch(setFavoritesAction(result.favorites));
+    }
+  }
+
+  async addFavorite(sessionId: string, messageId: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.addFavorite) return false;
+    const result = await cowork.addFavorite({ sessionId, messageId });
+    if (result.success) {
+      store.dispatch(addFavoritedMessageIdAction({ sessionId, messageId }));
+      await this.loadFavorites();
+      return true;
+    }
+    return false;
+  }
+
+  async removeFavorite(sessionId: string, messageId: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.removeFavorite) return false;
+    const result = await cowork.removeFavorite(messageId);
+    if (result.success) {
+      store.dispatch(removeFavoritedMessageIdAction({ sessionId, messageId }));
+      store.dispatch(removeFavoriteItemAction(messageId));
+      return true;
+    }
+    return false;
+  }
+
+  async removeFavoriteById(favoriteId: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.removeFavoriteById) return false;
+    const result = await cowork.removeFavoriteById(favoriteId);
+    if (result.success) {
+      store.dispatch(removeFavoriteItemByIdAction(favoriteId));
+      return true;
+    }
+    return false;
+  }
+
+  async loadSessionFavorites(sessionId: string): Promise<void> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.getSessionFavorites) return;
+    const result = await cowork.getSessionFavorites(sessionId);
+    if (result.success && result.messageIds) {
+      store.dispatch(setSessionFavoritedIdsAction({ sessionId, messageIds: result.messageIds }));
+    }
   }
 
   destroy(): void {

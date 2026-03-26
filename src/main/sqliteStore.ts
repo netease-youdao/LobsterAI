@@ -175,6 +175,25 @@ export class SqliteStore {
       );
     `);
 
+    // Create favorites table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS cowork_favorites (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES cowork_sessions(id) ON DELETE CASCADE
+      );
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_favorites_session_id ON cowork_favorites(session_id);
+    `);
+    this.db.run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_cowork_favorites_message_id ON cowork_favorites(message_id);
+    `);
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists

@@ -212,6 +212,24 @@ const coworkSlice = createSlice({
       const { sessionId, message } = action.payload;
 
       if (state.currentSession?.id === sessionId) {
+        // When a real user message arrives from the main process, replace any
+        // optimistic placeholder that was inserted to give instant UI feedback.
+        if (message.type === 'user' && !message.id.startsWith('optimistic-')) {
+          const optimisticIdx = state.currentSession.messages.findIndex(
+            (m) => m.id.startsWith('optimistic-') && m.type === 'user' && m.content === message.content,
+          );
+          if (optimisticIdx !== -1) {
+            state.currentSession.messages[optimisticIdx] = message;
+            state.currentSession.updatedAt = message.timestamp;
+            const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
+            if (sessionIndex !== -1) {
+              state.sessions[sessionIndex].updatedAt = message.timestamp;
+            }
+            markSessionUnread(state, sessionId);
+            return;
+          }
+        }
+
         const exists = state.currentSession.messages.some((item) => item.id === message.id);
         if (!exists) {
           state.currentSession.messages.push(message);

@@ -1629,4 +1629,82 @@ export class CoworkStore {
       assistant: this.getLatestMessageByType(row.id, 'assistant'),
     }));
   }
+
+  // ── Favorites ──────────────────────────────────────────────
+
+  addFavorite(sessionId: string, messageId: string, note?: string): { id: string; createdAt: number } {
+    const id = uuidv4();
+    const now = Date.now();
+    this.db.run(
+      `INSERT OR IGNORE INTO cowork_favorites (id, session_id, message_id, note, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id, sessionId, messageId, note ?? '', now],
+    );
+    this.saveDb();
+    return { id, createdAt: now };
+  }
+
+  removeFavorite(messageId: string): void {
+    this.db.run('DELETE FROM cowork_favorites WHERE message_id = ?', [messageId]);
+    this.saveDb();
+  }
+
+  removeFavoriteById(favoriteId: string): void {
+    this.db.run('DELETE FROM cowork_favorites WHERE id = ?', [favoriteId]);
+    this.saveDb();
+  }
+
+  isFavorited(messageId: string): boolean {
+    const row = this.getOne<{ id: string }>('SELECT id FROM cowork_favorites WHERE message_id = ?', [messageId]);
+    return !!row;
+  }
+
+  listFavorites(): Array<{
+    id: string;
+    sessionId: string;
+    sessionTitle: string;
+    messageId: string;
+    messageType: string;
+    messageContent: string;
+    note: string;
+    createdAt: number;
+  }> {
+    const rows = this.getAll<{
+      id: string;
+      session_id: string;
+      session_title: string;
+      message_id: string;
+      message_type: string;
+      message_content: string;
+      note: string;
+      created_at: number;
+    }>(`
+      SELECT f.id, f.session_id, f.message_id, f.note, f.created_at,
+             COALESCE(s.title, '') AS session_title,
+             COALESCE(m.type, 'assistant') AS message_type,
+             COALESCE(m.content, '') AS message_content
+      FROM cowork_favorites f
+      LEFT JOIN cowork_sessions s ON f.session_id = s.id
+      LEFT JOIN cowork_messages m ON f.message_id = m.id
+      ORDER BY f.created_at DESC
+    `);
+    return rows.map((r) => ({
+      id: String(r.id),
+      sessionId: String(r.session_id),
+      sessionTitle: String(r.session_title),
+      messageId: String(r.message_id),
+      messageType: String(r.message_type),
+      messageContent: String(r.message_content),
+      note: String(r.note),
+      createdAt: Number(r.created_at) || 0,
+    }));
+  }
+
+  getFavoritedMessageIds(sessionId: string): string[] {
+    const rows = this.getAll<{ message_id: string }>(
+      'SELECT message_id FROM cowork_favorites WHERE session_id = ?',
+      [sessionId],
+    );
+    return rows.map((r) => String(r.message_id));
+  }
 }

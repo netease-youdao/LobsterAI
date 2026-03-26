@@ -18,11 +18,12 @@ import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'favorites';
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowMcp: () => void;
+  onShowFavorites?: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -36,6 +37,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowCowork,
   onShowScheduledTasks,
   onShowMcp,
+  onShowFavorites,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
@@ -283,7 +285,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       ) : (
         <div className="px-3 pb-3 pt-1 flex items-center gap-1">
-          <LoginButton />
+          <LoginButton onShowFavorites={onShowFavorites} />
           <div className="flex-1" />
           <button
             type="button"

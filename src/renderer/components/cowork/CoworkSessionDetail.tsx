@@ -892,9 +892,75 @@ const CopyButton: React.FC<{
   );
 };
 
+// Favorite button component
+const FavoriteButton: React.FC<{
+  messageId: string;
+  sessionId: string;
+  visible: boolean;
+}> = ({ messageId, sessionId, visible }) => {
+  const favoritedIds = useSelector(
+    (state: RootState) => state.favorites.favoritedMessageIds[sessionId] ?? []
+  );
+  const isFavorited = favoritedIds.includes(messageId);
+
+  const handleToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isFavorited) {
+      await coworkService.removeFavorite(sessionId, messageId);
+    } else {
+      await coworkService.addFavorite(sessionId, messageId);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleToggle}
+      className={`p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-all duration-200 ${
+        visible || isFavorited ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
+      title={i18nService.t(isFavorited ? 'removeFromFavorites' : 'addToFavorites')}
+    >
+      {isFavorited ? (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="w-4 h-4 text-amber-500"
+          aria-hidden="true"
+        >
+          <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
+        </svg>
+      ) : (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="w-4 h-4 text-[var(--icon-secondary)]"
+          aria-hidden="true"
+        >
+          <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
+        </svg>
+      )}
+    </button>
+  );
+};
+
 export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const currentSessionId = useSelector((state: RootState) => state.cowork.currentSession?.id);
 
   // Get skills used for this message
   const messageSkillIds = (message.metadata as CoworkMessageMetadata)?.skillIds || [];
@@ -959,6 +1025,13 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                   content={message.content}
                   visible={isHovered}
                 />
+                {currentSessionId && (
+                  <FavoriteButton
+                    messageId={message.id}
+                    sessionId={currentSessionId}
+                    visible={isHovered}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -987,11 +1060,13 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
+  sessionId?: string;
 }> = ({
   message,
   resolveLocalFilePath,
   mapDisplayText,
   showCopyButton = false,
+  sessionId,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
@@ -1015,6 +1090,13 @@ const AssistantMessageItem: React.FC<{
             content={displayContent}
             visible={isHovered}
           />
+          {sessionId && (
+            <FavoriteButton
+              messageId={message.id}
+              sessionId={sessionId}
+              visible={isHovered}
+            />
+          )}
         </div>
       )}
     </div>
@@ -1124,12 +1206,20 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  sessionId?: string;
+  isBatchFavoriteMode?: boolean;
+  batchSelectedIds?: Set<string>;
+  onToggleBatchSelect?: (messageId: string) => void;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  sessionId,
+  isBatchFavoriteMode = false,
+  batchSelectedIds,
+  onToggleBatchSelect,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1227,13 +1317,32 @@ export const AssistantTurnBlock: React.FC<{
                   .some(laterItem => laterItem.type === 'tool_group');
 
                 return (
-                  <AssistantMessageItem
-                    key={item.message.id}
-                    message={item.message}
-                    resolveLocalFilePath={resolveLocalFilePath}
-                    mapDisplayText={mapDisplayText}
-                    showCopyButton={showCopyButtons && !hasToolGroupAfter}
-                  />
+                  <div key={item.message.id} className={isBatchFavoriteMode ? 'relative' : ''}>
+                    {isBatchFavoriteMode && onToggleBatchSelect && (
+                      <button
+                        type="button"
+                        onClick={() => onToggleBatchSelect(item.message.id)}
+                        className="absolute -left-8 top-1/2 -translate-y-1/2 z-10 p-1"
+                      >
+                        <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-colors ${
+                          batchSelectedIds?.has(item.message.id)
+                            ? 'bg-claude-accent border-claude-accent'
+                            : 'border-gray-400 dark:border-gray-500'
+                        }`}>
+                          {batchSelectedIds?.has(item.message.id) && (
+                            <CheckIcon className="w-3.5 h-3.5 text-white" />
+                          )}
+                        </div>
+                      </button>
+                    )}
+                    <AssistantMessageItem
+                      message={item.message}
+                      resolveLocalFilePath={resolveLocalFilePath}
+                      mapDisplayText={mapDisplayText}
+                      showCopyButton={showCopyButtons && !hasToolGroupAfter}
+                      sessionId={sessionId}
+                    />
+                  </div>
                 );
               }
 
@@ -1306,6 +1415,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
   const [isScrollable, setIsScrollable] = useState(false);
+  const isAutoScrollingRef = useRef(false);
   const [showTurnIndexPopover, setShowTurnIndexPopover] = useState(false);
   const showTurnIndexPopoverRef = useRef(false);
   const turnIndexPopoverRef = useRef<HTMLDivElement>(null);
@@ -1317,6 +1427,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+
+  // Batch favorite states
+  const [isBatchFavoriteMode, setIsBatchFavoriteMode] = useState(false);
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1334,6 +1448,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   useEffect(() => {
     setShouldAutoScroll(true);
+  }, [currentSession?.id]);
+
+  // Load favorited message IDs for current session
+  useEffect(() => {
+    if (currentSession?.id) {
+      void coworkService.loadSessionFavorites(currentSession.id);
+    }
   }, [currentSession?.id]);
 
   // Focus rename input when entering rename mode
@@ -1668,6 +1789,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setShowConfirmDelete(false);
   };
 
+  const handleEnterBatchFavorite = () => {
+    closeMenu();
+    setIsBatchFavoriteMode(true);
+    setBatchSelectedIds(new Set());
+  };
+
+  const handleExitBatchFavorite = () => {
+    setIsBatchFavoriteMode(false);
+    setBatchSelectedIds(new Set());
+  };
+
+  const handleToggleBatchSelect = useCallback((messageId: string) => {
+    setBatchSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }, []);
+
   const handleMessagesScroll = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -1675,12 +1819,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const isNearBottom = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
     setShouldAutoScroll((prev) => (prev === isNearBottom ? prev : isNearBottom));
 
-    // Check if content overflows the container (use functional updater to avoid redundant re-renders)
     const scrollable = container.scrollHeight > container.clientHeight;
     setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
     if (!scrollable) return;
 
-    // Show turn nav and reset hide timer (use functional updater to avoid redundant re-renders)
+    if (isAutoScrollingRef.current) {
+      isAutoScrollingRef.current = false;
+      return;
+    }
+
     setShowTurnNav((prev) => (prev ? prev : true));
 
     if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
@@ -1790,6 +1937,37 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
+  const allSelectableMessageIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const turn of turns) {
+      if (turn.userMessage) ids.push(turn.userMessage.id);
+      for (const item of turn.assistantItems) {
+        if (item.type === 'assistant') ids.push(item.message.id);
+      }
+    }
+    return ids;
+  }, [turns]);
+
+  const handleBatchSelectAll = useCallback(() => {
+    setBatchSelectedIds(prev => {
+      if (prev.size === allSelectableMessageIds.length) {
+        return new Set();
+      }
+      return new Set(allSelectableMessageIds);
+    });
+  }, [allSelectableMessageIds]);
+
+  const handleBatchFavoriteDone = useCallback(async () => {
+    if (!currentSession?.id || batchSelectedIds.size === 0) return;
+    const sessionId = currentSession.id;
+    const ids = Array.from(batchSelectedIds);
+    for (const messageId of ids) {
+      await coworkService.addFavorite(sessionId, messageId);
+    }
+    setIsBatchFavoriteMode(false);
+    setBatchSelectedIds(new Set());
+  }, [currentSession?.id, batchSelectedIds]);
+
   // Cache turn DOM elements when turns change
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -1861,6 +2039,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
     const container = scrollContainerRef.current;
     if (container) {
+      isAutoScrollingRef.current = true;
       container.scrollTop = container.scrollHeight;
       setIsScrollable(container.scrollHeight > container.clientHeight);
     }
@@ -1891,6 +2070,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             resolveLocalFilePath={resolveLocalFilePath}
             showTypingIndicator
             showCopyButtons={!isStreaming}
+            sessionId={currentSession?.id}
           />
         </div>
       );
@@ -1904,7 +2084,24 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return (
         <div key={turn.id} data-turn-index={index}>
           {turn.userMessage && (
-            <div data-export-role="user-message">
+            <div data-export-role="user-message" className={isBatchFavoriteMode ? 'relative' : ''}>
+              {isBatchFavoriteMode && (
+                <button
+                  type="button"
+                  onClick={() => handleToggleBatchSelect(turn.userMessage!.id)}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 z-10 p-1"
+                >
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-colors ${
+                    batchSelectedIds.has(turn.userMessage!.id)
+                      ? 'bg-claude-accent border-claude-accent'
+                      : 'border-gray-400 dark:border-gray-500'
+                  }`}>
+                    {batchSelectedIds.has(turn.userMessage!.id) && (
+                      <CheckIcon className="w-3.5 h-3.5 text-white" />
+                    )}
+                  </div>
+                </button>
+              )}
               <UserMessageItem message={turn.userMessage} skills={skills} />
             </div>
           )}
@@ -1916,6 +2113,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                sessionId={currentSession?.id}
+                isBatchFavoriteMode={isBatchFavoriteMode}
+                batchSelectedIds={batchSelectedIds}
+                onToggleBatchSelect={handleToggleBatchSelect}
               />
             </div>
           )}
@@ -2040,6 +2241,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </button>
           <button
             type="button"
+            onClick={handleEnterBatchFavorite}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+              <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
+            </svg>
+            {i18nService.t('batchFavorite')}
+          </button>
+          <button
+            type="button"
             onClick={handleDeleteClick}
             className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 transition-colors"
           >
@@ -2154,6 +2365,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
                 </svg>
               </button>
+              <div className="dark:border-claude-darkBorder border-claude-border border-t" />
+              <button
+                type="button"
+                onClick={() => {
+                  const container = scrollContainerRef.current;
+                  if (container) {
+                    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+                  }
+                  if (turns.length > 0) {
+                    currentTurnIndexRef.current = turns.length - 1;
+                    setCurrentTurnIndex(turns.length - 1);
+                  }
+                }}
+                className={`px-1.5 py-2.5 transition-colors dark:text-claude-darkText text-claude-text
+                  ${currentTurnIndex >= turns.length - 1
+                    ? 'opacity-30 cursor-default'
+                    : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+                title={i18nService.t('scrollToBottom')}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 5.25l-7.5 7.5-7.5-7.5M19.5 11.25l-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
             </div>
 
             {/* Turn Index Popover */}
@@ -2198,23 +2432,66 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       {/* Streaming Activity Bar */}
       {isStreaming && <StreamingActivityBar messages={currentSession.messages} />}
 
-      {/* Input Area */}
-      <div className="p-4 shrink-0">
-        <div className="max-w-3xl mx-auto">
-          <CoworkPromptInput
-            onSubmit={onContinue}
-            onStop={onStop}
-            isStreaming={isStreaming}
-            placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
-            disabled={remoteManaged}
-            size="large"
-            remoteManaged={remoteManaged}
-            onManageSkills={remoteManaged ? undefined : onManageSkills}
-            showModelSelector={!remoteManaged}
-            sessionId={currentSession?.id}
-          />
+      {/* Batch Favorite Action Bar */}
+      {isBatchFavoriteMode ? (
+        <div className="px-4 py-3 shrink-0 border-t dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50">
+          <div className="max-w-3xl mx-auto flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <input
+                type="checkbox"
+                checked={batchSelectedIds.size === allSelectableMessageIds.length && allSelectableMessageIds.length > 0}
+                onChange={handleBatchSelectAll}
+                className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-claude-accent cursor-pointer"
+              />
+              {i18nService.t('batchSelectAll')}
+            </label>
+            <div className="flex items-center gap-3">
+              <span className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {batchSelectedIds.size > 0 && i18nService.t('batchFavoriteSelected').replace('{count}', String(batchSelectedIds.size))}
+              </span>
+              <button
+                type="button"
+                onClick={handleBatchFavoriteDone}
+                disabled={batchSelectedIds.size === 0}
+                className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                  batchSelectedIds.size > 0
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true">
+                  <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
+                </svg>
+                {i18nService.t('batchFavoriteDone')}
+              </button>
+              <button
+                type="button"
+                onClick={handleExitBatchFavorite}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              >
+                {i18nService.t('batchCancel')}
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="p-4 shrink-0">
+          <div className="max-w-3xl mx-auto">
+            <CoworkPromptInput
+              onSubmit={onContinue}
+              onStop={onStop}
+              isStreaming={isStreaming}
+              placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
+              disabled={remoteManaged}
+              size="large"
+              remoteManaged={remoteManaged}
+              onManageSkills={remoteManaged ? undefined : onManageSkills}
+              showModelSelector={!remoteManaged}
+              sessionId={currentSession?.id}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
