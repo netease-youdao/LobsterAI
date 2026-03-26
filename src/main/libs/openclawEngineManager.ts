@@ -17,6 +17,8 @@ const DEFAULT_GATEWAY_PORT = 18789;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
 const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
 const GATEWAY_RESTART_DELAY_MS = 3000;
+const MAX_CONSECUTIVE_CRASHES = 5;
+const CRASH_WINDOW_MS = 60_000;
 
 export type OpenClawEnginePhase =
   | 'not_installed'
@@ -155,6 +157,8 @@ export class OpenClawEngineManager extends EventEmitter {
   private readonly expectedGatewayExits = new WeakSet<object>();
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
+  private consecutiveCrashes = 0;
+  private lastCrashTime = 0;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   private secretEnvVars: Record<string, string> = {};
@@ -513,6 +517,7 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     console.log(`[OpenClaw] startGateway: gateway is running, total startup time: ${elapsed()}`);
+    this.consecutiveCrashes = 0;
     this.setStatus({
       phase: 'running',
       version: runtime.version,
@@ -550,6 +555,7 @@ export class OpenClawEngineManager extends EventEmitter {
 
   async restartGateway(): Promise<OpenClawEngineStatus> {
     console.log('[OpenClaw] restartGateway: stopping existing gateway...');
+    this.consecutiveCrashes = 0;
     await this.stopGateway();
     console.log('[OpenClaw] restartGateway: starting gateway with new env...');
     return this.startGateway();
@@ -1278,6 +1284,13 @@ export class OpenClawEngineManager extends EventEmitter {
       }
       if (this.shutdownRequested) return;
 
+      const now = Date.now();
+      if (now - this.lastCrashTime > CRASH_WINDOW_MS) {
+        this.consecutiveCrashes = 0;
+      }
+      this.consecutiveCrashes++;
+      this.lastCrashTime = now;
+
       this.setStatus({
         phase: 'error',
         version: this.status.version,
@@ -1292,11 +1305,26 @@ export class OpenClawEngineManager extends EventEmitter {
     if (this.shutdownRequested) return;
     if (this.gatewayRestartTimer) return;
 
+    if (this.consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES) {
+      console.error(
+        `[OpenClaw] gateway crashed ${this.consecutiveCrashes} times within ${CRASH_WINDOW_MS / 1000}s — halting restarts`
+      );
+      this.setStatus({
+        phase: 'error',
+        version: this.status.version,
+        message: `OpenClaw gateway crashed ${this.consecutiveCrashes} times in rapid succession. Automatic restarts have been halted to prevent resource exhaustion. Please check your configuration and retry manually.`,
+        canRetry: true,
+      });
+      return;
+    }
+
+    const backoffMs = GATEWAY_RESTART_DELAY_MS * Math.pow(2, this.consecutiveCrashes - 1);
+
     this.gatewayRestartTimer = setTimeout(() => {
       this.gatewayRestartTimer = null;
       if (this.shutdownRequested) return;
       void this.startGateway();
-    }, GATEWAY_RESTART_DELAY_MS);
+    }, backoffMs);
   }
 
   private setStatus(next: OpenClawEngineStatus): void {
