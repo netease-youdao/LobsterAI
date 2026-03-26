@@ -1306,6 +1306,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
   const [isScrollable, setIsScrollable] = useState(false);
+  const [showTurnIndexPopover, setShowTurnIndexPopover] = useState(false);
+  const showTurnIndexPopoverRef = useRef(false);
+  const turnIndexPopoverRef = useRef<HTMLDivElement>(null);
+  const turnIndexButtonRef = useRef<HTMLButtonElement>(null);
 
   // Menu and action states
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -1359,6 +1363,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     turnElsCacheRef.current = [];
     if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+    setShowTurnIndexPopover(false);
+    showTurnIndexPopoverRef.current = false;
   }, [currentSession?.id]);
 
   // Close menu on outside click
@@ -1678,7 +1684,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setShowTurnNav((prev) => (prev ? prev : true));
 
     if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
-    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
+    if (!showTurnIndexPopoverRef.current) {
+      hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
+    }
 
     // Skip index recalculation during programmatic navigation
     if (isNavigatingRef.current) return;
@@ -1708,28 +1716,31 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setCurrentTurnIndex(visibleIndex);
   }, []);
 
+  const navigateToTurnByIndex = useCallback((index: number) => {
+    const turnEls = turnElsCacheRef.current;
+    if (index < 0 || index >= turnEls.length) return;
+
+    isNavigatingRef.current = true;
+    if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+    navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
+
+    turnEls[index].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    currentTurnIndexRef.current = index;
+    setCurrentTurnIndex(index);
+
+    setShowTurnNav(true);
+    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
+    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
+  }, []);
+
   const navigateToTurn = useCallback((direction: 'prev' | 'next') => {
     const turnEls = turnElsCacheRef.current;
     if (turnEls.length === 0) return;
     const idx = currentTurnIndexRef.current;
     const targetIndex = direction === 'prev' ? idx - 1 : idx + 1;
     if (targetIndex < 0 || targetIndex >= turnEls.length) return;
-
-    // Block scroll handler from overriding index during smooth scroll
-    isNavigatingRef.current = true;
-    if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
-    navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
-
-    turnEls[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
-    currentTurnIndexRef.current = targetIndex;
-    setCurrentTurnIndex(targetIndex);
-    // Reset hide timer
-    setShowTurnNav(true);
-    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
-    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
-  }, []);
-
-  // Get the last message content for auto-scroll on streaming updates
+    navigateToTurnByIndex(targetIndex);
+  }, [navigateToTurnByIndex]);
   const lastMessage = currentSession?.messages?.[currentSession.messages.length - 1];
   const lastMessageContent = lastMessage?.content;
 
@@ -1788,6 +1799,60 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       container.querySelectorAll<HTMLElement>('[data-turn-index]')
     );
   }, [turns]);
+
+  // Close turn index popover on click-outside or Escape
+  useEffect(() => {
+    if (!showTurnIndexPopover) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        turnIndexPopoverRef.current && !turnIndexPopoverRef.current.contains(e.target as Node)
+        && !turnIndexButtonRef.current?.contains(e.target as Node)
+      ) {
+        setShowTurnIndexPopover(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowTurnIndexPopover(false);
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showTurnIndexPopover]);
+
+  // Auto-scroll popover to bottom (show latest conversations) when opened
+  useEffect(() => {
+    if (showTurnIndexPopover && turnIndexPopoverRef.current) {
+      turnIndexPopoverRef.current.scrollTop = turnIndexPopoverRef.current.scrollHeight;
+    }
+  }, [showTurnIndexPopover]);
+
+  // Sync popover ref and manage hide timer based on popover visibility
+  useEffect(() => {
+    showTurnIndexPopoverRef.current = showTurnIndexPopover;
+    if (showTurnIndexPopover) {
+      // Popover opened — clear hide timer to keep nav visible
+      if (hideNavTimerRef.current) {
+        clearTimeout(hideNavTimerRef.current);
+        hideNavTimerRef.current = null;
+      }
+    } else {
+      // Popover closed — restart hide timer
+      if (showTurnNav) {
+        if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
+        hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
+      }
+    }
+  }, [showTurnIndexPopover, showTurnNav]);
+
+  // Close popover when nav hides
+  useEffect(() => {
+    if (!showTurnNav) setShowTurnIndexPopover(false);
+  }, [showTurnNav]);
 
   // Auto scroll to bottom when new messages arrive or content updates (streaming)
   useEffect(() => {
@@ -2043,39 +2108,90 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
         {/* Turn Navigation Buttons */}
         {turns.length > 1 && isScrollable && (
-          <div
-            className={`absolute right-6 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
+          <>
+            <div
+              className={`absolute right-6 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
 
-              dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
-              border dark:border-claude-darkBorder border-claude-border
-              ${showTurnNav ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-          >
-            <button
-              type="button"
-              onClick={() => currentTurnIndex > 0 && navigateToTurn('prev')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex <= 0
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+                dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
+                border dark:border-claude-darkBorder border-claude-border
+                ${showTurnNav ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-              </svg>
-            </button>
-            <div className="dark:border-claude-darkBorder border-claude-border border-t" />
-            <button
-              type="button"
-              onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurn('next')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex >= turns.length - 1
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-              </svg>
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => currentTurnIndex > 0 && navigateToTurn('prev')}
+                className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
+                  ${currentTurnIndex <= 0
+                    ? 'opacity-30 cursor-default'
+                    : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+                </svg>
+              </button>
+              <div className="dark:border-claude-darkBorder border-claude-border border-t" />
+              <button
+                ref={turnIndexButtonRef}
+                type="button"
+                onClick={() => setShowTurnIndexPopover(prev => !prev)}
+                className="px-1.5 py-2 transition-colors dark:text-claude-darkText text-claude-text
+                  dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer"
+                title={i18nService.t('turnIndex')}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                </svg>
+              </button>
+              <div className="dark:border-claude-darkBorder border-claude-border border-t" />
+              <button
+                type="button"
+                onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurn('next')}
+                className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
+                  ${currentTurnIndex >= turns.length - 1
+                    ? 'opacity-30 cursor-default'
+                    : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Turn Index Popover */}
+            {showTurnIndexPopover && (
+              <div
+                ref={turnIndexPopoverRef}
+                className="absolute right-16 top-1/2 -translate-y-1/2 z-20
+                  w-64 max-h-72 overflow-y-auto rounded-lg shadow-xl
+                  dark:bg-claude-darkSurface bg-claude-surface backdrop-blur-sm
+                  border dark:border-claude-darkBorder border-claude-border"
+              >
+                {turns.map((turn, index) => {
+                  const label = turn.userMessage?.content
+                    ? turn.userMessage.content.split('\n')[0].slice(0, 60)
+                    : '...';
+                  const isActive = index === currentTurnIndex;
+                  return (
+                    <button
+                      key={turn.id}
+                      type="button"
+                      onClick={() => {
+                        navigateToTurnByIndex(index);
+                        setShowTurnIndexPopover(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-sm truncate transition-colors
+                        ${isActive
+                          ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text font-medium'
+                          : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}
+                        ${index > 0 ? 'border-t dark:border-claude-darkBorder border-claude-border' : ''}`}
+                    >
+                      <span className="mr-2 text-xs opacity-50">{index + 1}</span>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
 

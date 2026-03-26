@@ -821,19 +821,27 @@ export class IMCoworkHandler extends EventEmitter {
       return;
     }
 
+    // Use reconciled messages from the store (authoritative after reconcileWithHistory)
+    // instead of accumulator messages which may be stale streaming snapshots.
+    // Fall back to accumulator messages if the store has none (e.g. timeout path).
+    const session = this.coworkStore.getSession(sessionId);
+    const storeMessages = session?.messages ?? [];
+    const messages = storeMessages.length > 0 ? storeMessages : accumulator.messages;
+
     // For cron-triggered background deliveries (scheduled task executions),
     // skip the reminder guard — the assistant text IS the scheduled reminder
     // itself, not a promise to create one.
     const replyText = accumulator.backgroundDelivery
-      ? this.formatReplyRaw(accumulator.messages)
-      : this.formatReply(sessionId, accumulator.messages);
+      ? this.formatReplyRaw(messages)
+      : this.formatReply(sessionId, messages);
 
     console.log(`[IMCoworkHandler] 会话完成:`, JSON.stringify({
       sessionId,
-      messageCount: accumulator.messages.length,
+      messageCount: messages.length,
       replyLength: replyText.length,
       reply: replyText,
       backgroundDelivery: accumulator.backgroundDelivery ?? null,
+      usedStoreMessages: storeMessages.length > 0,
     }, null, 2));
 
     this.cleanupAccumulator(sessionId);
@@ -842,7 +850,7 @@ export class IMCoworkHandler extends EventEmitter {
       if (!this.sendAsyncReply || !replyText || replyText === '处理完成，但没有生成回复。') {
         return;
       }
-      if (!isReminderSystemTurn(accumulator.messages)) {
+      if (!isReminderSystemTurn(messages)) {
         return;
       }
       void this.sendAsyncReply(

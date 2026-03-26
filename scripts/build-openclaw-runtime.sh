@@ -91,8 +91,8 @@ try {
 READVER
 )
 
-# Compute a fingerprint of all patch files so the build is invalidated when patches change.
-PATCHES_DIR="$ELECTRON_ROOT/scripts/patches"
+# Compute a fingerprint of version-specific patch files so the build is invalidated when patches change.
+PATCHES_DIR="$ELECTRON_ROOT/scripts/patches/$DESIRED_VERSION"
 PATCH_HASH=""
 if [[ -d "$PATCHES_DIR" ]]; then
   PATCH_HASH=$(cat "$PATCHES_DIR"/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)

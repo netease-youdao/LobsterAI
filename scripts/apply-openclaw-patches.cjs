@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * Apply LobsterAI patches to the openclaw source tree.
+ * Apply version-specific LobsterAI patches to the openclaw source tree.
  *
- * These patches add a dedicated gateway entry point that skips the full CLI
- * infrastructure, dramatically reducing startup time inside Electron's
- * utilityProcess (~15s instead of ~120s).
+ * Patches are organised in scripts/patches/<version>/ directories, where
+ * <version> matches the "openclaw.version" field in package.json (e.g.
+ * "v2026.3.2").  Only patches for the currently pinned version are applied.
  *
  * Usage:
  *   node scripts/apply-openclaw-patches.cjs [openclaw-src-dir]
@@ -25,7 +25,15 @@ const openclawSrc = process.argv[2]
   ? path.resolve(process.argv[2])
   : path.resolve(rootDir, '..', 'openclaw');
 
-const patchesDir = path.join(rootDir, 'scripts', 'patches');
+// Read pinned openclaw version from package.json.
+const pkg = require(path.join(rootDir, 'package.json'));
+const openclawVersion = pkg.openclaw && pkg.openclaw.version;
+if (!openclawVersion) {
+  console.error('[apply-openclaw-patches] Missing "openclaw.version" in package.json.');
+  process.exit(1);
+}
+
+const patchesDir = path.join(rootDir, 'scripts', 'patches', openclawVersion);
 
 if (!fs.existsSync(openclawSrc)) {
   console.error(`[apply-openclaw-patches] openclaw source not found: ${openclawSrc}`);
@@ -37,14 +45,21 @@ if (!fs.existsSync(path.join(openclawSrc, 'package.json'))) {
   process.exit(1);
 }
 
+if (!fs.existsSync(patchesDir)) {
+  console.log(`[apply-openclaw-patches] No patches directory for ${openclawVersion}, nothing to do.`);
+  process.exit(0);
+}
+
 const patchFiles = fs.readdirSync(patchesDir)
   .filter(f => f.endsWith('.patch'))
   .sort();
 
 if (patchFiles.length === 0) {
-  console.log('[apply-openclaw-patches] No patches found, nothing to do.');
+  console.log(`[apply-openclaw-patches] No patches found for ${openclawVersion}, nothing to do.`);
   process.exit(0);
 }
+
+console.log(`[apply-openclaw-patches] Applying patches for openclaw ${openclawVersion} (${patchFiles.length} file(s))`);
 
 let applied = 0;
 let skipped = 0;
