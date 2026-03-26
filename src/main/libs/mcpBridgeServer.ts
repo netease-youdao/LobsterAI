@@ -11,7 +11,14 @@ import crypto from 'crypto';
 import type { McpServerManager } from './mcpServerManager';
 
 const log = (level: string, msg: string) => {
-  console.log(`[McpBridge][${level}] ${msg}`);
+  const formatted = `[McpBridge][${level}] ${msg}`;
+  if (level === 'ERROR') {
+    console.error(formatted);
+  } else if (level === 'WARN') {
+    console.warn(formatted);
+  } else {
+    console.log(formatted);
+  }
 };
 
 export type AskUserRequest = {

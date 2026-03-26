@@ -857,11 +857,12 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
         }
       },
       getMcpBridgeConfig: (): McpBridgeConfig | null => {
-        if (!mcpBridgeServer?.callbackUrl || !mcpBridgeSecret) {
+        if (!mcpBridgeServer?.callbackUrl || !mcpBridgeServer?.askUserCallbackUrl || !mcpBridgeSecret) {
           return null;
         }
         return {
           callbackUrl: mcpBridgeServer.callbackUrl,
+          askUserCallbackUrl: mcpBridgeServer.askUserCallbackUrl,
           secret: mcpBridgeSecret,
           tools: mcpServerManager?.toolManifest ?? [],
         };
@@ -1228,13 +1229,14 @@ const startMcpBridge = (): Promise<McpBridgeConfig | null> => {
     });
 
     const callbackUrl = mcpBridgeServer.callbackUrl;
-    if (!callbackUrl) {
+    const askUserCallbackUrl = mcpBridgeServer.askUserCallbackUrl;
+    if (!callbackUrl || !askUserCallbackUrl) {
       console.error('[McpBridge] failed to get callback URL');
       return null;
     }
 
     console.log(`[McpBridge] started: ${tools.length} MCP tools, callback=${callbackUrl}`);
-    return { callbackUrl, secret: mcpBridgeSecret, tools };
+    return { callbackUrl, askUserCallbackUrl, secret: mcpBridgeSecret, tools };
   } catch (error) {
     console.error('[McpBridge] startup error:', error instanceof Error ? error.stack || error.message : String(error));
     return null;
@@ -2918,6 +2920,19 @@ if (!gotTheLock) {
     result: PermissionResult;
   }) => {
     try {
+      // Dual-dispatch pattern: permission responses arrive through one IPC channel
+      // but may target either of two independent subsystems.
+      //
+      // - resolveAskUser() handles AskUserQuestion plugin requests routed through
+      //   the McpBridgeServer HTTP callback. It is a no-op when the requestId does
+      //   not match a pending bridge request (i.e. for normal SDK permission requests).
+      //
+      // - respondToPermission() handles standard Claude Agent SDK permission requests
+      //   managed by the CoworkEngineRouter. It is a no-op when the requestId does
+      //   not match a pending SDK permission (i.e. for bridge plugin requests).
+      //
+      // Both calls are safe to invoke unconditionally; exactly one will match.
+
       // AskUserQuestion plugin responses go to the bridge server, not the runtime
       if (mcpBridgeServer && options.requestId) {
         const result = options.result;

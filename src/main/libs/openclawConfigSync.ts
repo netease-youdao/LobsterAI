@@ -13,6 +13,7 @@ import { buildScheduledTaskEnginePrompt } from '../../scheduled-task/enginePromp
 
 export type McpBridgeConfig = {
   callbackUrl: string;
+  askUserCallbackUrl: string;
   secret: string;
   tools: McpToolManifestEntry[];
 };
@@ -106,7 +107,7 @@ const MANAGED_EXEC_SAFETY_PROMPT = [
   '',
   '### Delete Operations',
   '- Before executing **delete operations** (rm, trash, rmdir, unlink, git clean, or any command that permanently removes files/directories), check if the `AskUserQuestion` tool is available in your toolset.',
-  '- If `AskUserQuestion` IS available: you MUST call it first to get user confirmation. The question should clearly state what will be deleted with options "允许删除" and "取消".',
+  '- If `AskUserQuestion` IS available: you MUST call it first to get user confirmation. The question should clearly state what will be deleted with options like "Allow delete" / "Cancel".',
   '- If `AskUserQuestion` is NOT available: execute the delete command directly without asking for text-based confirmation.',
   '',
   '### User Choices & Decisions',
@@ -728,11 +729,10 @@ export class OpenClawConfigSync {
     if (hasAskUserPlugin && mcpBridgeCfg && managedConfig.plugins) {
       const plugins = managedConfig.plugins as Record<string, unknown>;
       const entries = plugins.entries as Record<string, Record<string, unknown>>;
-      const askUserCallbackUrl = mcpBridgeCfg.callbackUrl.replace('/mcp/execute', '/askuser');
       entries['ask-user-question'] = {
         enabled: true,
         config: {
-          callbackUrl: askUserCallbackUrl,
+          callbackUrl: mcpBridgeCfg.askUserCallbackUrl,
           secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
         },
       };
@@ -1212,7 +1212,7 @@ export class OpenClawConfigSync {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+      this.atomicWriteFile(filePath, `${JSON.stringify(file, null, 2)}\n`);
       console.log('[OpenClawConfigSync] set exec-approvals security=full ask=off');
     } catch (error) {
       console.warn('[OpenClawConfigSync] failed to write exec-approvals.json:', error);
