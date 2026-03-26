@@ -258,15 +258,19 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
       <div className="modal-content w-full max-w-lg mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-6 py-4 border-b dark:border-claude-darkBorder border-claude-border">
-          <div className="p-2 rounded-full bg-yellow-100 dark:bg-yellow-900/30">
-            <ExclamationTriangleIcon className="h-6 w-6 text-yellow-600 dark:text-yellow-500" />
+          <div className={`p-2 rounded-full ${isQuestionTool && !isConfirmMode ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-yellow-100 dark:bg-yellow-900/30'}`}>
+            <ExclamationTriangleIcon className={`h-6 w-6 ${isQuestionTool && !isConfirmMode ? 'text-blue-600 dark:text-blue-500' : 'text-yellow-600 dark:text-yellow-500'}`} />
           </div>
           <div className="flex-1">
             <h2 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
-              {i18nService.t('coworkPermissionRequired')}
+              {isQuestionTool && !isConfirmMode
+                ? i18nService.t('coworkSelectionRequired')
+                : i18nService.t('coworkPermissionRequired')}
             </h2>
             <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-              {i18nService.t('coworkPermissionDescription')}
+              {isQuestionTool && !isConfirmMode
+                ? i18nService.t('coworkSelectionDescription')
+                : i18nService.t('coworkPermissionDescription')}
             </p>
           </div>
           <button
