@@ -411,6 +411,30 @@ const isBundledPluginAvailable = (pluginId: string): boolean => {
   return hasBundledOpenClawExtension(pluginId);
 };
 
+/**
+ * Writes a plugin-backed channel into a channels map only when the backing
+ * plugin is available according to `isAvailable`.  Extracted as a pure,
+ * exported function so it can be unit-tested without Electron / fs dependencies.
+ *
+ * @param isAvailable  Predicate that returns true when the plugin is installed.
+ * @param channels     Existing channels map (mutated in place via return value).
+ * @param pluginId     The plugin ID to check (e.g. 'moltbot-popo').
+ * @param channelKey   The openclaw.json channel key (e.g. 'moltbot-popo').
+ * @param channelConfig  The channel configuration object to write.
+ * @returns Updated channels map (same reference as `channels` when skipped,
+ *          new object when the channel was added).
+ */
+export function applyPluginChannel(
+  isAvailable: (pluginId: string) => boolean,
+  channels: Record<string, unknown>,
+  pluginId: string,
+  channelKey: string,
+  channelConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isAvailable(pluginId)) return channels;
+  return { ...channels, [channelKey]: channelConfig };
+}
+
 export type OpenClawConfigSyncResult = {
   ok: boolean;
   changed: boolean;
@@ -650,6 +674,22 @@ export class OpenClawConfigSync {
       };
     }
 
+    // Helper: write a plugin-backed channel into managedConfig.channels only when
+    // the backing plugin is actually installed in the OpenClaw bundle.  Using this
+    // helper for every plugin-based channel makes it structurally impossible to
+    // accidentally add a channel without the guard, which is the root cause of the
+    // "unknown channel id" startup failure seen when a plugin is absent.
+    // Built-in channels (telegram, discord) bypass this helper and write directly.
+    const addPluginChannel = (pluginId: string, channelKey: string, channelConfig: Record<string, unknown>): void => {
+      managedConfig.channels = applyPluginChannel(
+        isBundledPluginAvailable,
+        (managedConfig.channels as Record<string, unknown> || {}),
+        pluginId,
+        channelKey,
+        channelConfig,
+      );
+    };
+
     // Sync Telegram OpenClaw channel config
     const tgConfig = this.getTelegramOpenClawConfig?.();
     if (tgConfig?.enabled && tgConfig.botToken) {
@@ -763,7 +803,7 @@ export class OpenClawConfigSync {
         replyMode: feishuConfig.replyMode || 'auto',
         mediaMaxMb: feishuConfig.mediaMaxMb || 30,
       };
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), feishu: feishuChannel };
+      addPluginChannel('feishu-openclaw-plugin', 'feishu', feishuChannel);
     }
 
     // Sync DingTalk OpenClaw channel config (via dingtalk-connector plugin)
@@ -787,7 +827,7 @@ export class OpenClawConfigSync {
         ...(dingTalkConfig.gatewayBaseUrl ? { gatewayBaseUrl: dingTalkConfig.gatewayBaseUrl } : {}),
         ...(gatewayToken ? { gatewayToken: '${LOBSTER_DINGTALK_GW_TOKEN}' } : {}),
       };
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'dingtalk-connector': dingtalkChannel };
+      addPluginChannel('dingtalk-connector', 'dingtalk-connector', dingtalkChannel);
     }
 
     // Sync QQ OpenClaw channel config (via qqbot plugin)
@@ -814,7 +854,7 @@ export class OpenClawConfigSync {
       if (qqConfig.imageServerBaseUrl) {
         qqChannel.imageServerBaseUrl = qqConfig.imageServerBaseUrl;
       }
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), qqbot: qqChannel };
+      addPluginChannel('qqbot', 'qqbot', qqChannel);
     }
 
     // Sync WeCom OpenClaw channel config (via wecom-openclaw-plugin)
@@ -837,7 +877,7 @@ export class OpenClawConfigSync {
         })(),
         sendThinkingMessage: wecomConfig.sendThinkingMessage ?? true,
       };
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), wecom: wecomChannel };
+      addPluginChannel('wecom-openclaw-plugin', 'wecom', wecomChannel);
     }
 
     // Sync POPO OpenClaw channel config (via moltbot-popo plugin)
@@ -883,8 +923,9 @@ export class OpenClawConfigSync {
       if (!isWebSocket && popoConfig.webhookPath && popoConfig.webhookPath !== '/popo/callback') {
         popoChannel.webhookPath = popoConfig.webhookPath;
       }
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'moltbot-popo': popoChannel };
+      addPluginChannel('moltbot-popo', 'moltbot-popo', popoChannel);
     }
+
     // Sync NIM OpenClaw channel config (via openclaw-nim plugin)
     if (nimConfig?.enabled && nimConfig.appKey && nimConfig.account && nimConfig.token) {
       const nimChannel: Record<string, unknown> = {
@@ -898,19 +939,17 @@ export class OpenClawConfigSync {
       if (nimConfig.team) nimChannel.team = nimConfig.team;
       if (nimConfig.qchat) nimChannel.qchat = nimConfig.qchat;
       if (nimConfig.advanced) nimChannel.advanced = nimConfig.advanced;
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'nim': nimChannel };
+      addPluginChannel('nim', 'nim', nimChannel);
     }
 
     // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin).
-    // Only write the channel entry when the plugin is actually installed —
-    // OpenClaw rejects unknown channel IDs and the channel key must match
-    // the id the plugin declares (which is 'weixin', not the npm package name).
-    if (isBundledPluginAvailable('openclaw-weixin') && weixinConfig?.enabled) {
+    // The channel key must match the id the plugin declares ('weixin', not the npm package name).
+    if (weixinConfig?.enabled) {
       const weixinChannel: Record<string, unknown> = {
         enabled: true,
         ...(weixinConfig.accountId ? { accountId: weixinConfig.accountId } : {}),
       };
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'weixin': weixinChannel };
+      addPluginChannel('openclaw-weixin', 'weixin', weixinChannel);
     }
 
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
