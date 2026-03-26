@@ -23,6 +23,7 @@
     "technology-news-search": { "order": 224, "enabled": false },
     "github-profile": { "order": 225, "enabled": true },
     "qrcode": { "order": 226, "enabled": true },
+    "skill-vetter": { "order": 299, "enabled": true },
     "skill-creator": { "order": 300, "enabled": true }
   }
 }

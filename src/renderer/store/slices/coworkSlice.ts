@@ -12,10 +12,11 @@ interface CoworkState {
   sessions: CoworkSessionSummary[];
   currentSessionId: string | null;
   currentSession: CoworkSession | null;
-  draftPrompt: string;
+  draftPrompts: Record<string, string>;
   unreadSessionIds: string[];
   isCoworkActive: boolean;
   isStreaming: boolean;
+  remoteManaged: boolean;
   pendingPermissions: CoworkPermissionRequest[];
   config: CoworkConfig;
 }
@@ -24,10 +25,11 @@ const initialState: CoworkState = {
   sessions: [],
   currentSessionId: null,
   currentSession: null,
-  draftPrompt: '',
+  draftPrompts: {},
   unreadSessionIds: [],
   isCoworkActive: false,
   isStreaming: false,
+  remoteManaged: false,
   pendingPermissions: [],
   config: {
     workingDirectory: '',
@@ -141,8 +143,13 @@ const coworkSlice = createSlice({
       }
     },
 
-    setDraftPrompt(state, action: PayloadAction<string>) {
-      state.draftPrompt = action.payload;
+    setDraftPrompt(state, action: PayloadAction<{ sessionId: string; draft: string }>) {
+      const { sessionId, draft } = action.payload;
+      if (draft) {
+        state.draftPrompts[sessionId] = draft;
+      } else {
+        delete state.draftPrompts[sessionId];
+      }
     },
 
     addSession(state, action: PayloadAction<CoworkSession>) {
@@ -243,6 +250,10 @@ const coworkSlice = createSlice({
       state.isStreaming = action.payload;
     },
 
+    setRemoteManaged(state, action: PayloadAction<boolean>) {
+      state.remoteManaged = action.payload;
+    },
+
     updateSessionPinned(state, action: PayloadAction<{ sessionId: string; pinned: boolean }>) {
       const { sessionId, pinned } = action.payload;
       const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
@@ -302,6 +313,7 @@ const coworkSlice = createSlice({
       state.currentSessionId = null;
       state.currentSession = null;
       state.isStreaming = false;
+      state.remoteManaged = false;
     },
   },
 });
@@ -319,6 +331,7 @@ export const {
   addMessage,
   updateMessageContent,
   setStreaming,
+  setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
   enqueuePendingPermission,

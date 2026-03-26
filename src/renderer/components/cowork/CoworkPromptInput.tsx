@@ -79,7 +79,7 @@ export interface CoworkPromptInputRef {
 }
 
 interface CoworkPromptInputProps {
-  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => void;
+  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop?: () => void;
   isStreaming?: boolean;
   placeholder?: string;
@@ -90,6 +90,9 @@ interface CoworkPromptInputProps {
   showFolderSelector?: boolean;
   showModelSelector?: boolean;
   onManageSkills?: () => void;
+  sessionId?: string;
+  /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
+  remoteManaged?: boolean;
 }
 
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
@@ -106,9 +109,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showFolderSelector = false,
       showModelSelector = false,
       onManageSkills,
+      sessionId,
+      remoteManaged = false,
     } = props;
     const dispatch = useDispatch();
-    const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompt);
+    const draftKey = sessionId || '__home__';
+    const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[draftKey] || '');
     const [value, setValue] = useState(draftPrompt);
     const [attachments, setAttachments] = useState<CoworkAttachment[]>([]);
     const [showFolderMenu, setShowFolderMenu] = useState(false);
@@ -198,16 +204,21 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
   }, [workingDirectory]);
 
+  // Sync value from draft when sessionId changes
+  useEffect(() => {
+    setValue(draftPrompt);
+  }, [draftKey]); // intentionally omit draftPrompt to only trigger on session switch
+
   useEffect(() => {
     if (value !== draftPrompt) {
       const timer = setTimeout(() => {
-        dispatch(setDraftPrompt(value));
+        dispatch(setDraftPrompt({ sessionId: draftKey, draft: value }));
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [value, draftPrompt, dispatch]);
+  }, [value, draftPrompt, dispatch, draftKey]);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (showFolderSelector && !workingDirectory?.trim()) {
       setShowFolderRequiredWarning(true);
       return;
@@ -259,9 +270,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         base64Lengths: imageAtts.map(a => a.base64Data.length),
       });
     }
-    onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
+    const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
+    if (result === false) return;
     setValue('');
-    dispatch(setDraftPrompt(''));
+    dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
     setAttachments([]);
     setImageVisionHint(false);
   }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);
@@ -277,11 +289,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [onManageSkills]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to submit, Shift+Enter for new line
+    // Enter to submit, any modifier+Enter (Shift/Ctrl/Cmd/Alt) for new line
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
-    if (event.key === 'Enter' && !event.shiftKey && !isComposing && !isStreaming && !disabled) {
-      event.preventDefault();
-      handleSubmit();
+    if (event.key === 'Enter' && !isComposing) {
+      const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
+      if (!hasModifier && !isStreaming && !disabled) {
+        event.preventDefault();
+        handleSubmit();
+      } else if (hasModifier && !event.shiftKey) {
+        // Shift+Enter already inserts newline natively; for Ctrl/Cmd/Alt+Enter, insert via execCommand to preserve undo history
+        event.preventDefault();
+        document.execCommand('insertText', false, '\n');
+      }
     }
   };
 
@@ -670,22 +689,28 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     />
                   </>
                 )}
-                {showModelSelector && <ModelSelector dropdownDirection="up" />}
-                <button
-                  type="button"
-                  onClick={handleAddFile}
-                  className="flex items-center justify-center p-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-                  title={i18nService.t('coworkAddFile')}
-                  aria-label={i18nService.t('coworkAddFile')}
-                  disabled={disabled || isStreaming || isAddingFile}
-                >
-                  <PaperClipIcon className="h-4 w-4" />
-                </button>
-                <SkillsButton
-                  onSelectSkill={handleSelectSkill}
-                  onManageSkills={handleManageSkills}
-                />
-                <ActiveSkillBadge />
+                {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
+                {!remoteManaged && (
+                  <button
+                    type="button"
+                    onClick={handleAddFile}
+                    className="flex items-center justify-center p-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                    title={i18nService.t('coworkAddFile')}
+                    aria-label={i18nService.t('coworkAddFile')}
+                    disabled={disabled || isStreaming || isAddingFile}
+                  >
+                    <PaperClipIcon className="h-4 w-4" />
+                  </button>
+                )}
+                {!remoteManaged && (
+                  <>
+                    <SkillsButton
+                      onSelectSkill={handleSelectSkill}
+                      onManageSkills={handleManageSkills}
+                    />
+                    <ActiveSkillBadge />
+                  </>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {isStreaming ? (
@@ -725,18 +750,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               className={textareaClass}
             />
 
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={handleAddFile}
-                className="flex-shrink-0 p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-                title={i18nService.t('coworkAddFile')}
-                aria-label={i18nService.t('coworkAddFile')}
-                disabled={disabled || isStreaming || isAddingFile}
-              >
-                <PaperClipIcon className="h-4 w-4" />
-              </button>
-            </div>
+            {!remoteManaged && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleAddFile}
+                  className="flex-shrink-0 p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                  title={i18nService.t('coworkAddFile')}
+                  aria-label={i18nService.t('coworkAddFile')}
+                  disabled={disabled || isStreaming || isAddingFile}
+                >
+                  <PaperClipIcon className="h-4 w-4" />
+                </button>
+              </div>
+            )}
 
             {isStreaming ? (
               <button

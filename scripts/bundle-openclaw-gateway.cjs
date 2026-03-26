@@ -117,15 +117,6 @@ esbuild
       `[bundle-openclaw-gateway] Done in ${elapsed}ms (${sizeKB} KB)` +
         (result.warnings.length ? `, ${result.warnings.length} warnings` : ''),
     );
-
-    // Copy the compile-cache warmup script alongside the bundle so it's
-    // available in the packaged app (resources/cfmind/warmup-compile-cache.cjs).
-    const warmupSrc = path.join(rootDir, 'scripts', 'warmup-compile-cache.cjs');
-    const warmupDst = path.join(runtimeDir, 'warmup-compile-cache.cjs');
-    if (fs.existsSync(warmupSrc)) {
-      fs.copyFileSync(warmupSrc, warmupDst);
-      console.log(`[bundle-openclaw-gateway] Copied warmup-compile-cache.cjs to ${warmupDst}`);
-    }
   })
   .catch((err) => {
     console.error('[bundle-openclaw-gateway] esbuild failed:', err.message || err);

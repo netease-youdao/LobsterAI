@@ -15,5 +15,6 @@
       "*": ["node_modules/*"]
     }
   },
-  "include": ["src/main", "src/common"]
+  "include": ["src/main", "src/common"],
+  "exclude": ["src/**/*.test.*", "src/**/*.spec.*"]
 }

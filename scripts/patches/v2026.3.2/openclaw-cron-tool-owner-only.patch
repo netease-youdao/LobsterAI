@@ -1,0 +1,13 @@
+diff --git a/src/agents/tools/cron-tool.ts b/src/agents/tools/cron-tool.ts
+index 14df690102..66bc27d59f 100644
+--- a/src/agents/tools/cron-tool.ts
++++ b/src/agents/tools/cron-tool.ts
+@@ -212,7 +212,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
+   return {
+     label: "Cron",
+     name: "cron",
+-    ownerOnly: true,
++    ownerOnly: false,
+     description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.
+ 
+ ACTIONS:

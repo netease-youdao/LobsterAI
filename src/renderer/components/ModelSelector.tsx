@@ -3,6 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../store';
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { setSelectedModel, isSameModelIdentity, getModelIdentityKey } from '../store/slices/modelSlice';
+import type { Model } from '../store/slices/modelSlice';
 import { i18nService } from '../services/i18n';
 
 interface ModelSelectorProps {
@@ -33,7 +34,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
     };
   }, [isOpen]);
 
-  const handleModelSelect = (model: typeof availableModels[0]) => {
+  const handleModelSelect = (model: Model) => {
     dispatch(setSelectedModel(model));
     setIsOpen(false);
   };
@@ -51,6 +52,36 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
     ? 'bottom-full mb-1'
     : 'top-full mt-1';
 
+  const serverModels = availableModels.filter(m => m.isServerModel);
+  const userModels = availableModels.filter(m => !m.isServerModel);
+  const hasBothGroups = serverModels.length > 0 && userModels.length > 0;
+
+  const renderModelItem = (model: Model) => (
+    <button
+      key={getModelIdentityKey(model)}
+      onClick={() => handleModelSelect(model)}
+      className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
+        isSameModelIdentity(model, selectedModel) ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+      }`}
+    >
+      <div className="flex flex-col">
+        <span className="text-sm">{model.name}</span>
+        {model.provider && (
+          <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
+        )}
+      </div>
+      {isSameModelIdentity(model, selectedModel) && (
+        <CheckIcon className="h-4 w-4 text-claude-accent" />
+      )}
+    </button>
+  );
+
+  const renderGroupHeader = (label: string) => (
+    <div className="px-4 py-1.5 text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider">
+      {label}
+    </div>
+  );
+
   return (
     <div ref={containerRef} className="relative cursor-pointer">
       <button
@@ -64,25 +95,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
       {isOpen && (
         <div className={`absolute ${dropdownPositionClass} w-52 dark:bg-claude-darkSurface bg-claude-surface rounded-xl popover-enter shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden`}>
           <div className="max-h-64 overflow-y-auto">
-          {availableModels.map((model) => (
-            <button
-              key={getModelIdentityKey(model)}
-              onClick={() => handleModelSelect(model)}
-              className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
-                isSameModelIdentity(model, selectedModel) ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
-              }`}
-            >
-              <div className="flex flex-col">
-                <span className="text-sm">{model.name}</span>
-                {model.provider && (
-                  <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
-                )}
-              </div>
-              {isSameModelIdentity(model, selectedModel) && (
-                <CheckIcon className="h-4 w-4 text-claude-accent" />
-              )}
-            </button>
-          ))}
+            {hasBothGroups ? (
+              <>
+                {renderGroupHeader(i18nService.t('modelGroupServer'))}
+                {serverModels.map(renderModelItem)}
+                <div className="my-1 border-t dark:border-claude-darkBorder border-claude-border" />
+                {renderGroupHeader(i18nService.t('modelGroupUser'))}
+                {userModels.map(renderModelItem)}
+              </>
+            ) : (
+              availableModels.map(renderModelItem)
+            )}
           </div>
         </div>
       )}

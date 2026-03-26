@@ -1,5 +1,6 @@
 import { app, BrowserWindow, session } from 'electron';
 import { execSync, spawn, spawnSync } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
@@ -8,6 +9,9 @@ import { SqliteStore } from './sqliteStore';
 import { cpRecursiveSync } from './fsCompat';
 import { getElectronNodeRuntimePath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
+import { scanSkillSecurity, scanMultipleSkillDirs, mergeReports } from './libs/skillSecurity/skillSecurityScanner';
+import type { SkillSecurityReport, SecurityReportAction } from './libs/skillSecurity/skillSecurityTypes';
+import { t } from './i18n';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -1077,6 +1081,13 @@ export class SkillManager {
   private watchers: fs.FSWatcher[] = [];
   private notifyTimer: NodeJS.Timeout | null = null;
   private changeListeners: Array<() => void> = [];
+  private pendingInstalls = new Map<string, {
+    tempDir: string;
+    cleanupPath: string | null;
+    root: string;
+    skillDirs: string[];
+    timer: NodeJS.Timeout;
+  }>();
 
   constructor(private getStore: () => SqliteStore) {}
 
@@ -1337,7 +1348,13 @@ export class SkillManager {
     return this.listSkills();
   }
 
-  async downloadSkill(source: string): Promise<{ success: boolean; skills?: SkillRecord[]; error?: string }> {
+  async downloadSkill(source: string): Promise<{
+    success: boolean;
+    skills?: SkillRecord[];
+    error?: string;
+    auditReport?: SkillSecurityReport;
+    pendingInstallId?: string;
+  }> {
     let cleanupPath: string | null = null;
     try {
       const trimmed = source.trim();
@@ -1450,9 +1467,55 @@ export class SkillManager {
       if (skillDirs.length === 0) {
         cleanupPathSafely(cleanupPath);
         cleanupPath = null;
-        return { success: false, error: 'No SKILL.md found in source' };
+        return { success: false, error: t('skillErrNoSkillMd') };
       }
 
+      // Security scan before installation
+      let auditReport: SkillSecurityReport | null = null;
+      try {
+        console.log(`[SkillManager] Starting security scan for ${skillDirs.length} skill dir(s)...`);
+        const reports = await scanMultipleSkillDirs(skillDirs);
+        auditReport = mergeReports(reports);
+        if (auditReport) {
+          console.log(`[SkillManager] Security scan complete: riskLevel=${auditReport.riskLevel}, score=${auditReport.riskScore}, findings=${auditReport.findings.length}, duration=${auditReport.scanDurationMs}ms`);
+          for (const f of auditReport.findings) {
+            console.log(`[SkillManager]   [${f.severity}] ${f.dimension} | ${f.ruleId} → ${f.file}${f.line ? ':' + f.line : ''}`);
+          }
+        }
+      } catch (err) {
+        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+      }
+
+      // If risk detected, cache for user confirmation instead of auto-installing
+      if (auditReport && auditReport.riskLevel !== 'safe') {
+        const pendingId = crypto.randomUUID();
+        console.log(`[SkillManager] Risk detected (${auditReport.riskLevel}), pending user confirmation: ${pendingId}`);
+        const timer = setTimeout(() => {
+          const pending = this.pendingInstalls.get(pendingId);
+          if (pending) {
+            cleanupPathSafely(pending.cleanupPath);
+            this.pendingInstalls.delete(pendingId);
+            console.log(`[SkillManager] Pending install ${pendingId} expired (TTL)`);
+          }
+        }, 5 * 60 * 1000);
+
+        this.pendingInstalls.set(pendingId, {
+          tempDir: localSource,
+          cleanupPath,
+          root,
+          skillDirs,
+          timer,
+        });
+
+        return {
+          success: true,
+          auditReport,
+          pendingInstallId: pendingId,
+        };
+      }
+
+      // Safe or scan failed — install directly
+      console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
         let targetDir = resolveWithin(root, folderName);
@@ -1474,6 +1537,57 @@ export class SkillManager {
       cleanupPathSafely(cleanupPath);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to download skill' };
     }
+  }
+
+  confirmPendingInstall(
+    pendingId: string,
+    action: SecurityReportAction
+  ): { success: boolean; skills?: SkillRecord[]; error?: string } {
+    console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
+    const pending = this.pendingInstalls.get(pendingId);
+    if (!pending) {
+      console.warn(`[SkillManager] Pending install not found: ${pendingId}`);
+      return { success: false, error: 'No pending install found' };
+    }
+
+    clearTimeout(pending.timer);
+    this.pendingInstalls.delete(pendingId);
+
+    if (action === 'cancel') {
+      cleanupPathSafely(pending.cleanupPath);
+      return { success: true };
+    }
+
+    // Install the skill(s)
+    const installedIds: string[] = [];
+    for (const skillDir of pending.skillDirs) {
+      const folderName = normalizeFolderName(path.basename(skillDir));
+      let targetDir = resolveWithin(pending.root, folderName);
+      let suffix = 1;
+      while (fs.existsSync(targetDir)) {
+        targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
+        suffix += 1;
+      }
+      cpRecursiveSync(skillDir, targetDir);
+      installedIds.push(path.basename(targetDir));
+    }
+
+    cleanupPathSafely(pending.cleanupPath);
+
+    // If user chose 'installDisabled', disable all newly installed skills
+    if (action === 'installDisabled') {
+      for (const id of installedIds) {
+        try {
+          this.setSkillEnabled(id, false);
+        } catch {
+          // Non-critical
+        }
+      }
+    }
+
+    this.startWatching();
+    this.notifySkillsChanged();
+    return { success: true, skills: this.listSkills() };
   }
 
   startWatching(): void {

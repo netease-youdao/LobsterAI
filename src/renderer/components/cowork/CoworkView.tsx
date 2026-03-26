@@ -13,11 +13,11 @@ import CoworkSessionDetail from './CoworkSessionDetail';
 import ModelSelector from '../ModelSelector';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { QuickActionBar, PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
 import type { CoworkSession, CoworkImageAttachment, OpenClawEngineStatus } from '../../types/cowork';
-import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 
 export interface CoworkViewProps {
   onRequestAppSettings?: (options?: SettingsOpenOptions) => void;
@@ -154,9 +154,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     };
   }, [dispatch]);
 
-  const handleStartSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => {
+  const handleStartSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]): Promise<boolean | void> => {
     if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
-      return;
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
+      return false;
     }
     // Prevent duplicate submissions
     if (isStartingRef.current) return;
@@ -289,7 +290,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   const handleContinueSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => {
     if (!currentSession) return;
-    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) return;
+    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
+      return false;
+    }
 
     console.log('[CoworkView] handleContinueSession called', {
       hasImageAttachments: !!imageAttachments,
@@ -418,9 +422,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const isEngineReady = isOpenClawEngine
     ? isOpenClawReadyForSession(openClawStatus)
     : true;
-  const shouldShowGatewayStartupGate = Boolean(
-    isOpenClawEngine && openClawStatus?.phase === 'starting',
-  );
 
   const homeHeader = (
     <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
@@ -446,14 +447,49 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         )}
         <ModelSelector />
       </div>
-      <WindowTitleBar inline />
+      <div className="non-draggable flex items-center">
+        <div className="flex items-center gap-1.5 mr-2 px-2.5 py-1">
+          <ShieldCheckIcon className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+          <span className="text-xs text-green-600 dark:text-green-400 whitespace-nowrap">
+            {i18nService.t('lobsterGuardEnabled')}
+          </span>
+        </div>
+        <WindowTitleBar inline />
+      </div>
     </div>
   );
+
+  // Engine status banner for error/non-running states (starting overlay is now global in App.tsx)
+  const engineStatusBanner = shouldShowEngineStatus && openClawStatus && openClawStatus.phase !== 'starting' ? (
+    <div className={`shrink-0 flex items-center justify-between px-4 py-2 text-xs ${isEngineError
+      ? 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300'
+      : 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300'
+    }`}>
+      <div className="flex items-center gap-2">
+        <span>{resolveEngineStatusText(openClawStatus)}</span>
+        {typeof openClawStatus.progressPercent === 'number' && (
+          <span className="opacity-70">({Math.round(openClawStatus.progressPercent)}%)</span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={handleRestartGateway}
+        disabled={isRestartingGateway}
+        className={`shrink-0 rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isEngineError
+          ? 'bg-red-600 text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600'
+          : 'bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-700 dark:hover:bg-amber-600'
+        }`}
+      >
+        {i18nService.t('coworkOpenClawRestartGateway')}
+      </button>
+    </div>
+  ) : null;
 
   // When there's a current session, show the session detail view
   if (currentSession) {
     return (
-      <>
+      <div className="flex-1 flex flex-col h-full">
+        {engineStatusBanner}
         <CoworkSessionDetail
           onManageSkills={() => onShowSkills?.()}
           onContinue={handleContinueSession}
@@ -464,51 +500,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           onNewChat={onNewChat}
           updateBadge={updateBadge}
         />
-      </>
-    );
-  }
-
-  if (shouldShowGatewayStartupGate && openClawStatus) {
-    const progressPercent = typeof openClawStatus.progressPercent === 'number'
-      ? Math.max(0, Math.min(100, Math.round(openClawStatus.progressPercent)))
-      : null;
-
-    return (
-      <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
-        {homeHeader}
-        <div className="flex-1 flex items-center justify-center px-4">
-          <div className="w-full max-w-lg rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface p-6 shadow-card">
-            <div className="flex flex-col items-center text-center gap-3">
-              <div className="h-10 w-10 rounded-full bg-claude-accent/15 text-claude-accent flex items-center justify-center animate-pulse">
-                <ChatBubbleLeftRightIcon className="h-5 w-5" />
-              </div>
-              <div className="text-sm dark:text-claude-darkText text-claude-text">
-                {resolveEngineStatusText(openClawStatus)}
-              </div>
-              {progressPercent !== null && (
-                <div className="w-full space-y-1">
-                  <div className="h-1.5 w-full rounded-full bg-claude-accent/15 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-claude-accent transition-all"
-                      style={{ width: `${progressPercent}%` }}
-                    />
-                  </div>
-                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                    {progressPercent}%
-                  </div>
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={handleRestartGateway}
-                disabled={isRestartingGateway || openClawStatus.phase === 'starting'}
-                className="mt-1 rounded-lg px-3 py-1.5 text-xs font-medium bg-claude-accent text-white hover:bg-claude-accentHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {i18nService.t('coworkOpenClawRestartGateway')}
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
     );
   }
@@ -516,6 +507,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   // Home view - no current session
   return (
     <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
+      {/* Engine status banner for error states */}
+      {engineStatusBanner}
+
       {/* Header */}
       {homeHeader}
 
@@ -535,33 +529,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
           {/* Prompt Input Area - Large version with folder selector */}
           <div className="space-y-3">
-            {shouldShowEngineStatus && openClawStatus && (
-              <div className={`rounded-xl border px-4 py-3 ${isEngineError
-                ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
-                : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm">
-                    {resolveEngineStatusText(openClawStatus)}
-                    {typeof openClawStatus.progressPercent === 'number' && (
-                      <span className="ml-2 text-xs opacity-80">
-                        {Math.max(0, Math.min(100, Math.round(openClawStatus.progressPercent)))}%
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleRestartGateway}
-                    disabled={isRestartingGateway}
-                    className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isEngineError
-                      ? 'bg-red-600 text-white hover:bg-red-700'
-                      : 'bg-amber-600 text-white hover:bg-amber-700'}`}
-                  >
-                      {i18nService.t('coworkOpenClawRestartGateway')}
-                    </button>
-                </div>
-              </div>
-            )}
             <div className="shadow-glow-accent rounded-2xl">
               <CoworkPromptInput
                 ref={promptInputRef}

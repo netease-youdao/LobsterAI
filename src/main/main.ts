@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor } from 'electron';
+import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
 import type { WebContents } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -14,10 +14,10 @@ import {
 } from './libs/agentEngine';
 import { SkillManager } from './skillManager';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter } from './libs/claudeSettings';
+import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter, setAuthTokensGetter, setServerBaseUrlGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
-import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy } from './libs/coworkOpenAICompatProxy';
+import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setProxyTokenRefresher } from './libs/coworkOpenAICompatProxy';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
   listPairingRequests,
@@ -48,17 +48,18 @@ import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
 import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
-import { setLanguage } from './i18n';
+import { setLanguage, t } from './i18n';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
 import { McpStore } from './mcpStore';
 import { CronJobService } from './libs/cronJobService';
 import { migrateScheduledTasksToOpenclaw, migrateScheduledTaskRunsToOpenclaw } from './libs/migrateScheduledTasks';
 import { buildScheduledTaskEnginePrompt } from './libs/scheduledTaskEnginePrompt';
 import { McpServerManager } from './libs/mcpServerManager';
+import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
-import { initLogger, getLogFilePath } from './logger';
+import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
@@ -567,6 +568,7 @@ let openClawBootstrapPromise: Promise<OpenClawEngineStatus> | null = null;
 let openClawStatusForwarderBound = false;
 let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
+let preventSleepBlockerId: number | null = null;
 
 const initStore = async (): Promise<SqliteStore> => {
   if (!storeInitPromise) {
@@ -792,6 +794,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           return null;
         }
       },
+      getWeixinConfig: () => {
+        try {
+          return getIMGatewayManager().getConfig().weixin;
+        } catch {
+          return null;
+        }
+      },
       getDiscordOpenClawConfig: () => {
         try {
           return getIMGatewayManager()?.getConfig()?.discord ?? null;
@@ -889,7 +898,20 @@ const syncOpenClawConfig = async (
     };
   }
 
-  if (!syncResult.changed || !options.restartGatewayIfRunning) {
+  // Update secret env vars so the gateway process receives the latest
+  // plaintext credentials via environment variables (openclaw.json only
+  // contains ${VAR} placeholders, never plaintext secrets).
+  const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
+  const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
+  const secretEnvVarsChanged = JSON.stringify(nextSecretEnvVars) !== JSON.stringify(prevSecretEnvVars);
+  getOpenClawEngineManager().setSecretEnvVars(nextSecretEnvVars);
+
+  // When secret env vars change, the running gateway must be restarted even if
+  // the caller didn't request it — the ${VAR} placeholders in openclaw.json
+  // resolve from the process environment which is fixed at spawn time.
+  const needsRestart = syncResult.changed || secretEnvVarsChanged;
+
+  if (!needsRestart || (!options.restartGatewayIfRunning && !secretEnvVarsChanged)) {
     return {
       success: true,
       changed: syncResult.changed,
@@ -996,6 +1018,19 @@ const bindCoworkRuntimeForwarder = (): void => {
       if (win.isDestroyed()) return;
       win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId });
     });
+    // If session used a server model, notify renderer to refresh quota
+    try {
+      const apiConfig = resolveCurrentApiConfig();
+      if (apiConfig.providerMetadata?.providerName === 'lobsterai-server') {
+        const windows = BrowserWindow.getAllWindows();
+        windows.forEach((win) => {
+          if (win.isDestroyed()) return;
+          win.webContents.send('auth:quotaChanged');
+        });
+      }
+    } catch {
+      // ignore
+    }
   });
 
   runtime.on('error', (sessionId: string, error: string) => {
@@ -1539,9 +1574,56 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
+  // Register custom protocol for OAuth callback
+  app.setAsDefaultProtocolClient('lobsterai');
+
+  // Buffer for deep link auth code received before renderer is ready
+  let pendingAuthCode: string | null = null;
+
+  /**
+   * Parse a lobsterai:// deep link and send (or buffer) the auth code.
+   */
+  const handleDeepLink = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname === 'auth' && parsed.pathname === '/callback') {
+        const code = parsed.searchParams.get('code');
+        if (code) {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('auth:callback', { code });
+          } else {
+            pendingAuthCode = code;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Main] Failed to parse deep link:', e);
+    }
+  };
+
+  // Allow renderer to retrieve a buffered auth code on init
+  ipcMain.handle('auth:getPendingCallback', () => {
+    const code = pendingAuthCode;
+    pendingAuthCode = null;
+    return code;
+  });
+
+  // macOS: handle open-url event for deep links
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleDeepLink(url);
+  });
+
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
-    console.log('[Main] second-instance event', { commandLine, workingDirectory });
-    // 如果尝试启动第二个实例，则聚焦到主窗口
+    console.debug('[Main] second-instance event', { commandLine, workingDirectory });
+
+    // Check for deep link in command line args (Windows/Linux)
+    const deepLink = commandLine.find(arg => arg.startsWith('lobsterai://'));
+    if (deepLink) {
+      handleDeepLink(deepLink);
+    }
+
+    // Focus main window
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
@@ -1557,6 +1639,7 @@ if (!gotTheLock) {
   ipcMain.handle('store:set', async (_event, key, value) => {
     getStore().set(key, value);
     if (key === 'app_config') {
+      refreshEndpointsTestMode(getStore());
       const syncResult = await syncOpenClawConfig({
         reason: 'app-config-change',
         restartGatewayIfRunning: false,
@@ -1616,7 +1699,7 @@ if (!gotTheLock) {
       const archiveResult = await exportLogsZip({
         outputPath,
         entries: [
-          { archiveName: 'main.log', filePath: getLogFilePath() },
+          ...getRecentMainLogEntries(),
           { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
         ],
       });
@@ -1662,6 +1745,36 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('app:getPreventSleep', () => {
+    const enabled = getStore().get<boolean>('prevent_sleep_enabled') ?? false;
+    return { enabled };
+  });
+
+  ipcMain.handle('app:setPreventSleep', (_event, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      return { success: false, error: 'Invalid parameter: enabled must be boolean' };
+    }
+    try {
+      if (enabled) {
+        if (preventSleepBlockerId === null || !powerSaveBlocker.isStarted(preventSleepBlockerId)) {
+          preventSleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+        }
+      } else {
+        if (preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId)) {
+          powerSaveBlocker.stop(preventSleepBlockerId);
+          preventSleepBlockerId = null;
+        }
+      }
+      getStore().set('prevent_sleep_enabled', enabled);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to set prevent-sleep',
+      };
+    }
+  });
+
   // Window control IPC handlers
   ipcMain.on('window-minimize', () => {
     mainWindow?.minimize();
@@ -1689,6 +1802,266 @@ if (!gotTheLock) {
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getSystemLocale', () => app.getLocale());
+
+  // ── Auth IPC handlers ──
+
+  /**
+   * Helper: Persist auth tokens into the kv store.
+   */
+  const saveAuthTokens = (accessToken: string, refreshToken: string) => {
+    getStore().set('auth_tokens', { accessToken, refreshToken });
+  };
+
+  const getAuthTokens = (): { accessToken: string; refreshToken: string } | null => {
+    return getStore().get<{ accessToken: string; refreshToken: string }>('auth_tokens') || null;
+  };
+
+  const clearAuthTokens = () => {
+    getStore().delete('auth_tokens');
+  };
+
+  /**
+   * Helper: Fetch with Bearer token, auto-refresh on 401 and retry once.
+   */
+  const fetchWithAuth = async (url: string, options?: RequestInit): Promise<Response> => {
+    const tokens = getAuthTokens();
+    if (!tokens) throw new Error('No auth tokens');
+
+    const doFetch = (accessToken: string) =>
+      net.fetch(url, {
+        ...options,
+        headers: { ...(options?.headers as Record<string, string>), Authorization: `Bearer ${accessToken}` },
+      });
+
+    let resp = await doFetch(tokens.accessToken);
+
+    if (resp.status === 401 && tokens.refreshToken) {
+      const serverBaseUrl = getServerApiBaseUrl();
+      const refreshResp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: tokens.refreshToken }),
+      });
+      if (refreshResp.ok) {
+        const refreshBody = await refreshResp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+        if (refreshBody.code === 0 && refreshBody.data) {
+          saveAuthTokens(refreshBody.data.accessToken, refreshBody.data.refreshToken || tokens.refreshToken);
+          resp = await doFetch(refreshBody.data.accessToken);
+        }
+      }
+    }
+
+    return resp;
+  };
+
+  /**
+   * Normalize quota data from various server response formats into a unified shape.
+   */
+  const normalizeQuota = (raw: Record<string, unknown>) => {
+    let creditsLimit = 0;
+    let creditsUsed = 0;
+    let planName = t('authPlanFree');
+    let subscriptionStatus = 'free';
+
+    if (typeof raw.freeCreditsTotal === 'number') {
+      // Free user format from /api/user/quota
+      creditsLimit = raw.freeCreditsTotal as number;
+      creditsUsed = (raw.freeCreditsUsed as number) || 0;
+      planName = (raw.planName as string) || t('authPlanFree');
+      subscriptionStatus = (raw.subscriptionStatus as string) || 'free';
+    } else if (typeof raw.monthlyCreditsLimit === 'number') {
+      // Paid user format from /api/user/quota
+      creditsLimit = raw.monthlyCreditsLimit as number;
+      creditsUsed = (raw.monthlyCreditsUsed as number) || 0;
+      planName = (raw.planName as string) || t('authPlanStandard');
+      subscriptionStatus = (raw.subscriptionStatus as string) || 'active';
+    } else if (typeof raw.dailyCreditsLimit === 'number') {
+      // Legacy exchange format
+      creditsLimit = raw.dailyCreditsLimit as number;
+      creditsUsed = (raw.dailyCreditsUsed as number) || 0;
+      planName = (raw.planName as string) || t('authPlanFree');
+      subscriptionStatus = (raw.subscriptionStatus as string) || 'free';
+    } else if (typeof raw.creditsLimit === 'number') {
+      // Already normalized
+      return raw;
+    }
+
+    return {
+      planName,
+      subscriptionStatus,
+      creditsLimit,
+      creditsUsed,
+      creditsRemaining: Math.max(0, creditsLimit - creditsUsed),
+    };
+  };
+
+  ipcMain.handle('auth:login', async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
+    try {
+      const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
+      const finalUrl = `${baseUrl}?source=electron`;
+      await shell.openExternal(finalUrl);
+      return { success: true };
+    } catch (error) {
+      console.error('[Auth] login failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to open login' };
+    }
+  });
+
+  ipcMain.handle('auth:exchange', async (_event, { code }: { code: string }) => {
+    try {
+      const serverBaseUrl = getServerApiBaseUrl();
+      const resp = await net.fetch(`${serverBaseUrl}/api/auth/exchange`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authCode: code }),
+      });
+      if (!resp.ok) {
+        return { success: false, error: `Exchange failed: ${resp.status}` };
+      }
+      const body = await resp.json() as {
+        code: number;
+        message?: string;
+        data: {
+          accessToken: string;
+          refreshToken: string;
+          user: Record<string, unknown>;
+          quota: Record<string, unknown>;
+        };
+      };
+      if (body.code !== 0 || !body.data) {
+        return { success: false, error: body.message || 'Exchange failed' };
+      }
+      saveAuthTokens(body.data.accessToken, body.data.refreshToken);
+      return { success: true, user: body.data.user, quota: normalizeQuota(body.data.quota) };
+    } catch (error) {
+      console.error('[Auth] exchange failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Exchange failed' };
+    }
+  });
+
+  ipcMain.handle('auth:getUser', async () => {
+    try {
+      const tokens = getAuthTokens();
+      if (!tokens) return { success: false };
+      const serverBaseUrl = getServerApiBaseUrl();
+      // Fetch user profile
+      const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
+      if (!profileResp.ok) return { success: false };
+      const profileBody = await profileResp.json() as { code: number; data: Record<string, unknown> };
+      if (profileBody.code !== 0 || !profileBody.data) return { success: false };
+      // Fetch quota separately
+      const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
+      let quota = null;
+      if (quotaResp.ok) {
+        const quotaBody = await quotaResp.json() as { code: number; data: Record<string, unknown> };
+        if (quotaBody.code === 0 && quotaBody.data) {
+          quota = normalizeQuota(quotaBody.data);
+        }
+      }
+      return { success: true, user: profileBody.data, quota };
+    } catch {
+      return { success: false };
+    }
+  });
+
+  ipcMain.handle('auth:getQuota', async () => {
+    try {
+      const tokens = getAuthTokens();
+      if (!tokens) return { success: false };
+      const serverBaseUrl = getServerApiBaseUrl();
+      const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
+      if (!resp.ok) return { success: false };
+      const body = await resp.json() as { code: number; data: Record<string, unknown> };
+      if (body.code !== 0 || !body.data) return { success: false };
+      return { success: true, quota: normalizeQuota(body.data) };
+    } catch {
+      return { success: false };
+    }
+  });
+
+  ipcMain.handle('auth:getProfileSummary', async () => {
+    try {
+      const tokens = getAuthTokens();
+      if (!tokens) return { success: false };
+      const serverBaseUrl = getServerApiBaseUrl();
+      const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile-summary`);
+      if (!resp.ok) return { success: false };
+      const body = await resp.json() as { code: number; data: Record<string, unknown> };
+      if (body.code !== 0 || !body.data) return { success: false };
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false };
+    }
+  });
+
+  ipcMain.handle('auth:logout', async () => {
+    try {
+      const tokens = getAuthTokens();
+      if (tokens) {
+        const serverBaseUrl = getServerApiBaseUrl();
+        await net.fetch(`${serverBaseUrl}/api/auth/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tokens.accessToken}` },
+        }).catch(() => { /* best-effort */ });
+      }
+      clearAuthTokens();
+      return { success: true };
+    } catch {
+      clearAuthTokens();
+      return { success: true };
+    }
+  });
+
+  ipcMain.handle('auth:refreshToken', async () => {
+    try {
+      const tokens = getAuthTokens();
+      if (!tokens?.refreshToken) return { success: false };
+      const serverBaseUrl = getServerApiBaseUrl();
+      const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: tokens.refreshToken }),
+      });
+      if (!resp.ok) return { success: false };
+      const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+      if (body.code !== 0 || !body.data) return { success: false };
+      saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
+      return { success: true, accessToken: body.data.accessToken };
+    } catch {
+      return { success: false };
+    }
+  });
+
+  ipcMain.handle('auth:getAccessToken', async () => {
+    const tokens = getAuthTokens();
+    return tokens?.accessToken || null;
+  });
+
+  ipcMain.handle('auth:getModels', async () => {
+    try {
+      const tokens = getAuthTokens();
+      if (!tokens) {
+        console.log('[Auth:getModels] No auth tokens available');
+        return { success: false };
+      }
+      const serverBaseUrl = getServerApiBaseUrl();
+      const url = `${serverBaseUrl}/api/models/available`;
+      console.log('[Auth:getModels] Fetching:', url);
+      const resp = await fetchWithAuth(url);
+      console.log('[Auth:getModels] Response status:', resp.status);
+      if (!resp.ok) {
+        console.log('[Auth:getModels] Response not ok:', resp.status, resp.statusText);
+        return { success: false };
+      }
+      const data = await resp.json() as { code: number; data: Array<{ modelId: string; modelName: string; provider: string; apiFormat: string; supportsImage?: boolean }> };
+      console.log('[Auth:getModels] Response data:', JSON.stringify(data).slice(0, 500));
+      if (data.code !== 0) return { success: false };
+      return { success: true, models: data.data };
+    } catch (e) {
+      console.error('[Auth:getModels] Error:', e);
+      return { success: false };
+    }
+  });
 
   // Skills IPC handlers
   ipcMain.handle('skills:list', () => {
@@ -1720,6 +2093,17 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:download', async (_event, source: string) => {
     return getSkillManager().downloadSkill(source);
+  });
+
+  ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
+    const validActions = ['install', 'installDisabled', 'cancel'];
+    if (!validActions.includes(action)) {
+      return { success: false, error: 'Invalid action' };
+    }
+    return getSkillManager().confirmPendingInstall(
+      pendingId,
+      action as 'install' | 'installDisabled' | 'cancel'
+    );
   });
 
   ipcMain.handle('skills:getRoot', () => {
@@ -2155,6 +2539,19 @@ if (!gotTheLock) {
     try {
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSessions(sessionIds);
+      const router = getCoworkEngineRouter();
+      for (const sessionId of sessionIds) {
+        try {
+          getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
+        } catch {
+          // IM store may not be initialised yet; safe to ignore.
+        }
+        try {
+          router.onSessionDeleted(sessionId);
+        } catch {
+          // Router may not be initialised yet; safe to ignore.
+        }
+      }
       return { success: true };
     } catch (error) {
       return {
@@ -2202,6 +2599,19 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get session',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:remoteManaged', async (_event, sessionId: string) => {
+    try {
+      const mapping = getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId);
+      return { success: true, remoteManaged: !!mapping };
+    } catch (error) {
+      return {
+        success: false,
+        remoteManaged: false,
+        error: error instanceof Error ? error.message : 'Failed to check remote managed session',
       };
     }
   });
@@ -2826,7 +3236,7 @@ if (!gotTheLock) {
       // Only trigger sync when explicitly requested via syncGateway flag (e.g. from
       // the global Save button), to avoid frequent gateway restarts on every field blur.
       const hasOpenClawChange = config.telegram || config.discord || config.dingtalk
-        || config.feishu || config.qq || config.wecom || config.popo;
+        || config.feishu || config.qq || config.wecom || config.popo || config.weixin;
       if (options?.syncGateway && hasOpenClawChange && getOpenClawEngineManager().getStatus().phase === 'running') {
         scheduleImConfigSync();
       }
@@ -2899,6 +3309,31 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to test gateway connectivity',
       };
+    }
+  });
+
+  // Weixin QR login
+  ipcMain.handle('im:weixin:qr-login-start', async () => {
+    try {
+      const result = await getIMGatewayManager().weixinQrLoginStart();
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Failed to start Weixin QR login' };
+    }
+  });
+
+  ipcMain.handle('im:weixin:qr-login-wait', async (_event, accountId?: string) => {
+    try {
+      const result = await getIMGatewayManager().weixinQrLoginWait(accountId);
+      if (result.connected) {
+        // Restart gateway so the plugin picks up the new token and starts
+        // a fresh monitor loop (the old one may be stuck in a session pause).
+        console.log('[IMGatewayManager] Weixin login succeeded, restarting OpenClaw gateway');
+        await getOpenClawEngineManager().restartGateway();
+      }
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, connected: false, message: error instanceof Error ? error.message : 'Weixin QR login failed' };
     }
   });
 
@@ -2990,6 +3425,31 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to reject pairing request',
       };
+    }
+  });
+
+  // Feishu bot install helpers
+  ipcMain.handle('feishu:install:qrcode', async (_event, { isLark }: { isLark: boolean }) => {
+    try {
+      return await getIMGatewayManager().startFeishuInstallQrcode(isLark);
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : '获取二维码失败');
+    }
+  });
+
+  ipcMain.handle('feishu:install:poll', async (_event, { deviceCode }: { deviceCode: string }) => {
+    try {
+      return await getIMGatewayManager().pollFeishuInstall(deviceCode);
+    } catch (error) {
+      return { done: false, error: error instanceof Error ? error.message : '轮询失败' };
+    }
+  });
+
+  ipcMain.handle('feishu:install:verify', async (_event, { appId, appSecret }: { appId: string; appSecret: string }) => {
+    try {
+      return await getIMGatewayManager().verifyFeishuCredentials(appId, appSecret);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '验证失败' };
     }
   });
 
@@ -3767,6 +4227,7 @@ if (!gotTheLock) {
     console.log('[Main] initApp: starting initStore()');
     store = await initStore();
     console.log('[Main] initApp: store initialized');
+    refreshEndpointsTestMode(store);
 
     // Defensive recovery: app may be force-closed during execution and leave
     // stale running flags in DB. Normalize them on startup.
@@ -3777,6 +4238,78 @@ if (!gotTheLock) {
     }
     // Inject store getter into claudeSettings
     setStoreGetter(() => store);
+    // Inject auth getters for lobsterai-server provider routing
+    // The getter proactively triggers a background token refresh when the
+    // accessToken is within 5 minutes of expiry, so that the SDK always
+    // gets a fresh token without blocking.
+    let refreshPromise: Promise<void> | null = null;
+    const refreshTokenAsync = async () => {
+      if (refreshPromise) return;
+      refreshPromise = (async () => {
+        try {
+          const tokens = getAuthTokens();
+          if (!tokens?.refreshToken) return;
+          const serverBaseUrl = getServerApiBaseUrl();
+          const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken: tokens.refreshToken }),
+          });
+          if (resp.ok) {
+            const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+            if (body.code === 0 && body.data) {
+              saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
+              console.log('[Auth] proactive token refresh succeeded');
+            }
+          }
+        } catch (err) {
+          console.warn('[Auth] proactive token refresh failed:', err);
+        } finally {
+          refreshPromise = null;
+        }
+      })();
+    };
+
+    setAuthTokensGetter(() => {
+      const tokens = getAuthTokens();
+      if (!tokens) return null;
+      // Check if accessToken is close to expiry and trigger background refresh
+      try {
+        const payload = JSON.parse(Buffer.from(tokens.accessToken.split('.')[1], 'base64').toString());
+        const expiresAt = payload.exp * 1000;
+        if (expiresAt - Date.now() < 5 * 60 * 1000) {
+          refreshTokenAsync(); // fire-and-forget
+        }
+      } catch { /* unable to parse JWT, return token as-is */ }
+      return tokens;
+    });
+    setServerBaseUrlGetter(() => getServerApiBaseUrl());
+
+    // Wire up token refresher for the OpenAI compat proxy so it can retry
+    // on 401/403 with a fresh accessToken instead of failing immediately.
+    setProxyTokenRefresher(async () => {
+      const tokens = getAuthTokens();
+      if (!tokens?.refreshToken) return null;
+      const serverBaseUrl = getServerApiBaseUrl();
+      try {
+        const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: tokens.refreshToken }),
+        });
+        if (resp.ok) {
+          const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+          if (body.code === 0 && body.data) {
+            saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
+            console.log('[Auth] proxy token refresh succeeded');
+            return body.data.accessToken;
+          }
+        }
+      } catch (err) {
+        console.warn('[Auth] proxy token refresh failed:', err);
+      }
+      return null;
+    });
 
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
@@ -3865,6 +4398,23 @@ if (!gotTheLock) {
     createWindow();
     console.log('[Main] initApp: window created');
 
+    // Windows/Linux cold start: parse deep link from process.argv
+    // Always buffer since renderer is not ready yet after createWindow()
+    const coldStartDeepLink = process.argv.find(arg => arg.startsWith('lobsterai://'));
+    if (coldStartDeepLink) {
+      try {
+        const parsed = new URL(coldStartDeepLink);
+        if (parsed.hostname === 'auth' && parsed.pathname === '/callback') {
+          const code = parsed.searchParams.get('code');
+          if (code) {
+            pendingAuthCode = code;
+          }
+        }
+      } catch (e) {
+        console.error('[Main] Failed to parse cold-start deep link:', e);
+      }
+    }
+
     // Auto-reconnect IM bots that were enabled before restart
     getIMGatewayManager().startAllEnabled().catch((error) => {
       console.error('[IM] Failed to auto-start enabled gateways:', error);
@@ -3882,6 +4432,16 @@ if (!gotTheLock) {
       getStore().set('auto_launch_initialized', true);
       getStore().set('auto_launch_enabled', true);
       setAutoLaunchEnabled(true);
+    }
+
+    // Restore prevent-sleep setting
+    const preventSleepEnabled = getStore().get<boolean>('prevent_sleep_enabled');
+    if (preventSleepEnabled) {
+      try {
+        preventSleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+      } catch (err) {
+        console.error('[Main] Failed to start prevent-sleep blocker:', err);
+      }
     }
 
     let lastLanguage = getStore().get<AppConfigSettings>('app_config')?.language;
