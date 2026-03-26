@@ -206,6 +206,8 @@ export interface AppConfig {
       authType?: 'apikey' | 'oauth';
       oauthRefreshToken?: string;
       oauthTokenExpiresAt?: number;
+      /** Custom display name for the provider (used by custom providers) */
+      displayName?: string;
       models?: Array<{
         id: string;
         name: string;
@@ -431,7 +433,7 @@ export const CONFIG_KEYS = {
 };
 
 // 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama', 'custom'] as const;
+export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama'] as const;
 export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
 export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 
@@ -455,8 +457,8 @@ export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] =>
     ...GLOBAL_PROVIDERS,
   ];
   const uniqueProviders = [...new Set(orderedProviders)];
-  // Move ollama and custom to the end, with custom last
-  for (const key of ['ollama', 'custom'] as const) {
+  // Move ollama to the end
+  for (const key of ['ollama'] as const) {
     const idx = uniqueProviders.indexOf(key);
     if (idx !== -1) {
       uniqueProviders.splice(idx, 1);

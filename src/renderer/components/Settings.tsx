@@ -74,17 +74,18 @@ const providerKeys = [
   'xiaomi',
   'openrouter',
   'ollama',
-  'custom',
 ] as const;
 
 type ProviderType = (typeof providerKeys)[number];
+/** Any provider key — built-in or custom */
+type AnyProviderKey = ProviderType | (string & {});
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
 type Model = NonNullable<ProviderConfig['models']>[number];
 type ProviderConnectionTestResult = {
   success: boolean;
   message: string;
-  provider: ProviderType;
+  provider: AnyProviderKey;
 };
 
 interface ProviderExportEntry {
@@ -93,6 +94,7 @@ interface ProviderExportEntry {
   baseUrl: string;
   apiFormat?: 'anthropic' | 'openai';
   codingPlanEnabled?: boolean;
+  displayName?: string;
   models?: Model[];
 }
 
@@ -145,10 +147,30 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
   openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
   ollama: { label: 'Ollama', icon: <OllamaIcon /> },
-  custom: { label: 'Custom', icon: <CustomProviderIcon /> },
 };
 
-const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropic: string; openai: string }>> = {
+/** Check if a provider key represents a custom (user-added) provider */
+const isCustomProvider = (key: string): boolean => key === 'custom' || key.startsWith('custom-');
+
+/** Generate a unique custom provider key (custom-{8-char-hex}) */
+const generateCustomProviderKey = (existingKeys: string[]): string => {
+  const keySet = new Set(existingKeys);
+  let key: string;
+  do {
+    key = `custom-${Math.random().toString(16).slice(2, 10)}`;
+  } while (keySet.has(key));
+  return key;
+};
+
+/** Get the display name for a provider */
+const getProviderDisplayName = (key: string, config?: ProviderConfig): string => {
+  if (isCustomProvider(key)) {
+    return (config?.displayName?.trim()) || 'Custom';
+  }
+  return providerMeta[key as ProviderType]?.label ?? key.charAt(0).toUpperCase() + key.slice(1);
+};
+
+const providerSwitchableDefaultBaseUrls: Record<string, { anthropic: string; openai: string }> = {
   deepseek: {
     anthropic: 'https://api.deepseek.com/anthropic',
     openai: 'https://api.deepseek.com',
@@ -191,7 +213,7 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   },
 };
 
-const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
+const providerRequiresApiKey = (provider: AnyProviderKey) => provider !== 'ollama';
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
@@ -288,14 +310,14 @@ const shouldShowApiFormatSelector = (provider: string): boolean => (
   getFixedApiFormatForProvider(provider) === null
 );
 const getProviderDefaultBaseUrl = (
-  provider: ProviderType,
+  provider: AnyProviderKey,
   apiFormat: 'anthropic' | 'openai'
-): string | null => {
+): string | undefined => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
-  return defaults ? defaults[apiFormat] : null;
+  return defaults ? defaults[apiFormat] : undefined;
 };
 const resolveBaseUrl = (
-  provider: ProviderType,
+  provider: AnyProviderKey,
   baseUrl: string,
   apiFormat: 'anthropic' | 'openai'
 ): string => {
@@ -304,7 +326,7 @@ const resolveBaseUrl = (
     || defaultConfig.providers?.[provider]?.baseUrl
     || '';
 };
-const shouldAutoSwitchProviderBaseUrl = (provider: ProviderType, currentBaseUrl: string): boolean => {
+const shouldAutoSwitchProviderBaseUrl = (provider: AnyProviderKey, currentBaseUrl: string): boolean => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
   if (!defaults) {
     return false;
@@ -393,7 +415,7 @@ const getDefaultProviders = (): ProvidersConfig => {
   ) as ProvidersConfig;
 };
 
-const getDefaultActiveProvider = (): ProviderType => {
+const getDefaultActiveProvider = (): AnyProviderKey => {
   const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
   const firstEnabledProvider = providerKeys.find(providerKey => providers[providerKey]?.enabled);
   return firstEnabledProvider ?? providerKeys[0];
@@ -433,7 +455,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const didSaveRef = useRef(false);
 
   // Add state for active provider
-  const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
+  const [activeProvider, setActiveProvider] = useState<AnyProviderKey>(getDefaultActiveProvider());
   const [showApiKey, setShowApiKey] = useState(false);
 
   // MiniMax OAuth state
@@ -804,7 +826,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
           // After merging, find the first enabled provider to set as activeProvider
           // This ensures we don't use stale activeProvider from old config.api.baseUrl
-          const firstEnabledProvider = providerKeys.find(providerKey => merged[providerKey]?.enabled);
+          const allKeys = [...providerKeys, ...Object.keys(merged).filter(isCustomProvider)];
+          const firstEnabledProvider = allKeys.find(providerKey => merged[providerKey]?.enabled);
           if (firstEnabledProvider) {
             setActiveProvider(firstEnabledProvider);
           }
@@ -875,30 +898,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     return unsubscribe;
   }, []);
 
-  // Compute visible providers based on language
+  // Compute visible built-in providers based on language
   const visibleProviders = useMemo(() => {
     const visibleKeys = getVisibleProviders(language);
     const filtered: Partial<ProvidersConfig> = {};
     for (const key of visibleKeys) {
-      if (providers[key as keyof ProvidersConfig]) {
+      // Skip custom providers from the static visible list — they are rendered separately
+      if (!isCustomProvider(key) && providers[key as keyof ProvidersConfig]) {
         filtered[key as keyof ProvidersConfig] = providers[key as keyof ProvidersConfig];
       }
     }
     return filtered as ProvidersConfig;
   }, [language, providers]);
 
-  // Ensure activeProvider is always in visibleProviders when language changes
+  // Compute custom provider keys from the providers state
+  const customProviderKeys = useMemo(() =>
+    Object.keys(providers).filter(isCustomProvider),
+  [providers]);
+
+  // Ensure activeProvider is always in visibleProviders or customProviderKeys when language changes
   useEffect(() => {
-    const visibleKeys = Object.keys(visibleProviders) as ProviderType[];
-    if (visibleKeys.length > 0 && !visibleKeys.includes(activeProvider)) {
+    const allVisibleKeys = [...Object.keys(visibleProviders), ...customProviderKeys] as AnyProviderKey[];
+    if (allVisibleKeys.length > 0 && !allVisibleKeys.includes(activeProvider)) {
       // If current activeProvider is not visible, switch to first visible provider
-      const firstEnabledVisible = visibleKeys.find(key => visibleProviders[key]?.enabled);
-      setActiveProvider(firstEnabledVisible ?? visibleKeys[0]);
+      const firstEnabledVisible = allVisibleKeys.find(key => providers[key]?.enabled);
+      setActiveProvider(firstEnabledVisible ?? allVisibleKeys[0]);
     }
-  }, [visibleProviders, activeProvider]);
+  }, [visibleProviders, customProviderKeys, activeProvider, providers]);
 
   // Handle provider change
-  const handleProviderChange = (provider: ProviderType) => {
+  const handleProviderChange = (provider: AnyProviderKey) => {
     setIsAddingModel(false);
     setIsEditingModel(false);
     setEditingModelId(null);
@@ -913,7 +942,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   // Handle provider configuration change
-  const handleProviderConfigChange = (provider: ProviderType, field: string, value: string) => {
+  const handleProviderConfigChange = (provider: AnyProviderKey, field: string, value: string) => {
     setProviders(prev => {
       if (field === 'apiFormat') {
         const nextApiFormat = getEffectiveApiFormat(provider, value);
@@ -1317,7 +1346,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   // Toggle provider enabled status
-  const toggleProviderEnabled = (provider: ProviderType) => {
+  const toggleProviderEnabled = (provider: AnyProviderKey) => {
     const providerConfig = providers[provider];
     const isEnabling = !providerConfig.enabled;
     const missingApiKey = providerRequiresApiKey(provider) && !providerConfig.apiKey.trim();
@@ -1336,7 +1365,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }));
   };
 
-  const enableProvider = (provider: ProviderType) => {
+  const enableProvider = (provider: AnyProviderKey) => {
     setProviders(prev => {
       if (prev[provider].enabled) {
         return prev;
@@ -1350,6 +1379,47 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         },
       };
     });
+  };
+
+  // Add a new custom provider
+  const handleAddCustomProvider = () => {
+    const newKey = generateCustomProviderKey(Object.keys(providers));
+    setProviders(prev => ({
+      ...prev,
+      [newKey]: {
+        enabled: false,
+        apiKey: '',
+        baseUrl: '',
+        apiFormat: 'openai' as const,
+        displayName: '',
+        models: [],
+      },
+    }));
+    setActiveProvider(newKey);
+    // Reset model editing state
+    setIsAddingModel(false);
+    setIsEditingModel(false);
+    setEditingModelId(null);
+  };
+
+  // Delete a custom provider
+  const handleDeleteCustomProvider = (key: string) => {
+    if (!isCustomProvider(key)) return;
+    if (!window.confirm(i18nService.t('deleteProviderConfirm'))) return;
+
+    setProviders(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+
+    // If the deleted provider was active, switch to the first visible
+    if (activeProvider === key) {
+      const builtInKeys = Object.keys(visibleProviders);
+      const remainingCustom = customProviderKeys.filter(k => k !== key);
+      const allKeys = [...builtInKeys, ...remainingCustom];
+      setActiveProvider(allKeys[0] ?? providerKeys[0]);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -1366,7 +1436,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             {
               ...providerConfig,
               apiFormat,
-              baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+              baseUrl: resolveBaseUrl(providerKey, providerConfig.baseUrl, apiFormat),
             },
           ];
         })
@@ -1417,7 +1487,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             allModels.push({
               id: model.id,
               name: model.name,
-              provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              provider: getProviderDisplayName(providerName, config),
               providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
@@ -1608,7 +1678,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   const showTestResultModal = (
     result: Omit<ProviderConnectionTestResult, 'provider'>,
-    provider: ProviderType
+    provider: AnyProviderKey
   ) => {
     setTestResult({
       ...result,
@@ -1777,9 +1847,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           {
             enabled: providerConfig.enabled,
             apiKey,
-            baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
+            baseUrl: resolveBaseUrl(providerKey, providerConfig.baseUrl, apiFormat),
             apiFormat,
             codingPlanEnabled: (providerConfig as ProviderConfig).codingPlanEnabled,
+            displayName: (providerConfig as { displayName?: string }).displayName,
             models: providerConfig.models,
           },
         ] as const;
@@ -1884,7 +1955,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     try {
       const providerUpdates: Partial<ProvidersConfig> = {};
       let hadDecryptFailure = false;
-      for (const providerKey of providerKeys) {
+      // Iterate built-in + any custom providers from the import file
+      const importKeys = new Set([
+        ...providerKeys,
+        ...Object.keys(payload.providers ?? {}).filter(isCustomProvider),
+      ]);
+      for (const providerKey of importKeys) {
         const providerData = payload.providers?.[providerKey];
         if (!providerData) {
           continue;
@@ -1910,14 +1986,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         }
 
         const models = normalizeModels(providerData.models);
+        const existingConfig = providers[providerKey];
 
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : (existingConfig?.enabled ?? false),
+          apiKey: apiKey ?? (existingConfig?.apiKey ?? ''),
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : (existingConfig?.baseUrl ?? ''),
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existingConfig?.apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existingConfig as ProviderConfig)?.codingPlanEnabled,
+          displayName: isCustomProvider(providerKey) ? ((providerData as Record<string, unknown>).displayName as string | undefined) ?? existingConfig?.displayName : undefined,
+          models: models ?? (existingConfig?.models ?? []),
         };
       }
 
@@ -1965,7 +2043,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       const providerUpdates: Partial<ProvidersConfig> = {};
       let hadDecryptFailure = false;
 
-      for (const providerKey of providerKeys) {
+      // Iterate built-in + any custom providers from the import file
+      const importKeys = new Set([
+        ...providerKeys,
+        ...Object.keys(payload.providers).filter(isCustomProvider),
+      ]);
+      for (const providerKey of importKeys) {
         const providerData = payload.providers[providerKey];
         if (!providerData) {
           continue;
@@ -1988,14 +2071,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         }
 
         const models = normalizeModels(providerData.models);
+        const existingConfig = providers[providerKey];
 
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : (existingConfig?.enabled ?? false),
+          apiKey: apiKey ?? (existingConfig?.apiKey ?? ''),
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : (existingConfig?.baseUrl ?? ''),
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existingConfig?.apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existingConfig as ProviderConfig)?.codingPlanEnabled,
+          displayName: isCustomProvider(providerKey) ? ((providerData as Record<string, unknown>).displayName as string | undefined) ?? existingConfig?.displayName : undefined,
+          models: models ?? (existingConfig?.models ?? []),
         };
       }
 
@@ -2529,9 +2614,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 className="hidden"
                 onChange={handleImportProviders}
               />
+              {/* Built-in providers */}
               {Object.entries(visibleProviders).map(([provider, config]) => {
-                const providerKey = provider as ProviderType;
-                const providerInfo = providerMeta[providerKey];
+                const providerKey = provider as AnyProviderKey;
+                const providerInfo = providerMeta[providerKey as ProviderType];
                 const missingApiKey = providerRequiresApiKey(providerKey) && !config.apiKey.trim();
                 const canToggleProvider = config.enabled || !missingApiKey;
                 return (
@@ -2584,24 +2670,129 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </div>
                 );
               })}
+
+              {/* Custom providers */}
+              {customProviderKeys.map(providerKey => {
+                const config = providers[providerKey];
+                if (!config) return null;
+                const displayName = getProviderDisplayName(providerKey, config);
+                const missingApiKey = providerRequiresApiKey(providerKey) && !config.apiKey.trim();
+                const canToggleProvider = config.enabled || !missingApiKey;
+                return (
+                  <div
+                    key={providerKey}
+                    onClick={() => handleProviderChange(providerKey)}
+                    className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
+                      activeProvider === providerKey
+                        ? 'bg-claude-accent/10 dark:bg-claude-accent/20 border border-claude-accent/30 shadow-subtle'
+                        : 'dark:bg-claude-darkSurface/50 bg-claude-surface hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover border border-transparent'
+                    }`}
+                  >
+                    <div className="flex flex-1 items-center">
+                      <div className="mr-2 flex h-7 w-7 items-center justify-center">
+                        <span className="dark:text-claude-darkText text-claude-text">
+                          <CustomProviderIcon />
+                        </span>
+                      </div>
+                      <span className={`text-sm font-medium truncate ${
+                        activeProvider === providerKey
+                          ? 'text-claude-accent'
+                          : 'dark:text-claude-darkText text-claude-text'
+                      }`}>
+                        {displayName}
+                      </span>
+                    </div>
+                    <div className="flex items-center ml-2 gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteCustomProvider(providerKey);
+                        }}
+                        className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                        title={i18nService.t('deleteProvider')}
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                        </svg>
+                      </button>
+                      <div
+                        title={!canToggleProvider ? i18nService.t('configureApiKey') : undefined}
+                        className={`w-7 h-4 rounded-full flex items-center transition-colors ${
+                          config.enabled ? 'bg-claude-accent' : 'dark:bg-claude-darkBorder bg-claude-border'
+                        } ${
+                          canToggleProvider ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!canToggleProvider) return;
+                          toggleProviderEnabled(providerKey);
+                        }}
+                      >
+                        <div
+                          className={`w-3 h-3 rounded-full bg-white shadow-md transform transition-transform ${
+                            config.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Add Custom Provider button */}
+              <button
+                type="button"
+                onClick={handleAddCustomProvider}
+                className="flex items-center w-full p-2 rounded-xl cursor-pointer transition-colors dark:bg-claude-darkSurface/30 bg-claude-surface/50 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover border border-dashed dark:border-claude-darkBorder border-claude-border"
+              >
+                <div className="flex flex-1 items-center">
+                  <div className="mr-2 flex h-7 w-7 items-center justify-center">
+                    <svg className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                  </div>
+                  <span className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('addCustomProvider')}
+                  </span>
+                </div>
+              </button>
             </div>
 
             {/* Provider Settings - Right Side */}
             <div className="w-3/5 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
+              {!providers[activeProvider] ? null : (<>
               <div className="flex items-center justify-between pb-2 border-b dark:border-claude-darkBorder border-claude-border">
                 <h3 className="text-base font-medium dark:text-claude-darkText text-claude-text">
-                  {(providerMeta[activeProvider]?.label ?? activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1))} {i18nService.t('providerSettings')}
+                  {getProviderDisplayName(activeProvider, providers[activeProvider])} {i18nService.t('providerSettings')}
                 </h3>
                 <div
                   className={`px-2 py-0.5 rounded-lg text-xs font-medium ${
-                    providers[activeProvider].enabled
+                    providers[activeProvider]?.enabled
                       ? 'bg-green-500/20 text-green-600 dark:text-green-400'
                       : 'bg-red-500/20 text-red-600 dark:text-red-400'
                   }`}
                 >
-                  {providers[activeProvider].enabled ? i18nService.t('providerStatusOn') : i18nService.t('providerStatusOff')}
+                  {providers[activeProvider]?.enabled ? i18nService.t('providerStatusOn') : i18nService.t('providerStatusOff')}
                 </div>
               </div>
+
+              {/* Display Name field for custom providers */}
+              {isCustomProvider(activeProvider) && (
+                <div>
+                  <label htmlFor={`${activeProvider}-displayName`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
+                    {i18nService.t('providerDisplayName')}
+                  </label>
+                  <input
+                    type="text"
+                    id={`${activeProvider}-displayName`}
+                    value={(providers[activeProvider] as { displayName?: string })?.displayName ?? ''}
+                    onChange={(e) => handleProviderConfigChange(activeProvider, 'displayName', e.target.value)}
+                    className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                    placeholder={i18nService.t('providerDisplayNamePlaceholder')}
+                  />
+                </div>
+              )}
 
               {/* MiniMax OAuth auth section */}
               {activeProvider === 'minimax' && (
@@ -2897,7 +3088,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     </div>
                   )}
                 </div>
-                {activeProvider === 'custom' && (
+                {isCustomProvider(activeProvider) && (
                 <div className="mt-1.5 space-y-0.5 text-[11px] text-claude-secondaryText dark:text-claude-darkSecondaryText">
                   <p>
                     <span className="text-sm text-claude-accent/50 mr-1">•</span>
@@ -3183,6 +3374,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   )}
                 </div>
               </div>
+              </>)}
             </div>
           </div>
         );
@@ -3541,7 +3733,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               </div>
 
               <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
+                <span>{getProviderDisplayName(testResult.provider, providers[testResult.provider])}</span>
                 <span className="text-[11px]">•</span>
                 <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                   {testResult.success ? (

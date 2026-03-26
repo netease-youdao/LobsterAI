@@ -120,11 +120,16 @@ const App: React.FC = () => {
         if (config.providers) {
           Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
             if (providerConfig.enabled && providerConfig.models) {
+              // Use displayName for custom providers, otherwise capitalize provider key
+              const isCustom = providerName === 'custom' || providerName.startsWith('custom-');
+              const displayName = isCustom
+                ? ((providerConfig as Record<string, unknown>).displayName as string)?.trim() || 'Custom'
+                : providerName.charAt(0).toUpperCase() + providerName.slice(1);
               providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
                 providerModels.push({
                   id: model.id,
                   name: model.name,
-                  provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+                  provider: displayName,
                   providerKey: providerName,
                   supportsImage: model.supportsImage ?? false,
                 });
@@ -406,11 +411,15 @@ const App: React.FC = () => {
       const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
       Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
         if (providerConfig.enabled && providerConfig.models) {
+          const isCustom = providerName === 'custom' || providerName.startsWith('custom-');
+          const displayName = isCustom
+            ? ((providerConfig as Record<string, unknown>).displayName as string)?.trim() || 'Custom'
+            : providerName.charAt(0).toUpperCase() + providerName.slice(1);
           providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
             allModels.push({
               id: model.id,
               name: model.name,
-              provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              provider: displayName,
               providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
