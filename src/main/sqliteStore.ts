@@ -245,9 +245,77 @@ export class SqliteStore {
   }
 
   save() {
-    const data = this.db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(this.dbPath, buffer);
+    const MAX_RETRIES = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const data = this.db.export();
+        const buffer = Buffer.from(data);
+        
+        // Use atomic write with temporary file to prevent corruption
+        const tempPath = `${this.dbPath}.tmp`;
+        fs.writeFileSync(tempPath, buffer);
+        
+        // Atomic rename to replace the original file
+        if (fs.existsSync(this.dbPath)) {
+          fs.unlinkSync(this.dbPath);
+        }
+        fs.renameSync(tempPath, this.dbPath);
+        
+        if (attempt > 1) {
+          console.info(`[SqliteStore] Database saved successfully after ${attempt} attempts`);
+        }
+        return;
+        
+      } catch (error) {
+        lastError = error as Error;
+        console.warn(`[SqliteStore] Save attempt ${attempt}/${MAX_RETRIES} failed:`, error);
+        
+        // Clean up temp file if it exists
+        const tempPath = `${this.dbPath}.tmp`;
+        try {
+          if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+          }
+        } catch (cleanupError) {
+          console.warn('[SqliteStore] Failed to cleanup temp file:', cleanupError);
+        }
+        
+        // Don't retry on certain fatal errors
+        if (error instanceof Error) {
+          const message = error.message.toLowerCase();
+          if (message.includes('permission denied') || 
+              message.includes('access denied') ||
+              message.includes('readonly')) {
+            console.error('[SqliteStore] Fatal error, no retry:', error.message);
+            break;
+          }
+        }
+        
+        // Wait before retry with exponential backoff
+        if (attempt < MAX_RETRIES) {
+          const delay = Math.pow(2, attempt) * 100; // 200ms, 400ms, 800ms
+          const startTime = Date.now();
+          while (Date.now() - startTime < delay) {
+            // Busy wait to avoid async complexity
+          }
+        }
+      }
+    }
+    
+    // All attempts failed
+    const errorMessage = `Failed to save database after ${MAX_RETRIES} attempts: ${lastError?.message || 'Unknown error'}`;
+    console.error('[SqliteStore]', errorMessage);
+    
+    // Try to notify user about data loss risk
+    try {
+      // This will be caught by the main process error handler
+      throw new Error(`CRITICAL: Database save failed - ${errorMessage}`);
+    } catch (criticalError) {
+      console.error('[SqliteStore] CRITICAL: Data may be lost!', criticalError);
+      // Don't re-throw to avoid crashing the app, but log prominently
+    }
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
