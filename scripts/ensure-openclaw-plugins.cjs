@@ -159,7 +159,17 @@ for (const plugin of plugins) {
   const installInfoPath = path.join(cacheDir, 'plugin-install-info.json');
   const targetDir = path.join(runtimeExtensionsDir, id);
 
+  // Resolve file: paths (local tgz) relative to rootDir so they work from
+  // any working directory (including the npm install tmp dir).
+  const isLocalTgz = typeof version === 'string' && version.startsWith('file:');
+  const resolvedVersion = isLocalTgz
+    ? `file:${path.resolve(rootDir, version.slice('file:'.length))}`
+    : version;
+
   log(`--- Plugin: ${id} (${npmSpec}@${version}) ---`);
+  if (isLocalTgz) {
+    log(`  Local tgz: ${resolvedVersion}`);
+  }
 
   // Check cache
   let needsDownload = true;
@@ -181,13 +191,15 @@ for (const plugin of plugins) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-plugin-${id}-`));
 
     try {
-      // Create a minimal wrapper package.json
+      // Create a minimal wrapper package.json.
+      // Use resolvedVersion so that file: paths are absolute and work from
+      // the tmp directory regardless of cwd.
       const wrapperPkg = {
         name: `openclaw-plugin-wrapper-${id}`,
         version: '0.0.0',
         private: true,
         dependencies: {
-          [npmSpec]: version,
+          [npmSpec]: resolvedVersion,
         },
       };
       fs.writeFileSync(
