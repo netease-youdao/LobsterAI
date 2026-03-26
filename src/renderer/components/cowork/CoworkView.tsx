@@ -452,11 +452,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       }
 
       if (startedSession) {
-        dispatch(setTempSession({
+        const realSession: CoworkSession = {
           ...updatedTempSession,
           id: startedSession.id,
           claudeSessionId: startedSession.claudeSessionId,
-        }));
+        };
+        dispatch(setTempSession(realSession));
+        dispatch(setCurrentSession(realSession));
       }
 
       if (isPendingStartCancelled() && startedSession) {
@@ -638,21 +640,43 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     </div>
   ) : null;
 
-  if (tempSession) {
+  if (tempSession && tempSession.messages.length === 0) {
     return (
-      <div className="flex-1 flex flex-col h-full">
+      <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
         {engineStatusBanner}
-        <CoworkSessionDetail
-          onManageSkills={() => onShowSkills?.()}
-          onContinue={tempSession.messages.length === 0 ? handleStartTempChat : handleContinueSession}
-          onStop={handleStopTempSession}
-          onNavigateHome={() => dispatch(clearTempSession())}
-          isSidebarCollapsed={isSidebarCollapsed}
-          onToggleSidebar={onToggleSidebar}
-          onNewChat={onNewChat}
-          updateBadge={updateBadge}
-          isTempSession={true}
-        />
+        {homeHeader}
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="max-w-3xl mx-auto px-4 py-16 space-y-12">
+            <div className="text-center space-y-5">
+              <img src="logo.png" alt="logo" className="w-16 h-16 mx-auto" />
+              <h2 className="text-3xl font-bold tracking-tight dark:text-claude-darkText text-claude-text">
+                {i18nService.t('tempSession')}
+              </h2>
+              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary max-w-md mx-auto">
+                {i18nService.t('tempSessionHint')}
+              </p>
+            </div>
+            <div className="space-y-3">
+              <div className="shadow-glow-accent rounded-2xl">
+                <CoworkPromptInput
+                  ref={promptInputRef}
+                  onSubmit={handleStartTempChat}
+                  onStop={handleStopTempSession}
+                  isStreaming={isStreaming}
+                  disabled={!isEngineReady}
+                  placeholder={i18nService.t('coworkPlaceholder')}
+                  size="large"
+                  workingDirectory={config.workingDirectory}
+                  onWorkingDirectoryChange={async (dir: string) => {
+                    await coworkService.updateConfig({ workingDirectory: dir });
+                  }}
+                  showFolderSelector={true}
+                  onManageSkills={() => onShowSkills?.()}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -664,12 +688,16 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         <CoworkSessionDetail
           onManageSkills={() => onShowSkills?.()}
           onContinue={handleContinueSession}
-          onStop={handleStopSession}
-          onNavigateHome={() => dispatch(clearCurrentSession())}
+          onStop={tempSession ? handleStopTempSession : handleStopSession}
+          onNavigateHome={() => {
+            dispatch(clearCurrentSession());
+            if (tempSession) dispatch(clearTempSession());
+          }}
           isSidebarCollapsed={isSidebarCollapsed}
           onToggleSidebar={onToggleSidebar}
           onNewChat={onNewChat}
           updateBadge={updateBadge}
+          isTempSession={!!tempSession}
         />
       </div>
     );
