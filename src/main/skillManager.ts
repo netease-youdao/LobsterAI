@@ -1472,6 +1472,7 @@ export class SkillManager {
 
       // Security scan before installation
       let auditReport: SkillSecurityReport | null = null;
+      let scanFailed = false;
       try {
         console.log(`[SkillManager] Starting security scan for ${skillDirs.length} skill dir(s)...`);
         const reports = await scanMultipleSkillDirs(skillDirs);
@@ -1483,13 +1484,32 @@ export class SkillManager {
           }
         }
       } catch (err) {
-        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+        console.error('[SkillManager] Security scan failed:', err);
+        scanFailed = true;
+        // Build a synthetic report so the user must confirm before install
+        auditReport = {
+          scannedAt: Date.now(),
+          skillName: path.basename(skillDirs[0] || localSource),
+          riskLevel: 'high',
+          riskScore: 80,
+          findings: [{
+            dimension: 'dangerous_command',
+            severity: 'danger',
+            ruleId: 'scan-failure',
+            file: '*',
+            matchedPattern: err instanceof Error ? err.message : String(err),
+            description: 'securityScanFailedDescription',
+          }],
+          dimensionSummary: { dangerous_command: { count: 1, maxSeverity: 'danger' } },
+          scanDurationMs: 0,
+        };
       }
 
-      // If risk detected, cache for user confirmation instead of auto-installing
-      if (auditReport && auditReport.riskLevel !== 'safe') {
+      // If risk detected or scan failed, cache for user confirmation instead of auto-installing
+      if (auditReport && (auditReport.riskLevel !== 'safe' || scanFailed)) {
         const pendingId = crypto.randomUUID();
-        console.log(`[SkillManager] Risk detected (${auditReport.riskLevel}), pending user confirmation: ${pendingId}`);
+        const reason = scanFailed ? 'scan failed' : `risk detected (${auditReport.riskLevel})`;
+        console.log(`[SkillManager] ${reason}, pending user confirmation: ${pendingId}`);
         const timer = setTimeout(() => {
           const pending = this.pendingInstalls.get(pendingId);
           if (pending) {
@@ -1514,8 +1534,8 @@ export class SkillManager {
         };
       }
 
-      // Safe or scan failed — install directly
-      console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
+      // Safe — install directly
+      console.log(`[SkillManager] Skill is safe, installing directly`);
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
         let targetDir = resolveWithin(root, folderName);
