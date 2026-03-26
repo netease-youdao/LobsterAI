@@ -2208,10 +2208,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         <div className="non-draggable flex items-center gap-1">
           {/* In-session search bar (expanded) */}
           {searchVisible ? (
-            <div className="flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 search-bar-enter">
-              <svg className="h-3.5 w-3.5 flex-shrink-0 text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
-              </svg>
+            <div className="flex items-center gap-1 rounded-lg border border-border bg-surface px-2 py-1 search-bar-enter focus-within:ring-1 focus-within:ring-blue-400 dark:focus-within:ring-blue-500">
               <input
                 ref={searchInputRef}
                 type="text"
@@ -2222,37 +2219,35 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   if (e.key === 'ArrowUp') { e.preventDefault(); navigateSearchMatch('prev'); }
                 }}
                 placeholder={i18nService.t('coworkSearchPlaceholder')}
-                className="w-40 text-xs bg-transparent focus:outline-none text-foreground placeholder-secondary"
+                className="w-36 text-xs bg-transparent focus:outline-none text-foreground placeholder-secondary"
               />
-              {searchQuery.trim() && (
-                <span className={`text-xs flex-shrink-0 tabular-nums ${searchMatchCount === 0 ? 'text-red-500' : 'text-secondary'}`}>
-                  {searchMatchCount === 0 ? i18nService.t('coworkSearchNoResults') : `${searchCurrentIndex + 1}/${searchMatchCount}`}
+              {searchQuery.trim() ? (
+                <span className={`text-xs flex-shrink-0 tabular-nums mr-0.5 ${searchMatchCount === 0 ? 'text-red-500' : 'text-secondary'}`}>
+                  {searchMatchCount === 0 ? '0/0' : `${searchCurrentIndex + 1}/${searchMatchCount}`}
                 </span>
-              )}
-              {searchMatchCount > 0 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => navigateSearchMatch('prev')}
-                    className="p-0.5 rounded hover:bg-surface-raised text-secondary transition-colors"
-                    aria-label="Previous match"
-                  >
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => navigateSearchMatch('next')}
-                    className="p-0.5 rounded hover:bg-surface-raised text-secondary transition-colors"
-                    aria-label="Next match"
-                  >
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-                </>
-              )}
+              ) : null}
+              <button
+                type="button"
+                onClick={() => navigateSearchMatch('prev')}
+                disabled={searchMatchCount === 0}
+                className="p-0.5 rounded hover:bg-surface-raised text-secondary transition-colors disabled:opacity-30 disabled:cursor-default"
+                aria-label="Previous match"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => navigateSearchMatch('next')}
+                disabled={searchMatchCount === 0}
+                className="p-0.5 rounded hover:bg-surface-raised text-secondary transition-colors disabled:opacity-30 disabled:cursor-default"
+                aria-label="Next match"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
               <button
                 type="button"
                 onClick={closeSearch}
@@ -2271,8 +2266,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 type="button"
                 onClick={openSearch}
                 className="p-1.5 rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-                aria-label="Search in session"
-                title="Search in session (Cmd+F)"
+                aria-label={i18nService.t(isMac ? 'coworkSearchOpenMac' : 'coworkSearchOpenWin')}
+                title={i18nService.t(isMac ? 'coworkSearchOpenMac' : 'coworkSearchOpenWin')}
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
