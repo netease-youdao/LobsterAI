@@ -45,6 +45,7 @@ import {
   OpenRouterIcon,
   OllamaIcon,
   CustomProviderIcon,
+  AIHubMixIcon,
 } from './icons/providers';
 
 type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
@@ -73,6 +74,7 @@ const providerKeys = [
   'stepfun',
   'xiaomi',
   'openrouter',
+  'aihubmix',
   'ollama',
   'custom',
 ] as const;
@@ -144,6 +146,7 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
   volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
   openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
+  aihubmix: { label: 'AIHubMix', icon: <AIHubMixIcon /> },
   ollama: { label: 'Ollama', icon: <OllamaIcon /> },
   custom: { label: 'Custom', icon: <CustomProviderIcon /> },
 };
@@ -180,6 +183,10 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   openrouter: {
     anthropic: 'https://openrouter.ai/api',
     openai: 'https://openrouter.ai/api/v1',
+  },
+  aihubmix: {
+    anthropic: 'https://aihubmix.com',
+    openai: 'https://aihubmix.com/v1',
   },
   ollama: {
     anthropic: 'http://localhost:11434',
@@ -292,7 +299,8 @@ const getProviderDefaultBaseUrl = (
   apiFormat: 'anthropic' | 'openai'
 ): string | null => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
-  return defaults ? defaults[apiFormat] : null;
+  if (!defaults) return null;
+  return defaults[apiFormat];
 };
 const resolveBaseUrl = (
   provider: ProviderType,
@@ -1631,7 +1639,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       return;
     }
 
-    // 获取第一个可用模型
     const firstModel = providerConfig.models?.[0];
     if (!firstModel) {
       showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider);
@@ -2958,7 +2965,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                         type="radio"
                         name={`${activeProvider}-apiFormat`}
                         value="anthropic"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) !== 'openai'}
+                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) === 'anthropic'}
                         onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'anthropic')}
                         className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface"
                       />

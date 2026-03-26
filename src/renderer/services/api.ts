@@ -110,7 +110,7 @@ class ApiService {
   }
 
   private shouldUseOpenAIResponsesApi(provider: string): boolean {
-    return provider === 'openai';
+    return provider === 'openai' || provider === 'aihubmix';
   }
 
   private buildImageHint(images?: ImageAttachment[]): string {
@@ -271,7 +271,7 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'aihubmix', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -576,7 +576,6 @@ class ApiService {
       throw new ApiError('An unexpected error occurred while calling the API. Please try again.');
     }
   }
-
   // OpenAI 兼容 API 调用 (OpenAI, DeepSeek, etc.)
   private async chatWithOpenAICompatible(
     message: ChatUserMessageInput,
@@ -753,6 +752,7 @@ class ApiService {
           : {
               model: modelId,
               messages: messages,
+              max_tokens: 8192,
               stream: true,
             };
         if (useResponsesApi && systemInstructions) {
