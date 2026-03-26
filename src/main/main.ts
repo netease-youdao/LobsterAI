@@ -17,6 +17,10 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter, setAuthTokensGetter, setServerBaseUrlGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
+import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
+import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setScheduledTaskDeps } from './libs/coworkOpenAICompatProxy';
+import { createAgentApiServer, getAgentApiServer } from './libs/agentApiServer';
+import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy } from './libs/coworkOpenAICompatProxy';
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setProxyTokenRefresher } from './libs/coworkOpenAICompatProxy';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
@@ -4134,6 +4138,14 @@ if (!gotTheLock) {
       console.error('Failed to stop OpenAI compatibility proxy:', error);
     });
 
+    // Stop Agent API Server
+    const agentServer = getAgentApiServer();
+    if (agentServer) {
+      await agentServer.stop().catch((error) => {
+        console.error('Failed to stop Agent API Server:', error);
+      });
+    }
+
     // Stop skill services.
     const skillServices = getSkillServiceManager();
     await skillServices.stopAll();
@@ -4389,6 +4401,25 @@ if (!gotTheLock) {
     await startCoworkOpenAICompatProxy().catch((error) => {
       console.error('Failed to start OpenAI compatibility proxy:', error);
     });
+
+    // Start Agent API Server
+    const agentApiKey = process.env.LOBSTER_AGENT_API_KEY || 'lobsterai-agent-default-key';
+    const agentServer = createAgentApiServer(agentApiKey);
+    agentServer.setCoworkRunnerGetter(getCoworkRunner);
+    agentServer.setStateChangedPublisher((event) => {
+      const windows = BrowserWindow.getAllWindows();
+      windows.forEach((win) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('agent:state:changed', event);
+        }
+      });
+    });
+    await agentServer.start().catch((error) => {
+      console.error('Failed to start Agent API Server:', error);
+    });
+
+    // Inject scheduled task dependencies into the proxy server
+    setScheduledTaskDeps({ getScheduledTaskStore, getScheduler });
 
     // 设置安全策略
     setContentSecurityPolicy();
