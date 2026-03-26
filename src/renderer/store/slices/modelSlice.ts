@@ -50,8 +50,7 @@ function buildInitialModels(): Model[] {
   return models.length > 0 ? models : defaultConfig.model.availableModels;
 }
 
-// 初始可用模型列表（会在运行时更新）
-export let availableModels: Model[] = buildInitialModels();
+const _initialModels: Model[] = buildInitialModels();
 const defaultModelProvider = defaultConfig.model.defaultModelProvider;
 
 interface ModelState {
@@ -61,11 +60,11 @@ interface ModelState {
 
 const initialState: ModelState = {
   // 使用 config 中的默认模型
-  selectedModel: availableModels.find(
+  selectedModel: _initialModels.find(
     model => model.id === defaultConfig.model.defaultModel
       && (!defaultModelProvider || model.providerKey === defaultModelProvider)
-  ) || availableModels[0],
-  availableModels: availableModels,
+  ) || _initialModels[0],
+  availableModels: _initialModels,
 };
 
 const modelSlice = createSlice({
@@ -79,8 +78,6 @@ const modelSlice = createSlice({
       // 保留已有的服务端模型，只更新用户自配模型（与 setServerModels 对称）
       const serverModels = state.availableModels.filter(m => m.isServerModel);
       state.availableModels = [...serverModels, ...action.payload];
-      // 更新导出的 availableModels
-      availableModels = state.availableModels;
       // 同步选中模型信息，确保名称与最新配置一致
       if (state.availableModels.length > 0) {
         const matchedModel = state.availableModels.find(m => isSameModelIdentity(m, state.selectedModel));
@@ -96,7 +93,6 @@ const modelSlice = createSlice({
       // 服务端模型放前面，自配模型保留在后面
       const userModels = state.availableModels.filter(m => !m.isServerModel);
       state.availableModels = [...action.payload, ...userModels];
-      availableModels = state.availableModels;
       // 如果当前选中模型不在列表中，切换到第一个
       if (!state.availableModels.find(m => isSameModelIdentity(m, state.selectedModel))) {
         if (state.availableModels.length > 0) {
@@ -106,7 +102,6 @@ const modelSlice = createSlice({
     },
     clearServerModels: (state) => {
       state.availableModels = state.availableModels.filter(m => !m.isServerModel);
-      availableModels = state.availableModels;
       // 如果当前选中的是服务端模型，切换到第一个可用模型
       if (state.selectedModel.isServerModel && state.availableModels.length > 0) {
         state.selectedModel = state.availableModels[0];
@@ -116,4 +111,4 @@ const modelSlice = createSlice({
 });
 
 export const { setSelectedModel, setAvailableModels, setServerModels, clearServerModels } = modelSlice.actions;
-export default modelSlice.reducer; 
+export default modelSlice.reducer;
