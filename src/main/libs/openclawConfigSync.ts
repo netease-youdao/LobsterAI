@@ -42,7 +42,8 @@ const normalizeModelName = (modelId: string): string => {
   const trimmed = modelId.trim();
   if (!trimmed) return 'default-model';
   const slashIndex = trimmed.lastIndexOf('/');
-  return slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
+  const afterSlash = slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
+  return afterSlash || trimmed;
 };
 
 const MANAGED_OWNER_ALLOW_FROM = [
