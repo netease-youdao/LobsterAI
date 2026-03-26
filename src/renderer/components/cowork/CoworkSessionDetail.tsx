@@ -13,6 +13,7 @@ import {
   ExclamationTriangleIcon,
   ChevronRightIcon,
   PhotoIcon,
+  DocumentDuplicateIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
@@ -1491,6 +1492,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     closeMenu();
   };
 
+  // Clone handler
+  const handleCloneClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMenuPosition(null);
+    if (!currentSession) return;
+    await coworkService.cloneSession(currentSession.id);
+  };
+
   // Delete handlers
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2018,6 +2027,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <PencilSquareIcon className="h-4 w-4" />
             {i18nService.t('renameConversation')}
           </button>
+          {remoteManaged && (
+            <button
+              type="button"
+              onClick={handleCloneClick}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            >
+              <DocumentDuplicateIcon className="h-4 w-4" />
+              {i18nService.t('cloneAsLocalTask')}
+            </button>
+          )}
           <button
             type="button"
             onClick={handleTogglePin}

@@ -2616,6 +2616,21 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:clone', async (_event, sessionId: string) => {
+    try {
+      const cloned = getCoworkStore().cloneSession(sessionId, t('clonedPrefix'));
+      if (!cloned) {
+        return { success: false, error: 'Source session not found' };
+      }
+      return { success: true, session: cloned };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to clone session',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:list', async () => {
     try {
       const sessions = getCoworkStore().listSessions();

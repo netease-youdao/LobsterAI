@@ -640,6 +640,41 @@ export class CoworkStore {
     this.saveDb();
   }
 
+  cloneSession(sourceId: string, titlePrefix: string = '[克隆]'): CoworkSession | null {
+    const source = this.getSession(sourceId);
+    if (!source) return null;
+
+    const newId = uuidv4();
+    const now = Date.now();
+    const newTitle = `${titlePrefix} ${source.title}`;
+
+    this.db.run(`
+      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, pinned, created_at, updated_at)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, 0, ?, ?)
+    `, [newId, newTitle, source.cwd, source.systemPrompt, source.executionMode, JSON.stringify(source.activeSkillIds), now, now]);
+
+    // Batch-copy all messages with new IDs, preserving sequence order
+    for (let i = 0; i < source.messages.length; i++) {
+      const msg = source.messages[i];
+      this.db.run(`
+        INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        uuidv4(),
+        newId,
+        msg.type,
+        msg.content,
+        msg.metadata ? JSON.stringify(msg.metadata) : null,
+        msg.timestamp,
+        i + 1,
+      ]);
+    }
+
+    this.saveDb();
+
+    return this.getSession(newId);
+  }
+
   deleteSession(id: string): void {
     this.markMemorySourcesInactiveBySession(id);
     this.db.run('DELETE FROM cowork_sessions WHERE id = ?', [id]);

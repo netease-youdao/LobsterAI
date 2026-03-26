@@ -54,6 +54,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: '免费',
     authPlanStandard: '标准',
+    cloneAsLocalTask: '克隆为本地任务',
+    clonedPrefix: '[克隆]',
+    cloneTaskFailed: '克隆任务失败',
   },
   en: {
     // Tray menu
@@ -95,6 +98,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Auth quota
     authPlanFree: 'Free',
     authPlanStandard: 'Standard',
+    cloneAsLocalTask: 'Clone as Local Task',
+    clonedPrefix: '[Clone]',
+    cloneTaskFailed: 'Failed to clone task',
   },
 };
 

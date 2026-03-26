@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { CoworkSessionSummary, CoworkSessionStatus } from '../../types/cowork';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, DocumentDuplicateIcon } from '@heroicons/react/24/outline';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
 import ListChecksIcon from '../icons/ListChecksIcon';
 import { i18nService } from '../../services/i18n';
+import { coworkService } from '../../services/cowork';
 
 interface CoworkSessionItemProps {
   session: CoworkSessionSummary;
@@ -14,6 +15,7 @@ interface CoworkSessionItemProps {
   isBatchMode: boolean;
   isSelected: boolean;
   showBatchOption?: boolean;
+  isRemoteManaged?: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onTogglePin: (pinned: boolean) => void;
@@ -93,6 +95,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   isBatchMode,
   isSelected,
   showBatchOption = true,
+  isRemoteManaged = false,
   onSelect,
   onDelete,
   onTogglePin,
@@ -211,6 +214,12 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     onEnterBatchMode();
   };
 
+  const handleCloneClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    closeMenu();
+    void coworkService.cloneSession(session.id);
+  };
+
   useEffect(() => {
     if (!menuPosition) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -263,23 +272,31 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
   const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
   const batchLabel = i18nService.t('batchOperations');
+  const cloneLabel = i18nService.t('cloneAsLocalTask');
   const menuItems = useMemo(() => {
     const items = [
       { key: 'rename', label: renameLabel, onClick: handleRenameClick, tone: 'neutral' as const },
       { key: 'pin', label: pinButtonLabel, onClick: handleTogglePin, tone: 'neutral' as const },
       { key: 'delete', label: deleteLabel, onClick: handleDeleteClick, tone: 'danger' as const },
     ];
+    if (isRemoteManaged) {
+      // Insert clone item after rename (index 1)
+      items.splice(1, 0, { key: 'clone', label: cloneLabel, onClick: handleCloneClick, tone: 'neutral' as const });
+    }
     if (showBatchOption) {
       items.unshift({ key: 'batch', label: batchLabel, onClick: handleBatchClick, tone: 'neutral' as const });
     }
     return items;
   }, [
     batchLabel,
+    cloneLabel,
     deleteLabel,
     handleBatchClick,
+    handleCloneClick,
     handleDeleteClick,
     handleRenameClick,
     handleTogglePin,
+    isRemoteManaged,
     pinButtonLabel,
     renameLabel,
     showBatchOption,
@@ -418,6 +435,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                   className={`h-4 w-4 ${session.pinned ? 'opacity-60' : ''}`}
                 />
               )}
+              {item.key === 'clone' && <DocumentDuplicateIcon className="h-4 w-4" />}
               {item.key === 'delete' && <TrashIcon className="h-4 w-4" />}
               {item.label}
             </button>
