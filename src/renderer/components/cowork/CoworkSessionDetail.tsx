@@ -25,6 +25,7 @@ import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../common/scheduledReminderText';
+import Mark from 'mark.js';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
@@ -1318,6 +1319,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
 
+  // In-session search states
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatchCount, setSearchMatchCount] = useState(0);
+  const [searchCurrentIndex, setSearchCurrentIndex] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const markInstanceRef = useRef<Mark | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
@@ -1741,6 +1752,153 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (targetIndex < 0 || targetIndex >= turnEls.length) return;
     navigateToTurnByIndex(targetIndex);
   }, [navigateToTurnByIndex]);
+
+  // ── In-session search ──────────────────────────────────────────────────────
+
+  const openSearch = useCallback(() => {
+    setSearchVisible(true);
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchVisible(false);
+    setSearchQuery('');
+    setSearchMatchCount(0);
+    setSearchCurrentIndex(0);
+    if (markInstanceRef.current) {
+      markInstanceRef.current.unmark();
+    }
+  }, []);
+
+  // Navigate to the nth highlighted mark element (0-based)
+  const navigateToMatch = useCallback((index: number) => {
+    const container = searchContainerRef.current;
+    if (!container) return;
+    const marks = container.querySelectorAll<HTMLElement>('mark[data-search-match]');
+    if (marks.length === 0) return;
+    const clampedIndex = Math.max(0, Math.min(index, marks.length - 1));
+    setSearchCurrentIndex(clampedIndex);
+
+    // Remove active class from all, add to current
+    marks.forEach((m) => m.classList.remove('search-match-active'));
+    const target = marks[clampedIndex];
+    target.classList.add('search-match-active');
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
+  const applySearch = useCallback((query: string) => {
+    const container = searchContainerRef.current;
+    if (!container) return;
+
+    if (!markInstanceRef.current) {
+      markInstanceRef.current = new Mark(container);
+    }
+    const instance = markInstanceRef.current;
+    instance.unmark({
+      done: () => {
+        if (!query.trim()) {
+          setSearchMatchCount(0);
+          setSearchCurrentIndex(0);
+          return;
+        }
+        let count = 0;
+        instance.mark(query, {
+          caseSensitive: false,
+          separateWordSearch: false,
+          acrossElements: true,
+          className: 'search-match',
+          each: (el: HTMLElement) => {
+            el.setAttribute('data-search-match', String(count));
+            count += 1;
+          },
+          done: (totalCount: number) => {
+            setSearchMatchCount(totalCount);
+            setSearchCurrentIndex(0);
+            if (totalCount > 0) {
+              // Activate first match
+              const first = container.querySelector<HTMLElement>('mark[data-search-match="0"]');
+              if (first) {
+                first.classList.add('search-match-active');
+                first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            }
+          },
+        });
+      },
+    });
+  }, []);
+
+  // Debounced search on query change
+  useEffect(() => {
+    if (!searchVisible) return;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      applySearch(searchQuery);
+    }, 200);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [searchQuery, searchVisible, applySearch]);
+
+  // Clear marks when search closes or session changes
+  useEffect(() => {
+    if (!searchVisible && markInstanceRef.current) {
+      markInstanceRef.current.unmark();
+    }
+  }, [searchVisible]);
+
+  useEffect(() => {
+    return () => {
+      if (markInstanceRef.current) {
+        markInstanceRef.current.unmark();
+      }
+    };
+  }, [currentSession?.id]);
+
+  // Pause highlighting during streaming to avoid React DOM conflicts
+  useEffect(() => {
+    if (isStreaming && markInstanceRef.current) {
+      markInstanceRef.current.unmark();
+    } else if (!isStreaming && searchVisible && searchQuery.trim()) {
+      applySearch(searchQuery);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming]);
+
+  const navigateSearchMatch = useCallback((direction: 'prev' | 'next') => {
+    if (searchMatchCount === 0) return;
+    const next = direction === 'next'
+      ? (searchCurrentIndex + 1) % searchMatchCount
+      : (searchCurrentIndex - 1 + searchMatchCount) % searchMatchCount;
+    navigateToMatch(next);
+  }, [searchMatchCount, searchCurrentIndex, navigateToMatch]);
+
+  // Cmd+F / Ctrl+F to open search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMeta = e.metaKey || e.ctrlKey;
+      if (isMeta && e.key === 'f') {
+        e.preventDefault();
+        if (searchVisible) {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        } else {
+          openSearch();
+        }
+      }
+      if (e.key === 'Escape' && searchVisible) {
+        closeSearch();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [searchVisible, openSearch, closeSearch]);
+
+  // ────────────────────────────────────────────────────────────────────────────
+
   const lastMessage = currentSession?.messages?.[currentSession.messages.length - 1];
   const lastMessageContent = lastMessage?.content;
 
@@ -1973,20 +2131,95 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           )}
         </div>
 
-        {/* Right side: Folder + Menu */}
+        {/* Right side: Search + Folder + Menu */}
         <div className="non-draggable flex items-center gap-1">
-          {/* Folder button */}
-          <button
-            type="button"
-            onClick={handleOpenFolder}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-            aria-label={i18nService.t('coworkOpenFolder')}
-          >
-            <FolderIcon className="h-4 w-4" />
-            <span className="max-w-[120px] truncate text-xs">
-              {truncatePath(currentSession.cwd)}
-            </span>
-          </button>
+          {/* In-session search bar (expanded) */}
+          {searchVisible ? (
+            <div className="flex items-center gap-1 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-2 py-1 search-bar-enter">
+              <svg className="h-3.5 w-3.5 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+              </svg>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); navigateSearchMatch('next'); }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); navigateSearchMatch('prev'); }
+                }}
+                placeholder={i18nService.t('coworkSearchPlaceholder')}
+                className="w-40 text-xs bg-transparent focus:outline-none dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary"
+              />
+              {searchQuery.trim() && (
+                <span className={`text-xs flex-shrink-0 tabular-nums ${searchMatchCount === 0 ? 'dark:text-red-400 text-red-500' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary'}`}>
+                  {searchMatchCount === 0 ? i18nService.t('coworkSearchNoResults') : `${searchCurrentIndex + 1}/${searchMatchCount}`}
+                </span>
+              )}
+              {searchMatchCount > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => navigateSearchMatch('prev')}
+                    className="p-0.5 rounded hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary transition-colors"
+                    aria-label="Previous match"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigateSearchMatch('next')}
+                    className="p-0.5 rounded hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary transition-colors"
+                    aria-label="Next match"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={closeSearch}
+                className="p-0.5 rounded hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary transition-colors flex-shrink-0"
+                aria-label={i18nService.t('coworkSearchClose')}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Search icon button (collapsed) */}
+              <button
+                type="button"
+                onClick={openSearch}
+                className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                aria-label="Search in session"
+                title="Search in session (Cmd+F)"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                </svg>
+              </button>
+
+              {/* Folder button */}
+              <button
+                type="button"
+                onClick={handleOpenFolder}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                aria-label={i18nService.t('coworkOpenFolder')}
+              >
+                <FolderIcon className="h-4 w-4" />
+                <span className="max-w-[120px] truncate text-xs">
+                  {truncatePath(currentSession.cwd)}
+                </span>
+              </button>
+            </>
+          )}
 
           {/* Menu button */}
           <button
@@ -2098,7 +2331,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       {/* Messages */}
       <div className="relative flex-1 min-h-0">
         <div
-          ref={scrollContainerRef}
+          ref={(el) => { (scrollContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el; (searchContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el; }}
           onScroll={handleMessagesScroll}
           className="h-full min-h-0 overflow-y-auto pt-3"
         >
