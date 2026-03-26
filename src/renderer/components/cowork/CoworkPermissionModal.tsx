@@ -106,6 +106,14 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
   const isQuestionTool = questions.length > 0;
 
+  // Detect simple confirm mode: 1 question with exactly 2 options (allow/deny pattern).
+  // In this case, render as a simple confirm dialog (直接 允许/拒绝) instead of
+  // requiring the user to select an option first then click submit.
+  const isConfirmMode = isQuestionTool
+    && questions.length === 1
+    && questions[0].options.length === 2
+    && !questions[0].multiSelect;
+
   const [answers, setAnswers] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -137,6 +145,10 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   const { dangerLevel, dangerReasonText } = useMemo(() => {
+    // AskUserQuestion in confirm mode (delete confirmation) → show caution warning
+    if (permission.toolName === 'AskUserQuestion') {
+      return { dangerLevel: 'caution' as DangerLevel, dangerReasonText: i18nService.t('dangerReasonFileDelete') };
+    }
     if (permission.toolName !== 'Bash') {
       return { dangerLevel: 'safe' as DangerLevel, dangerReasonText: '' };
     }
@@ -191,18 +203,31 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
     });
   };
 
-  const isComplete = isQuestionTool
+  const isComplete = isQuestionTool && !isConfirmMode
     ? questions.every((question) => (answers[question.question] ?? '').trim())
     : true;
 
-  const denyButtonLabel = isQuestionTool
+  const denyButtonLabel = isQuestionTool && !isConfirmMode
     ? i18nService.t('coworkDenyRequest')
     : i18nService.t('coworkDeny');
-  const approveButtonLabel = isQuestionTool
+  const approveButtonLabel = isQuestionTool && !isConfirmMode
     ? i18nService.t('coworkConfirmSelection')
     : i18nService.t('coworkApprove');
 
   const handleApprove = () => {
+    if (isConfirmMode) {
+      // Confirm mode: auto-select the first option (allow) and respond
+      const q = questions[0];
+      onRespond({
+        behavior: 'allow',
+        updatedInput: {
+          ...(toolInput && typeof toolInput === 'object' ? toolInput : {}),
+          answers: { [q.question]: q.options[0].label },
+        },
+      });
+      return;
+    }
+
     if (isQuestionTool) {
       if (!isComplete) return;
       onRespond({
@@ -255,7 +280,14 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
         {/* Content */}
         <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
-          {isQuestionTool ? (
+          {isConfirmMode ? (
+            /* Simple confirm dialog — show question text + allow/deny buttons */
+            <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg">
+              <p className="text-sm dark:text-claude-darkText text-claude-text whitespace-pre-wrap">
+                {questions[0].question}
+              </p>
+            </div>
+          ) : isQuestionTool ? (
             <>
               {questions.map((question) => {
                 const selectedValues = getSelectedValues(question);
@@ -346,7 +378,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
         </div>
 
         {/* Warning for dangerous operations - 固定在滚动区域外，始终可见 */}
-        {!isQuestionTool && dangerLevel === 'destructive' && (
+        {(!isQuestionTool || isConfirmMode) && dangerLevel === 'destructive' && (
           <div className="flex items-start gap-2 p-3 mx-6 my-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
             <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
             <div>
@@ -359,7 +391,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
             </div>
           </div>
         )}
-        {!isQuestionTool && dangerLevel === 'caution' && (
+        {(!isQuestionTool || isConfirmMode) && dangerLevel === 'caution' && (
           <div className="flex items-start gap-2 p-3 mx-6 my-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
             <ExclamationTriangleIcon className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
             <div>

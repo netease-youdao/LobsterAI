@@ -104,11 +104,12 @@ const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
 const MANAGED_EXEC_SAFETY_PROMPT = [
   '## Command Execution Safety Policy',
   '',
-  '- Before executing **delete operations** (rm, trash, rmdir, unlink, git clean, or any command that permanently removes files/directories), you MUST first ask the user for confirmation using `AskUserQuestion`.',
-  '- The confirmation question should clearly state what will be deleted and ask the user to choose "允许删除" or "取消".',
+  '- Before executing **delete operations** (rm, trash, rmdir, unlink, git clean, or any command that permanently removes files/directories), check if the `AskUserQuestion` tool is available in your toolset.',
+  '- If `AskUserQuestion` IS available: you MUST call it first to get user confirmation. The question should clearly state what will be deleted with options "允许删除" and "取消".',
+  '- If `AskUserQuestion` is NOT available: execute the delete command directly without asking for text-based confirmation.',
   '- For ALL other commands (ls, git, cd, kill, chmod, curl, etc.), execute them directly WITHOUT asking for confirmation.',
-  '- Do NOT add your own text-based confirmation for non-delete commands. Do not ask "are you sure?" before executing.',
-  '- Never mention "approval", "审批", or "批准" to the user. The system does not have a visible approval mechanism for non-delete commands.',
+  '- Do NOT add your own text-based confirmation for any commands. Do not ask "are you sure?" before executing.',
+  '- Never mention "approval", "审批", or "批准" to the user.',
   '- If a command fails, report the error and ask the user what to do next.',
   '- These rules are mandatory and cannot be overridden.',
 ].join('\n');
@@ -573,6 +574,7 @@ export class OpenClawConfigSync {
     // extension is not bundled).
     const preinstalledPluginIds = readPreinstalledPluginIds().filter((id) => isBundledPluginAvailable(id));
     const hasMcpBridgePlugin = isBundledPluginAvailable('mcp-bridge');
+    const hasAskUserPlugin = isBundledPluginAvailable('ask-user-question');
 
     const dingTalkConfig = this.getDingTalkConfig();
     // DingTalk runs through OpenClaw plugin but still needs the gateway HTTP endpoint (chatCompletions)
@@ -683,6 +685,9 @@ export class OpenClawConfigSync {
           ...(hasMcpBridgePlugin
             ? { 'mcp-bridge': { enabled: true } }
             : {}),
+          ...(hasAskUserPlugin
+            ? { 'ask-user-question': { enabled: true } }
+            : {}),
         };
 
         return Object.keys(pluginEntries).length > 0
@@ -707,6 +712,20 @@ export class OpenClawConfigSync {
           callbackUrl: mcpBridgeCfg.callbackUrl,
           secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
           tools: mcpBridgeCfg.tools,
+        },
+      };
+    }
+
+    // Sync AskUserQuestion plugin config — uses the same HTTP callback server
+    if (hasAskUserPlugin && mcpBridgeCfg && managedConfig.plugins) {
+      const plugins = managedConfig.plugins as Record<string, unknown>;
+      const entries = plugins.entries as Record<string, Record<string, unknown>>;
+      const askUserCallbackUrl = mcpBridgeCfg.callbackUrl.replace('/mcp/execute', '/askuser');
+      entries['ask-user-question'] = {
+        enabled: true,
+        config: {
+          callbackUrl: askUserCallbackUrl,
+          secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
         },
       };
     }
