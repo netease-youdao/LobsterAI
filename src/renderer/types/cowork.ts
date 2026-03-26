@@ -156,6 +156,17 @@ export interface CoworkSessionSummary {
   updatedAt: number;
 }
 
+export interface CoworkFavoriteItem {
+  id: string;
+  sessionId: string;
+  sessionTitle: string;
+  messageId: string;
+  messageType: string;
+  messageContent: string;
+  note: string;
+  createdAt: number;
+}
+
 // Start session options
 export interface CoworkStartOptions {
   prompt: string;

@@ -7,6 +7,7 @@ import imReducer from './slices/imSlice';
 import quickActionReducer from './slices/quickActionSlice';
 import scheduledTaskReducer from './slices/scheduledTaskSlice';
 import authReducer from './slices/authSlice';
+import favoritesReducer from './slices/favoritesSlice';
 
 export const store = configureStore({
   reducer: {
@@ -18,6 +19,7 @@ export const store = configureStore({
     quickAction: quickActionReducer,
     scheduledTask: scheduledTaskReducer,
     auth: authReducer,
+    favorites: favoritesReducer,
   },
 });
 

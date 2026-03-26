@@ -2672,6 +2672,60 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:favorite:add', async (_event, options: { sessionId: string; messageId: string; note?: string }) => {
+    try {
+      const result = getCoworkStore().addFavorite(options.sessionId, options.messageId, options.note);
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to add favorite' };
+    }
+  });
+
+  ipcMain.handle('cowork:favorite:remove', async (_event, messageId: string) => {
+    try {
+      getCoworkStore().removeFavorite(messageId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to remove favorite' };
+    }
+  });
+
+  ipcMain.handle('cowork:favorite:removeById', async (_event, favoriteId: string) => {
+    try {
+      getCoworkStore().removeFavoriteById(favoriteId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to remove favorite' };
+    }
+  });
+
+  ipcMain.handle('cowork:favorite:list', async () => {
+    try {
+      const favorites = getCoworkStore().listFavorites();
+      return { success: true, favorites };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to list favorites' };
+    }
+  });
+
+  ipcMain.handle('cowork:favorite:isFavorited', async (_event, messageId: string) => {
+    try {
+      const favorited = getCoworkStore().isFavorited(messageId);
+      return { success: true, favorited };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to check favorite' };
+    }
+  });
+
+  ipcMain.handle('cowork:favorite:getSessionFavorites', async (_event, sessionId: string) => {
+    try {
+      const messageIds = getCoworkStore().getFavoritedMessageIds(sessionId);
+      return { success: true, messageIds };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get session favorites' };
+    }
+  });
+
   ipcMain.handle('cowork:session:exportResultImage', async (
     event,
     options: {
