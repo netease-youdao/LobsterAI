@@ -27,3 +27,17 @@ export const getFallbackDownloadUrl = () => isTestMode()
 export const getSkillStoreUrl = () => isTestMode()
   ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/skill-store'
   : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/skill-store';
+
+// 登录地址
+export const getLoginOvermindUrl = () => isTestMode()
+  ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/login-url'
+  : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/login-url';
+
+// Portal 页面
+const PORTAL_BASE_TEST = 'https://c.youdao.com/dict/hardware/cowork/lobsterai-portal.html#';
+const PORTAL_BASE_PROD = 'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal.html#';
+
+const getPortalBase = () => isTestMode() ? PORTAL_BASE_TEST : PORTAL_BASE_PROD;
+
+export const getPortalPricingUrl = () => `${getPortalBase()}/pricing`;
+export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;

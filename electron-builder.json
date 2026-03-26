@@ -52,6 +52,12 @@
       ]
     }
   ],
+  "protocols": [
+    {
+      "name": "LobsterAI",
+      "schemes": ["lobsterai"]
+    }
+  ],
   "mac": {
     "target": [
       "dmg"

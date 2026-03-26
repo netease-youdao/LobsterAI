@@ -50,6 +50,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
+
+    // Auth quota
+    authPlanFree: '免费',
+    authPlanStandard: '标准',
   },
   en: {
     // Tray menu
@@ -87,6 +91,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
+
+    // Auth quota
+    authPlanFree: 'Free',
+    authPlanStandard: 'Standard',
   },
 };
 
