@@ -4,6 +4,7 @@
  * OpenClaw's mcp-bridge plugin calls this endpoint to execute MCP tools.
  * Binds to 127.0.0.1 only (local traffic).
  */
+import crypto from 'crypto';
 import http from 'http';
 import net from 'net';
 import type { McpServerManager } from './mcpServerManager';
@@ -88,9 +89,13 @@ export class McpBridgeServer {
       return;
     }
 
-    // Verify secret token
-    const authHeader = req.headers['x-mcp-bridge-secret'];
-    if (authHeader !== this.secret) {
+    // Verify secret token (timing-safe comparison to prevent timing attacks)
+    const authHeader = String(req.headers['x-mcp-bridge-secret'] || '');
+    const secretBuf = Buffer.from(this.secret);
+    const headerBuf = Buffer.from(authHeader);
+    const authorized = secretBuf.length === headerBuf.length
+      && crypto.timingSafeEqual(secretBuf, headerBuf);
+    if (!authorized) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
@@ -125,10 +130,19 @@ export class McpBridgeServer {
     }
   }
 
-  private readBody(req: http.IncomingMessage): Promise<string> {
+  private readBody(req: http.IncomingMessage, maxBytes = 1024 * 1024): Promise<string> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
-      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      let totalLength = 0;
+      req.on('data', (chunk: Buffer) => {
+        totalLength += chunk.length;
+        if (totalLength > maxBytes) {
+          req.destroy();
+          reject(new Error('Request body too large'));
+          return;
+        }
+        chunks.push(chunk);
+      });
       req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
       req.on('error', reject);
     });

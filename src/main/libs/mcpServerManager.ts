@@ -13,6 +13,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { McpServerRecord } from '../mcpStore';
 import { getElectronNodeRuntimePath, getEnhancedEnv } from './coworkUtil';
+import { containsShellMetacharacters } from './mcpCommandValidator';
 
 export interface McpToolManifestEntry {
   server: string;
@@ -88,8 +89,16 @@ interface ResolvedStdioCommand {
  */
 async function resolveStdioCommand(server: McpServerRecord): Promise<ResolvedStdioCommand> {
   const stdioCommand = server.command || '';
-  let effectiveCommand = stdioCommand;
   const stdioArgs = server.args || [];
+
+  // Defense-in-depth: reject commands or args containing shell metacharacters,
+  // even if they somehow bypassed the IPC-layer validation (e.g. legacy DB data).
+  if (containsShellMetacharacters(stdioCommand, stdioArgs)) {
+    log('WARN', `Server "${server.name}" command or args contain shell metacharacters, skipping`);
+    return { command: '', args: [], env: undefined };
+  }
+
+  let effectiveCommand = stdioCommand;
   let effectiveArgs = [...stdioArgs];
   let stdioEnv = server.env && Object.keys(server.env).length > 0
     ? { ...server.env }

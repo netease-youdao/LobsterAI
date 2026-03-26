@@ -229,8 +229,11 @@ const McpManager: React.FC = () => {
     if (editingServer && editingServer.id) {
       const result = await mcpService.updateServer(editingServer.id, data);
       if (!result.success) {
-        setActionError(result.error || i18nService.t('mcpUpdateFailed'));
-        return;
+        // Return error/confirmation info to the FormModal for in-modal display
+        if (result.needsConfirmation) {
+          return { needsConfirmation: true, command: result.command };
+        }
+        return { error: result.error || i18nService.t('mcpUpdateFailed') };
       }
       if (result.servers) {
         dispatch(setMcpServers(result.servers));
@@ -238,8 +241,10 @@ const McpManager: React.FC = () => {
     } else {
       const result = await mcpService.createServer(data);
       if (!result.success) {
-        setActionError(result.error || i18nService.t('mcpCreateFailed'));
-        return;
+        if (result.needsConfirmation) {
+          return { needsConfirmation: true, command: result.command };
+        }
+        return { error: result.error || i18nService.t('mcpCreateFailed') };
       }
       if (result.servers) {
         dispatch(setMcpServers(result.servers));
