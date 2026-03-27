@@ -3760,10 +3760,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     onChange={(event) => { setCoworkMemoryDraftText(event.target.value); setMemoryModalError(''); }}
                     placeholder={i18nService.t('coworkMemoryCrudTextPlaceholder')}
                     autoFocus
-                    className="min-h-[200px] w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30"
+                    className={`min-h-[200px] w-full rounded-lg border px-3 py-2 text-sm dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text focus:ring-1 transition-colors ${memoryModalError ? 'border-red-400 dark:border-red-500 focus:border-red-400 focus:ring-red-400/30' : 'dark:border-claude-darkBorder border-claude-border focus:border-claude-accent focus:ring-claude-accent/30'}`}
                   />
                   {memoryModalError && (
-                    <p className="text-xs text-red-500 mt-1">{memoryModalError}</p>
+                    <p className="flex items-center gap-1 text-xs text-red-600 dark:text-red-400 mt-1">
+                      <span aria-hidden="true">&#9888;</span>
+                      {memoryModalError}
+                    </p>
                   )}
                 </div>
 
