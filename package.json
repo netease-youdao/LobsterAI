@@ -47,6 +47,11 @@
         "id": "nim",
         "npm": "openclaw-nim",
         "version": "0.3.0"
+      },
+      {
+        "id": "openclaw-netease-bee",
+        "npm": "openclaw-netease-bee",
+        "version": "0.1.2"
       }
     ]
   },

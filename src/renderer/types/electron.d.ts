@@ -416,10 +416,10 @@ interface IElectronAPI {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
     setConfig: (config: Partial<IMGatewayConfig>, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
     syncConfig: () => Promise<{ success: boolean; error?: string }>;
-    startGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin') => Promise<{ success: boolean; error?: string }>;
-    stopGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin') => Promise<{ success: boolean; error?: string }>;
+    startGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin') => Promise<{ success: boolean; error?: string }>;
+    stopGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin') => Promise<{ success: boolean; error?: string }>;
     testGateway: (
-      platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin',
+      platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin',
       configOverride?: Partial<IMGatewayConfig>
     ) => Promise<{ success: boolean; result?: IMConnectivityTestResult; error?: string }>;
     getStatus: () => Promise<{ success: boolean; status?: IMGatewayStatus; error?: string }>;
@@ -520,7 +520,7 @@ interface IMGatewayConfig {
   qq: QQConfig;
   discord: DiscordOpenClawConfig;
   nim: NimConfig;
-  xiaomifeng: XiaomifengConfig;
+  'netease-bee': NeteaseBeeChanConfig;
   wecom: WecomConfig;
   popo: PopoOpenClawConfig;
   weixin: WeixinOpenClawConfig;
@@ -642,7 +642,7 @@ interface NimConfig {
   advanced?: NimAdvancedConfig;
 }
 
-interface XiaomifengConfig {
+interface NeteaseBeeChanConfig {
   enabled: boolean;
   clientId: string;
   secret: string;
@@ -716,7 +716,7 @@ interface IMGatewayStatus {
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
   nim: NimGatewayStatus;
-  xiaomifeng: XiaomifengGatewayStatus;
+  'netease-bee': NeteaseBeeChanGatewayStatus;
   wecom: WecomGatewayStatus;
   popo: PopoGatewayStatus;
   weixin: WeixinGatewayStatus;
@@ -749,7 +749,7 @@ interface IMConnectivityCheck {
 }
 
 interface IMConnectivityTestResult {
-  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo';
+  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo';
   testedAt: number;
   verdict: IMConnectivityVerdict;
   checks: IMConnectivityCheck[];
@@ -800,7 +800,7 @@ interface NimGatewayStatus {
   lastOutboundAt: number | null;
 }
 
-interface XiaomifengGatewayStatus {
+interface NeteaseBeeChanGatewayStatus {
   connected: boolean;
   startedAt: number | null;
   lastError: string | null;
@@ -843,7 +843,7 @@ interface WeixinGatewayStatus {
 }
 
 interface IMMessage {
-  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin';
+  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin';
   messageId: string;
   conversationId: string;
   senderId: string;

@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode, Agent } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig, IMSettings } from '../im/types';
-import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig } from '../im/types';
+import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig, NeteaseBeeChanConfig } from '../im/types';
 import { resolveRawApiConfig, resolveAllProviderApiKeys } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
@@ -505,6 +505,7 @@ type OpenClawConfigSyncDeps = {
   getWecomConfig: () => WecomOpenClawConfig | null;
   getPopoConfig: () => PopoOpenClawConfig | null;
   getNimConfig: () => NimConfig | null;
+  getNeteaseBeeChanConfig: () => NeteaseBeeChanConfig | null;
   getWeixinConfig: () => WeixinOpenClawConfig | null;
   getIMSettings?: () => IMSettings | null;
   getMcpBridgeConfig?: () => McpBridgeConfig | null;
@@ -523,6 +524,7 @@ export class OpenClawConfigSync {
   private readonly getWecomConfig: () => WecomOpenClawConfig | null;
   private readonly getPopoConfig: () => PopoOpenClawConfig | null;
   private readonly getNimConfig: () => NimConfig | null;
+  private readonly getNeteaseBeeChanConfig: () => NeteaseBeeChanConfig | null;
   private readonly getWeixinConfig: () => WeixinOpenClawConfig | null;
   private readonly getIMSettings?: () => IMSettings | null;
   private readonly getMcpBridgeConfig?: () => McpBridgeConfig | null;
@@ -540,6 +542,7 @@ export class OpenClawConfigSync {
     this.getWecomConfig = deps.getWecomConfig;
     this.getPopoConfig = deps.getPopoConfig;
     this.getNimConfig = deps.getNimConfig;
+    this.getNeteaseBeeChanConfig = deps.getNeteaseBeeChanConfig;
     this.getWeixinConfig = deps.getWeixinConfig;
     this.getIMSettings = deps.getIMSettings;
     this.getMcpBridgeConfig = deps.getMcpBridgeConfig;
@@ -614,6 +617,8 @@ export class OpenClawConfigSync {
     const popoConfig = this.getPopoConfig();
 
     const nimConfig = this.getNimConfig();
+
+    const neteaseBeeChanConfig = this.getNeteaseBeeChanConfig();
 
     const weixinConfig = this.getWeixinConfig();
 
@@ -696,6 +701,7 @@ export class OpenClawConfigSync {
                 if (id === 'wecom-openclaw-plugin') return !!(wecomConfig?.enabled && wecomConfig.botId);
                 if (id === 'moltbot-popo') return !!(popoConfig?.enabled && popoConfig.appKey);
                 if (id === 'nim') return !!(nimConfig?.enabled && nimConfig.appKey && nimConfig.account && nimConfig.token);
+                if (id === 'openclaw-netease-bee') return !!(neteaseBeeChanConfig?.enabled && neteaseBeeChanConfig.clientId && neteaseBeeChanConfig.secret);
                 if (id === 'openclaw-weixin') return true; // Always keep enabled for QR login discovery
                 return true; // other plugins stay enabled
               })();
@@ -1001,6 +1007,15 @@ export class OpenClawConfigSync {
       if (nimConfig.qchat) nimChannel.qchat = nimConfig.qchat;
       if (nimConfig.advanced) nimChannel.advanced = nimConfig.advanced;
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'nim': nimChannel };
+    }
+
+    // Sync NeteaseBee OpenClaw channel config (via openclaw-netease-bee plugin)
+    if (neteaseBeeChanConfig?.enabled && neteaseBeeChanConfig.clientId && neteaseBeeChanConfig.secret) {
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'netease-bee': {
+        enabled: true,
+        clientId: neteaseBeeChanConfig.clientId,
+        secret: neteaseBeeChanConfig.secret,
+      }};
     }
 
     // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin)
@@ -1509,6 +1524,7 @@ export class OpenClawConfigSync {
       { getter: () => this.getWecomConfig(), channel: 'wecom', platform: 'wecom' },
       { getter: () => this.getPopoConfig(), channel: 'moltbot-popo', platform: 'popo' },
       { getter: () => this.getNimConfig(), channel: 'nim', platform: 'nim' },
+      { getter: () => this.getNeteaseBeeChanConfig(), channel: 'netease-bee', platform: 'netease-bee' },
       { getter: () => this.getWeixinConfig(), channel: 'openclaw-weixin', platform: 'weixin' },
     ];
 

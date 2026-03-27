@@ -178,16 +178,16 @@ export interface NimGatewayStatus {
   lastOutboundAt: number | null;
 }
 
-// ==================== Xiaomifeng Types ====================
+// ==================== NetEase Bee Types ====================
 
-export interface XiaomifengConfig {
+export interface NeteaseBeeChanConfig {
   enabled: boolean;
   clientId: string;    // 小蜜蜂平台的 NIM 账号 ID
   secret: string;      // 用于 token 中继的密钥
   debug?: boolean;
 }
 
-export interface XiaomifengGatewayStatus {
+export interface NeteaseBeeChanGatewayStatus {
   connected: boolean;
   startedAt: number | null;
   lastError: string | null;
@@ -300,7 +300,7 @@ export interface WeixinGatewayStatus {
 
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin';
+export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin';
 
 export interface IMGatewayConfig {
   dingtalk: DingTalkOpenClawConfig;
@@ -309,7 +309,7 @@ export interface IMGatewayConfig {
   qq: QQOpenClawConfig;
   discord: DiscordOpenClawConfig;
   nim: NimConfig;
-  xiaomifeng: XiaomifengConfig;
+  'netease-bee': NeteaseBeeChanConfig;
   wecom: WecomOpenClawConfig;
   popo: PopoOpenClawConfig;
   weixin: WeixinOpenClawConfig;
@@ -330,7 +330,7 @@ export interface IMGatewayStatus {
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
   nim: NimGatewayStatus;
-  xiaomifeng: XiaomifengGatewayStatus;
+  'netease-bee': NeteaseBeeChanGatewayStatus;
   wecom: WecomGatewayStatus;
   popo: PopoGatewayStatus;
   weixin: WeixinGatewayStatus;
@@ -497,7 +497,7 @@ export const DEFAULT_NIM_CONFIG: NimConfig = {
   token: '',
 };
 
-export const DEFAULT_XIAOMIFENG_CONFIG: XiaomifengConfig = {
+export const DEFAULT_NETEASE_BEE_CONFIG: NeteaseBeeChanConfig = {
   enabled: false,
   clientId: '',
   secret: '',
@@ -590,7 +590,7 @@ export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   qq: DEFAULT_QQ_CONFIG,
   discord: DEFAULT_DISCORD_OPENCLAW_CONFIG,
   nim: DEFAULT_NIM_CONFIG,
-  xiaomifeng: DEFAULT_XIAOMIFENG_CONFIG,
+  'netease-bee': DEFAULT_NETEASE_BEE_CONFIG,
   wecom: DEFAULT_WECOM_CONFIG,
   popo: DEFAULT_POPO_CONFIG,
   weixin: DEFAULT_WEIXIN_CONFIG,
@@ -638,7 +638,7 @@ export const DEFAULT_IM_STATUS: IMGatewayStatus = {
     lastInboundAt: null,
     lastOutboundAt: null,
   },
-  xiaomifeng: {
+  'netease-bee': {
     connected: false,
     startedAt: null,
     lastError: null,

@@ -860,9 +860,11 @@ export class IMCoworkHandler extends EventEmitter {
 
     if (accumulator.backgroundDelivery) {
       if (!this.sendAsyncReply || !replyText || replyText === '处理完成，但没有生成回复。') {
+        console.warn('[IMCoworkHandler] cannot send async IM reminder reply', replyText);
         return;
       }
       if (!isReminderSystemTurn(messages)) {
+        console.log('[IMCoworkHandler] not a reminder system turn, skipping async reply');
         return;
       }
       void this.sendAsyncReply(

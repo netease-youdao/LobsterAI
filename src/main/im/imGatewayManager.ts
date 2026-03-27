@@ -1,14 +1,13 @@
 /**
  * IM Gateway Manager
- * Unified manager for DingTalk, Feishu, NIM, Xiaomifeng gateways
- * and Telegram, Discord, QQ, WeCom, Weixin, POPO via OpenClaw
+ * Unified manager for DingTalk, Feishu, NIM gateways
+ * and Telegram, Discord, QQ, WeCom, Weixin, POPO, NeteaseBee via OpenClaw
  */
 
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import { t } from '../i18n';
 import { NimGateway } from './nimGateway';
-import { XiaomifengGateway } from './xiaomifengGateway';
 import { IMChatHandler } from './imChatHandler';
 import { IMCoworkHandler } from './imCoworkHandler';
 import { IMStore } from './imStore';
@@ -85,7 +84,6 @@ export interface IMGatewayManagerOptions {
 
 export class IMGatewayManager extends EventEmitter {
   private nimGateway: NimGateway;
-  private xiaomifengGateway: XiaomifengGateway;
   private imStore: IMStore;
   private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
@@ -120,7 +118,6 @@ export class IMGatewayManager extends EventEmitter {
 
     this.imStore = new IMStore(db, saveDb);
     this.nimGateway = new NimGateway();
-    this.xiaomifengGateway = new XiaomifengGateway();
 
     // Store Cowork dependencies if provided
     if (options?.coworkRuntime && options?.coworkStore) {
@@ -148,23 +145,7 @@ export class IMGatewayManager extends EventEmitter {
 
     // NIM runs via OpenClaw; no direct gateway events to forward
 
-    // Xiaomifeng events
-    this.xiaomifengGateway.on('status', () => {
-      this.emit('statusChange', this.getStatus());
-    });
-    this.xiaomifengGateway.on('connected', () => {
-      this.emit('statusChange', this.getStatus());
-    });
-    this.xiaomifengGateway.on('disconnected', () => {
-      this.emit('statusChange', this.getStatus());
-    });
-    this.xiaomifengGateway.on('error', (error) => {
-      this.emit('error', { platform: 'xiaomifeng', error });
-      this.emit('statusChange', this.getStatus());
-    });
-    this.xiaomifengGateway.on('message', (message: IMMessage) => {
-      this.emit('message', message);
-    });
+    // netease-bee runs via OpenClaw; no direct gateway events to forward
 
     // QQ runs via OpenClaw; no direct gateway events to forward
 
@@ -186,10 +167,7 @@ export class IMGatewayManager extends EventEmitter {
 
     // NIM runs via OpenClaw; no direct reconnect needed
 
-    if (this.xiaomifengGateway && !this.xiaomifengGateway.isConnected()) {
-      console.log('[IMGatewayManager] Reconnecting Xiaomifeng...');
-      this.xiaomifengGateway.reconnectIfNeeded();
-    }
+    // netease-bee runs via OpenClaw; no direct reconnect needed
 
     // QQ runs via OpenClaw; no direct reconnection needed
 
@@ -267,7 +245,6 @@ export class IMGatewayManager extends EventEmitter {
     };
 
     this.nimGateway.setMessageCallback(messageHandler);
-    this.xiaomifengGateway.setMessageCallback(messageHandler);
   }
 
   /**
@@ -384,31 +361,17 @@ export class IMGatewayManager extends EventEmitter {
     // Feishu now runs via OpenClaw; config sync is handled by IPC handler
 
 
-    // Hot-update Xiaomifeng config: restart if credential fields changed.
-    // Only perform hot-restart when syncGateway is explicitly true (i.e. user clicked Save).
-    if (options?.syncGateway && config.xiaomifeng && this.xiaomifengGateway) {
-      const oldXmf = previousConfig.xiaomifeng;
-      const newXmf = { ...oldXmf, ...config.xiaomifeng };
+    // Hot-update netease-bee config: sync OpenClaw config when credentials change.
+    // Only perform sync when syncGateway is explicitly true (i.e. user clicked Save).
+    if (options?.syncGateway && config['netease-bee']) {
+      const oldNb = previousConfig['netease-bee'];
+      const newNb = { ...oldNb, ...config['netease-bee'] };
       const credentialsChanged =
-        newXmf.clientId !== oldXmf.clientId ||
-        newXmf.secret !== oldXmf.secret;
-      const gatewayShouldBeActive =
-        Boolean(newXmf.enabled && newXmf.clientId && newXmf.secret);
-
-      // Check if gateway is connected OR actively reconnecting (has pending timer)
-      const isActiveOrReconnecting = this.xiaomifengGateway.isRunning() || this.xiaomifengGateway.isReconnecting();
-      if (credentialsChanged && gatewayShouldBeActive) {
-        if (isActiveOrReconnecting) {
-          console.log('[IMGatewayManager] Xiaomifeng credentials changed, restarting gateway...');
-          this.restartGateway('xiaomifeng').catch((err) => {
-            console.error('[IMGatewayManager] Failed to restart Xiaomifeng after config change:', err.message);
-          });
-        } else {
-          console.log('[IMGatewayManager] Xiaomifeng credentials changed, starting gateway...');
-          this.startGateway('xiaomifeng').catch((err) => {
-            console.error('[IMGatewayManager] Failed to start Xiaomifeng after config change:', err.message);
-          });
-        }
+        newNb.clientId !== oldNb?.clientId ||
+        newNb.secret !== oldNb?.secret;
+      if (credentialsChanged) {
+        console.log('[IMGatewayManager] netease-bee credentials changed, syncing OpenClaw config...');
+        this.syncOpenClawConfig?.();
       }
     }
 
@@ -495,7 +458,7 @@ export class IMGatewayManager extends EventEmitter {
           lastOutboundAt: null as number | null,
         };
       })(),
-      xiaomifeng: this.xiaomifengGateway.getStatus(),
+      'netease-bee': { connected: false, startedAt: null, lastError: null, botAccount: null, lastInboundAt: null, lastOutboundAt: null },
       wecom: {
         connected: Boolean(config.wecom?.enabled && config.wecom.botId && config.wecom.secret),
         startedAt: null as number | null,
@@ -752,8 +715,11 @@ export class IMGatewayManager extends EventEmitter {
       await this.syncOpenClawConfig?.();
       await this.ensureOpenClawGatewayConnected?.();
       return;
-    } else if (platform === 'xiaomifeng') {
-      await this.xiaomifengGateway.start(config.xiaomifeng);
+    } else if (platform === 'netease-bee') {
+      // netease-bee runs via OpenClaw gateway
+      console.log('[IMGatewayManager] netease-bee in OpenClaw mode, syncing config instead of starting direct gateway');
+      await this.ensureOpenClawGatewayConnected?.();
+      return;
     } else if (platform === 'qq') {
       // QQ runs via OpenClaw gateway (qqbot plugin)
       console.log('[IMGatewayManager] QQ in OpenClaw mode, syncing config instead of starting direct gateway');
@@ -810,8 +776,11 @@ export class IMGatewayManager extends EventEmitter {
       console.log('[IMGatewayManager] NIM in OpenClaw mode, syncing disabled config');
       await this.syncOpenClawConfig?.();
       return;
-    } else if (platform === 'xiaomifeng') {
-      await this.xiaomifengGateway.stop();
+    } else if (platform === 'netease-bee') {
+      // netease-bee runs via OpenClaw gateway
+      console.log('[IMGatewayManager] netease-bee in OpenClaw mode, syncing disabled config');
+      await this.syncOpenClawConfig?.();
+      return;
     } else if (platform === 'qq') {
       // QQ runs via OpenClaw gateway
       console.log('[IMGatewayManager] QQ in OpenClaw mode, syncing disabled config');
@@ -850,16 +819,6 @@ export class IMGatewayManager extends EventEmitter {
     // Ensure chat handler is ready (called once instead of per-platform)
     this.updateChatHandler();
 
-    // --- Non-OpenClaw platforms: start independently ---
-
-    if (config.xiaomifeng?.enabled && config.xiaomifeng?.clientId && config.xiaomifeng?.secret) {
-      try {
-        await this.startGateway('xiaomifeng');
-      } catch (error: any) {
-        console.error(`[IMGatewayManager] Failed to start Xiaomifeng: ${error.message}`);
-      }
-    }
-
     // --- OpenClaw platforms: collect and batch into a single sync ---
 
     const openClawPlatformsToStart: IMPlatform[] = [];
@@ -891,6 +850,9 @@ export class IMGatewayManager extends EventEmitter {
     if (config.nim?.enabled && config.nim.appKey && config.nim.account && config.nim.token) {
       openClawPlatformsToStart.push('nim');
     }
+    if (config['netease-bee']?.enabled && config['netease-bee']?.clientId && config['netease-bee']?.secret) {
+      openClawPlatformsToStart.push('netease-bee');
+    }
 
     if (openClawPlatformsToStart.length > 0) {
       console.log(`[IMGatewayManager] Starting OpenClaw platforms in batch: ${openClawPlatformsToStart.join(', ')}`);
@@ -904,13 +866,11 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   async stopAll(): Promise<void> {
-    await Promise.all([
-      this.xiaomifengGateway.stop(),
-    ]);
+    // All platforms run via OpenClaw; nothing to stop directly
   }
 
   isAnyConnected(): boolean {
-    return this.xiaomifengGateway.isConnected();
+    return false;
   }
 
   isConnected(platform: IMPlatform): boolean {
@@ -934,8 +894,10 @@ export class IMGatewayManager extends EventEmitter {
       const config = this.getConfig();
       return Boolean(config.nim?.enabled && config.nim.appKey && config.nim.account && config.nim.token);
     }
-    if (platform === 'xiaomifeng') {
-      return this.xiaomifengGateway.isConnected();
+    if (platform === 'netease-bee') {
+      // netease-bee runs via OpenClaw; status comes from OpenClaw
+      const config = this.getConfig();
+      return Boolean(config['netease-bee']?.enabled && config['netease-bee']?.clientId && config['netease-bee']?.secret);
     }
     if (platform === 'qq') {
       // QQ runs via OpenClaw; consider it connected when enabled and configured
@@ -981,8 +943,9 @@ export class IMGatewayManager extends EventEmitter {
       } else if (platform === 'popo') {
         // POPO runs via OpenClaw; notifications are handled by the moltbot-popo plugin
         console.log('[IMGatewayManager] POPO notification via OpenClaw not yet supported');
-      } else if (platform === 'xiaomifeng') {
-        await this.xiaomifengGateway.sendNotification(text);
+      } else if (platform === 'netease-bee') {
+        // netease-bee runs via OpenClaw; notifications not yet supported
+        console.log('[IMGatewayManager] netease-bee notification via OpenClaw not yet supported');
       }
       return true;
     } catch (error: any) {
@@ -1013,8 +976,9 @@ export class IMGatewayManager extends EventEmitter {
       } else if (platform === 'popo') {
         // POPO runs via OpenClaw; notifications are handled by the moltbot-popo plugin
         console.log('[IMGatewayManager] POPO notification with media via OpenClaw not yet supported');
-      } else if (platform === 'xiaomifeng') {
-        await this.xiaomifengGateway.sendNotificationWithMedia(text);
+      } else if (platform === 'netease-bee') {
+        // netease-bee runs via OpenClaw; notifications not yet supported
+        console.log('[IMGatewayManager] netease-bee notification via OpenClaw not yet supported');
       }
       return true;
     } catch (error: any) {
@@ -1610,7 +1574,7 @@ export class IMGatewayManager extends EventEmitter {
       telegram: { ...current.telegram, ...(configOverride.telegram || {}) },
       discord: { ...current.discord, ...(configOverride.discord || {}) },
       nim: { ...current.nim, ...(configOverride.nim || {}) },
-      xiaomifeng: { ...current.xiaomifeng, ...(configOverride.xiaomifeng || {}) },
+      'netease-bee': { ...current['netease-bee'], ...(configOverride['netease-bee'] || {}) },
       wecom: { ...current.wecom, ...(configOverride.wecom || {}) },
       weixin: { ...current.weixin, ...(configOverride.weixin || {}) },
       popo: { ...current.popo, ...(configOverride.popo || {}) },
@@ -1641,10 +1605,10 @@ export class IMGatewayManager extends EventEmitter {
       if (!config.nim.token) fields.push('token');
       return fields;
     }
-    if (platform === 'xiaomifeng') {
+    if (platform === 'netease-bee') {
       const fields: string[] = [];
-      if (!config.xiaomifeng?.clientId) fields.push('clientId');
-      if (!config.xiaomifeng?.secret) fields.push('secret');
+      if (!config['netease-bee']?.clientId) fields.push('clientId');
+      if (!config['netease-bee']?.secret) fields.push('secret');
       return fields;
     }
     if (platform === 'qq') {
@@ -1712,14 +1676,14 @@ export class IMGatewayManager extends EventEmitter {
       return t('imNimConfigReady', { account });
     }
 
-    if (platform === 'xiaomifeng') {
-      // 小蜜蜂使用网易云信 NIM SDK，鉴权是通过 SDK 登录验证的
-      // 这里我们只做配置完整性检查，实际登录验证在 start 时进行
-      const { clientId, secret } = config.xiaomifeng;
+    if (platform === 'netease-bee') {
+      const nbConfig = config['netease-bee'];
+      const clientId = nbConfig?.clientId;
+      const secret = nbConfig?.secret;
       if (!clientId || !secret) {
         throw new Error(t('imConfigIncomplete'));
       }
-      return t('imXiaomifengConfigReady', { clientId });
+      return `网易小蜜蜂配置已就绪（Client ID: ${clientId}），通过 OpenClaw 运行。`;
     }
 
     if (platform === 'wecom') {
@@ -1774,9 +1738,6 @@ export class IMGatewayManager extends EventEmitter {
   async sendConversationReply(platform: IMPlatform, conversationId: string, text: string): Promise<boolean> {
     try {
       switch (platform) {
-        case 'xiaomifeng':
-          await this.xiaomifengGateway.sendConversationNotification(conversationId, text);
-          return true;
         default:
           return this.sendNotificationWithMedia(platform, text);
       }
@@ -2215,7 +2176,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'dingtalk') return status.dingtalk.startedAt;
     if (platform === 'telegram') return status.telegram.startedAt;
     if (platform === 'nim') return status.nim.startedAt;
-    if (platform === 'xiaomifeng') return status.xiaomifeng.startedAt;
+    if (platform === 'netease-bee') return status['netease-bee'].startedAt;
     if (platform === 'qq') return status.qq.startedAt;
     if (platform === 'wecom') return status.wecom.startedAt;
     if (platform === 'weixin') return status.weixin.startedAt;
@@ -2228,7 +2189,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'feishu') return status.feishu.lastInboundAt;
     if (platform === 'telegram') return status.telegram.lastInboundAt;
     if (platform === 'nim') return status.nim.lastInboundAt;
-    if (platform === 'xiaomifeng') return status.xiaomifeng.lastInboundAt;
+    if (platform === 'netease-bee') return status['netease-bee'].lastInboundAt;
     if (platform === 'qq') return status.qq.lastInboundAt;
     if (platform === 'wecom') return status.wecom.lastInboundAt;
     if (platform === 'weixin') return status.weixin.lastInboundAt;
@@ -2241,7 +2202,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'feishu') return status.feishu.lastOutboundAt;
     if (platform === 'telegram') return status.telegram.lastOutboundAt;
     if (platform === 'nim') return status.nim.lastOutboundAt;
-    if (platform === 'xiaomifeng') return status.xiaomifeng.lastOutboundAt;
+    if (platform === 'netease-bee') return status['netease-bee'].lastOutboundAt;
     if (platform === 'qq') return status.qq.lastOutboundAt;
     if (platform === 'wecom') return status.wecom.lastOutboundAt;
     if (platform === 'weixin') return status.weixin.lastOutboundAt;
@@ -2254,7 +2215,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'feishu') return status.feishu.error;
     if (platform === 'telegram') return status.telegram.lastError;
     if (platform === 'nim') return status.nim.lastError;
-    if (platform === 'xiaomifeng') return status.xiaomifeng.lastError;
+    if (platform === 'netease-bee') return status['netease-bee'].lastError;
     if (platform === 'qq') return status.qq.lastError;
     if (platform === 'wecom') return status.wecom.lastError;
     if (platform === 'weixin') return status.weixin.lastError;

@@ -328,10 +328,10 @@ contextBridge.exposeInMainWorld('electron', {
     syncConfig: () => ipcRenderer.invoke('im:config:sync'),
 
     // Gateway control
-    startGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin') => ipcRenderer.invoke('im:gateway:start', platform),
-    stopGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin') => ipcRenderer.invoke('im:gateway:stop', platform),
+    startGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin') => ipcRenderer.invoke('im:gateway:start', platform),
+    stopGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin') => ipcRenderer.invoke('im:gateway:stop', platform),
     testGateway: (
-      platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin',
+      platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin',
       configOverride?: any
     ) => ipcRenderer.invoke('im:gateway:test', platform, configOverride),
 

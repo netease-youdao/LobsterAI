@@ -99,7 +99,7 @@ const SCHEDULED_TASK_CHANNEL_OPTIONS = [
   { value: 'popo', label: 'POPO' },
   { value: 'nim', label: 'NIM' },
   { value: 'openclaw-weixin', label: 'WeChat' },
-  { value: 'xiaomifeng', label: 'Xiaomifeng' },
+  { value: 'netease-bee', label: 'NetEase Bee' },
 ] as const;
 const MIME_EXTENSION_MAP: Record<string, string> = {
   'image/png': '.png',
@@ -831,6 +831,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       getNimConfig: () => {
         try {
           return getIMGatewayManager().getConfig().nim;
+        } catch {
+          return null;
+        }
+      },
+      getNeteaseBeeChanConfig: () => {
+        try {
+          return getIMGatewayManager().getConfig()['netease-bee'];
         } catch {
           return null;
         }
