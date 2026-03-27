@@ -12,9 +12,9 @@
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
-        "id": "dingtalk-connector",
-        "npm": "@dingtalk-real-ai/dingtalk-connector",
-        "version": "0.7.9"
+        "id": "dingtalk",
+        "npm": "@soimy/dingtalk",
+        "version": "3.3.0"
       },
       {
         "id": "feishu-openclaw-plugin",

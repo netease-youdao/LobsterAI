@@ -676,7 +676,7 @@ export class OpenClawConfigSync {
               // When a channel is disabled in the UI, its plugin must also be
               // disabled so OpenClaw doesn't load it at all.
               const pluginEnabled = (() => {
-                if (id === 'dingtalk-connector') return !!(dingTalkConfig?.enabled && dingTalkConfig.clientId);
+                if (id === 'dingtalk') return !!(dingTalkConfig?.enabled && dingTalkConfig.clientId);
                 if (id === 'feishu-openclaw-plugin') return !!(feishuConfig?.enabled && feishuConfig.appId);
                 if (id === 'qqbot') return !!(qqConfig?.enabled && qqConfig.appId);
                 if (id === 'wecom-openclaw-plugin') return !!(wecomConfig?.enabled && wecomConfig.botId);
@@ -875,7 +875,7 @@ export class OpenClawConfigSync {
         ...(dingTalkConfig.gatewayBaseUrl ? { gatewayBaseUrl: dingTalkConfig.gatewayBaseUrl } : {}),
         ...(gatewayToken ? { gatewayToken: '${LOBSTER_DINGTALK_GW_TOKEN}' } : {}),
       };
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'dingtalk-connector': dingtalkChannel };
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'dingtalk': dingtalkChannel };
     }
 
     // Sync QQ OpenClaw channel config (via qqbot plugin)
@@ -1009,7 +1009,7 @@ export class OpenClawConfigSync {
     if (platformBindingsForSentinel) {
       // Map openclaw channel key → platform key
       const channelToPlatform: Record<string, string> = {
-        'dingtalk-connector': 'dingtalk',
+        dingtalk: 'dingtalk',
         feishu: 'feishu',
         telegram: 'telegram',
         discord: 'discord',
@@ -1487,7 +1487,7 @@ export class OpenClawConfigSync {
 
     // Map openclaw channel name → platform key used in platformAgentBindings
     const channelMap: Array<{ getter: () => { enabled: boolean } | null; channel: string; platform: string }> = [
-      { getter: () => this.getDingTalkConfig(), channel: 'dingtalk-connector', platform: 'dingtalk' },
+      { getter: () => this.getDingTalkConfig(), channel: 'dingtalk', platform: 'dingtalk' },
       { getter: () => this.getFeishuConfig(), channel: 'feishu', platform: 'feishu' },
       { getter: () => this.getTelegramOpenClawConfig?.() ?? null, channel: 'telegram', platform: 'telegram' },
       { getter: () => this.getDiscordOpenClawConfig?.() ?? null, channel: 'discord', platform: 'discord' },

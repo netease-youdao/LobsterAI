@@ -90,7 +90,7 @@ const IPC_MAX_ITEMS = 40;
 const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const ENGINE_NOT_READY_CODE = 'ENGINE_NOT_READY';
 const SCHEDULED_TASK_CHANNEL_OPTIONS = [
-  { value: 'dingtalk-connector', label: 'DingTalk' },
+  { value: 'dingtalk', label: 'DingTalk' },
   { value: 'feishu', label: 'Feishu' },
   { value: 'telegram', label: 'Telegram' },
   { value: 'discord', label: 'Discord' },
@@ -1358,13 +1358,13 @@ const getIMGatewayManager = () => {
           return openClawRuntimeAdapter?.getSessionKeysForSession(sessionId) ?? [];
         },
         createScheduledTask: async ({ sessionId, message, request }) => {
-          if (message.platform === 'dingtalk') {
-            await getIMGatewayManager().primeConversationReplyRoute(
-              message.platform,
-              message.conversationId,
-              sessionId,
-            );
-          }
+          // if (message.platform === 'dingtalk') {
+          //   await getIMGatewayManager().primeConversationReplyRoute(
+          //     message.platform,
+          //     message.conversationId,
+          //     sessionId,
+          //   );
+          // }
           const channelName = PLATFORM_TO_CHANNEL_MAP[message.platform];
           const hasChannel = !!(channelName && message.conversationId);
           // Strip IM subtype prefix (e.g. "direct:ou_xxx" -> "ou_xxx")
@@ -1506,7 +1506,7 @@ function listScheduledTaskChannels(): Array<{ value: string; label: string }> {
   }
 
   return SCHEDULED_TASK_CHANNEL_OPTIONS.filter((option) => {
-    if (option.value === 'dingtalk-connector') {
+    if (option.value === 'dingtalk') {
       return enabledConfigKeys.has('dingtalk');
     }
     if (option.value === 'qqbot') {

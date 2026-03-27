@@ -63,7 +63,7 @@ export const CHANNEL_PLATFORM_MAP: Record<string, IMPlatform> = {
   telegram: 'telegram',
   discord: 'discord',
   feishu: 'feishu',
-  'dingtalk-connector': 'dingtalk',
+  dingtalk: 'dingtalk',
   qqbot: 'qq',
   'wecom-openclaw-plugin': 'wecom',
   wecom: 'wecom',

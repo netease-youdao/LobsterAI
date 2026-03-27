@@ -1774,27 +1774,6 @@ export class IMGatewayManager extends EventEmitter {
   async sendConversationReply(platform: IMPlatform, conversationId: string, text: string): Promise<boolean> {
     try {
       switch (platform) {
-        case 'dingtalk': {
-          const target = await this.resolveDingTalkConversationReplyTarget(conversationId)
-            ?? this.parseDingTalkConversationTarget(conversationId);
-          if (!target) {
-            // Fallback: try to extract userId directly from conversationId (raw peerId).
-            const fallbackUserId = conversationId.trim();
-            if (!fallbackUserId) {
-              console.warn(`[IMGatewayManager] Cannot resolve DingTalk target from conversationId: ${conversationId}`);
-              return false;
-            }
-            return this.sendDingTalkDirectHttp(fallbackUserId, text);
-          }
-          // Extract userId from target string like "user:0146552636218419"
-          const userId = target.target.startsWith('user:')
-            ? target.target.slice(5)
-            : target.target;
-          return this.sendDingTalkDirectHttp(userId, text);
-        }
-        case 'nim':
-          console.log('[IMGatewayManager] NIM conversation reply via OpenClaw not yet supported');
-          return false;
         case 'xiaomifeng':
           await this.xiaomifengGateway.sendConversationNotification(conversationId, text);
           return true;
@@ -2047,7 +2026,7 @@ export class IMGatewayManager extends EventEmitter {
     return {
       coworkSessionId: normalizedCoworkSessionId,
       candidateSessionKeys,
-      dingtalkSessionKeys: this.collectSessionKeysByChannel(sessions, 'dingtalk-connector'),
+      dingtalkSessionKeys: this.collectSessionKeysByChannel(sessions, 'dingtalk'),
       resolved: resolveOpenClawDeliveryRouteForSessionKeys(candidateSessionKeys, sessions)
         ?? resolveManagedSessionDeliveryRoute(normalizedCoworkSessionId, sessions),
     };
@@ -2174,7 +2153,7 @@ export class IMGatewayManager extends EventEmitter {
       return {
         sessionKey,
         route: {
-          channel: 'dingtalk-connector',
+          channel: 'dingtalk',
           to,
           ...(accountId ? { accountId } : {}),
         },
