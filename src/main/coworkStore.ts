@@ -348,6 +348,7 @@ export interface CoworkSessionSummary {
   title: string;
   status: CoworkSessionStatus;
   pinned: boolean;
+  folder: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -669,12 +670,13 @@ export class CoworkStore {
       title: string;
       status: string;
       pinned: number | null;
+      folder: string | null;
       created_at: number;
       updated_at: number;
     }
 
     const rows = this.getAll<SessionSummaryRow>(`
-      SELECT id, title, status, pinned, created_at, updated_at
+      SELECT id, title, status, pinned, folder, created_at, updated_at
       FROM cowork_sessions
       ORDER BY pinned DESC, updated_at DESC
     `);
@@ -684,9 +686,15 @@ export class CoworkStore {
       title: row.title,
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
+      folder: row.folder || '',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
+  }
+
+  setSessionFolder(id: string, folder: string): void {
+    this.db.run('UPDATE cowork_sessions SET folder = ? WHERE id = ?', [folder, id]);
+    this.saveDb();
   }
 
   resetRunningSessions(): number {

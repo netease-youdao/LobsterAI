@@ -152,6 +152,7 @@ export interface CoworkSessionSummary {
   title: string;
   status: CoworkSessionStatus;
   pinned: boolean;
+  folder: string;
   createdAt: number;
   updatedAt: number;
 }

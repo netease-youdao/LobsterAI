@@ -126,6 +126,7 @@ const coworkSlice = createSlice({
             title,
             status,
             pinned: pinned ?? false,
+            folder: state.sessions.find(s => s.id === id)?.folder ?? '',
             createdAt,
             updatedAt,
           };
@@ -158,6 +159,7 @@ const coworkSlice = createSlice({
         title: action.payload.title,
         status: action.payload.status,
         pinned: action.payload.pinned ?? false,
+        folder: '',
         createdAt: action.payload.createdAt,
         updatedAt: action.payload.updatedAt,
       };
@@ -265,6 +267,14 @@ const coworkSlice = createSlice({
       }
     },
 
+    updateSessionFolder(state, action: PayloadAction<{ sessionId: string; folder: string }>) {
+      const { sessionId, folder } = action.payload;
+      const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
+      if (sessionIndex !== -1) {
+        state.sessions[sessionIndex].folder = folder;
+      }
+    },
+
     updateSessionTitle(state, action: PayloadAction<{ sessionId: string; title: string }>) {
       const { sessionId, title } = action.payload;
       const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
@@ -333,6 +343,7 @@ export const {
   setStreaming,
   setRemoteManaged,
   updateSessionPinned,
+  updateSessionFolder,
   updateSessionTitle,
   enqueuePendingPermission,
   dequeuePendingPermission,
