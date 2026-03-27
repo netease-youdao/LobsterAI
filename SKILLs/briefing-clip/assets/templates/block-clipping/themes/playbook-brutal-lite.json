@@ -1,0 +1,19 @@
+{
+  "preset": "playbook-brutal-lite",
+  "tokens": {
+    "color": {
+      "pageBg": "#f2e9d2",
+      "pageBgAlt": "#f7f0df",
+      "surface": "#ffffff",
+      "surfaceSoft": "#fff4d4",
+      "ink": "#121212",
+      "muted": "#585858",
+      "accent": "#111111",
+      "accentSoft": "#ffe25a",
+      "line": "#111111",
+      "chipNeutral": "#ffe25a",
+      "chipAccent": "#f3a7c6",
+      "chipPositive": "#8fd0f3"
+    }
+  }
+}
