@@ -584,6 +584,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
+  const [memoryModalError, setMemoryModalError] = useState<string>('');
   const [bootstrapIdentity, setBootstrapIdentity] = useState<string>('');
   const [bootstrapUser, setBootstrapUser] = useState<string>('');
   const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
@@ -1262,6 +1263,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const resetCoworkMemoryEditor = () => {
     setCoworkMemoryEditingId(null);
     setCoworkMemoryDraftText('');
+    setMemoryModalError('');
     setShowMemoryModal(false);
   };
 
@@ -1269,9 +1271,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     const text = coworkMemoryDraftText.trim();
     if (!text) return;
     if (text.length < 2) {
-      setError(i18nService.t('coworkMemoryCrudTextTooShort'));
+      setMemoryModalError(i18nService.t('coworkMemoryCrudTextTooShort'));
       return;
     }
+    setMemoryModalError('');
 
     setCoworkMemoryListLoading(true);
     try {
@@ -3754,11 +3757,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   )}
                   <textarea
                     value={coworkMemoryDraftText}
-                    onChange={(event) => setCoworkMemoryDraftText(event.target.value)}
+                    onChange={(event) => { setCoworkMemoryDraftText(event.target.value); setMemoryModalError(''); }}
                     placeholder={i18nService.t('coworkMemoryCrudTextPlaceholder')}
                     autoFocus
                     className="min-h-[200px] w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30"
                   />
+                  {memoryModalError && (
+                    <p className="text-xs text-red-500 mt-1">{memoryModalError}</p>
+                  )}
                 </div>
 
                 <div className="flex justify-end space-x-2 px-5 pb-5">
