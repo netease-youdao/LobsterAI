@@ -63,6 +63,7 @@ import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints'
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
+import { SkillAnalyticsService } from './libs/skillAnalyticsService';
 import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
@@ -575,6 +576,7 @@ let openClawStatusForwarderBound = false;
 let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
+let skillAnalyticsService: SkillAnalyticsService | null = null;
 
 const initStore = async (): Promise<SqliteStore> => {
   if (!storeInitPromise) {
@@ -2208,6 +2210,23 @@ if (!gotTheLock) {
     config: Record<string, string>
   ) => {
     return getSkillManager().testEmailConnectivity(skillId, config);
+  });
+
+  ipcMain.handle('skill-analytics:getSkillDetail', (_event, skillName: string, timeRange?: { from: number; to: number }) => {
+    try {
+      if (!skillAnalyticsService) {
+        const sqliteStore = getStore();
+        skillAnalyticsService = new SkillAnalyticsService(
+          sqliteStore.getDatabase(),
+          sqliteStore.getSaveFunction()
+        );
+        skillAnalyticsService.start();
+      }
+      const data = skillAnalyticsService.getSkillDetail(skillName, timeRange);
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get skill detail' };
+    }
   });
 
   ipcMain.handle('openclaw:engine:getStatus', async () => {
@@ -4587,6 +4606,12 @@ if (!gotTheLock) {
     // on 401/403 with a fresh accessToken instead of failing immediately.
     // Delegates to the shared refreshOnce() to avoid concurrent refresh races.
     setProxyTokenRefresher(() => refreshOnce('proxy'));
+
+    skillAnalyticsService = new SkillAnalyticsService(
+      store.getDatabase(),
+      store.getSaveFunction()
+    );
+    skillAnalyticsService.start();
 
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();

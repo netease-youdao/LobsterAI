@@ -258,6 +258,9 @@ interface IElectronAPI {
     ) => Promise<{ success: boolean; result?: EmailConnectivityTestResult; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
+  skillAnalytics: {
+    getSkillDetail: (skillName: string, timeRange?: { from: number; to: number }) => Promise<{ success: boolean; data?: any; error?: string }>;
+  };
   mcp: {
     list: () => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
     create: (data: any) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;

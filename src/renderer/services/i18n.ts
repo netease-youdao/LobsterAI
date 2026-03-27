@@ -646,6 +646,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     clearAll: '全部清除',
     clearAllSkills: '清除所有已选技能',
 
+    skillAnalyticsButton: '技能统计',
+    skillAnalyticsExecutions: '执行次数',
+    skillAnalyticsCompletionRate: '完成率',
+    skillAnalyticsScriptLatency: '脚本平均耗时',
+    skillAnalyticsNoData: '暂无数据，请先使用技能后再查看统计',
+
     // MCP 服务
     mcpServers: 'MCP',
     mcpDescription: '配置和管理 MCP（Model Context Protocol）服务器，为您的智能体扩展工具能力',
@@ -1797,6 +1803,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     clearSkill: 'Clear Skill',
     clearAll: 'Clear All',
     clearAllSkills: 'Clear all selected skills',
+
+    skillAnalyticsButton: 'Skill Stats',
+    skillAnalyticsExecutions: 'Executions',
+    skillAnalyticsCompletionRate: 'Completion Rate',
+    skillAnalyticsScriptLatency: 'Script Avg Latency',
+    skillAnalyticsNoData: 'No data yet. Use skills first to see stats.',
 
     // MCP Servers
     mcpServers: 'MCP',
