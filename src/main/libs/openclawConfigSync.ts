@@ -1375,7 +1375,7 @@ export class OpenClawConfigSync {
 
       // Keep scheduled-task policy after skills so native channel sessions
       // treat it as the final app-managed override for reminder handling.
-      const scheduledTaskPrompt = buildScheduledTaskEnginePrompt('openclaw').replaceAll(MARKER, '');
+      const scheduledTaskPrompt = buildScheduledTaskEnginePrompt().replaceAll(MARKER, '');
       if (scheduledTaskPrompt) {
         sections.push(scheduledTaskPrompt);
       }

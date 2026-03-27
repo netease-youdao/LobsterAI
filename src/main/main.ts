@@ -6,12 +6,9 @@ import os from 'os';
 import { SqliteStore } from './sqliteStore';
 import { CoworkStore } from './coworkStore';
 import { AgentManager } from './agentManager';
-import { CoworkRunner } from './libs/coworkRunner';
 import {
-  ClaudeRuntimeAdapter,
   CoworkEngineRouter,
   OpenClawRuntimeAdapter,
-  type CoworkAgentEngine,
 } from './libs/agentEngine';
 import { SkillManager } from './skillManager';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
@@ -555,8 +552,6 @@ process.on('exit', (code) => {
 
 let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
-let coworkRunner: CoworkRunner | null = null;
-let claudeRuntimeAdapter: ClaudeRuntimeAdapter | null = null;
 let openClawRuntimeAdapter: OpenClawRuntimeAdapter | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let skillManager: SkillManager | null = null;
@@ -775,9 +770,8 @@ const getAgentManager = () => {
   return agentManager;
 };
 
-const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
-  const configured = getCoworkStore().getConfig().agentEngine;
-  return configured === 'openclaw' ? 'openclaw' : 'yd_cowork';
+const resolveCoworkAgentEngine = (): 'openclaw' => {
+  return 'openclaw';
 };
 
 const getOpenClawConfigSync = (): OpenClawConfigSync => {
@@ -1003,18 +997,6 @@ const syncOpenClawConfig = async (
   };
 };
 
-const getCoworkRunner = () => {
-  if (!coworkRunner) {
-    coworkRunner = new CoworkRunner(getCoworkStore());
-
-    // Provide MCP server configuration to the runner
-    coworkRunner.setMcpServerProvider(() => {
-      return getMcpStore().getEnabledServers();
-    });
-  }
-  return coworkRunner;
-};
-
 const bindCoworkRuntimeForwarder = (): void => {
   if (coworkRuntimeForwarderBound) return;
   const runtime = getCoworkEngineRouter();
@@ -1098,9 +1080,6 @@ const bindCoworkRuntimeForwarder = (): void => {
 
 const getCoworkEngineRouter = () => {
   if (!coworkEngineRouter) {
-    if (!claudeRuntimeAdapter) {
-      claudeRuntimeAdapter = new ClaudeRuntimeAdapter(getCoworkRunner());
-    }
     if (!openClawRuntimeAdapter) {
       openClawRuntimeAdapter = new OpenClawRuntimeAdapter(getCoworkStore(), getOpenClawEngineManager());
       // Wire up channel session sync for IM conversations via OpenClaw
@@ -1121,9 +1100,7 @@ const getCoworkEngineRouter = () => {
       }
     }
     coworkEngineRouter = new CoworkEngineRouter({
-      getCurrentEngine: resolveCoworkAgentEngine,
       openclawRuntime: openClawRuntimeAdapter,
-      claudeRuntime: claudeRuntimeAdapter,
     });
   }
   return coworkEngineRouter;
@@ -1520,11 +1497,11 @@ function listScheduledTaskChannels(): Array<{ value: string; label: string }> {
 }
 
 function mergeCoworkSystemPrompt(
-  engine: CoworkAgentEngine,
+  _engine: 'openclaw',
   systemPrompt?: string,
 ): string | undefined {
   const sections = [
-    buildScheduledTaskEnginePrompt(engine),
+    buildScheduledTaskEnginePrompt(),
     systemPrompt?.trim() || '',
   ].filter(Boolean);
   return sections.length > 0 ? sections.join('\n\n') : undefined;
@@ -2512,12 +2489,6 @@ if (!gotTheLock) {
         metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
 
-      const runner = getCoworkRunner();
-
-      // Update session status to 'running' before starting async task
-      // This ensures the frontend receives the correct status immediately
-      coworkStoreInstance.updateSession(session.id, { status: 'running' });
-
       // Start the session asynchronously (skip initial user message since we already added it)
       const runtime = getCoworkEngineRouter();
       runtime.startSession(session.id, options.prompt, {
@@ -3118,7 +3089,7 @@ if (!gotTheLock) {
   ipcMain.handle('cowork:config:set', async (_event, config: {
     workingDirectory?: string;
     executionMode?: 'auto' | 'local' | 'sandbox';
-    agentEngine?: CoworkAgentEngine;
+    agentEngine?: 'openclaw';
     memoryEnabled?: boolean;
     memoryImplicitUpdateEnabled?: boolean;
     memoryLlmJudgeEnabled?: boolean;
@@ -3130,11 +3101,9 @@ if (!gotTheLock) {
         config.executionMode && String(config.executionMode) === 'container'
           ? 'local'
           : config.executionMode;
-      const normalizedAgentEngine = config.agentEngine === 'yd_cowork'
-        ? 'yd_cowork'
-        : config.agentEngine === 'openclaw'
-          ? 'openclaw'
-          : undefined;
+      const normalizedAgentEngine = config.agentEngine === 'openclaw'
+        ? 'openclaw' as const
+        : undefined;
       const normalizedMemoryEnabled = typeof config.memoryEnabled === 'boolean'
         ? config.memoryEnabled
         : undefined;
@@ -3186,7 +3155,7 @@ if (!gotTheLock) {
 
       const nextConfig = getCoworkStore().getConfig();
       if (normalizedAgentEngine !== undefined && normalizedAgentEngine !== previousConfig.agentEngine) {
-        getCoworkEngineRouter().handleEngineConfigChanged(normalizedAgentEngine);
+        getCoworkEngineRouter().handleEngineConfigChanged();
       }
       const switchedToOpenClaw = normalizedAgentEngine === 'openclaw'
         && previousConfig.agentEngine !== 'openclaw';

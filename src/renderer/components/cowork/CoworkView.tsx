@@ -47,7 +47,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     isStreaming,
     config,
   } = useSelector((state: RootState) => state.cowork);
-  const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
+  const isOpenClawEngine = true;
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
