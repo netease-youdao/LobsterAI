@@ -1,4 +1,4 @@
-import { Skill, MarketplaceSkill, MarketTag, LocalSkillInfo, LocalizedText } from '../types/skill';
+import { Skill, MarketplaceSkill, MarketTag, LocalSkillInfo, LocalizedText, SkillInstallConflict } from '../types/skill';
 import { getSkillStoreUrl } from './endpoints';
 import { i18nService } from './i18n';
 
@@ -20,6 +20,15 @@ type EmailConnectivityTestResult = {
   testedAt: number;
   verdict: 'pass' | 'fail';
   checks: EmailConnectivityCheck[];
+};
+
+type SkillInstallResult = {
+  success: boolean;
+  skills?: Skill[];
+  error?: string;
+  auditReport?: any;
+  pendingInstallId?: string;
+  installConflict?: SkillInstallConflict;
 };
 
 class SkillService {
@@ -78,13 +87,7 @@ class SkillService {
     }
   }
 
-  async downloadSkill(source: string): Promise<{
-    success: boolean;
-    skills?: Skill[];
-    error?: string;
-    auditReport?: any;
-    pendingInstallId?: string;
-  }> {
+  async downloadSkill(source: string): Promise<SkillInstallResult> {
     try {
       const result = await window.electron.skills.download(source);
       if (result.success && result.skills) {
@@ -101,7 +104,7 @@ class SkillService {
   async confirmInstall(
     pendingId: string,
     action: string
-  ): Promise<{ success: boolean; skills?: Skill[]; error?: string }> {
+  ): Promise<SkillInstallResult> {
     try {
       const result = await window.electron.skills.confirmInstall(pendingId, action);
       if (result.success && result.skills) {
