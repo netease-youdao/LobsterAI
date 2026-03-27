@@ -1312,6 +1312,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isNavigatingRef = useRef(false);
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
+  const railLinesRef = useRef<HTMLDivElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
   const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
   const [isRailHovered, setIsRailHovered] = useState(false);
@@ -1805,6 +1806,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [currentRailIndex, turns]);
 
+  // Scroll rail lines container to keep active item visible
+  useEffect(() => {
+    const container = railLinesRef.current;
+    if (!container || currentRailIndex < 0) return;
+    const activeEl = container.children[currentRailIndex] as HTMLElement | undefined;
+    if (activeEl) {
+      activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [currentRailIndex]);
+
   // Auto scroll to bottom when new messages arrive or content updates (streaming)
   useEffect(() => {
     if (!shouldAutoScroll) {
@@ -2098,6 +2109,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             </button>
 
             {/* Message Lines */}
+            <div
+              ref={railLinesRef}
+              className="overflow-hidden"
+              style={{ maxHeight: '60vh' }}
+            >
             {(() => {
               // Build flat list of messages with their content length and turn index
               const MIN_W = 6;  // px
@@ -2188,6 +2204,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 );
               });
             })()}
+            </div>
 
             {/* Down Arrow */}
             <button
