@@ -1192,21 +1192,31 @@ export class OpenClawEngineManager extends EventEmitter {
   private stopGatewayProcess(child: GatewayProcess): void {
     this.expectedGatewayExits.add(child);
 
+    // Remove all listeners on stdout/stderr/child to prevent fd handle leaks.
+    // These were attached by attachGatewayProcessLogs() and attachGatewayExitHandlers().
+    child.stdout?.removeAllListeners();
+    child.stderr?.removeAllListeners();
+    child.removeAllListeners();
+
     try {
       child.kill();
     } catch {
       // ignore
     }
 
-    setTimeout(() => {
+    const forceKillTimer = setTimeout(() => {
       try {
         if ('pid' in child && typeof child.pid === 'number') {
-          child.kill();
+          process.kill(child.pid, 'SIGKILL');
         }
       } catch {
-        // ignore
+        // ignore — process may have already exited
       }
     }, 1200);
+
+    child.once('exit', () => {
+      clearTimeout(forceKillTimer);
+    });
   }
 
   // Workaround: Electron utilityProcess V8 isolate reports getTimezoneOffset()=0.
