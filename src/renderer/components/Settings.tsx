@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import Modal from './common/Modal';
 import { configService } from '../services/config';
 import { apiService } from '../services/api';
 import { checkForAppUpdate } from '../services/appUpdate';
@@ -3422,14 +3423,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 modal-backdrop flex items-center justify-center"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <Modal
+      onClose={onClose}
+      overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center"
+      className="relative flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
+      onClick={handleSettingsClick}
     >
-      <div
-        className="relative flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"
-        onClick={handleSettingsClick}
-      >
         {/* Left sidebar */}
         <div className="w-[220px] shrink-0 flex flex-col dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted border-r dark:border-claude-darkBorder border-claude-border rounded-l-2xl overflow-y-auto">
           <div className="px-5 pt-5 pb-3">
@@ -3775,11 +3774,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </button>
                 </div>
               </div>
-            </div>
-          )}
-      </div>
-    </div>
+          </div>
+        )}
+    </Modal>
   );
 };
 
-export default Settings; 
+export default Settings;

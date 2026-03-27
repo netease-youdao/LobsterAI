@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useSelector } from 'react-redux';
+import Modal from '../common/Modal';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
 import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
@@ -2060,14 +2061,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
       {/* Delete Confirmation Modal */}
       {showConfirmDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
-          onClick={handleCancelDelete}
+        <Modal
+          onClose={handleCancelDelete}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
+          className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
         >
-          <div
-            className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
-            onClick={(e) => e.stopPropagation()}
-          >
             {/* Header */}
             <div className="flex items-center gap-3 px-5 py-4">
               <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
@@ -2100,8 +2098,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 {i18nService.t('deleteSession')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Messages */}

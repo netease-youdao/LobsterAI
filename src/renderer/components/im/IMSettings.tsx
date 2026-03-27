@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import Modal from '../common/Modal';
 import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { RootState } from '../../store';
@@ -3818,14 +3819,11 @@ const IMSettings: React.FC = () => {
         )}
 
         {connectivityModalPlatform && (
-          <div
-            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
-            onClick={() => setConnectivityModalPlatform(null)}
+          <Modal
+            onClose={() => setConnectivityModalPlatform(null)}
+            overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+            className="w-full max-w-2xl dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal border dark:border-claude-darkBorder border-claude-border overflow-hidden"
           >
-            <div
-              className="w-full max-w-2xl dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal border dark:border-claude-darkBorder border-claude-border overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
               <div className="px-4 py-3 border-b dark:border-claude-darkBorder border-claude-border flex items-center justify-between">
                 <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
                   {`${i18nService.t(connectivityModalPlatform)} ${i18nService.t('imConnectivitySectionTitle')}`}
@@ -3894,8 +3892,7 @@ const IMSettings: React.FC = () => {
               <div className="px-4 py-3 border-t dark:border-claude-darkBorder border-claude-border flex items-center justify-end">
                 {renderConnectivityTestButton(connectivityModalPlatform)}
               </div>
-            </div>
-          </div>
+          </Modal>
         )}
       </div>
     </div>

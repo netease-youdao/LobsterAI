@@ -3,6 +3,7 @@ import { agentService } from '../../services/agent';
 import { i18nService } from '../../services/i18n';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import AgentSkillSelector from './AgentSkillSelector';
+import Modal from '../common/Modal';
 
 interface AgentCreateModalProps {
   isOpen: boolean;
@@ -45,11 +46,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div
-        className="w-full max-w-md mx-4 rounded-xl shadow-xl bg-white dark:bg-claude-darkSurface border dark:border-claude-darkBorder border-claude-border"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal isOpen={isOpen} onClose={onClose} className="w-full max-w-md mx-4 rounded-xl shadow-xl bg-white dark:bg-claude-darkSurface border dark:border-claude-darkBorder border-claude-border">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
           <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
             {i18nService.t('createAgent') || 'Create Agent'}
@@ -125,8 +122,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
             {creating ? (i18nService.t('creating') || 'Creating...') : (i18nService.t('create') || 'Create')}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import Modal from '../common/Modal';
 import { useDispatch, useSelector } from 'react-redux';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
@@ -672,14 +673,7 @@ const McpManager: React.FC = () => {
 
       {/* Delete confirmation modal */}
       {pendingDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={handleCancelDelete}
-        >
-          <div
-            className="w-full max-w-sm mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-5"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <Modal onClose={handleCancelDelete} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-sm mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-5">
             <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
               {i18nService.t('deleteMcpServer')}
             </div>
@@ -709,8 +703,7 @@ const McpManager: React.FC = () => {
                 {i18nService.t('confirmDelete')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Edit / Registry-install form modal */}

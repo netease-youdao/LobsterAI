@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { i18nService } from '../../services/i18n';
+import Modal from '../common/Modal';
 import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
 
 interface McpServerFormModalProps {
@@ -218,14 +219,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     : i18nService.t('saveMcpServer');
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
             {modalTitle}
@@ -434,8 +428,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
+import Modal from '../common/Modal';
 import {
   ShieldCheckIcon,
   ChevronDownIcon,
@@ -90,14 +91,11 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
   }
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={() => onAction('cancel')}
+    <Modal
+      onClose={() => onAction('cancel')}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="w-full max-w-xl mx-4 rounded-2xl dark:bg-claude-darkBg bg-white shadow-xl border dark:border-claude-darkBorder border-claude-border overflow-hidden"
     >
-      <div
-        className="w-full max-w-xl mx-4 rounded-2xl dark:bg-claude-darkBg bg-white shadow-xl border dark:border-claude-darkBorder border-claude-border overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
           <div className="flex items-center gap-2.5">
@@ -212,8 +210,7 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
             </button>
           </div>
         </div>
-      </div>
-    </div>,
+    </Modal>,
     document.body
   );
 };

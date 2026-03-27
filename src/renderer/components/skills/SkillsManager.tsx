@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import Modal from '../common/Modal';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   ArrowDownTrayIcon,
@@ -630,14 +631,11 @@ const SkillsManager: React.FC = () => {
       )}
 
       {selectedMarketplaceSkill && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setSelectedMarketplaceSkill(null)}
+        <Modal
+          onClose={() => setSelectedMarketplaceSkill(null)}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
         >
-          <div
-            className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
-          >
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
@@ -714,19 +712,15 @@ const SkillsManager: React.FC = () => {
                 {installingSkillId === selectedMarketplaceSkill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
               </button>
             )}
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
       {selectedSkill && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setSelectedSkill(null)}
+        <Modal
+          onClose={() => setSelectedSkill(null)}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
         >
-          <div
-            className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
-          >
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg dark:bg-claude-darkBg bg-claude-bg flex items-center justify-center flex-shrink-0">
@@ -828,19 +822,15 @@ const SkillsManager: React.FC = () => {
                 />
               </div>
             </div>
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
       {skillPendingDelete && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={handleCancelDeleteSkill}
+        <Modal
+          onClose={handleCancelDeleteSkill}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          className="w-full max-w-sm mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-5"
         >
-          <div
-            className="w-full max-w-sm mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-5"
-            onClick={(event) => event.stopPropagation()}
-          >
             <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
               {i18nService.t('deleteSkill')}
             </div>
@@ -870,19 +860,15 @@ const SkillsManager: React.FC = () => {
                 {i18nService.t('confirmDelete')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
       {isGithubImportOpen && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setIsGithubImportOpen(false)}
+        <Modal
+          onClose={() => setIsGithubImportOpen(false)}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
         >
-          <div
-            className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
-          >
             <div className="flex items-start justify-between">
               <div>
                 <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
@@ -930,8 +916,7 @@ const SkillsManager: React.FC = () => {
                 {isDownloadingSkill ? i18nService.t('importingSkill') : i18nService.t('importSkill')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
       {securityReport && (
