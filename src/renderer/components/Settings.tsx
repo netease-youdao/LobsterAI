@@ -29,6 +29,7 @@ import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
+import { keyboardEventToShortcut } from '../services/shortcuts';
 import {
   OpenAIIcon,
   DeepSeekIcon,
@@ -458,6 +459,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
   });
+  const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
 
   // State for model editing
   const [isAddingModel, setIsAddingModel] = useState(false);
@@ -1483,6 +1485,30 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       ...prev,
       [key]: value
     }));
+  };
+
+  // 开始录制快捷键
+  const startRecordingShortcut = (key: string) => {
+    setRecordingShortcut(key);
+  };
+
+  // 处理快捷键输入框的键盘事件
+  const handleShortcutKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, key: keyof typeof shortcuts) => {
+    if (recordingShortcut !== key) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const shortcut = keyboardEventToShortcut(e.nativeEvent);
+    if (shortcut) {
+      handleShortcutChange(key, shortcut);
+      setRecordingShortcut(null);
+    }
+  };
+
+  // 处理快捷键输入框的失焦事件
+  const handleShortcutBlur = () => {
+    setRecordingShortcut(null);
   };
 
   // 阻止点击设置窗口时事件传播到背景
@@ -3248,30 +3274,39 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('newChat')}</span>
                   <input
                     type="text"
-                    value={shortcuts.newChat}
+                    value={recordingShortcut === 'newChat' ? i18nService.t('pressShortcut') : shortcuts.newChat}
                     onChange={(e) => handleShortcutChange('newChat', e.target.value)}
+                    onFocus={() => startRecordingShortcut('newChat')}
+                    onKeyDown={(e) => handleShortcutKeyDown(e, 'newChat')}
+                    onBlur={handleShortcutBlur}
                     data-shortcut-input="true"
-                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                    className={`w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm text-center ${recordingShortcut === 'newChat' ? 'animate-pulse bg-claude-accent/10' : ''}`}
                   />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('search')}</span>
                   <input
                     type="text"
-                    value={shortcuts.search}
+                    value={recordingShortcut === 'search' ? i18nService.t('pressShortcut') : shortcuts.search}
                     onChange={(e) => handleShortcutChange('search', e.target.value)}
+                    onFocus={() => startRecordingShortcut('search')}
+                    onKeyDown={(e) => handleShortcutKeyDown(e, 'search')}
+                    onBlur={handleShortcutBlur}
                     data-shortcut-input="true"
-                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                    className={`w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm text-center ${recordingShortcut === 'search' ? 'animate-pulse bg-claude-accent/10' : ''}`}
                   />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('openSettings')}</span>
                   <input
                     type="text"
-                    value={shortcuts.settings}
+                    value={recordingShortcut === 'settings' ? i18nService.t('pressShortcut') : shortcuts.settings}
                     onChange={(e) => handleShortcutChange('settings', e.target.value)}
+                    onFocus={() => startRecordingShortcut('settings')}
+                    onKeyDown={(e) => handleShortcutKeyDown(e, 'settings')}
+                    onBlur={handleShortcutBlur}
                     data-shortcut-input="true"
-                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                    className={`w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm text-center ${recordingShortcut === 'settings' ? 'animate-pulse bg-claude-accent/10' : ''}`}
                   />
                 </div>
               </div>
