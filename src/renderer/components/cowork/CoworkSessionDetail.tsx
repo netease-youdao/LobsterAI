@@ -1306,9 +1306,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [currentRailIndex, setCurrentRailIndex] = useState(-1);
   const currentRailIndexRef = useRef(-1);
   const railItemCountRef = useRef(0);
+  // Mapping: turnIndex → { first: firstRailIdx, last: lastRailIdx }
+  const turnToRailRangeRef = useRef<{ first: number; last: number }[]>([]);
   const isNavigatingRef = useRef(false);
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const railElsCacheRef = useRef<HTMLElement[]>([]);
+  const turnElsCacheRef = useRef<HTMLElement[]>([]);
   const railLinesRef = useRef<HTMLDivElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
   const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
@@ -1362,7 +1364,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setCurrentRailIndex(-1);
     currentRailIndexRef.current = -1;
     isNavigatingRef.current = false;
-    railElsCacheRef.current = [];
+    turnElsCacheRef.current = [];
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     setHoveredRailIndex(null);
   }, [currentSession?.id]);
@@ -1683,13 +1685,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     // Skip index recalculation during programmatic navigation
     if (isNavigatingRef.current) return;
 
-    // Update current rail index based on cached message-level elements
-    const railEls = railElsCacheRef.current;
-    if (railEls.length === 0) return;
+    // Use turn-level elements (always in DOM, even for lazy-rendered turns) for scroll detection
+    const turnEls = turnElsCacheRef.current;
+    const railCount = railItemCountRef.current;
+    if (turnEls.length === 0 || railCount === 0) return;
 
     // If at very bottom, snap to last rail item
     if (distanceToBottom <= NAV_BOTTOM_SNAP_THRESHOLD) {
-      const lastRail = railEls.length - 1;
+      const lastRail = railCount - 1;
       if (currentRailIndexRef.current !== lastRail) {
         currentRailIndexRef.current = lastRail;
         setCurrentRailIndex(lastRail);
@@ -1697,31 +1700,71 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
 
-    // Find the last message element whose top is above the scroll threshold
+    // Find current turn based on turn element offsetTop
     const scrollTop = container.scrollTop;
-    let visibleRailIdx = 0;
-    for (let i = 0; i < railEls.length; i++) {
-      if (railEls[i].offsetTop <= scrollTop + 80) {
-        visibleRailIdx = i;
+    let currentTurn = 0;
+    for (let i = 0; i < turnEls.length; i++) {
+      if (turnEls[i].offsetTop <= scrollTop + 80) {
+        currentTurn = i;
       } else {
         break;
       }
     }
-    if (currentRailIndexRef.current !== visibleRailIdx) {
-      currentRailIndexRef.current = visibleRailIdx;
-      setCurrentRailIndex(visibleRailIdx);
+
+    // Map turn to rail index: check if scrolled past the midpoint of the turn
+    // (first half → user message = first rail item, second half → assistant = last rail item)
+    const range = turnToRailRangeRef.current[currentTurn];
+    if (!range) return;
+    let railIdx = range.first;
+    if (range.first !== range.last) {
+      const turnEl = turnEls[currentTurn];
+      const nextTurnTop = currentTurn + 1 < turnEls.length
+        ? turnEls[currentTurn + 1].offsetTop
+        : container.scrollHeight;
+      const turnMid = turnEl.offsetTop + (nextTurnTop - turnEl.offsetTop) / 2;
+      if (scrollTop + 80 >= turnMid) {
+        railIdx = range.last;
+      }
+    }
+
+    if (currentRailIndexRef.current !== railIdx) {
+      currentRailIndexRef.current = railIdx;
+      setCurrentRailIndex(railIdx);
     }
   }, []);
 
   const navigateToRailItem = useCallback((railIndex: number) => {
-    const railEls = railElsCacheRef.current;
-    if (railIndex < 0 || railIndex >= railEls.length) return;
+    if (railIndex < 0 || railIndex >= railItemCountRef.current) return;
 
     isNavigatingRef.current = true;
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
 
-    railEls[railIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Find the turn that contains this rail item
+    const ranges = turnToRailRangeRef.current;
+    let targetTurnIdx = 0;
+    for (let t = 0; t < ranges.length; t++) {
+      if (ranges[t] && railIndex >= ranges[t].first && railIndex <= ranges[t].last) {
+        targetTurnIdx = t;
+        break;
+      }
+    }
+
+    // Try to scroll to the exact data-rail-index element if it's in the DOM
+    const container = scrollContainerRef.current;
+    if (container) {
+      const el = container.querySelector<HTMLElement>(`[data-rail-index="${railIndex}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        // Fallback: scroll to the turn element (always in DOM)
+        const turnEls = turnElsCacheRef.current;
+        if (targetTurnIdx < turnEls.length) {
+          turnEls[targetTurnIdx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    }
+
     currentRailIndexRef.current = railIndex;
     setCurrentRailIndex(railIndex);
   }, []);
@@ -1774,15 +1817,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
-  // Cache message-level DOM elements (data-rail-index) when turns change
+  // Cache turn-level DOM elements (data-turn-index, always in DOM even for lazy turns)
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container) { railElsCacheRef.current = []; return; }
-    // Query all elements with data-rail-index, sorted by index
-    const els = Array.from(container.querySelectorAll<HTMLElement>('[data-rail-index]'));
-    els.sort((a, b) => Number(a.dataset.railIndex) - Number(b.dataset.railIndex));
-    // Filter out placeholder entries with data-rail-index="-1"
-    railElsCacheRef.current = els.filter(el => el.dataset.railIndex !== '-1');
+    if (!container) { turnElsCacheRef.current = []; return; }
+    turnElsCacheRef.current = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-turn-index]')
+    );
   }, [turns]);
 
   // Sync rail index when turns change or rail first appears (isScrollable becomes true)
@@ -2128,6 +2169,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               // Build flat list of messages with their content length and turn index
               const MIN_W = 6;  // px
               const MAX_W = 16; // px
+              // Strip common markdown syntax for tooltip display
+              const stripMd = (s: string) => s
+                .replace(/^#+\s+/gm, '')
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/`[^`]*`/g, ' ')
+                .replace(/[*_~>]/g, '')
+                .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+                .replace(/\s+/g, ' ')
+                .trim();
+              // Get first meaningful text snippet from content
+              const getLabel = (content: string, fallback: string) => {
+                const stripped = stripMd(content);
+                return stripped.slice(0, 50) || fallback;
+              };
               type RailItem = { key: string; turnIndex: number; label: string; contentLen: number; isUser: boolean };
               const items: RailItem[] = [];
               for (let i = 0; i < turns.length; i++) {
@@ -2137,7 +2192,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   items.push({
                     key: `${turn.id}-user`,
                     turnIndex: i,
-                    label: content.split('\n')[0].slice(0, 50) || `Turn ${i + 1}`,
+                    label: getLabel(content, `Turn ${i + 1}`),
                     contentLen: content.length,
                     isUser: true,
                   });
@@ -2153,15 +2208,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   items.push({
                     key: `${turn.id}-asst`,
                     turnIndex: i,
-                    label: asstContent.split('\n')[0].slice(0, 50),
+                    label: getLabel(asstContent, 'LobsterAI'),
                     contentLen: asstContent.length,
                     isUser: false,
                   });
                 }
               }
               const maxLen = items.reduce((acc, m) => Math.max(acc, m.contentLen), 1);
-              // Sync rail item count
+              // Sync rail item count and turn-to-rail mapping
               railItemCountRef.current = items.length;
+              const rangeMap: { first: number; last: number }[] = [];
+              for (let ri = 0; ri < items.length; ri++) {
+                const ti = items[ri].turnIndex;
+                if (!rangeMap[ti]) {
+                  rangeMap[ti] = { first: ri, last: ri };
+                } else {
+                  rangeMap[ti].last = ri;
+                }
+              }
+              turnToRailRangeRef.current = rangeMap;
 
               // Clamp rail index to valid range
               const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= items.length
