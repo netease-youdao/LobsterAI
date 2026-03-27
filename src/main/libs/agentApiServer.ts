@@ -1,14 +1,20 @@
 import http from 'http';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 
 const AGENT_API_PORT = 19888;
 const AGENT_API_HOST = '127.0.0.1';
 
+type AgentChatContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url?: { url?: string } | string };
+
 interface AgentChatRequest {
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string | AgentChatContentPart[] }[];
   model?: string;
   stream?: boolean;
+  skillIds?: string[];
 }
 
 interface AgentChatResponse {
@@ -50,6 +56,66 @@ function createSSEEvent(data: unknown): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
+function buildAttachmentName(mimeType: string, index: number): string {
+  const extensionMap: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/bmp': 'bmp',
+  };
+  const extension = extensionMap[mimeType] || 'bin';
+  return `image-${index + 1}.${extension}`;
+}
+
+function parseDataImageUrl(
+  value: string,
+  index: number,
+): { name: string; mimeType: string; base64Data: string } | null {
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(value);
+  if (!match) return null;
+  const mimeType = match[1].toLowerCase();
+  const base64Data = match[2];
+  if (!base64Data) return null;
+  return {
+    name: buildAttachmentName(mimeType, index),
+    mimeType,
+    base64Data,
+  };
+}
+
+function parsePromptAndAttachments(
+  messages: AgentChatRequest['messages'],
+): { prompt: string; imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> } {
+  const lastMessage = messages[messages.length - 1];
+  const content = lastMessage.content;
+  if (typeof content === 'string') {
+    return { prompt: content, imageAttachments: [] };
+  }
+  const textParts: string[] = [];
+  const imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [];
+  for (const part of content) {
+    if (part?.type === 'text') {
+      if (typeof part.text === 'string' && part.text.trim()) {
+        textParts.push(part.text);
+      }
+      continue;
+    }
+    if (part?.type === 'image_url') {
+      const rawUrl = typeof part.image_url === 'string'
+        ? part.image_url
+        : part.image_url?.url;
+      if (typeof rawUrl !== 'string') continue;
+      const attachment = parseDataImageUrl(rawUrl, imageAttachments.length);
+      if (attachment) {
+        imageAttachments.push(attachment);
+      }
+    }
+  }
+  const prompt = textParts.join('\n').trim() || (imageAttachments.length > 0 ? '请结合图片内容进行回答。' : '');
+  return { prompt, imageAttachments };
+}
+
 function parseAuthHeader(req: http.IncomingMessage): string | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
@@ -84,10 +150,14 @@ export class AgentApiServer {
   private server: http.Server | null = null;
   private apiKey: string = '';
   private getCoworkRunner: () => any | null = () => null;
+  private getSkillManager: () => any | null = () => null;
   private publishStateChanged: (event: AgentStateChangedEvent) => void = () => {};
+  private uploadRoot: string;
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
+    this.uploadRoot = path.join(os.tmpdir(), 'lobster-agent-uploads');
+    fs.mkdirSync(this.uploadRoot, { recursive: true });
   }
 
   setCoworkRunnerGetter(getter: () => any | null): void {
@@ -96,6 +166,10 @@ export class AgentApiServer {
 
   setStateChangedPublisher(publisher: (event: AgentStateChangedEvent) => void): void {
     this.publishStateChanged = publisher;
+  }
+
+  setSkillManagerGetter(getter: () => any | null): void {
+    this.getSkillManager = getter;
   }
 
   private getStateDefaults(state: AgentAnimationState): {
@@ -247,6 +321,21 @@ export class AgentApiServer {
       return;
     }
 
+    if (pathname === '/api/agent/skills' && req.method === 'GET') {
+      this.handleSkills(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/skills/set-enabled' && req.method === 'POST') {
+      await this.handleSetSkillEnabled(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/files/upload' && req.method === 'POST') {
+      await this.handleUploadFile(req, res);
+      return;
+    }
+
     sendError(res, 404, 'Not found');
   }
 
@@ -267,16 +356,124 @@ export class AgentApiServer {
     return uuidv4();
   }
 
-  private async startRunnerSession(runner: any, sessionId: string, prompt: string): Promise<void> {
+  private async startRunnerSession(
+    runner: any,
+    sessionId: string,
+    prompt: string,
+    imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [],
+    skillIds: string[] = [],
+  ): Promise<void> {
     if (typeof runner?.startCoworkSession === 'function') {
-      await runner.startCoworkSession(sessionId, prompt);
+      await runner.startCoworkSession(sessionId, prompt, { imageAttachments, skillIds });
       return;
     }
     if (typeof runner?.startSession === 'function') {
-      await runner.startSession(sessionId, prompt, { confirmationMode: 'text' });
+      await runner.startSession(sessionId, prompt, { confirmationMode: 'text', imageAttachments, skillIds });
       return;
     }
     throw new Error('CoworkRunner start method not available');
+  }
+
+  private async readRequestBody(req: http.IncomingMessage): Promise<any | null> {
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+    }
+    try {
+      return JSON.parse(body);
+    } catch {
+      return null;
+    }
+  }
+
+  private handleSkills(req: http.IncomingMessage, res: http.ServerResponse): void {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const manager = this.getSkillManager();
+    if (!manager || typeof manager.listSkills !== 'function') {
+      sendError(res, 503, 'SkillManager not available');
+      return;
+    }
+    const skills = manager.listSkills();
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({ skills }));
+  }
+
+  private async handleSetSkillEnabled(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const manager = this.getSkillManager();
+    if (!manager || typeof manager.setSkillEnabled !== 'function') {
+      sendError(res, 503, 'SkillManager not available');
+      return;
+    }
+    const parsed = await this.readRequestBody(req);
+    if (!parsed || typeof parsed.id !== 'string' || typeof parsed.enabled !== 'boolean') {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    try {
+      const skills = manager.setSkillEnabled(parsed.id, parsed.enabled);
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
+      });
+      res.end(JSON.stringify({ skills }));
+    } catch (error) {
+      sendError(res, 400, String(error));
+    }
+  }
+
+  private async handleUploadFile(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const parsed = await this.readRequestBody(req);
+    if (!parsed || typeof parsed.name !== 'string' || typeof parsed.base64Data !== 'string') {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const safeName = path.basename(parsed.name).replace(/[^a-zA-Z0-9._-]/g, '_') || 'file.bin';
+    const base64Data = parsed.base64Data.trim();
+    if (!base64Data) {
+      sendError(res, 400, 'Empty file data');
+      return;
+    }
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (!buffer.length) {
+      sendError(res, 400, 'Invalid base64 data');
+      return;
+    }
+    if (buffer.length > 25 * 1024 * 1024) {
+      sendError(res, 413, 'File too large');
+      return;
+    }
+    const fileId = uuidv4();
+    const fullPath = path.join(this.uploadRoot, `${fileId}-${safeName}`);
+    fs.writeFileSync(fullPath, buffer);
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({
+      file: {
+        id: fileId,
+        name: safeName,
+        path: fullPath,
+        size: buffer.length,
+      },
+    }));
   }
 
   private getRunnerSessionStatus(runner: any, sessionId: string): string | null {
@@ -305,30 +502,26 @@ export class AgentApiServer {
       return;
     }
 
-    let body = '';
-    for await (const chunk of req) {
-      body += chunk;
-    }
-
-    let parsed: AgentChatRequest;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
+    const parsed = await this.readRequestBody(req) as AgentChatRequest | null;
+    if (!parsed) {
       sendError(res, 400, 'Invalid JSON body');
       return;
     }
 
-    const { messages, stream = true } = parsed;
+    const { messages, stream = true, skillIds = [] } = parsed;
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       sendError(res, 400, 'Missing messages');
       return;
     }
 
-    const lastMessage = messages[messages.length - 1];
-    const userPrompt = lastMessage.content;
+    const { prompt: userPrompt, imageAttachments } = parsePromptAndAttachments(messages);
+    if (!userPrompt && imageAttachments.length === 0) {
+      sendError(res, 400, 'Missing message content');
+      return;
+    }
 
     if (!stream) {
-      await this.handleChatNoStream(req, res, userPrompt);
+      await this.handleChatNoStream(req, res, userPrompt, imageAttachments, skillIds);
       return;
     }
 
@@ -441,7 +634,7 @@ export class AgentApiServer {
     try {
       this.emitStateChanged(sessionId, turnId, 'think');
       this.emitActTokenToStream(res, sessionId, 'think');
-      await this.startRunnerSession(runner, sessionId, userPrompt);
+      await this.startRunnerSession(runner, sessionId, userPrompt, imageAttachments, skillIds);
 
       await new Promise<void>((resolve) => {
         const checkInterval = setInterval(() => {
@@ -484,7 +677,13 @@ export class AgentApiServer {
     }
   }
 
-  private async handleChatNoStream(req: http.IncomingMessage, res: http.ServerResponse, userPrompt: string): Promise<void> {
+  private async handleChatNoStream(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    userPrompt: string,
+    imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [],
+    skillIds: string[] = [],
+  ): Promise<void> {
     if (!this.verifyAuth(req)) {
       sendError(res, 401, 'Invalid or missing API key');
       return;
@@ -523,7 +722,7 @@ export class AgentApiServer {
 
     try {
       this.emitStateChanged(sessionId, turnId, 'think');
-      await this.startRunnerSession(runner, sessionId, userPrompt);
+      await this.startRunnerSession(runner, sessionId, userPrompt, imageAttachments, skillIds);
 
       await new Promise<void>((resolve) => {
         const checkInterval = setInterval(() => {
