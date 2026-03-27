@@ -123,8 +123,15 @@ const safeUrlTransform = (url: string): string => {
   const trimmed = url.trim();
   if (!trimmed) return trimmed;
 
+  // Reject protocol-relative URLs (e.g. //evil.com) — they inherit the page
+  // protocol and bypass the scheme whitelist check below.
+  if (trimmed.startsWith('//')) {
+    return '';
+  }
+
   const match = trimmed.match(/^([a-z][a-z0-9+.-]*):/i);
   if (!match) {
+    // No scheme at all — treat as a relative path (safe for anchor hrefs).
     return trimmed;
   }
 
