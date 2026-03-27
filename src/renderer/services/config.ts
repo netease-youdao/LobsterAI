@@ -1,4 +1,4 @@
-import { AppConfig, CONFIG_KEYS, defaultConfig } from '../config';
+import { AppConfig, CONFIG_KEYS, defaultConfig, type SpeechConfig, type SpeechProviderType } from '../config';
 import { localStore } from './store';
 
 const getFixedProviderApiFormat = (providerKey: string): 'anthropic' | 'openai' | null => {
@@ -64,6 +64,49 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
       },
     ])
   ) as AppConfig['providers'];
+};
+
+const normalizeSpeechProvider = (value: unknown): SpeechProviderType => {
+  if (value === 'glm' || value === 'qwen') {
+    return value;
+  }
+  return '';
+};
+
+const normalizeSpeechConfig = (speech: AppConfig['speech']): SpeechConfig => {
+  const fallback: SpeechConfig = {
+    enabled: defaultConfig.speech?.enabled ?? false,
+    provider: defaultConfig.speech?.provider ?? '',
+    apiKey: defaultConfig.speech?.apiKey ?? '',
+    language: defaultConfig.speech?.language ?? '',
+  };
+
+  const normalizedProvider = normalizeSpeechProvider(speech?.provider);
+  const apiKey = typeof speech?.apiKey === 'string'
+    ? speech.apiKey.trim()
+    : '';
+  const language = typeof speech?.language === 'string'
+    ? speech.language.trim()
+    : fallback.language ?? '';
+  const enabled = speech?.enabled === true;
+
+  if (!enabled || !normalizedProvider || !apiKey) {
+    return {
+      ...fallback,
+      provider: normalizedProvider,
+      apiKey,
+      language,
+      enabled: false,
+    };
+  }
+
+  return {
+    ...fallback,
+    provider: normalizedProvider,
+    apiKey,
+    language,
+    enabled: true,
+  };
 };
 
 // Model IDs that have been removed from specific providers.
@@ -163,6 +206,7 @@ class ConfigService {
             ...(storedConfig.shortcuts ?? {}),
           } as AppConfig['shortcuts'],
           providers: mergedProviders as AppConfig['providers'],
+          speech: normalizeSpeechConfig(storedConfig.speech),
         };
       }
     } catch (error) {
@@ -176,10 +220,12 @@ class ConfigService {
 
   async updateConfig(newConfig: Partial<AppConfig>) {
     const normalizedProviders = normalizeProvidersConfig(newConfig.providers as AppConfig['providers'] | undefined);
+    const mergedSpeech = normalizeSpeechConfig(newConfig.speech ?? this.config.speech);
     this.config = {
       ...this.config,
       ...newConfig,
       ...(normalizedProviders ? { providers: normalizedProviders } : {}),
+      speech: mergedSpeech,
     };
     await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
   }

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
-import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { PhotoIcon, ExclamationTriangleIcon, MicrophoneIcon } from '@heroicons/react/24/outline';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
@@ -15,6 +15,11 @@ import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
 import { getCompactFolderName } from '../../utils/path';
+import { configService } from '../../services/config';
+import { getSpeechConfig, isSpeechInputAvailable, transcribeAudio } from '../../services/speechTranscription';
+import { prepareSpeechUpload } from '../../services/speechAudio';
+import { useAudioLevelVisualizer } from '../../hooks/useAudioLevelVisualizer';
+import { AUDIO_WAVE_MULTIPLIERS, getWaveScale } from '../../utils/speechWaveform';
 
 type CoworkAttachment = {
   path: string;
@@ -26,7 +31,6 @@ type CoworkAttachment = {
 const INPUT_FILE_LABEL = '输入文件';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
-
 const isImagePath = (filePath: string): boolean => {
   const dotIndex = filePath.lastIndexOf('.');
   if (dotIndex === -1) return false;
@@ -122,10 +126,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isDraggingFiles, setIsDraggingFiles] = useState(false);
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [isTranscribing, setIsTranscribing] = useState(false);
+    const [showSpeechTooltip, setShowSpeechTooltip] = useState(false);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const dragDepthRef = useRef(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const mediaStreamRef = useRef<MediaStream | null>(null);
+    const mediaChunksRef = useRef<Blob[]>([]);
+    const speechTooltipTimerRef = useRef<number | null>(null);
+    const { audioLevel, startVisualizer, resetVisualizer } = useAudioLevelVisualizer({ normalizationFactor: 85 });
 
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
@@ -203,6 +215,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       setShowFolderRequiredWarning(false);
     }
   }, [workingDirectory]);
+
+  useEffect(() => () => {
+    if (speechTooltipTimerRef.current != null) {
+      window.clearTimeout(speechTooltipTimerRef.current);
+    }
+    mediaRecorderRef.current?.stop?.();
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  }, []);
 
   // Sync value from draft when sessionId changes
   useEffect(() => {
@@ -331,6 +353,156 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
   const modelSupportsImage = !!selectedModel?.supportsImage;
+  const currentConfig = configService.getConfig();
+  const speechInputAvailable = isSpeechInputAvailable(currentConfig);
+
+  const showSpeechToast = useCallback((message: string) => {
+    window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+  }, []);
+
+  const showSpeechTooltipHint = useCallback(() => {
+    setShowSpeechTooltip(true);
+    if (speechTooltipTimerRef.current != null) {
+      window.clearTimeout(speechTooltipTimerRef.current);
+    }
+    speechTooltipTimerRef.current = window.setTimeout(() => {
+      setShowSpeechTooltip(false);
+      speechTooltipTimerRef.current = null;
+    }, 2000);
+  }, []);
+
+  const stopMediaStream = useCallback(() => {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  }, []);
+
+  const appendTranscriptToInput = useCallback((transcript: string) => {
+    setValue((prev) => `${prev}${transcript}`);
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    if (disabled || isStreaming || isTranscribing || remoteManaged) {
+      return;
+    }
+    if (!speechInputAvailable) {
+      showSpeechTooltipHint();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      showSpeechToast(i18nService.t('coworkSpeechTranscriptionFailed'));
+      return;
+    }
+
+    try {
+      setShowSpeechTooltip(false);
+      mediaChunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      startVisualizer(stream);
+
+      const preferredMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : undefined;
+      const recorder = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          mediaChunksRef.current.push(event.data);
+        }
+      };
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      const denied = error instanceof DOMException && (
+        error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError'
+      );
+      const message = denied
+        ? i18nService.t('coworkMicrophonePermissionDenied')
+        : i18nService.t('coworkSpeechTranscriptionFailed');
+      showSpeechToast(message);
+      resetVisualizer();
+      stopMediaStream();
+    }
+  }, [
+    disabled,
+    isStreaming,
+    isTranscribing,
+    remoteManaged,
+    speechInputAvailable,
+    showSpeechTooltipHint,
+    showSpeechToast,
+    startVisualizer,
+    resetVisualizer,
+    stopMediaStream,
+  ]);
+
+  const stopRecording = useCallback(async () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') {
+      return;
+    }
+
+    setIsRecording(false);
+    setIsTranscribing(true);
+    const stopPromise = new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+    });
+    recorder.stop();
+    const mimeType = recorder.mimeType || 'audio/webm';
+    mediaRecorderRef.current = null;
+
+    await stopPromise;
+
+    try {
+      const blob = new Blob(mediaChunksRef.current, { type: mimeType });
+      const speechProvider = getSpeechConfig(configService.getConfig()).provider;
+      const upload = await prepareSpeechUpload({
+        provider: speechProvider,
+        blob,
+        mimeType,
+        fileName: 'speech-input.webm',
+      });
+      const result = await transcribeAudio({
+        audioBase64: upload.audioBase64,
+        mimeType: upload.mimeType,
+        fileName: upload.fileName,
+      });
+
+      if (!result.success) {
+        showSpeechToast(i18nService.t('coworkSpeechTranscriptionFailed'));
+        return;
+      }
+
+      appendTranscriptToInput(result.text);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
+    } catch {
+      showSpeechToast(i18nService.t('coworkSpeechTranscriptionFailed'));
+    } finally {
+      mediaChunksRef.current = [];
+      setIsTranscribing(false);
+      resetVisualizer();
+      stopMediaStream();
+    }
+  }, [
+    appendTranscriptToInput,
+    resetVisualizer,
+    showSpeechToast,
+    stopMediaStream,
+  ]);
+
+  const handleSpeechButtonClick = useCallback(() => {
+    if (isRecording) {
+      void stopRecording();
+      return;
+    }
+    if (!speechInputAvailable) {
+      showSpeechTooltipHint();
+      return;
+    }
+    void startRecording();
+  }, [isRecording, speechInputAvailable, showSpeechTooltipHint, startRecording, stopRecording]);
 
   const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
     if (!filePath) return;
@@ -582,6 +754,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [disabled, handleIncomingFiles, isStreaming]);
 
   const canSubmit = !disabled && (!!value.trim() || attachments.length > 0);
+  const speechButtonDisabled = disabled || isStreaming || isTranscribing || remoteManaged;
+  const speechButtonEnabled = !speechButtonDisabled && speechInputAvailable;
   const enhancedContainerClass = isDraggingFiles
     ? `${containerClass} ring-2 ring-claude-accent/50 border-claude-accent/60`
     : containerClass;
@@ -712,7 +886,62 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
+                {!remoteManaged && (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={handleSpeechButtonClick}
+                      disabled={speechButtonDisabled}
+                      className={`flex h-10 items-center gap-2 px-1.5 py-1 rounded-xl transition-all active:scale-95 ${
+                        isRecording
+                          ? 'text-red-600 dark:text-red-400'
+                        : speechButtonEnabled
+                            ? 'text-claude-accent hover:text-claude-accentHover'
+                            : 'text-claude-accent/45 dark:text-claude-accent/40'
+                      } ${speechButtonDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      aria-label={isRecording ? i18nService.t('coworkStopRecording') : i18nService.t('coworkStartRecording')}
+                      title={isRecording ? i18nService.t('coworkStopRecording') : i18nService.t('coworkStartRecording')}
+                    >
+                      {isRecording ? (
+                        <>
+                          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-claude-accent/12 dark:bg-claude-accent/18 text-claude-accent dark:text-claude-accent">
+                            <StopIcon className="h-4 w-4" />
+                          </span>
+                          <span className="flex h-7 min-w-[52px] items-center gap-1.5 overflow-hidden">
+                            {AUDIO_WAVE_MULTIPLIERS.map((multiplier) => (
+                              <span
+                                key={`desktop-${multiplier}`}
+                                className="block h-4 w-1.5 origin-center rounded-full bg-claude-accent transition-transform duration-100"
+                                style={{ transform: `scaleY(${getWaveScale(audioLevel, multiplier)})` }}
+                              />
+                            ))}
+                          </span>
+                        </>
+                      ) : isTranscribing ? (
+                        <>
+                          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-claude-accent/12 dark:bg-claude-accent/18">
+                            <span className="h-4 w-4 rounded-full border-2 border-current/35 border-t-current animate-spin" />
+                          </span>
+                          <span className="text-xs font-medium">{i18nService.t('coworkTranscribing')}</span>
+                        </>
+                      ) : (
+                        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-full ${
+                          speechButtonEnabled
+                            ? 'bg-claude-accent/12 dark:bg-claude-accent/18'
+                            : 'bg-claude-accent/8 dark:bg-claude-accent/12'
+                        }`}>
+                          <MicrophoneIcon className="h-4 w-4" />
+                        </span>
+                      )}
+                    </button>
+                    {showSpeechTooltip && !speechInputAvailable && (
+                      <div className="absolute right-0 bottom-full mb-2 w-64 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-3 py-2 text-xs leading-5 dark:text-claude-darkText text-claude-text shadow-xl">
+                        {i18nService.t('speechInputUnsupportedTooltip')}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {isStreaming ? (
                   <button
                     type="button"
@@ -762,6 +991,62 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 >
                   <PaperClipIcon className="h-4 w-4" />
                 </button>
+              </div>
+            )}
+
+            {!remoteManaged && (
+              <div className="relative mr-3">
+                <button
+                  type="button"
+                  onClick={handleSpeechButtonClick}
+                  disabled={speechButtonDisabled}
+                  className={`flex-shrink-0 flex h-10 items-center gap-2 px-1.5 py-1 rounded-lg transition-all active:scale-95 ${
+                    isRecording
+                      ? 'text-red-600 dark:text-red-400'
+                      : speechButtonEnabled
+                        ? 'text-claude-accent hover:text-claude-accentHover'
+                        : 'text-claude-accent/45 dark:text-claude-accent/40'
+                  } ${speechButtonDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  aria-label={isRecording ? i18nService.t('coworkStopRecording') : i18nService.t('coworkStartRecording')}
+                  title={isRecording ? i18nService.t('coworkStopRecording') : i18nService.t('coworkStartRecording')}
+                >
+                  {isRecording ? (
+                    <>
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-claude-accent/12 dark:bg-claude-accent/18 text-claude-accent dark:text-claude-accent">
+                        <StopIcon className="h-4 w-4" />
+                      </span>
+                      <span className="flex h-7 min-w-[48px] items-center gap-1.5 overflow-hidden">
+                        {AUDIO_WAVE_MULTIPLIERS.map((multiplier) => (
+                          <span
+                            key={`compact-${multiplier}`}
+                            className="block h-4 w-1.5 origin-center rounded-full bg-claude-accent transition-transform duration-100"
+                            style={{ transform: `scaleY(${getWaveScale(audioLevel, multiplier)})` }}
+                          />
+                        ))}
+                      </span>
+                    </>
+                  ) : isTranscribing ? (
+                    <>
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-claude-accent/12 dark:bg-claude-accent/18">
+                        <span className="h-4 w-4 rounded-full border-2 border-current/35 border-t-current animate-spin" />
+                      </span>
+                      <span className="text-xs font-medium">{i18nService.t('coworkTranscribing')}</span>
+                    </>
+                  ) : (
+                    <span className={`inline-flex h-8 w-8 items-center justify-center rounded-full ${
+                      speechButtonEnabled
+                        ? 'bg-claude-accent/12 dark:bg-claude-accent/18'
+                        : 'bg-claude-accent/8 dark:bg-claude-accent/12'
+                    }`}>
+                      <MicrophoneIcon className="h-4 w-4" />
+                    </span>
+                  )}
+                </button>
+                {showSpeechTooltip && !speechInputAvailable && (
+                  <div className="absolute right-0 bottom-full mb-2 w-64 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-3 py-2 text-xs leading-5 dark:text-claude-darkText text-claude-text shadow-xl">
+                    {i18nService.t('speechInputUnsupportedTooltip')}
+                  </div>
+                )}
               </div>
             )}
 

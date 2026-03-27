@@ -91,6 +91,17 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(`api:stream:${requestId}:abort`, handler);
     },
   },
+  speech: {
+    transcribe: (options: {
+      url: string;
+      headers: Record<string, string>;
+      fileName: string;
+      mimeType: string;
+      audioBase64: string;
+      model: string;
+      language?: string;
+    }) => ipcRenderer.invoke('speech:transcribe', options),
+  },
   ipcRenderer: {
     send: (channel: string, ...args: any[]) => {
       ipcRenderer.send(channel, ...args);

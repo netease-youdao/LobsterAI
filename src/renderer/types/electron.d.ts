@@ -296,6 +296,23 @@ interface IElectronAPI {
     onStreamError: (requestId: string, callback: (error: string) => void) => () => void;
     onStreamAbort: (requestId: string, callback: () => void) => () => void;
   };
+  speech: {
+    transcribe: (options: {
+      url: string;
+      headers: Record<string, string>;
+      fileName: string;
+      mimeType: string;
+      audioBase64: string;
+      model: string;
+      language?: string;
+    }) => Promise<{
+      success: boolean;
+      status?: number;
+      text?: string;
+      error?: string;
+      raw?: unknown;
+    }>;
+  };
   getApiConfig: () => Promise<CoworkApiConfig | null>;
   checkApiConfig: (options?: { probeModel?: boolean }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
   saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;

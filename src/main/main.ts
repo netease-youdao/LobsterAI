@@ -4025,6 +4025,69 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('speech:transcribe', async (_event, options: {
+    url: string;
+    headers: Record<string, string>;
+    fileName: string;
+    mimeType: string;
+    audioBase64: string;
+    model: string;
+    language?: string;
+  }) => {
+    try {
+      const audioBuffer = Buffer.from(options.audioBase64, 'base64');
+      const fileBlob = new Blob([audioBuffer], { type: options.mimeType });
+      const formData = new FormData();
+      formData.append('file', fileBlob, options.fileName);
+      formData.append('model', options.model);
+      if (options.language) {
+        formData.append('language', options.language);
+      }
+
+      console.log('[SpeechTranscription] Sending transcription request.');
+      const response = await session.defaultSession.fetch(options.url, {
+        method: 'POST',
+        headers: options.headers,
+        body: formData,
+      });
+
+      const raw = await response.json().catch((): null => null);
+      if (!response.ok) {
+        console.warn(`[SpeechTranscription] Transcription request failed with status ${response.status}.`, raw);
+        return {
+          success: false,
+          status: response.status,
+          error: typeof raw === 'object' && raw && 'error' in raw
+            ? JSON.stringify(raw)
+            : response.statusText || 'Speech transcription request failed',
+          raw,
+        };
+      }
+
+      if (raw && typeof raw === 'object' && typeof (raw as { text?: unknown }).text === 'string') {
+        return {
+          success: true,
+          status: response.status,
+          text: (raw as { text: string }).text,
+          raw,
+        };
+      }
+
+      return {
+        success: false,
+        status: response.status,
+        error: 'Malformed transcription response',
+        raw,
+      };
+    } catch (error) {
+      console.error('[SpeechTranscription] Transcription request failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Speech transcription request failed',
+      };
+    }
+  });
+
   // SSE 流式 API 代理
   ipcMain.handle('api:stream', async (event, options: {
     url: string;

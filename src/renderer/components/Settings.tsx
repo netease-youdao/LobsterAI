@@ -9,8 +9,8 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
-import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, MicrophoneIcon } from '@heroicons/react/24/outline';
+import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid, StopIcon } from '@heroicons/react/20/solid';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import TrashIcon from './icons/TrashIcon';
 import PencilIcon from './icons/PencilIcon';
@@ -28,7 +28,11 @@ import type {
 import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
-import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
+import { defaultConfig, type AppConfig, type SpeechProviderType, getVisibleProviders } from '../config';
+import { prepareSpeechUpload } from '../services/speechAudio';
+import { transcribeAudioWithConfig } from '../services/speechTranscription';
+import { useAudioLevelVisualizer } from '../hooks/useAudioLevelVisualizer';
+import { AUDIO_WAVE_MULTIPLIERS, getWaveScale } from '../utils/speechWaveform';
 import {
   OpenAIIcon,
   DeepSeekIcon,
@@ -47,7 +51,7 @@ import {
   CustomProviderIcon,
 } from './icons/providers';
 
-type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
+type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'speech' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -81,6 +85,7 @@ type ProviderType = (typeof providerKeys)[number];
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
 type Model = NonNullable<ProviderConfig['models']>[number];
+type SpeechSettingsState = NonNullable<AppConfig['speech']>;
 type ProviderConnectionTestResult = {
   success: boolean;
   message: string;
@@ -192,6 +197,7 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
 };
 
 const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
+const speechProviderValues: SpeechProviderType[] = ['', 'glm', 'qwen'];
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
@@ -467,6 +473,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [newModelId, setNewModelId] = useState('');
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [modelFormError, setModelFormError] = useState<string | null>(null);
+  const [speechSettings, setSpeechSettings] = useState<SpeechSettingsState>({
+    enabled: false,
+    provider: '',
+    apiKey: '',
+    language: '',
+  });
+  const [isSpeechTestRecording, setIsSpeechTestRecording] = useState(false);
+  const [isSpeechTestTranscribing, setIsSpeechTestTranscribing] = useState(false);
+  const [speechTestResult, setSpeechTestResult] = useState<string | null>(null);
+  const [speechTestError, setSpeechTestError] = useState<string | null>(null);
+  const speechTestRecorderRef = useRef<MediaRecorder | null>(null);
+  const speechTestStreamRef = useRef<MediaStream | null>(null);
+  const speechTestChunksRef = useRef<Blob[]>([]);
+  const { audioLevel: speechTestAudioLevel, startVisualizer: startSpeechTestVisualizer, resetVisualizer: resetSpeechTestVisualizer } = useAudioLevelVisualizer({ normalizationFactor: 85 });
 
   // About tab
   const [appVersion, setAppVersion] = useState('');
@@ -481,9 +501,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     window.electron.appInfo.getVersion().then(setAppVersion);
   }, []);
 
+  useEffect(() => () => {
+    speechTestRecorderRef.current?.stop?.();
+    speechTestRecorderRef.current = null;
+    speechTestStreamRef.current?.getTracks().forEach((track) => track.stop());
+    speechTestStreamRef.current = null;
+    resetSpeechTestVisualizer();
+  }, [resetSpeechTestVisualizer]);
+
   useEffect(() => {
     setShowApiKey(false);
   }, [activeProvider]);
+
+  const showToast = useCallback((message: string) => {
+    window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+  }, []);
 
   const handleCopyContactEmail = useCallback(async () => {
     const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
@@ -827,6 +859,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           ) as ProvidersConfig;
         });
       }
+
+      setSpeechSettings({
+        enabled: config.speech?.enabled ?? false,
+        provider: config.speech?.provider ?? '',
+        apiKey: config.speech?.apiKey ?? '',
+        language: config.speech?.language ?? '',
+      });
       
       // 加载快捷键设置
       if (config.shortcuts) {
@@ -887,6 +926,25 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     return filtered as ProvidersConfig;
   }, [language, providers]);
 
+  const speechProviderOptions = useMemo(() => {
+    return speechProviderValues.map((value) => {
+      if (!value) {
+        return { value, label: i18nService.t('disabled') };
+      }
+      return {
+        value,
+        label: value === 'glm' ? 'GLM ASR' : 'Qwen ASR',
+      };
+    });
+  }, [language]);
+
+  const isSpeechInputSelectionValid = useMemo(() => {
+    if (!speechSettings.provider) {
+      return false;
+    }
+    return !!speechSettings.apiKey.trim();
+  }, [speechSettings.apiKey, speechSettings.provider]);
+
   // Ensure activeProvider is always in visibleProviders when language changes
   useEffect(() => {
     const visibleKeys = Object.keys(visibleProviders) as ProviderType[];
@@ -911,6 +969,121 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     setIsTestResultModalOpen(false);
     setTestResult(null);
   };
+
+  const stopSpeechTestStream = useCallback(() => {
+    speechTestStreamRef.current?.getTracks().forEach((track) => track.stop());
+    speechTestStreamRef.current = null;
+  }, []);
+
+  const startSpeechTestRecording = useCallback(async () => {
+    if (!speechSettings.provider || !speechSettings.apiKey.trim() || isSpeechTestTranscribing) {
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      showToast(i18nService.t('coworkSpeechTranscriptionFailed'));
+      return;
+    }
+
+    try {
+      setSpeechTestError(null);
+      setSpeechTestResult(null);
+      speechTestChunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      speechTestStreamRef.current = stream;
+      startSpeechTestVisualizer(stream);
+
+      const preferredMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : undefined;
+      const recorder = preferredMimeType
+        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+        : new MediaRecorder(stream);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          speechTestChunksRef.current.push(event.data);
+        }
+      };
+
+      speechTestRecorderRef.current = recorder;
+      recorder.start();
+      setIsSpeechTestRecording(true);
+    } catch (error) {
+      const denied = error instanceof DOMException
+        && (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError');
+      const message = denied
+        ? i18nService.t('coworkMicrophonePermissionDenied')
+        : i18nService.t('coworkSpeechTranscriptionFailed');
+      setSpeechTestError(message);
+      showToast(message);
+      resetSpeechTestVisualizer();
+      stopSpeechTestStream();
+    }
+  }, [isSpeechTestTranscribing, resetSpeechTestVisualizer, showToast, speechSettings.apiKey, speechSettings.provider, startSpeechTestVisualizer, stopSpeechTestStream]);
+
+  const stopSpeechTestRecording = useCallback(async () => {
+    const recorder = speechTestRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') {
+      return;
+    }
+
+    setIsSpeechTestRecording(false);
+    setIsSpeechTestTranscribing(true);
+    const stopPromise = new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+    });
+    recorder.stop();
+    const mimeType = recorder.mimeType || 'audio/webm';
+    speechTestRecorderRef.current = null;
+
+    await stopPromise;
+
+    try {
+      const blob = new Blob(speechTestChunksRef.current, { type: mimeType });
+      const upload = await prepareSpeechUpload({
+        provider: speechSettings.provider,
+        blob,
+        mimeType,
+        fileName: 'speech-settings-test.webm',
+      });
+      const result = await transcribeAudioWithConfig({
+        speechConfig: {
+          ...speechSettings,
+          enabled: speechSettings.provider !== '' && speechSettings.apiKey.trim() !== '',
+        },
+        audioBase64: upload.audioBase64,
+        mimeType: upload.mimeType,
+        fileName: upload.fileName,
+      });
+
+      if (!result.success) {
+        setSpeechTestError(i18nService.t('coworkSpeechTranscriptionFailed'));
+        setSpeechTestResult(null);
+        showToast(i18nService.t('coworkSpeechTranscriptionFailed'));
+        return;
+      }
+
+      setSpeechTestError(null);
+      setSpeechTestResult(result.text);
+    } catch {
+      setSpeechTestError(i18nService.t('coworkSpeechTranscriptionFailed'));
+      setSpeechTestResult(null);
+      showToast(i18nService.t('coworkSpeechTranscriptionFailed'));
+    } finally {
+      speechTestChunksRef.current = [];
+      setIsSpeechTestTranscribing(false);
+      resetSpeechTestVisualizer();
+      stopSpeechTestStream();
+    }
+  }, [resetSpeechTestVisualizer, showToast, speechSettings, stopSpeechTestStream]);
+
+  const handleSpeechTestClick = useCallback(() => {
+    if (isSpeechTestRecording) {
+      void stopSpeechTestRecording();
+      return;
+    }
+    void startSpeechTestRecording();
+  }, [isSpeechTestRecording, startSpeechTestRecording, stopSpeechTestRecording]);
 
   // Handle provider configuration change
   const handleProviderConfigChange = (provider: ProviderType, field: string, value: string) => {
@@ -1372,6 +1545,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         })
       ) as ProvidersConfig;
 
+      if (speechSettings.provider && !isSpeechInputSelectionValid) {
+        setError(i18nService.t('speechInputInvalidConfig'));
+        setIsSaving(false);
+        return;
+      }
+
       // Find the first enabled provider to use as the primary API
       const firstEnabledProvider = Object.entries(normalizedProviders).find(
         ([_, config]) => config.enabled
@@ -1390,6 +1569,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         theme,
         language,
         useSystemProxy,
+        speech: {
+          enabled: speechSettings.provider !== '' && isSpeechInputSelectionValid,
+          provider: speechSettings.provider,
+          apiKey: speechSettings.apiKey.trim(),
+          language: speechSettings.language?.trim() ?? '',
+        },
         shortcuts,
         app: {
           ...configService.getConfig().app,
@@ -1501,7 +1686,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     setModelFormError(null);
   };
 
-  const handleEditModel = (modelId: string, modelName: string, supportsImage?: boolean) => {
+  const handleEditModel = (
+    modelId: string,
+    modelName: string,
+    supportsImage?: boolean
+  ) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
     setEditingModelId(modelId);
@@ -2048,6 +2237,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     { key: 'general',        label: i18nService.t('general'),        icon: <Cog6ToothIcon className="h-5 w-5" /> },
     { key: 'coworkAgentEngine', label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
     { key: 'model',          label: i18nService.t('model'),          icon: <CubeIcon className="h-5 w-5" /> },
+    { key: 'speech',         label: i18nService.t('speechInput'),    icon: <MicrophoneIcon className="h-5 w-5" /> },
     { key: 'im',             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
     { key: 'email',          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
     { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
@@ -3182,7 +3372,131 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     </div>
                   )}
                 </div>
+
               </div>
+            </div>
+          </div>
+        );
+
+      case 'speech':
+        return (
+          <div className="space-y-6">
+            <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+              <div>
+                <h3 className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('speechInput')}
+                </h3>
+                <p className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('speechInputDescription')}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                  {i18nService.t('speechInputProvider')}
+                </label>
+                <ThemedSelect
+                  id="speech-provider"
+                  value={speechSettings.provider}
+                  onChange={(value) => {
+                    setSpeechSettings((prev) => ({
+                      ...prev,
+                      provider: value as SpeechProviderType,
+                      enabled: value !== '' && prev.apiKey.trim() !== '',
+                    }));
+                    setError(null);
+                  }}
+                  options={speechProviderOptions}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                  {i18nService.t('apiKey')}
+                </label>
+                <input
+                  type="password"
+                  value={speechSettings.apiKey}
+                  onChange={(event) => {
+                    const nextApiKey = event.target.value;
+                    setSpeechSettings((prev) => ({
+                      ...prev,
+                      apiKey: nextApiKey,
+                      enabled: prev.provider !== '' && nextApiKey.trim() !== '',
+                    }));
+                    if (error) {
+                      setError(null);
+                    }
+                  }}
+                  className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs"
+                  placeholder={i18nService.t('apiKeyPlaceholder')}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('speechInputTestDescription')}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSpeechTestClick}
+                    disabled={!isSpeechInputSelectionValid || isSpeechTestTranscribing}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl bg-claude-accent px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-claude-accentHover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isSpeechTestRecording ? (
+                      <>
+                        <StopIcon className="h-4 w-4" />
+                        <span className="flex h-7 min-w-[48px] items-center gap-1.5 overflow-hidden">
+                          {AUDIO_WAVE_MULTIPLIERS.map((multiplier) => (
+                            <span
+                              key={`settings-speech-${multiplier}`}
+                              className="block h-4 w-1.5 origin-center rounded-full bg-white/90 transition-transform duration-100"
+                              style={{ transform: `scaleY(${getWaveScale(speechTestAudioLevel, multiplier)})` }}
+                            />
+                          ))}
+                        </span>
+                      </>
+                    ) : isSpeechTestTranscribing ? (
+                      <span className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                    ) : (
+                      <MicrophoneIcon className="h-4 w-4" />
+                    )}
+                    <span>
+                      {isSpeechTestRecording
+                        ? i18nService.t('coworkStopRecording')
+                        : isSpeechTestTranscribing
+                          ? i18nService.t('coworkTranscribing')
+                          : i18nService.t('speechInputTestAction')}
+                    </span>
+                  </button>
+                </div>
+
+                {(speechTestResult !== null || speechTestError) && (
+                  <div className={`rounded-xl border px-3 py-3 text-xs leading-5 ${
+                    speechTestError
+                      ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300'
+                      : 'dark:border-claude-darkBorder border-claude-border bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:text-claude-darkText text-claude-text'
+                  }`}>
+                    <div className="mb-1 font-medium">
+                      {i18nService.t('speechInputTestResult')}
+                    </div>
+                    <div className="break-words whitespace-pre-wrap">
+                      {speechTestError
+                        ? speechTestError
+                        : speechTestResult === ''
+                          ? i18nService.t('speechInputTestEmptyResult')
+                          : speechTestResult}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {speechSettings.provider !== '' && !isSpeechInputSelectionValid && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  {i18nService.t('speechInputInvalidConfig')}
+                </p>
+              )}
             </div>
           </div>
         );
