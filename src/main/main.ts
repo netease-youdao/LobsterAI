@@ -59,6 +59,7 @@ import { migrateScheduledTasksToOpenclaw, migrateScheduledTaskRunsToOpenclaw } f
 import { buildScheduledTaskEnginePrompt } from '../scheduled-task/enginePrompt';
 import { IpcChannel as ScheduledTaskIpc, DeliveryMode as STDeliveryMode, SessionTarget as STSessionTarget, PayloadKind as STPayloadKind } from '../scheduled-task/constants';
 import { McpServerManager } from './libs/mcpServerManager';
+import { validateMcpCommand } from './libs/mcpCommandValidator';
 import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
@@ -2310,8 +2311,22 @@ if (!gotTheLock) {
     env?: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    isBuiltIn?: boolean;
+    confirmed?: boolean;
   }) => {
     try {
+      // Validate stdio command before persisting
+      if (data.transportType === 'stdio') {
+        const validation = validateMcpCommand(data.command, data.args, data.isBuiltIn);
+        if (!validation.valid) {
+          return { success: false, error: validation.error };
+        }
+        if (validation.needsConfirmation && !data.confirmed) {
+          return { success: false, needsConfirmation: true, command: validation.sanitizedCommand };
+        }
+        data.command = validation.sanitizedCommand;
+      }
+
       getMcpStore().createServer(data as any);
       const servers = getMcpStore().listServers();
       // Trigger async MCP bridge refresh (don't await — let UI show DB result immediately)
@@ -2331,8 +2346,22 @@ if (!gotTheLock) {
     env?: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    isBuiltIn?: boolean;
+    confirmed?: boolean;
   }) => {
     try {
+      // Validate stdio command before persisting
+      if (data.transportType === 'stdio' && data.command !== undefined) {
+        const validation = validateMcpCommand(data.command, data.args, data.isBuiltIn);
+        if (!validation.valid) {
+          return { success: false, error: validation.error };
+        }
+        if (validation.needsConfirmation && !data.confirmed) {
+          return { success: false, needsConfirmation: true, command: validation.sanitizedCommand };
+        }
+        data.command = validation.sanitizedCommand;
+      }
+
       getMcpStore().updateServer(id, data as any);
       const servers = getMcpStore().listServers();
       refreshMcpBridge().catch(err => console.error('[McpBridge] background refresh error:', err));

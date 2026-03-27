@@ -2,13 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { i18nService } from '../../services/i18n';
 import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
 
+interface McpSaveResult {
+  error?: string;
+  needsConfirmation?: boolean;
+  command?: string;
+}
+
 interface McpServerFormModalProps {
   isOpen: boolean;
   server?: McpServerConfig | null; // null = create mode, defined = edit mode
   registryEntry?: McpRegistryEntry | null; // install from registry mode
   existingNames: string[];
   onClose: () => void;
-  onSave: (data: McpServerFormData) => void;
+  onSave: (data: McpServerFormData) => Promise<McpSaveResult | void>;
 }
 
 const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
@@ -94,30 +100,61 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setHeaderRows([]);
     }
     setError('');
+    setPendingConfirmData(null);
   }, [isOpen, server, registryEntry]);
 
-  const handleSave = () => {
+  const [pendingConfirmData, setPendingConfirmData] = useState<McpServerFormData | null>(null);
+
+  const handleSave = async (overrideData?: McpServerFormData) => {
+    const data = overrideData || buildFormData();
+    if (!data) return;
+
+    const result = await onSave(data);
+    if (result?.needsConfirmation && result.command) {
+      setError(i18nService.t('mcpCommandNotInAllowlist').replace('{command}', result.command));
+      setPendingConfirmData({ ...data, confirmed: true });
+      return;
+    }
+    if (result?.error) {
+      setError(result.error);
+      return;
+    }
+    setPendingConfirmData(null);
+  };
+
+  const handleConfirmUnknownCommand = async () => {
+    if (!pendingConfirmData) return;
+    const data = pendingConfirmData;
+    setPendingConfirmData(null);
+    setError('');
+    const result = await onSave(data);
+    if (result?.error) {
+      setError(result.error);
+    }
+  };
+
+  const buildFormData = (): McpServerFormData | null => {
     const trimmedName = name.trim();
     if (!trimmedName) {
       setError(i18nService.t('mcpNameRequired'));
-      return;
+      return null;
     }
 
     // Check name uniqueness (excluding current server in edit mode)
     const otherNames = existingNames.filter(n => !isEdit || n !== server?.name);
     if (otherNames.includes(trimmedName)) {
       setError(i18nService.t('mcpNameExists'));
-      return;
+      return null;
     }
 
     if (transportType === 'stdio' && !command.trim()) {
       setError(i18nService.t('mcpCommandRequired'));
-      return;
+      return null;
     }
 
     if ((transportType === 'sse' || transportType === 'http') && !url.trim()) {
       setError(i18nService.t('mcpUrlRequired'));
-      return;
+      return null;
     }
 
     const args = argsText
@@ -158,7 +195,8 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       data.registryId = registryEntry.id;
     }
 
-    onSave(data);
+    setPendingConfirmData(null);
+    return data;
   };
 
   const handleAddEnvRow = () => {
@@ -425,13 +463,23 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             >
               {i18nService.t('cancel')}
             </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              className="px-3 py-1.5 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
-            >
-              {saveText}
-            </button>
+            {pendingConfirmData ? (
+              <button
+                type="button"
+                onClick={handleConfirmUnknownCommand}
+                className="px-3 py-1.5 text-xs rounded-lg bg-yellow-500 text-white hover:bg-yellow-600 transition-colors"
+              >
+                {i18nService.t('mcpConfirmAddCommand')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleSave()}
+                className="px-3 py-1.5 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+              >
+                {saveText}
+              </button>
+            )}
           </div>
         </div>
       </div>

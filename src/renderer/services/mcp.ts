@@ -48,7 +48,7 @@ class McpService {
     }
   }
 
-  async createServer(data: McpServerFormData): Promise<{ success: boolean; servers?: McpServerConfig[]; error?: string }> {
+  async createServer(data: McpServerFormData): Promise<{ success: boolean; servers?: McpServerConfig[]; error?: string; needsConfirmation?: boolean; command?: string }> {
     try {
       const result = await window.electron.mcp.create(data);
       if (result.success && result.servers) {
@@ -62,7 +62,7 @@ class McpService {
     }
   }
 
-  async updateServer(id: string, data: Partial<McpServerFormData>): Promise<{ success: boolean; servers?: McpServerConfig[]; error?: string }> {
+  async updateServer(id: string, data: Partial<McpServerFormData>): Promise<{ success: boolean; servers?: McpServerConfig[]; error?: string; needsConfirmation?: boolean; command?: string }> {
     try {
       const result = await window.electron.mcp.update(id, data);
       if (result.success && result.servers) {

@@ -31,6 +31,7 @@ export interface McpServerFormData {
   isBuiltIn?: boolean;
   githubUrl?: string;
   registryId?: string;
+  confirmed?: boolean;            // user confirmed non-allowlisted command
 }
 
 // Built-in MCP registry entry (pure frontend definition)
