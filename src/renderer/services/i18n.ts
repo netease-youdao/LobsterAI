@@ -41,6 +41,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     light: '浅色',
     dark: '深色',
     system: '跟随系统',
+    custom: '自定义',
+    accentColor: '主题色',
     chinese: '中文',
     english: 'English',
     
@@ -1194,6 +1196,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     light: 'Light',
     dark: 'Dark',
     system: 'System',
+    custom: 'Custom',
+    accentColor: 'Accent Color',
     chinese: 'Chinese',
     english: 'English',
     

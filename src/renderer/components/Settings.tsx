@@ -3,7 +3,7 @@ import { configService } from '../services/config';
 import { apiService } from '../services/api';
 import { checkForAppUpdate } from '../services/appUpdate';
 import type { AppUpdateInfo } from '../services/appUpdate';
-import { themeService } from '../services/theme';
+import { themeService, ThemeType } from '../services/theme';
 import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
@@ -413,7 +413,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const dispatch = useDispatch();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
-  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  const [theme, setTheme] = useState<ThemeType>('system');
+  const [accentColor, setAccentColor] = useState<string>('#F472B6');
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
@@ -428,7 +429,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [isTesting, setIsTesting] = useState(false);
   const [isImportingProviders, setIsImportingProviders] = useState(false);
   const [isExportingProviders, setIsExportingProviders] = useState(false);
-  const initialThemeRef = useRef<'light' | 'dark' | 'system'>(themeService.getTheme());
+  const initialThemeRef = useRef<ThemeType>(themeService.getTheme());
+  const initialAccentRef = useRef<string>(themeService.getAccentColor());
   const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
   const didSaveRef = useRef(false);
 
@@ -631,8 +633,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       
       // Set general settings
       initialThemeRef.current = config.theme;
+      initialAccentRef.current = themeService.getAccentColor();
       initialLanguageRef.current = config.language;
       setTheme(config.theme);
+      if (config.themeAccentColor) {
+        setAccentColor(config.themeAccentColor);
+      }
       setLanguage(config.language);
       setUseSystemProxy(config.useSystemProxy ?? false);
       const savedTestMode = config.app?.testMode ?? false;
@@ -846,6 +852,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         return;
       }
       themeService.setTheme(initialThemeRef.current);
+      if (initialThemeRef.current === 'custom') {
+        themeService.setAccentColor(initialAccentRef.current);
+      }
       i18nService.setLanguage(initialLanguageRef.current, { persist: false });
     };
   }, []);
@@ -1388,6 +1397,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         },
         providers: normalizedProviders, // Save all providers configuration
         theme,
+        themeAccentColor: theme === 'custom' ? accentColor : undefined,
         language,
         useSystemProxy,
         shortcuts,
@@ -2221,12 +2231,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
                 {i18nService.t('appearance')}
               </h4>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-3">
                 {([
                   { value: 'light' as const, label: i18nService.t('light') },
                   { value: 'dark' as const, label: i18nService.t('dark') },
                   { value: 'system' as const, label: i18nService.t('system') },
-                ]).map((option) => {
+                  { value: 'custom' as const, label: i18nService.t('custom') },
+                ] as const).map((option) => {
                   const isSelected = theme === option.value;
                   return (
                     <button
@@ -2234,6 +2245,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                       type="button"
                       onClick={() => {
                         setTheme(option.value);
+                        if (option.value === 'custom') {
+                          themeService.setAccentColor(accentColor);
+                        }
                         themeService.setTheme(option.value);
                       }}
                       className={`flex flex-col items-center rounded-xl border-2 p-3 transition-colors cursor-pointer ${
@@ -2323,6 +2337,31 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                             </g>
                             {/* Divider line */}
                             <line x1="60" y1="0" x2="60" y2="80" stroke="#888" strokeWidth="0.5" />
+                           </>
+                        )}
+                        {option.value === 'custom' && (
+                          <>
+                            <defs>
+                              <linearGradient id="custom-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stopColor={accentColor} stopOpacity="0.15" />
+                                <stop offset="100%" stopColor={accentColor} stopOpacity="0.05" />
+                              </linearGradient>
+                            </defs>
+                            <rect width="120" height="80" fill="url(#custom-grad)" />
+                            <rect x="0" y="0" width="30" height="80" fill={accentColor} fillOpacity="0.12" />
+                            <rect x="4" y="8" width="22" height="4" rx="2" fill={accentColor} fillOpacity="0.4" />
+                            <rect x="4" y="16" width="18" height="3" rx="1.5" fill={accentColor} fillOpacity="0.2" />
+                            <rect x="4" y="22" width="20" height="3" rx="1.5" fill={accentColor} fillOpacity="0.2" />
+                            <rect x="4" y="28" width="16" height="3" rx="1.5" fill={accentColor} fillOpacity="0.2" />
+                            <rect x="36" y="8" width="78" height="64" rx="4" fill="#FFFFFF" />
+                            <rect x="42" y="16" width="50" height="4" rx="2" fill={accentColor} fillOpacity="0.3" />
+                            <rect x="42" y="24" width="66" height="3" rx="1.5" fill={accentColor} fillOpacity="0.12" />
+                            <rect x="42" y="30" width="60" height="3" rx="1.5" fill={accentColor} fillOpacity="0.12" />
+                            <rect x="42" y="36" width="55" height="3" rx="1.5" fill={accentColor} fillOpacity="0.12" />
+                            <rect x="42" y="46" width="40" height="4" rx="2" fill={accentColor} fillOpacity="0.3" />
+                            <rect x="42" y="54" width="66" height="3" rx="1.5" fill={accentColor} fillOpacity="0.12" />
+                            <rect x="42" y="60" width="58" height="3" rx="1.5" fill={accentColor} fillOpacity="0.12" />
+                            <circle cx="105" cy="12" r="6" fill={accentColor} fillOpacity="0.6" />
                           </>
                         )}
                       </svg>
@@ -2337,6 +2376,29 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   );
                 })}
               </div>
+              {theme === 'custom' && (
+                <div className="mt-4 flex items-center gap-3">
+                  <label className="text-sm dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('accentColor')}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="color"
+                      value={accentColor}
+                      onChange={(e) => {
+                        setAccentColor(e.target.value);
+                        themeService.setAccentColor(e.target.value);
+                        themeService.setTheme('custom');
+                      }}
+                      className="w-8 h-8 rounded-lg border dark:border-claude-darkBorder border-claude-border cursor-pointer appearance-none bg-transparent p-0"
+                      style={{ WebkitAppearance: 'none' }}
+                    />
+                  </div>
+                  <span className="text-xs text-claude-textSecondary font-mono">
+                    {accentColor.toUpperCase()}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         );

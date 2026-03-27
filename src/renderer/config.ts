@@ -214,7 +214,8 @@ export interface AppConfig {
     };
   };
   // 主题配置
-  theme: 'light' | 'dark' | 'system';
+  theme: 'light' | 'dark' | 'system' | 'custom';
+  themeAccentColor?: string;
   // 语言配置
   language: 'zh' | 'en';
   // 是否使用系统代理
