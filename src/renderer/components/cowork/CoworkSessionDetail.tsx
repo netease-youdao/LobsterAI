@@ -1314,7 +1314,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
   const [isScrollable, setIsScrollable] = useState(false);
   const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
-  const hoveredRailIndexRef = useRef<number | null>(null);
   const [isRailHovered, setIsRailHovered] = useState(false);
   const [railTooltip, setRailTooltip] = useState<{ label: string; top: number; right: number; isUser: boolean } | null>(null);
 
@@ -1370,7 +1369,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     turnElsCacheRef.current = [];
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     setHoveredRailIndex(null);
-    hoveredRailIndexRef.current = null;
   }, [currentSession?.id]);
 
   // Close menu on outside click
@@ -1798,6 +1796,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     );
   }, [turns]);
 
+  // Resolve uninitialized rail index (-1) to last item after render
+  useEffect(() => {
+    if (currentRailIndex < 0 && railItemCountRef.current > 0) {
+      const lastRail = railItemCountRef.current - 1;
+      currentRailIndexRef.current = lastRail;
+      setCurrentRailIndex(lastRail);
+    }
+  }, [currentRailIndex, turns]);
+
   // Auto scroll to bottom when new messages arrive or content updates (streaming)
   useEffect(() => {
     if (!shouldAutoScroll) {
@@ -2062,7 +2069,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             onMouseEnter={() => setIsRailHovered(true)}
             onMouseLeave={() => {
               setIsRailHovered(false);
-              hoveredRailIndexRef.current = null;
               setHoveredRailIndex(null);
               setRailTooltip(null);
             }}
@@ -2078,7 +2084,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 setCurrentRailIndex(ri);
                 navigateToTurnByIndex(targetTurn);
               }}
-              onMouseEnter={() => { hoveredRailIndexRef.current = null; setHoveredRailIndex(null); }}
+              onMouseEnter={() => { setHoveredRailIndex(null); }}
               className={`shrink-0 flex items-center justify-center w-5 h-5 mb-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
                 ${!isRailHovered
                   ? 'opacity-0 pointer-events-none'
@@ -2127,7 +2133,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                   });
                 }
               }
-              const maxLen = Math.max(...items.map(m => m.contentLen), 1);
+              const maxLen = items.reduce((acc, m) => Math.max(acc, m.contentLen), 1);
               // Sync rail item count and turn-to-rail mapping
               railItemCountRef.current = items.length;
               const mapping: number[] = [];
@@ -2137,15 +2143,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               }
               turnToRailIndexRef.current = mapping;
 
-              // Resolve uninitialized rail index (-1) to last item
-              let resolvedRailIndex = currentRailIndex;
-              if (resolvedRailIndex < 0 && items.length > 0) {
-                resolvedRailIndex = items.length - 1;
-                Promise.resolve().then(() => {
-                  currentRailIndexRef.current = resolvedRailIndex;
-                  setCurrentRailIndex(resolvedRailIndex);
-                });
-              }
+              // Clamp rail index to valid range
+              const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= items.length
+                ? items.length - 1
+                : currentRailIndex;
 
               return items.map((msg, idx) => {
                 const isActive = idx === resolvedRailIndex;
@@ -2162,7 +2163,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                       navigateToTurnByIndex(msg.turnIndex);
                     }}
                     onMouseEnter={(e) => {
-                      hoveredRailIndexRef.current = idx;
                       setHoveredRailIndex(idx);
                       const rect = e.currentTarget.getBoundingClientRect();
                       const top = Math.max(8, Math.min(rect.top + rect.height / 2, window.innerHeight - 8));
@@ -2200,7 +2200,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 setCurrentRailIndex(ri);
                 navigateToTurnByIndex(targetTurn);
               }}
-              onMouseEnter={() => { hoveredRailIndexRef.current = null; setHoveredRailIndex(null); }}
+              onMouseEnter={() => { setHoveredRailIndex(null); }}
               className={`shrink-0 flex items-center justify-center w-5 h-5 mt-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
                 ${!isRailHovered
                   ? 'opacity-0 pointer-events-none'
