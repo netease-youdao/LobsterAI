@@ -1308,6 +1308,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [currentRailIndex, setCurrentRailIndex] = useState(-1);
   const currentRailIndexRef = useRef(-1);
   const railItemCountRef = useRef(0);
+  const turnToRailIndexRef = useRef<number[]>([]);
   const isNavigatingRef = useRef(false);
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
@@ -2067,7 +2068,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             {/* Up Arrow */}
             <button
               type="button"
-              onClick={() => currentTurnIndex > 0 && navigateToTurnByIndex(currentTurnIndex - 1)}
+              onClick={() => {
+                if (currentTurnIndex <= 0) return;
+                const targetTurn = currentTurnIndex - 1;
+                const ri = turnToRailIndexRef.current[targetTurn] ?? 0;
+                currentRailIndexRef.current = ri;
+                setCurrentRailIndex(ri);
+                navigateToTurnByIndex(targetTurn);
+              }}
+              onMouseEnter={() => { hoveredRailIndexRef.current = null; setHoveredRailIndex(null); }}
               className={`shrink-0 flex items-center justify-center w-5 h-5 mb-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
                 ${!isRailHovered
                   ? 'opacity-0 pointer-events-none'
@@ -2115,8 +2124,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 }
               }
               const maxLen = Math.max(...items.map(m => m.contentLen), 1);
-              // Sync rail item count for scroll handler
+              // Sync rail item count and turn-to-rail mapping
               railItemCountRef.current = items.length;
+              const mapping: number[] = [];
+              for (let ri = 0; ri < items.length; ri++) {
+                const ti = items[ri].turnIndex;
+                if (mapping[ti] === undefined) mapping[ti] = ri;
+              }
+              turnToRailIndexRef.current = mapping;
 
               // Resolve uninitialized rail index (-1) to last item
               let resolvedRailIndex = currentRailIndex;
@@ -2168,7 +2183,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             {/* Down Arrow */}
             <button
               type="button"
-              onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurnByIndex(currentTurnIndex + 1)}
+              onClick={() => {
+                if (currentTurnIndex >= turns.length - 1) return;
+                const targetTurn = currentTurnIndex + 1;
+                const ri = turnToRailIndexRef.current[targetTurn] ?? 0;
+                currentRailIndexRef.current = ri;
+                setCurrentRailIndex(ri);
+                navigateToTurnByIndex(targetTurn);
+              }}
+              onMouseEnter={() => { hoveredRailIndexRef.current = null; setHoveredRailIndex(null); }}
               className={`shrink-0 flex items-center justify-center w-5 h-5 mt-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
                 ${!isRailHovered
                   ? 'opacity-0 pointer-events-none'
