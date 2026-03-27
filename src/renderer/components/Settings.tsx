@@ -1268,6 +1268,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const handleSaveCoworkMemoryEntry = async () => {
     const text = coworkMemoryDraftText.trim();
     if (!text) return;
+    if (text.length < 2) {
+      setError(i18nService.t('coworkMemoryCrudTextTooShort'));
+      return;
+    }
 
     setCoworkMemoryListLoading(true);
     try {
