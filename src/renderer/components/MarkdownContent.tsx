@@ -176,29 +176,33 @@ const openExternalViaAnchorFallback = (url: string): void => {
 };
 
 const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
-  const normalizedClassName = Array.isArray(className)
-    ? className.join(' ')
-    : className || '';
+  const normalizedClassName = Array.isArray(className) ? className.join(' ') : className || '';
   const match = /language-([\w-]+)/.exec(normalizedClassName);
   const hasPosition = node?.position?.start?.line != null && node?.position?.end?.line != null;
-  const isInline = typeof props.inline === 'boolean'
-    ? props.inline
-    : hasPosition
-      ? node.position.start.line === node.position.end.line
-      : !match;
+  const isInline =
+    typeof props.inline === 'boolean'
+      ? props.inline
+      : hasPosition
+        ? node.position.start.line === node.position.end.line
+        : !match;
   const codeText = Array.isArray(children) ? children.join('') : String(children);
   const trimmedCodeText = codeText.replace(/\n$/, '');
-  const shouldHighlight = !isInline && match
-    && trimmedCodeText.length <= CODE_BLOCK_CHAR_LIMIT
-    && trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
+  const shouldHighlight =
+    !isInline &&
+    match &&
+    trimmedCodeText.length <= CODE_BLOCK_CHAR_LIMIT &&
+    trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
   const [isCopied, setIsCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
 
-  useEffect(() => () => {
-    if (copyTimeoutRef.current != null) {
-      window.clearTimeout(copyTimeoutRef.current);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (copyTimeoutRef.current != null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    },
+    []
+  );
 
   const handleCopy = useCallback(async () => {
     try {
@@ -232,9 +236,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
                 <ClipboardDocumentIcon className="h-4 w-4" />
               )}
             </button>
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
-              {trimmedCodeText}
-            </code>
+            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">{trimmedCodeText}</code>
           </div>
         </div>
       );
@@ -260,19 +262,12 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
           </button>
         </div>
         {shouldHighlight ? (
-          <SyntaxHighlighter
-            style={oneDark}
-            language={match[1]}
-            PreTag="div"
-            customStyle={SYNTAX_HIGHLIGHTER_STYLE}
-          >
+          <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div" customStyle={SYNTAX_HIGHLIGHTER_STYLE}>
             {trimmedCodeText}
           </SyntaxHighlighter>
         ) : (
           <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
-              {trimmedCodeText}
-            </code>
+            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">{trimmedCodeText}</code>
           </div>
         )}
       </div>
@@ -282,13 +277,12 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
   const inlineClassName = [
     'inline bg-transparent px-0.5 text-[0.92em] font-mono font-medium dark:text-claude-darkText text-claude-text',
     normalizedClassName,
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
-    <code
-      className={inlineClassName}
-      {...props}
-    >
+    <code className={inlineClassName} {...props}>
       {children}
     </code>
   );
@@ -396,9 +390,7 @@ const findFallbackPathFromContext = (
   return null;
 };
 
-const createMarkdownComponents = (
-  resolveLocalFilePath?: (href: string, text: string) => string | null
-) => ({
+const createMarkdownComponents = (resolveLocalFilePath?: (href: string, text: string) => string | null) => ({
   p: ({ node, className, children, ...props }: any) => (
     <p className="my-1 first:mt-0 last:mb-0 leading-6 dark:text-claude-darkText text-claude-text" {...props}>
       {children}
@@ -440,7 +432,10 @@ const createMarkdownComponents = (
     </li>
   ),
   blockquote: ({ node, className, children, ...props }: any) => (
-    <blockquote className="border-l-4 border-claude-accent pl-4 py-1 my-2 dark:bg-claude-darkSurface/30 bg-claude-surfaceHover/30 rounded-r-lg dark:text-claude-darkText text-claude-text" {...props}>
+    <blockquote
+      className="border-l-4 border-claude-accent pl-4 py-1 my-2 dark:bg-claude-darkSurface/30 bg-claude-surfaceHover/30 rounded-r-lg dark:text-claude-darkText text-claude-text"
+      {...props}
+    >
       {children}
     </blockquote>
   ),
@@ -478,9 +473,8 @@ const createMarkdownComponents = (
     </td>
   ),
   img: ({ node, className, src, alt, ...props }: any) => {
-    const resolvedSrc = typeof src === 'string' && src.startsWith('file://')
-      ? src.replace(/^file:\/\//, 'localfile://')
-      : src;
+    const resolvedSrc =
+      typeof src === 'string' && src.startsWith('file://') ? src.replace(/^file:\/\//, 'localfile://') : src;
     return <img className="max-w-full h-auto rounded-xl my-4" src={resolvedSrc} alt={alt} {...props} />;
   },
   hr: ({ node, ...props }: any) => (
@@ -494,14 +488,12 @@ const createMarkdownComponents = (
     const hrefValue = typeof href === 'string' ? href.trim() : '';
     const isExternalLink = !!hrefValue && isExternalHref(hrefValue);
     const linkText = Array.isArray(children) ? children.join('') : String(children ?? '');
-    const resolvedPath = hrefValue && !isExternalLink && resolveLocalFilePath
-      ? resolveLocalFilePath(hrefValue, linkText)
-      : null;
+    const resolvedPath =
+      hrefValue && !isExternalLink && resolveLocalFilePath ? resolveLocalFilePath(hrefValue, linkText) : null;
     const isLocalFilePath = !!hrefValue && !isExternalLink && (resolvedPath || isLikelyLocalFilePath(hrefValue));
 
     if (isLocalFilePath) {
-      const rawPath = resolvedPath
-        ?? stripFileProtocol(stripHashAndQuery(hrefValue));
+      const rawPath = resolvedPath ?? stripFileProtocol(stripHashAndQuery(hrefValue));
       const decodedPath = safeDecodeURIComponent(rawPath);
       const filePath = decodedPath || rawPath;
 
@@ -514,11 +506,7 @@ const createMarkdownComponents = (
             return;
           }
 
-          const fallbackPath = findFallbackPathFromContext(
-            anchor,
-            linkText,
-            resolveLocalFilePath
-          );
+          const fallbackPath = findFallbackPathFromContext(anchor, linkText, resolveLocalFilePath);
           if (fallbackPath) {
             const fallbackResult = await window.electron.shell.openPath(fallbackPath);
             if (!fallbackResult?.success) {
@@ -598,25 +586,25 @@ interface MarkdownContentProps {
   resolveLocalFilePath?: (href: string, text: string) => string | null;
 }
 
-const MarkdownContent: React.FC<MarkdownContentProps> = ({
-  content,
-  className = '',
-  resolveLocalFilePath,
-}) => {
-  const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath]);
-  const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
-  return (
-    <div className={`markdown-content text-[15px] leading-6 ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
-        urlTransform={safeUrlTransform}
-        components={components}
-      >
-        {normalizedContent}
-      </ReactMarkdown>
-    </div>
-  );
-};
+const MarkdownContent: React.FC<MarkdownContentProps> = React.memo(
+  ({ content, className = '', resolveLocalFilePath }) => {
+    const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath]);
+    const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
+    return (
+      <div className={`markdown-content text-[15px] leading-6 ${className}`}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex]}
+          urlTransform={safeUrlTransform}
+          components={components}
+        >
+          {normalizedContent}
+        </ReactMarkdown>
+      </div>
+    );
+  }
+);
+
+MarkdownContent.displayName = 'MarkdownContent';
 
 export default MarkdownContent;
