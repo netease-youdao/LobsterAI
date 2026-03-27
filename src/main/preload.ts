@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { IpcChannel as ScheduledTaskIpc } from '../scheduled-task/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -133,9 +134,39 @@ contextBridge.exposeInMainWorld('electron', {
       },
     },
   },
+  agents: {
+    list: async () => {
+      const result = await ipcRenderer.invoke('agents:list');
+      return result?.success ? result.agents : [];
+    },
+    get: async (id: string) => {
+      const result = await ipcRenderer.invoke('agents:get', id);
+      return result?.success ? result.agent : null;
+    },
+    create: async (request: { id?: string; name: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; source?: string; presetId?: string }) => {
+      const result = await ipcRenderer.invoke('agents:create', request);
+      return result?.success ? result.agent : null;
+    },
+    update: async (id: string, updates: { name?: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; enabled?: boolean }) => {
+      const result = await ipcRenderer.invoke('agents:update', id, updates);
+      return result?.success ? result.agent : null;
+    },
+    delete: async (id: string) => {
+      const result = await ipcRenderer.invoke('agents:delete', id);
+      return result?.success ? result.deleted : false;
+    },
+    presets: async () => {
+      const result = await ipcRenderer.invoke('agents:presets');
+      return result?.success ? result.presets : [];
+    },
+    addPreset: async (presetId: string) => {
+      const result = await ipcRenderer.invoke('agents:addPreset', presetId);
+      return result?.success ? result.agent : null;
+    },
+  },
   cowork: {
     // Session management
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; agentId?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:start', options),
     continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:continue', options),
@@ -153,8 +184,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:get', sessionId),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
-    listSessions: () =>
-      ipcRenderer.invoke('cowork:session:list'),
+    listSessions: (agentId?: string) =>
+      ipcRenderer.invoke('cowork:session:list', agentId),
     exportResultImage: (options: { rect: { x: number; y: number; width: number; height: number }; defaultFileName?: string }) =>
       ipcRenderer.invoke('cowork:session:exportResultImage', options),
     captureImageChunk: (options: { rect: { x: number; y: number; width: number; height: number } }) =>
@@ -329,44 +360,45 @@ contextBridge.exposeInMainWorld('electron', {
   },
   scheduledTasks: {
     // Task CRUD
-    list: () => ipcRenderer.invoke('scheduledTask:list'),
-    get: (id: string) => ipcRenderer.invoke('scheduledTask:get', id),
-    create: (input: any) => ipcRenderer.invoke('scheduledTask:create', input),
-    update: (id: string, input: any) => ipcRenderer.invoke('scheduledTask:update', id, input),
-    delete: (id: string) => ipcRenderer.invoke('scheduledTask:delete', id),
-    toggle: (id: string, enabled: boolean) => ipcRenderer.invoke('scheduledTask:toggle', id, enabled),
+    list: () => ipcRenderer.invoke(ScheduledTaskIpc.List),
+    get: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Get, id),
+    create: (input: any) => ipcRenderer.invoke(ScheduledTaskIpc.Create, input),
+    update: (id: string, input: any) => ipcRenderer.invoke(ScheduledTaskIpc.Update, id, input),
+    delete: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Delete, id),
+    toggle: (id: string, enabled: boolean) => ipcRenderer.invoke(ScheduledTaskIpc.Toggle, id, enabled),
 
     // Execution
-    runManually: (id: string) => ipcRenderer.invoke('scheduledTask:runManually', id),
-    stop: (id: string) => ipcRenderer.invoke('scheduledTask:stop', id),
+    runManually: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.RunManually, id),
+    stop: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Stop, id),
 
     // Run history
     listRuns: (taskId: string, limit?: number, offset?: number) =>
-      ipcRenderer.invoke('scheduledTask:listRuns', taskId, limit, offset),
-    countRuns: (taskId: string) => ipcRenderer.invoke('scheduledTask:countRuns', taskId),
+      ipcRenderer.invoke(ScheduledTaskIpc.ListRuns, taskId, limit, offset),
+    countRuns: (taskId: string) => ipcRenderer.invoke(ScheduledTaskIpc.CountRuns, taskId),
     listAllRuns: (limit?: number, offset?: number) =>
-      ipcRenderer.invoke('scheduledTask:listAllRuns', limit, offset),
+      ipcRenderer.invoke(ScheduledTaskIpc.ListAllRuns, limit, offset),
     resolveSession: (sessionKey: string) =>
-      ipcRenderer.invoke('scheduledTask:resolveSession', sessionKey),
+      ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, sessionKey),
 
     // Delivery channels
-    listChannels: () => ipcRenderer.invoke('scheduledTask:listChannels'),
+    listChannels: () => ipcRenderer.invoke(ScheduledTaskIpc.ListChannels),
+    listChannelConversations: (channel: string) => ipcRenderer.invoke(ScheduledTaskIpc.ListChannelConversations, channel),
 
     // Stream event listeners
     onStatusUpdate: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('scheduledTask:statusUpdate', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:statusUpdate', handler);
+      ipcRenderer.on(ScheduledTaskIpc.StatusUpdate, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.StatusUpdate, handler);
     },
     onRunUpdate: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('scheduledTask:runUpdate', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:runUpdate', handler);
+      ipcRenderer.on(ScheduledTaskIpc.RunUpdate, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.RunUpdate, handler);
     },
     onRefresh: (callback: () => void) => {
       const handler = () => callback();
-      ipcRenderer.on('scheduledTask:refresh', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:refresh', handler);
+      ipcRenderer.on(ScheduledTaskIpc.Refresh, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.Refresh, handler);
     },
   },
   networkStatus: {

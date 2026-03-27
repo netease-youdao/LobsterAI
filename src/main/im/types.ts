@@ -318,6 +318,8 @@ export interface IMGatewayConfig {
 export interface IMSettings {
   systemPrompt?: string;
   skillsEnabled: boolean;
+  /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
+  platformAgentBindings?: Record<string, string>;
 }
 
 export interface IMGatewayStatus {
@@ -380,6 +382,7 @@ export interface IMSessionMapping {
   imConversationId: string;
   platform: IMPlatform;
   coworkSessionId: string;
+  agentId: string;
   createdAt: number;
   lastActiveAt: number;
 }

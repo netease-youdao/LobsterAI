@@ -1,0 +1,110 @@
+diff --git a/src/agents/tools/cron-tool.ts b/src/agents/tools/cron-tool.ts
+index 14df690102..c36714ece6 100644
+--- a/src/agents/tools/cron-tool.ts
++++ b/src/agents/tools/cron-tool.ts
+@@ -1,11 +1,13 @@
+ import { Type } from "@sinclair/typebox";
+ import { loadConfig } from "../../config/config.js";
++import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
+ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+ import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
+ import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
+ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+ import { extractTextFromChatContent } from "../../shared/chat-content.js";
+ import { isRecord, truncateUtf16Safe } from "../../utils.js";
++import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
+ import { resolveSessionAgentId } from "../agent-scope.js";
+ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+ import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+@@ -159,6 +161,46 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
+   if (!rawSessionKey) {
+     return null;
+   }
++
++  // Try structured delivery info from session store (most reliable).
++  const { deliveryContext, threadId } = extractDeliveryInfo(rawSessionKey);
++  const persistedDelivery = normalizeDeliveryContext(deliveryContext);
++  if (persistedDelivery?.channel && persistedDelivery?.to) {
++    const delivery: CronDelivery = {
++      mode: "announce",
++      channel: persistedDelivery.channel as CronMessageChannel,
++      to: persistedDelivery.to,
++    };
++    if (persistedDelivery.accountId) delivery.accountId = persistedDelivery.accountId;
++    if (persistedDelivery.threadId != null) delivery.threadId = persistedDelivery.threadId;
++    else if (threadId != null) delivery.threadId = threadId;
++    return delivery;
++  }
++
++  // Try JSON-encoded delivery context embedded in session key.
++  const jsonIdx = rawSessionKey.indexOf(":{");
++  if (jsonIdx > 0) {
++    try {
++      const ctx = JSON.parse(rawSessionKey.slice(jsonIdx + 1));
++      if (ctx && typeof ctx.channel === "string" && ctx.channel.trim()) {
++        const channel = ctx.channel.trim().toLowerCase() as CronMessageChannel;
++        const peerId = (ctx.peerid || ctx.peerId || ctx.conversationId || "").trim();
++        const chatType = (ctx.chattype || ctx.chatType || "direct").trim().toLowerCase();
++        const accountId = (ctx.accountid || ctx.accountId || "").trim();
++        if (peerId) {
++          const to = chatType === "group" ? `group:${peerId}` : `user:${peerId}`;
++          const delivery: CronDelivery = { mode: "announce", channel, to };
++          if (accountId && accountId !== "__default__") delivery.accountId = accountId;
++          if (threadId != null) delivery.threadId = threadId;
++          return delivery;
++        }
++      }
++    } catch {
++      // fall through to legacy parsing
++    }
++  }
++
++  // Legacy session-key parsing (channel:marker:peerId patterns).
+   const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
+   if (!parsed || !parsed.rest) {
+     return null;
+@@ -172,6 +214,21 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
+     return null;
+   }
+ 
++  if (head === "dingtalk-connector") {
++    const accountId = parts[1]?.trim();
++    const senderId = parts[2]?.trim();
++    if (accountId && senderId) {
++      const delivery: CronDelivery = {
++        mode: "announce",
++        channel: "dingtalk-connector" as CronMessageChannel,
++        to: `user:${senderId}`,
++        accountId,
++      };
++      if (threadId != null) delivery.threadId = threadId;
++      return delivery;
++    }
++  }
++
+   // buildAgentPeerSessionKey encodes peers as:
+   // - direct:<peerId>
+   // - <channel>:direct:<peerId>
+@@ -204,6 +261,9 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
+   if (channel) {
+     delivery.channel = channel;
+   }
++  if (threadId != null) {
++    delivery.threadId = threadId;
++  }
+   return delivery;
+ }
+ 
+diff --git a/src/cron/types.ts b/src/cron/types.ts
+index ef5de924b0..8dde2d0754 100644
+--- a/src/cron/types.ts
++++ b/src/cron/types.ts
+@@ -25,6 +25,8 @@ export type CronDelivery = {
+   to?: string;
+   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
+   accountId?: string;
++  /** Thread or topic id for threaded channels (e.g. Telegram forum topics). */
++  threadId?: string | number;
+   bestEffort?: boolean;
+   /** Separate destination for failure notifications. */
+   failureDestination?: CronFailureDestination;

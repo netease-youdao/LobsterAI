@@ -1,4 +1,4 @@
-import type { CoworkAgentEngine } from './agentEngine/types';
+import type { CoworkAgentEngine } from '../main/libs/agentEngine/types';
 
 export const SCHEDULED_TASK_SWITCH_MESSAGE =
   'Scheduled tasks are only available in OpenClaw. Switch the agent engine to OpenClaw and try again.';

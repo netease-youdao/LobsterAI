@@ -119,15 +119,17 @@ export function buildDingTalkSendParamsFromRoute(
   };
 }
 
-export function buildDingTalkSessionKeyCandidates(conversationId: string): string[] {
+export function buildDingTalkSessionKeyCandidates(conversationId: string, agentId?: string): string[] {
   const normalizedConversationId = conversationId.trim();
   if (!normalizedConversationId) {
     return [];
   }
 
+  const effectiveAgentId = agentId || DEFAULT_MANAGED_AGENT_ID;
+
   return [
-    `agent:${DEFAULT_MANAGED_AGENT_ID}:openai-user:dingtalk-connector:${normalizedConversationId}`,
-    `agent:${DEFAULT_MANAGED_AGENT_ID}:dingtalk-connector:${normalizedConversationId}`,
+    `agent:${effectiveAgentId}:openai-user:dingtalk-connector:${normalizedConversationId}`,
+    `agent:${effectiveAgentId}:dingtalk-connector:${normalizedConversationId}`,
     `dingtalk-connector:${normalizedConversationId}`,
   ];
 }

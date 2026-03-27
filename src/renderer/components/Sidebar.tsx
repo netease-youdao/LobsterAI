@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../store';
+import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
 import CoworkSessionList from './cowork/CoworkSessionList';
@@ -13,16 +14,17 @@ import ClockIcon from './icons/ClockIcon';
 import PuzzleIcon from './icons/PuzzleIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import TrashIcon from './icons/TrashIcon';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ExclamationTriangleIcon, UserGroupIcon } from '@heroicons/react/24/outline';
 
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents';
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowMcp: () => void;
+  onShowAgents: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -36,12 +38,15 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowCowork,
   onShowScheduledTasks,
   onShowMcp,
+  onShowAgents,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
   updateBadge,
 }) => {
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const sessions = useSelector((state: RootState) => state.cowork.sessions);
+  const filteredSessions = sessions.filter((s) => !s.agentId || s.agentId === currentAgentId);
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
@@ -110,12 +115,12 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSelectAll = useCallback(() => {
     setSelectedIds(prev => {
-      if (prev.size === sessions.length) {
+      if (prev.size === filteredSessions.length) {
         return new Set();
       }
-      return new Set(sessions.map(s => s.id));
+      return new Set(filteredSessions.map(s => s.id));
     });
-  }, [sessions]);
+  }, [filteredSessions]);
 
   const handleBatchDeleteClick = useCallback(() => {
     if (selectedIds.size === 0) return;
@@ -218,14 +223,32 @@ const Sidebar: React.FC<SidebarProps> = ({
             <ConnectorIcon className="h-4 w-4" />
             {i18nService.t('mcpServers')}
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsSearchOpen(false);
+              onShowAgents();
+            }}
+            className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+              activeView === 'agents'
+                ? 'bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20'
+                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+            }`}
+          >
+            <UserGroupIcon className="h-4 w-4" />
+            {i18nService.t('myAgents')}
+          </button>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto px-2.5 pb-4">
+        <SidebarAgentList
+          onShowCowork={onShowCowork}
+        />
         <div className="px-3 pb-2 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
           {i18nService.t('coworkHistory')}
         </div>
         <CoworkSessionList
-          sessions={sessions}
+          sessions={filteredSessions}
           currentSessionId={currentSessionId}
           isBatchMode={isBatchMode}
           selectedIds={selectedIds}
@@ -240,7 +263,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       <CoworkSearchModal
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
-        sessions={sessions}
+        sessions={filteredSessions}
         currentSessionId={currentSessionId}
         onSelectSession={handleSelectSession}
         onDeleteSession={handleDeleteSession}
@@ -252,7 +275,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <label className="flex items-center gap-2 cursor-pointer text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
             <input
               type="checkbox"
-              checked={selectedIds.size === sessions.length && sessions.length > 0}
+              checked={selectedIds.size === filteredSessions.length && filteredSessions.length > 0}
               onChange={handleSelectAll}
               className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-claude-accent cursor-pointer"
             />
@@ -337,6 +360,54 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
     </aside>
+  );
+};
+
+/* ── Simplified agent list for sidebar quick-switch ─── */
+
+const SidebarAgentList: React.FC<{
+  onShowCowork: () => void;
+}> = ({ onShowCowork }) => {
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+
+  useEffect(() => {
+    agentService.loadAgents();
+  }, []);
+
+  const enabledAgents = agents.filter((a) => a.enabled);
+
+  // Hide section if only the default main agent exists
+  if (enabledAgents.length <= 1 && !enabledAgents.some((a) => a.source === 'preset')) {
+    return null;
+  }
+
+  const handleSwitch = (agentId: string) => {
+    if (agentId === currentAgentId) return;
+    agentService.switchAgent(agentId);
+    coworkService.loadSessions(agentId);
+    onShowCowork();
+  };
+
+  return (
+    <div className="px-3 pb-2">
+      <div className="space-y-0.5">
+        {enabledAgents.map((agent) => (
+          <div
+            key={agent.id}
+            className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer transition-colors ${
+              currentAgentId === agent.id
+                ? 'bg-claude-accent/10 text-claude-accent'
+                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+            }`}
+            onClick={() => handleSwitch(agent.id)}
+          >
+            <span className="text-base leading-none">{agent.icon || '🦞'}</span>
+            <span className="truncate flex-1 text-xs font-medium">{agent.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 };
 

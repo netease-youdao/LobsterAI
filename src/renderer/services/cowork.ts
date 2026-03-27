@@ -193,9 +193,9 @@ class CoworkService {
     this.openClawEngineListenerAttached = false;
   }
 
-  async loadSessions(): Promise<void> {
+  async loadSessions(agentId?: string): Promise<void> {
     const requestId = ++this.latestLoadSessionsRequestId;
-    const result = await window.electron?.cowork?.listSessions();
+    const result = await window.electron?.cowork?.listSessions(agentId);
     if (result?.success && result.sessions) {
       // High-frequency IM traffic can trigger overlapping list refreshes.
       // Ignore stale responses so an older snapshot does not hide newer sessions.

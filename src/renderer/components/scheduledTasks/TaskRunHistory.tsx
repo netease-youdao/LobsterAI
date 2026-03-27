@@ -3,9 +3,9 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
-import type { ScheduledTaskRun } from '../../types/scheduledTask';
+import type { ScheduledTaskRun } from '../../../scheduled-task/types';
 import RunSessionModal from './RunSessionModal';
-import { formatDuration } from './utils';
+import { formatDateTime, formatDuration } from './utils';
 
 interface TaskRunHistoryProps {
   taskId: string;
@@ -46,7 +46,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
                 <span className={`text-sm font-bold ${statusInfo.color}`}>{statusInfo.icon}</span>
                 <div className="min-w-0">
                   <span className="text-sm dark:text-claude-darkText text-claude-text">
-                    {new Date(run.startedAt).toLocaleString()}
+                    {formatDateTime(new Date(run.startedAt))}
                   </span>
                 </div>
               </div>

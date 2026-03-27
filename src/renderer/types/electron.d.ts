@@ -25,6 +25,7 @@ interface CoworkSession {
   systemPrompt: string;
   executionMode: 'auto' | 'local' | 'sandbox';
   activeSkillIds: string[];
+  agentId: string;
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
@@ -43,6 +44,7 @@ interface CoworkSessionSummary {
   title: string;
   status: 'idle' | 'running' | 'completed' | 'error';
   pinned: boolean;
+  agentId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -214,6 +216,8 @@ interface McpMarketplaceData {
   servers: McpMarketplaceServer[];
 }
 
+import type { Agent, PresetAgent } from './agent';
+
 interface CreditItem {
   type: 'subscription' | 'boost' | 'free';
   label: string;
@@ -263,6 +267,15 @@ interface IElectronAPI {
     fetchMarketplace: () => Promise<{ success: boolean; data?: McpMarketplaceData; error?: string }>;
     refreshBridge: () => Promise<{ success: boolean; tools: number; error?: string }>;
   };
+  agents: {
+    list: () => Promise<Agent[]>;
+    get: (id: string) => Promise<Agent | null>;
+    create: (request: { id?: string; name: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; source?: string; presetId?: string }) => Promise<Agent>;
+    update: (id: string, updates: { name?: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; enabled?: boolean }) => Promise<Agent>;
+    delete: (id: string) => Promise<void>;
+    presets: () => Promise<PresetAgent[]>;
+    addPreset: (presetId: string) => Promise<Agent>;
+  };
   api: {
     fetch: (options: {
       url: string;
@@ -310,7 +323,7 @@ interface IElectronAPI {
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; agentId?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
     continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
@@ -319,7 +332,7 @@ interface IElectronAPI {
     renameSession: (options: { sessionId: string; title: string }) => Promise<{ success: boolean; error?: string }>;
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     remoteManaged: (sessionId: string) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
-    listSessions: () => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
+    listSessions: (agentId?: string) => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
     exportResultImage: (options: {
       rect: { x: number; y: number; width: number; height: number };
       defaultFileName?: string;
@@ -425,17 +438,17 @@ interface IElectronAPI {
     onMessageReceived: (callback: (message: IMMessage) => void) => () => void;
   };
   scheduledTasks: {
-    list: () => Promise<{ success: boolean; tasks?: import('./scheduledTask').ScheduledTask[]; error?: string }>;
-    get: (id: string) => Promise<{ success: boolean; task?: import('./scheduledTask').ScheduledTask; error?: string }>;
-    create: (input: import('./scheduledTask').ScheduledTaskInput) => Promise<{ success: boolean; task?: import('./scheduledTask').ScheduledTask; error?: string }>;
-    update: (id: string, input: Partial<import('./scheduledTask').ScheduledTaskInput>) => Promise<{ success: boolean; task?: import('./scheduledTask').ScheduledTask; error?: string }>;
+    list: () => Promise<{ success: boolean; tasks?: import('../../scheduled-task/types').ScheduledTask[]; error?: string }>;
+    get: (id: string) => Promise<{ success: boolean; task?: import('../../scheduled-task/types').ScheduledTask; error?: string }>;
+    create: (input: import('../../scheduled-task/types').ScheduledTaskInput) => Promise<{ success: boolean; task?: import('../../scheduled-task/types').ScheduledTask; error?: string }>;
+    update: (id: string, input: Partial<import('../../scheduled-task/types').ScheduledTaskInput>) => Promise<{ success: boolean; task?: import('../../scheduled-task/types').ScheduledTask; error?: string }>;
     delete: (id: string) => Promise<{ success: boolean; error?: string }>;
-    toggle: (id: string, enabled: boolean) => Promise<{ success: boolean; task?: import('./scheduledTask').ScheduledTask; warning?: string; error?: string }>;
+    toggle: (id: string, enabled: boolean) => Promise<{ success: boolean; task?: import('../../scheduled-task/types').ScheduledTask; warning?: string; error?: string }>;
     runManually: (id: string) => Promise<{ success: boolean; error?: string }>;
     stop: (id: string) => Promise<{ success: boolean; error?: string }>;
-    listRuns: (taskId: string, limit?: number, offset?: number) => Promise<{ success: boolean; runs?: import('./scheduledTask').ScheduledTaskRun[]; error?: string }>;
+    listRuns: (taskId: string, limit?: number, offset?: number) => Promise<{ success: boolean; runs?: import('../../scheduled-task/types').ScheduledTaskRun[]; error?: string }>;
     countRuns: (taskId: string) => Promise<{ success: boolean; count?: number; error?: string }>;
-    listAllRuns: (limit?: number, offset?: number) => Promise<{ success: boolean; runs?: import('./scheduledTask').ScheduledTaskRunWithName[]; error?: string }>;
+    listAllRuns: (limit?: number, offset?: number) => Promise<{ success: boolean; runs?: import('../../scheduled-task/types').ScheduledTaskRunWithName[]; error?: string }>;
     resolveSession: (sessionKey: string) => Promise<{
       success: boolean;
       session?: import('./cowork').CoworkSession | null;
@@ -443,11 +456,16 @@ interface IElectronAPI {
     }>;
     listChannels: () => Promise<{
       success: boolean;
-      channels?: import('./scheduledTask').ScheduledTaskChannelOption[];
+      channels?: import('../../scheduled-task/types').ScheduledTaskChannelOption[];
       error?: string;
     }>;
-    onStatusUpdate: (callback: (data: import('./scheduledTask').ScheduledTaskStatusEvent) => void) => () => void;
-    onRunUpdate: (callback: (data: import('./scheduledTask').ScheduledTaskRunEvent) => void) => () => void;
+    listChannelConversations?: (channel: string) => Promise<{
+      success: boolean;
+      conversations?: import('../../scheduled-task/types').ScheduledTaskConversationOption[];
+      error?: string;
+    }>;
+    onStatusUpdate: (callback: (data: import('../../scheduled-task/types').ScheduledTaskStatusEvent) => void) => () => void;
+    onRunUpdate: (callback: (data: import('../../scheduled-task/types').ScheduledTaskRunEvent) => void) => () => void;
     onRefresh: (callback: () => void) => () => void;
   };
   permissions: {

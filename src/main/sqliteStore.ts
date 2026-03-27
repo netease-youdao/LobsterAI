@@ -161,6 +161,26 @@ export class SqliteStore {
       ON user_memory_sources(memory_id, is_active);
     `);
 
+    // Create agents table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        system_prompt TEXT NOT NULL DEFAULT '',
+        identity TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        icon TEXT NOT NULL DEFAULT '',
+        skill_ids TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'custom',
+        preset_id TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+
     // Create MCP servers table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -226,6 +246,43 @@ export class SqliteStore {
       this.db.run('UPDATE cowork_sessions SET pinned = 0 WHERE pinned IS NULL;');
     } catch {
       // Column might not exist yet.
+    }
+
+    // Migration: Add agent_id column to cowork_sessions
+    try {
+      const sessionCols = this.db.exec("PRAGMA table_info(cowork_sessions);");
+      const sessionColNames = sessionCols[0]?.values.map((row) => row[1]) || [];
+      if (!sessionColNames.includes('agent_id')) {
+        this.db.run("ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'main';");
+        this.save();
+      }
+    } catch {
+      // Column already exists or migration not needed.
+    }
+
+    // Migration: Ensure default 'main' agent exists
+    try {
+      const mainAgent = this.db.exec("SELECT id FROM agents WHERE id = 'main'");
+      if (!mainAgent[0]?.values?.length) {
+        const now = Date.now();
+        // Read existing systemPrompt from cowork_config to inherit into main agent
+        let existingSystemPrompt = '';
+        try {
+          const spRow = this.db.exec("SELECT value FROM cowork_config WHERE key = 'systemPrompt'");
+          if (spRow[0]?.values?.[0]?.[0]) {
+            existingSystemPrompt = String(spRow[0].values[0][0]);
+          }
+        } catch {
+          // No existing systemPrompt
+        }
+        this.db.run(`
+          INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
+          VALUES ('main', 'main', '', ?, '', '', '', '[]', 1, 1, 'custom', '', ?, ?)
+        `, [existingSystemPrompt, now, now]);
+        this.save();
+      }
+    } catch (error) {
+      console.warn('Failed to ensure main agent:', error);
     }
 
     try {

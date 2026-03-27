@@ -6,6 +6,7 @@ import mcpReducer from './slices/mcpSlice';
 import imReducer from './slices/imSlice';
 import quickActionReducer from './slices/quickActionSlice';
 import scheduledTaskReducer from './slices/scheduledTaskSlice';
+import agentReducer from './slices/agentSlice';
 import authReducer from './slices/authSlice';
 
 export const store = configureStore({
@@ -17,6 +18,7 @@ export const store = configureStore({
     im: imReducer,
     quickAction: quickActionReducer,
     scheduledTask: scheduledTaskReducer,
+    agent: agentReducer,
     auth: authReducer,
   },
 });

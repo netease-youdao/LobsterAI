@@ -1,3 +1,10 @@
+import type {
+  DeliveryMode,
+  SessionTarget,
+  WakeMode,
+  TaskStatus,
+} from './constants';
+
 export interface ScheduleAt {
   kind: 'at';
   at: string;
@@ -32,14 +39,14 @@ export interface SystemEventPayload {
 export type ScheduledTaskPayload = AgentTurnPayload | SystemEventPayload;
 
 export interface ScheduledTaskDelivery {
-  mode: 'none' | 'announce' | 'webhook';
+  mode: DeliveryMode;
   channel?: string;
   to?: string;
   accountId?: string;
   bestEffort?: boolean;
 }
 
-export type TaskLastStatus = 'success' | 'error' | 'skipped' | 'running' | null;
+export type TaskLastStatus = TaskStatus | null;
 
 export interface TaskState {
   nextRunAtMs: number | null;
@@ -57,8 +64,8 @@ export interface ScheduledTask {
   description: string;
   enabled: boolean;
   schedule: Schedule;
-  sessionTarget: 'main' | 'isolated';
-  wakeMode: 'now' | 'next-heartbeat';
+  sessionTarget: SessionTarget;
+  wakeMode: WakeMode;
   payload: ScheduledTaskPayload;
   delivery: ScheduledTaskDelivery;
   agentId: string | null;
@@ -73,7 +80,7 @@ export interface ScheduledTaskRun {
   taskId: string;
   sessionId: string | null;
   sessionKey: string | null;
-  status: 'running' | 'success' | 'error' | 'skipped';
+  status: TaskStatus;
   startedAt: string;
   finishedAt: string | null;
   durationMs: number | null;
@@ -89,8 +96,8 @@ export interface ScheduledTaskInput {
   description: string;
   enabled: boolean;
   schedule: Schedule;
-  sessionTarget: 'main' | 'isolated';
-  wakeMode: 'now' | 'next-heartbeat';
+  sessionTarget: SessionTarget;
+  wakeMode: WakeMode;
   payload: ScheduledTaskPayload;
   delivery?: ScheduledTaskDelivery;
   agentId?: string | null;
@@ -109,6 +116,13 @@ export interface ScheduledTaskRunEvent {
 export interface ScheduledTaskChannelOption {
   value: string;
   label: string;
+}
+
+export interface ScheduledTaskConversationOption {
+  conversationId: string;
+  platform: string;
+  coworkSessionId: string;
+  lastActiveAt: number;
 }
 
 export type ScheduledTaskViewMode = 'list' | 'create' | 'edit' | 'detail';

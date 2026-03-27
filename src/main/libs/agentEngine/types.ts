@@ -34,6 +34,7 @@ export type CoworkStartOptions = {
   workspaceRoot?: string;
   confirmationMode?: 'modal' | 'text';
   imageAttachments?: CoworkImageAttachment[];
+  agentId?: string;
 };
 
 export type CoworkContinueOptions = {

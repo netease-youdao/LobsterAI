@@ -228,6 +228,39 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 - Naming: `PascalCase` for components (e.g., `Chat.tsx`), `camelCase` for functions/vars, and `*Slice.ts` for Redux slices.
 - Tailwind CSS is the primary styling approach; prefer utility classes over bespoke CSS.
 
+## String Literal Constants
+
+**Never use bare string literals** for values that act as discriminants, status codes, IPC channel names, mode selectors, or any string compared/switched against in multiple places. Instead, define a centralized `as const` object and derive the type from it.
+
+### Pattern
+
+```typescript
+// In constants.ts (one per module, e.g. src/scheduled-task/constants.ts)
+export const SessionTarget = {
+  Main: 'main',
+  Isolated: 'isolated',
+} as const;
+export type SessionTarget = typeof SessionTarget[keyof typeof SessionTarget];
+```
+
+### Rules
+
+1. **One source of truth per module.** Each module that owns a set of string constants must have a `constants.ts` file. Consumer modules import both the value object and the type.
+2. **Value construction and comparison must use constants.** Write `SessionTarget.Main`, not `'main'`. This applies to source files, test files, and any other TypeScript that references these values.
+3. **Discriminant `kind` fields in interface definitions remain literal.** The `kind: 'at'` in `interface ScheduleAt` defines the discriminated union shape and must stay as a literal. The constant should match this value; consumers use the constant object for comparisons and construction.
+4. **IPC channel names must be constants.** All `ipcMain.handle()` registrations and `ipcRenderer.invoke()` calls must reference an `IpcChannel` constant, never a bare string.
+5. **Tests use constants too.** Test files must import and use the same constants — this is the primary defense against "modified the constant but forgot to update the test" drift.
+
+### What NOT to constantize
+
+- Platform-specific identifiers passed through from external sources (e.g., `'telegram'`, `'feishu'` as IM platform names from user config).
+- One-off strings used in a single location with no comparison logic (e.g., error messages, log tags).
+- CSS class names, HTML attributes, and other UI-layer strings managed by Tailwind/React.
+
+### Existing reference
+
+`src/scheduled-task/constants.ts` is the canonical example of this pattern, covering schedule kinds, payload kinds, delivery modes, session targets, wake modes, origin kinds, binding kinds, task status, IPC channels, and migration keys.
+
 ## Logging Guidelines
 
 The main process uses `electron-log` via `src/main/logger.ts`, which intercepts all `console.*` calls and writes them to daily-rotated log files. **No additional logging library is needed** — use the standard `console` API everywhere in `src/main/`.

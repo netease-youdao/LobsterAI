@@ -50,6 +50,7 @@ export interface CoworkSession {
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
+  agentId: string;
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
@@ -152,6 +153,7 @@ export interface CoworkSessionSummary {
   title: string;
   status: CoworkSessionStatus;
   pinned: boolean;
+  agentId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -163,6 +165,7 @@ export interface CoworkStartOptions {
   systemPrompt?: string;
   title?: string;
   activeSkillIds?: string[];
+  agentId?: string;
   imageAttachments?: CoworkImageAttachment[];
 }
 

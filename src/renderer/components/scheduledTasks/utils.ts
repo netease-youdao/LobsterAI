@@ -1,3 +1,4 @@
+import cronstrue from 'cronstrue/i18n';
 import { i18nService } from '../../services/i18n';
 import type {
   ScheduledTask,
@@ -6,7 +7,7 @@ import type {
   Schedule,
   ScheduleCron,
   TaskLastStatus,
-} from '../../types/scheduledTask';
+} from '../../../scheduled-task/types';
 
 const WEEKDAY_KEYS = [
   'scheduledTasksFormWeekSun',
@@ -77,6 +78,11 @@ function formatCronExpr(schedule: ScheduleCron): string {
     return tpl(i18nService.t('scheduledTasksCronEveryNHours'), { n: String(hour.step) });
   }
 
+  // --- Every hour at fixed minute: M * * * * (e.g. 25 * * * *) ---
+  if (min.type === 'value' && hour.type === 'any' && dom.type === 'any' && mon.type === 'any' && dow.type === 'any') {
+    return tpl(i18nService.t('scheduledTasksCronEveryHourAtMinute'), { min: pad2(min.value) });
+  }
+
   // From here we need a fixed time (both minute and hour are concrete values)
   if (min.type !== 'value' || hour.type !== 'value') return fallbackCron(schedule);
   const time = `${pad2(hour.value)}:${pad2(min.value)}`;
@@ -138,14 +144,20 @@ function formatCronExpr(schedule: ScheduleCron): string {
 
 function fallbackCron(schedule: ScheduleCron): string {
   const tzLabel = schedule.tz ? ` (${schedule.tz})` : '';
-  return `Cron · ${schedule.expr}${tzLabel}`;
+  try {
+    const locale = i18nService.getLanguage() === 'zh' ? 'zh_CN' : 'en';
+    const desc = cronstrue.toString(schedule.expr, { locale, use24HourTimeFormat: true });
+    return `${desc}${tzLabel}`;
+  } catch {
+    return `Cron · ${schedule.expr}${tzLabel}`;
+  }
 }
 
 export function formatScheduleLabel(schedule: Schedule): string {
   if (schedule.kind === 'at') {
     const date = new Date(schedule.at);
     if (Number.isFinite(date.getTime())) {
-      return `${i18nService.t('scheduledTasksFormScheduleModeAt')} · ${date.toLocaleString()}`;
+      return `${i18nService.t('scheduledTasksFormScheduleModeAt')} · ${formatDateTime(date)}`;
     }
     return i18nService.t('scheduledTasksFormScheduleModeAt');
   }
@@ -162,6 +174,18 @@ export function formatScheduleLabel(schedule: Schedule): string {
   }
 
   return formatCronExpr(schedule);
+}
+
+/**
+ * Locale-aware date-time formatting.
+ * Chinese → 24-hour clock; English → 12-hour clock with AM/PM.
+ */
+export function formatDateTime(date: Date): string {
+  const lang = i18nService.getLanguage();
+  if (lang === 'zh') {
+    return date.toLocaleString('zh-CN', { hour12: false });
+  }
+  return date.toLocaleString('en-US');
 }
 
 export function formatDuration(ms: number | null): string {
@@ -182,8 +206,13 @@ export function formatPayloadLabel(payload: ScheduledTaskPayload): string {
 }
 
 export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
-  if (delivery.mode === 'none') {
+  if (delivery.mode === 'none' && !delivery.channel) {
     return i18nService.t('scheduledTasksFormDeliveryModeNone');
+  }
+
+  if (delivery.mode === 'none' && delivery.channel) {
+    const toLabel = delivery.to ? ` -> ${delivery.to}` : '';
+    return `${delivery.channel}${toLabel}`;
   }
 
   if (delivery.mode === 'webhook') {
@@ -195,6 +224,90 @@ export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
   const channel = delivery.channel || 'last';
   const toLabel = delivery.to ? ` -> ${delivery.to}` : '';
   return `${i18nService.t('scheduledTasksFormDeliveryModeAnnounce')} · ${channel}${toLabel}`;
+}
+
+export type PlanType = 'once' | 'daily' | 'weekly' | 'monthly' | 'advanced';
+
+export interface PlanInfo {
+  planType: PlanType;
+  hour: number;
+  minute: number;
+  second: number;
+  weekday: number;
+  monthDay: number;
+  year: number;
+  month: number;
+  day: number;
+}
+
+const DEFAULT_PLAN_INFO: PlanInfo = {
+  planType: 'daily',
+  hour: 9,
+  minute: 0,
+  second: 0,
+  weekday: 1,
+  monthDay: 1,
+  year: new Date().getFullYear(),
+  month: new Date().getMonth() + 1,
+  day: new Date().getDate(),
+};
+
+export function scheduleToPlanInfo(schedule: Schedule): PlanInfo {
+  if (schedule.kind === 'at') {
+    const date = new Date(schedule.at);
+    if (!Number.isFinite(date.getTime())) return { ...DEFAULT_PLAN_INFO, planType: 'once' };
+    return {
+      planType: 'once',
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      hour: date.getHours(),
+      minute: date.getMinutes(),
+      second: date.getSeconds(),
+      weekday: DEFAULT_PLAN_INFO.weekday,
+      monthDay: DEFAULT_PLAN_INFO.monthDay,
+    };
+  }
+
+  if (schedule.kind === 'every') {
+    return { ...DEFAULT_PLAN_INFO, planType: 'advanced' };
+  }
+
+  const parts = schedule.expr.trim().split(/\s+/);
+  if (parts.length !== 5) return { ...DEFAULT_PLAN_INFO, planType: 'advanced' };
+
+  const [minRaw, hourRaw, domRaw, , dowRaw] = parts;
+  const min = parseField(minRaw);
+  const hour = parseField(hourRaw);
+  const dom = parseField(domRaw);
+  const dow = parseField(dowRaw);
+
+  if (!min || !hour || min.type !== 'value' || hour.type !== 'value') {
+    return { ...DEFAULT_PLAN_INFO, planType: 'advanced' };
+  }
+
+  const base: PlanInfo = {
+    ...DEFAULT_PLAN_INFO,
+    hour: hour.value,
+    minute: min.value,
+  };
+
+  // Daily: M H * * *
+  if (dom && dom.type === 'any' && dow && dow.type === 'any') {
+    return { ...base, planType: 'daily' };
+  }
+
+  // Weekly: M H * * DOW (single value)
+  if (dom && dom.type === 'any' && dow && dow.type === 'value' && dow.value >= 0 && dow.value <= 6) {
+    return { ...base, planType: 'weekly', weekday: dow.value };
+  }
+
+  // Monthly: M H DOM * *
+  if (dom && dom.type === 'value' && dow && dow.type === 'any') {
+    return { ...base, planType: 'monthly', monthDay: dom.value };
+  }
+
+  return { ...DEFAULT_PLAN_INFO, planType: 'advanced' };
 }
 
 export function getTaskPromptText(task: ScheduledTask): string {

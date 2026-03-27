@@ -23,6 +23,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles (created by ChannelSessionSync)
     cronSessionPrefix: '定时',
+    channelPrefixFeishu: '飞书',
+    channelPrefixDingtalk: '钉钉',
+    channelPrefixWecom: '企微',
+    channelPrefixNim: '云信',
+    channelPrefixWeixin: '微信',
+    // NIM chat type labels
+    nimQChat: '圈组',
+    nimGroup: '群聊',
 
     // Timeout hint
     taskTimedOut: '[任务超时] 任务因超过最大允许时长而被自动停止。你可以继续对话以从中断处继续。',
@@ -64,6 +72,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Session titles
     cronSessionPrefix: 'Cron',
+    channelPrefixFeishu: 'Feishu',
+    channelPrefixDingtalk: 'DingTalk',
+    channelPrefixWecom: 'WeCom',
+    channelPrefixNim: 'NIM',
+    channelPrefixWeixin: 'WeChat',
+    // NIM chat type labels
+    nimQChat: 'QChat',
+    nimGroup: 'Group',
 
     // Timeout hint
     taskTimedOut: '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',

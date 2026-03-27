@@ -65,7 +65,14 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
       }`}
     >
       <div className="flex flex-col">
-        <span className="text-sm">{model.name}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm">{model.name}</span>
+          {model.supportsImage && (
+            <span className="text-[10px] leading-none px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent whitespace-nowrap">
+              {i18nService.t('imageInput')}
+            </span>
+          )}
+        </div>
         {model.provider && (
           <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
         )}
@@ -93,7 +100,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
       </button>
 
       {isOpen && (
-        <div className={`absolute ${dropdownPositionClass} w-52 dark:bg-claude-darkSurface bg-claude-surface rounded-xl popover-enter shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden`}>
+        <div className={`absolute ${dropdownPositionClass} w-60 dark:bg-claude-darkSurface bg-claude-surface rounded-xl popover-enter shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden`}>
           <div className="max-h-64 overflow-y-auto">
             {hasBothGroups ? (
               <>

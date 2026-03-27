@@ -15,10 +15,11 @@ import {
 } from '../store/slices/scheduledTaskSlice';
 import type {
   ScheduledTaskChannelOption,
+  ScheduledTaskConversationOption,
   ScheduledTaskInput,
   ScheduledTaskStatusEvent,
   ScheduledTaskRunEvent,
-} from '../types/scheduledTask';
+} from '../../scheduled-task/types';
 
 class ScheduledTaskService {
   private cleanupFns: (() => void)[] = [];
@@ -225,6 +226,18 @@ class ScheduledTaskService {
       return result.success && result.channels ? result.channels : [];
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+      return [];
+    }
+  }
+
+  async listChannelConversations(channel: string): Promise<ScheduledTaskConversationOption[]> {
+    const api = window.electron?.scheduledTasks;
+    if (!api?.listChannelConversations) return [];
+
+    try {
+      const result = await api.listChannelConversations(channel);
+      return result.success && result.conversations ? result.conversations : [];
+    } catch {
       return [];
     }
   }
