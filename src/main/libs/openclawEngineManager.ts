@@ -5,7 +5,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
-import { getElectronNodeRuntimePath, ensureElectronNodeShim } from './coworkUtil';
+import { getElectronNodeRuntimePath, ensureElectronNodeShim, getSkillsRoot } from './coworkUtil';
 import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
@@ -390,9 +390,12 @@ export class OpenClawEngineManager extends EventEmitter {
     console.log(`[OpenClaw] compile cache dir: ${compileCacheDir}`);
     const electronNodeRuntimePath = getElectronNodeRuntimePath();
     const cliShimDir = this.ensureBundledCliShims();
+    const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      SKILLS_ROOT: skillsRoot,
+      LOBSTERAI_SKILLS_ROOT: skillsRoot,
       OPENCLAW_HOME: runtime.root,
       OPENCLAW_STATE_DIR: this.stateDir,
       OPENCLAW_CONFIG_PATH: this.configPath,

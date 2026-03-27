@@ -97,9 +97,12 @@ const modelSlice = createSlice({
       const userModels = state.availableModels.filter(m => !m.isServerModel);
       state.availableModels = [...action.payload, ...userModels];
       availableModels = state.availableModels;
-      // 如果当前选中模型不在列表中，切换到第一个
-      if (!state.availableModels.find(m => isSameModelIdentity(m, state.selectedModel))) {
-        if (state.availableModels.length > 0) {
+      // 同步选中模型信息（如 supportsImage 等属性可能随服务端更新）
+      if (state.availableModels.length > 0) {
+        const matchedModel = state.availableModels.find(m => isSameModelIdentity(m, state.selectedModel));
+        if (matchedModel) {
+          state.selectedModel = matchedModel;
+        } else {
           state.selectedModel = state.availableModels[0];
         }
       }

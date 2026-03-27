@@ -5,9 +5,10 @@ import { RootState } from '../../store';
 import { setViewMode } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
-import type { ScheduledTask } from '../../types/scheduledTask';
+import type { ScheduledTask } from '../../../scheduled-task/types';
 import TaskRunHistory from './TaskRunHistory';
 import {
+  formatDateTime,
   formatDeliveryLabel,
   formatDuration,
   formatScheduleLabel,
@@ -33,9 +34,6 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const statusLabel = i18nService.t(getStatusLabelKey(task.state.lastStatus));
   const statusTone = getStatusTone(task.state.lastStatus);
   const promptText = task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message;
-  const timeoutText = task.payload.kind === 'agentTurn' && typeof task.payload.timeoutSeconds === 'number'
-    ? `${task.payload.timeoutSeconds}s`
-    : i18nService.t('scheduledTasksNotSet');
 
   const sectionClass = 'rounded-lg border dark:border-claude-darkBorder border-claude-border p-4';
   const sectionTitleClass = 'text-sm font-semibold dark:text-claude-darkText text-claude-text mb-3';
@@ -99,44 +97,6 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             <div className={valueClass}>{formatScheduleLabel(task.schedule)}</div>
           </div>
           <div>
-            <div className={labelClass}>{i18nService.t('scheduledTasksFormEnabled')}</div>
-            <div className={valueClass}>
-              {task.enabled ? i18nService.t('enabled') : i18nService.t('disabled')}
-            </div>
-          </div>
-          <div>
-            <div className={labelClass}>{i18nService.t('scheduledTasksFormAgentId')}</div>
-            <div className={valueClass}>{task.agentId || i18nService.t('scheduledTasksNotSet')}</div>
-          </div>
-          <div>
-            <div className={labelClass}>{i18nService.t('scheduledTasksFormSessionTarget')}</div>
-            <div className={valueClass}>
-              {task.sessionTarget === 'main'
-                ? i18nService.t('scheduledTasksFormSessionTargetMain')
-                : i18nService.t('scheduledTasksFormSessionTargetIsolated')}
-            </div>
-          </div>
-          <div>
-            <div className={labelClass}>{i18nService.t('scheduledTasksFormWakeMode')}</div>
-            <div className={valueClass}>
-              {task.wakeMode === 'now'
-                ? i18nService.t('scheduledTasksFormWakeModeNow')
-                : i18nService.t('scheduledTasksFormWakeModeNextHeartbeat')}
-            </div>
-          </div>
-          <div>
-            <div className={labelClass}>{i18nService.t('scheduledTasksFormPayloadKind')}</div>
-            <div className={valueClass}>
-              {task.payload.kind === 'systemEvent'
-                ? i18nService.t('scheduledTasksFormPayloadKindSystemEvent')
-                : i18nService.t('scheduledTasksFormPayloadKindAgentTurn')}
-            </div>
-          </div>
-          <div>
-            <div className={labelClass}>{i18nService.t('scheduledTasksFormTimeoutSeconds')}</div>
-            <div className={valueClass}>{timeoutText}</div>
-          </div>
-          <div>
             <div className={labelClass}>{i18nService.t('scheduledTasksDetailNotify')}</div>
             <div className={valueClass}>{formatDeliveryLabel(task.delivery)}</div>
           </div>
@@ -158,7 +118,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
               {statusLabel}
               {task.state.lastRunAtMs && (
                 <span className="ml-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  ({new Date(task.state.lastRunAtMs).toLocaleString()})
+                  ({formatDateTime(new Date(task.state.lastRunAtMs))})
                 </span>
               )}
             </div>
@@ -167,7 +127,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             <div className={labelClass}>{i18nService.t('scheduledTasksNextRun')}</div>
             <div className={valueClass}>
               {task.state.nextRunAtMs
-                ? new Date(task.state.nextRunAtMs).toLocaleString()
+                ? formatDateTime(new Date(task.state.nextRunAtMs))
                 : '-'}
             </div>
           </div>

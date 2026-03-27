@@ -9,9 +9,8 @@ import fs from 'fs';
 import path from 'path';
 import type { Database } from 'sql.js';
 import type { CronJobService } from './cronJobService';
-import type { Schedule, ScheduledTaskDelivery, ScheduledTaskInput } from '../../renderer/types/scheduledTask';
-
-const MIGRATION_KEY = 'scheduled_tasks_migrated_to_openclaw_v1';
+import { MigrationKey, ScheduleKind, PayloadKind, DeliveryMode, SessionTarget, WakeMode, GatewayStatus, DefaultAgentId } from './constants';
+import type { Schedule, ScheduledTaskDelivery, ScheduledTaskInput } from './types';
 
 // ---------------------------------------------------------------------------
 // Legacy types (main branch schema — never changed, only removed)
@@ -66,16 +65,16 @@ function convertSchedule(legacy: LegacySchedule): Schedule | null {
     // Skip one-time tasks whose scheduled time is already in the past —
     // the gateway rejects them and they would never fire anyway.
     if (new Date(withTz).getTime() <= Date.now()) return null;
-    return { kind: 'at', at: withTz };
+    return { kind: ScheduleKind.At, at: withTz };
   }
   if (legacy.type === 'interval') {
     const ms = legacy.intervalMs;
     if (!ms || ms <= 0) return null;
-    return { kind: 'every', everyMs: ms };
+    return { kind: ScheduleKind.Every, everyMs: ms };
   }
   if (legacy.type === 'cron') {
     if (!legacy.expression) return null;
-    return { kind: 'cron', expr: legacy.expression };
+    return { kind: ScheduleKind.Cron, expr: legacy.expression };
   }
   return null;
 }
@@ -88,10 +87,10 @@ function convertDelivery(platformsJson: string): ScheduledTaskDelivery {
     // ignore
   }
   if (!Array.isArray(platforms) || platforms.length === 0) {
-    return { mode: 'none' };
+    return { mode: DeliveryMode.None };
   }
   // New format supports one delivery target — use the first platform as channel.
-  return { mode: 'announce', channel: platforms[0] };
+  return { mode: DeliveryMode.Announce, channel: platforms[0] };
 }
 
 function rowToInput(row: LegacyTaskRow): ScheduledTaskInput | null {
@@ -116,11 +115,11 @@ function rowToInput(row: LegacyTaskRow): ScheduledTaskInput | null {
     schedule,
     // 旧任务都带有 prompt，使用 isolated session + agentTurn。
     // main session 仅支持 systemEvent payload，不适用于迁移场景。
-    sessionTarget: 'isolated',
-    wakeMode: 'next-heartbeat',
-    payload: { kind: 'agentTurn', message: row.prompt },
+    sessionTarget: SessionTarget.Isolated,
+    wakeMode: WakeMode.NextHeartbeat,
+    payload: { kind: PayloadKind.AgentTurn, message: row.prompt },
     delivery: convertDelivery(row.notify_platforms_json ?? '[]'),
-    agentId: 'main',
+    agentId: DefaultAgentId,
   };
 }
 
@@ -143,7 +142,7 @@ export async function migrateScheduledTasksToOpenclaw(deps: MigrationDeps): Prom
   const { db, getKv, setKv, cronJobService } = deps;
 
   // 1. Idempotency guard
-  if (getKv(MIGRATION_KEY) === 'true') return;
+  if (getKv(MigrationKey.TasksToOpenclaw) === 'true') return;
 
   // 2. Check if the legacy table exists (new installs won't have it)
   try {
@@ -152,7 +151,7 @@ export async function migrateScheduledTasksToOpenclaw(deps: MigrationDeps): Prom
     );
     if (!tableCheck[0]?.values?.length) {
       // Fresh install — nothing to migrate
-      setKv(MIGRATION_KEY, 'true');
+      setKv(MigrationKey.TasksToOpenclaw, 'true');
       return;
     }
   } catch (err) {
@@ -167,7 +166,7 @@ export async function migrateScheduledTasksToOpenclaw(deps: MigrationDeps): Prom
       'SELECT id, name, description, enabled, schedule_json, prompt, notify_platforms_json FROM scheduled_tasks',
     );
     if (!result[0]?.values?.length) {
-      setKv(MIGRATION_KEY, 'true');
+      setKv(MigrationKey.TasksToOpenclaw, 'true');
       return;
     }
     const cols = result[0].columns;
@@ -207,7 +206,7 @@ export async function migrateScheduledTasksToOpenclaw(deps: MigrationDeps): Prom
   // Skipped tasks (invalid schedule etc.) are unrecoverable and don't block completion.
   // Gateway errors may be transient, so we leave the flag unset to allow a retry on next launch.
   if (gatewayErrors === 0) {
-    setKv(MIGRATION_KEY, 'true');
+    setKv(MigrationKey.TasksToOpenclaw, 'true');
   }
 }
 
@@ -215,7 +214,7 @@ export async function migrateScheduledTasksToOpenclaw(deps: MigrationDeps): Prom
 // Run history migration: SQLite scheduled_task_runs → OpenClaw JSONL files
 // ---------------------------------------------------------------------------
 
-const RUN_HISTORY_MIGRATION_KEY = 'scheduled_task_runs_migrated_to_openclaw_v1';
+const RUN_HISTORY_MIGRATION_KEY = MigrationKey.RunsToOpenclaw;
 
 interface LegacyRunRow {
   id: string;
@@ -228,11 +227,10 @@ interface LegacyRunRow {
   error: string | null;
 }
 
-/** Convert legacy run status to OpenClaw gateway status. */
-function toGatewayStatus(status: string): 'ok' | 'error' | 'skipped' {
-  if (status === 'success') return 'ok';
-  if (status === 'error') return 'error';
-  return 'skipped';
+function toGatewayStatus(status: string): GatewayStatus {
+  if (status === 'success') return GatewayStatus.Ok;
+  if (status === 'error') return GatewayStatus.Error;
+  return GatewayStatus.Skipped;
 }
 
 interface RunHistoryMigrationDeps {

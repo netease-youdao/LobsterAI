@@ -298,6 +298,49 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type CoworkAgentEngine = 'openclaw' | 'yd_cowork';
 
+export type AgentSource = 'custom' | 'preset';
+
+export interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  identity: string;
+  model: string;
+  icon: string;
+  skillIds: string[];
+  enabled: boolean;
+  isDefault: boolean;
+  source: AgentSource;
+  presetId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CreateAgentRequest {
+  id?: string;
+  name: string;
+  description?: string;
+  systemPrompt?: string;
+  identity?: string;
+  model?: string;
+  icon?: string;
+  skillIds?: string[];
+  source?: AgentSource;
+  presetId?: string;
+}
+
+export interface UpdateAgentRequest {
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  identity?: string;
+  model?: string;
+  icon?: string;
+  skillIds?: string[];
+  enabled?: boolean;
+}
+
 const COWORK_AGENT_ENGINE = 'openclaw';
 
 function normalizeCoworkAgentEngineValue(value?: string | null): CoworkAgentEngine {
@@ -338,6 +381,7 @@ export interface CoworkSession {
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
+  agentId: string;
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
@@ -349,6 +393,7 @@ export interface CoworkSessionSummary {
   status: CoworkSessionStatus;
   pinned: boolean;
   folder: string;
+  agentId: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -520,15 +565,16 @@ export class CoworkStore {
     cwd: string,
     systemPrompt: string = '',
     executionMode: CoworkExecutionMode = 'local',
-    activeSkillIds: string[] = []
+    activeSkillIds: string[] = [],
+    agentId: string = 'main'
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
 
     this.db.run(`
-      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, pinned, created_at, updated_at)
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, 0, ?, ?)
-    `, [id, title, cwd, systemPrompt, executionMode, JSON.stringify(activeSkillIds), now, now]);
+      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, 0, ?, ?)
+    `, [id, title, cwd, systemPrompt, executionMode, JSON.stringify(activeSkillIds), agentId, now, now]);
 
     this.saveDb();
 
@@ -542,6 +588,7 @@ export class CoworkStore {
       systemPrompt,
       executionMode,
       activeSkillIds,
+      agentId,
       messages: [],
       createdAt: now,
       updatedAt: now,
@@ -559,12 +606,13 @@ export class CoworkStore {
       system_prompt: string;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
+      agent_id?: string | null;
       created_at: number;
       updated_at: number;
     }
 
     const row = this.getOne<SessionRow>(`
-      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, created_at, updated_at
+      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `, [id]);
@@ -592,6 +640,7 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       activeSkillIds,
+      agentId: row.agent_id || 'main',
       messages,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -664,22 +713,33 @@ export class CoworkStore {
     this.saveDb();
   }
 
-  listSessions(): CoworkSessionSummary[] {
+  listSessions(agentId?: string): CoworkSessionSummary[] {
     interface SessionSummaryRow {
       id: string;
       title: string;
       status: string;
       pinned: number | null;
       folder: string | null;
+      agent_id: string | null;
       created_at: number;
       updated_at: number;
     }
 
-    const rows = this.getAll<SessionSummaryRow>(`
-      SELECT id, title, status, pinned, folder, created_at, updated_at
-      FROM cowork_sessions
-      ORDER BY pinned DESC, updated_at DESC
-    `);
+    let rows: SessionSummaryRow[];
+    if (agentId) {
+      rows = this.getAll<SessionSummaryRow>(`
+        SELECT id, title, status, pinned, folder, agent_id, created_at, updated_at
+        FROM cowork_sessions
+        WHERE agent_id = ?
+        ORDER BY pinned DESC, updated_at DESC
+      `, [agentId]);
+    } else {
+      rows = this.getAll<SessionSummaryRow>(`
+        SELECT id, title, status, pinned, folder, agent_id, created_at, updated_at
+        FROM cowork_sessions
+        ORDER BY pinned DESC, updated_at DESC
+      `);
+    }
 
     return rows.map(row => ({
       id: row.id,
@@ -687,6 +747,7 @@ export class CoworkStore {
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
       folder: row.folder || '',
+      agentId: row.agent_id || 'main',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -1636,5 +1697,183 @@ export class CoworkStore {
       human: this.getLatestMessageByType(row.id, 'user'),
       assistant: this.getLatestMessageByType(row.id, 'assistant'),
     }));
+  }
+
+  // ========== Agent CRUD ==========
+
+  listAgents(): Agent[] {
+    interface AgentRow {
+      id: string;
+      name: string;
+      description: string;
+      system_prompt: string;
+      identity: string;
+      model: string;
+      icon: string;
+      skill_ids: string;
+      enabled: number;
+      is_default: number;
+      source: string;
+      preset_id: string;
+      created_at: number;
+      updated_at: number;
+    }
+
+    const rows = this.getAll<AgentRow>(`
+      SELECT * FROM agents ORDER BY is_default DESC, created_at ASC
+    `);
+
+    return rows.map(row => this.mapAgentRow(row));
+  }
+
+  getAgent(id: string): Agent | null {
+    interface AgentRow {
+      id: string;
+      name: string;
+      description: string;
+      system_prompt: string;
+      identity: string;
+      model: string;
+      icon: string;
+      skill_ids: string;
+      enabled: number;
+      is_default: number;
+      source: string;
+      preset_id: string;
+      created_at: number;
+      updated_at: number;
+    }
+
+    const row = this.getOne<AgentRow>(`SELECT * FROM agents WHERE id = ?`, [id]);
+    if (!row) return null;
+    return this.mapAgentRow(row);
+  }
+
+  createAgent(request: CreateAgentRequest): Agent {
+    const id = request.id || request.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || uuidv4();
+    const now = Date.now();
+
+    // Ensure no duplicate ID
+    const existing = this.getAgent(id);
+    if (existing) {
+      // Append timestamp to make unique
+      return this.createAgent({ ...request, id: `${id}-${Date.now()}` });
+    }
+
+    this.db.run(`
+      INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
+    `, [
+      id,
+      request.name,
+      request.description || '',
+      request.systemPrompt || '',
+      request.identity || '',
+      request.model || '',
+      request.icon || '',
+      JSON.stringify(request.skillIds || []),
+      request.source || 'custom',
+      request.presetId || '',
+      now,
+      now,
+    ]);
+
+    this.saveDb();
+    return this.getAgent(id)!;
+  }
+
+  updateAgent(id: string, updates: UpdateAgentRequest): Agent | null {
+    const existing = this.getAgent(id);
+    if (!existing) return null;
+
+    const now = Date.now();
+    const setClauses: string[] = ['updated_at = ?'];
+    const values: (string | number | null)[] = [now];
+
+    if (updates.name !== undefined) {
+      setClauses.push('name = ?');
+      values.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      setClauses.push('description = ?');
+      values.push(updates.description);
+    }
+    if (updates.systemPrompt !== undefined) {
+      setClauses.push('system_prompt = ?');
+      values.push(updates.systemPrompt);
+    }
+    if (updates.identity !== undefined) {
+      setClauses.push('identity = ?');
+      values.push(updates.identity);
+    }
+    if (updates.model !== undefined) {
+      setClauses.push('model = ?');
+      values.push(updates.model);
+    }
+    if (updates.icon !== undefined) {
+      setClauses.push('icon = ?');
+      values.push(updates.icon);
+    }
+    if (updates.skillIds !== undefined) {
+      setClauses.push('skill_ids = ?');
+      values.push(JSON.stringify(updates.skillIds));
+    }
+    if (updates.enabled !== undefined) {
+      setClauses.push('enabled = ?');
+      values.push(updates.enabled ? 1 : 0);
+    }
+
+    values.push(id);
+    this.db.run(`UPDATE agents SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.saveDb();
+
+    return this.getAgent(id);
+  }
+
+  deleteAgent(id: string): boolean {
+    if (id === 'main') return false; // Cannot delete default agent
+    this.db.run('DELETE FROM agents WHERE id = ? AND is_default = 0', [id]);
+    this.saveDb();
+    return true;
+  }
+
+  private mapAgentRow(row: {
+    id: string;
+    name: string;
+    description: string;
+    system_prompt: string;
+    identity: string;
+    model: string;
+    icon: string;
+    skill_ids: string;
+    enabled: number;
+    is_default: number;
+    source: string;
+    preset_id: string;
+    created_at: number;
+    updated_at: number;
+  }): Agent {
+    let skillIds: string[] = [];
+    try {
+      skillIds = JSON.parse(row.skill_ids);
+    } catch {
+      skillIds = [];
+    }
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      systemPrompt: row.system_prompt,
+      identity: row.identity,
+      model: row.model,
+      icon: row.icon,
+      skillIds,
+      enabled: Boolean(row.enabled),
+      isDefault: Boolean(row.is_default),
+      source: row.source as AgentSource,
+      presetId: row.preset_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 }

@@ -18,13 +18,14 @@ import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
-import { getScheduledReminderDisplayText } from '../../../common/scheduledReminderText';
+import { getScheduledReminderDisplayText } from '../../../scheduled-task/reminderText';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
@@ -1295,6 +1296,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
+  // Clear lazy-render height cache when session changes
+  const sessionId = currentSession?.id;
+  useEffect(() => {
+    clearHeightCache();
+  }, [sessionId]);
+
   // Turn navigation states
   // currentTurnIndex (state) drives UI rendering; currentTurnIndexRef (ref) provides
   // up-to-date value inside callbacks (avoids stale closure). Both must be updated together.
@@ -1900,9 +1907,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const isLastTurn = index === turns.length - 1;
       const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
       const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+      // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX)
+      const alwaysRender = index >= turns.length - 3;
 
       return (
-        <div key={turn.id} data-turn-index={index}>
+        <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
           {turn.userMessage && (
             <div data-export-role="user-message">
               <UserMessageItem message={turn.userMessage} skills={skills} />
@@ -1919,7 +1928,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               />
             </div>
           )}
-        </div>
+        </LazyRenderTurn>
       );
     });
   };

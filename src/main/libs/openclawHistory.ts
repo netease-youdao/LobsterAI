@@ -1,7 +1,7 @@
 import {
   parseScheduledReminderPrompt,
   parseSimpleScheduledReminderText,
-} from '../../common/scheduledReminderText';
+} from '../../scheduled-task/reminderText';
 
 type GatewayHistoryRole = 'user' | 'assistant' | 'system';
 

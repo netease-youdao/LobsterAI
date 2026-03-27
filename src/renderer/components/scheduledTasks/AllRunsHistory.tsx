@@ -3,10 +3,10 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
-import type { ScheduledTaskRunWithName } from '../../types/scheduledTask';
+import type { ScheduledTaskRunWithName } from '../../../scheduled-task/types';
 import { ClockIcon } from '@heroicons/react/24/outline';
 import RunSessionModal from './RunSessionModal';
-import { formatDuration } from './utils';
+import { formatDateTime, formatDuration } from './utils';
 
 const statusConfig: Record<string, { label: string; color: string }> = {
   success: { label: 'scheduledTasksStatusSuccess', color: 'text-green-500' },
@@ -86,7 +86,7 @@ const AllRunsHistory: React.FC = () => {
 
             {/* Run time + duration */}
             <div className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">
-              {new Date(run.startedAt).toLocaleString()}
+              {formatDateTime(new Date(run.startedAt))}
               {run.durationMs !== null && (
                 <span className="ml-1.5 text-xs opacity-70">({formatDuration(run.durationMs)})</span>
               )}

@@ -19,7 +19,8 @@ import {
   type IMScheduledTaskRequestDetector,
   type ParsedIMScheduledTaskRequest,
 } from './imScheduledTaskHandler';
-import { buildScheduledTaskEnginePrompt } from '../libs/scheduledTaskEnginePrompt';
+import { buildScheduledTaskEnginePrompt } from '../../scheduled-task/enginePrompt';
+import { t } from '../i18n';
 
 interface MessageAccumulator {
   messages: CoworkMessage[];
@@ -322,11 +323,17 @@ export class IMCoworkHandler extends EventEmitter {
       throw new Error(`IM 工作目录不存在或无效: ${resolvedWorkspaceRoot}`);
     }
 
+    // Resolve the agent bound to this platform
+    const imSettings = this.imStore.getIMSettings();
+    const agentId = imSettings.platformAgentBindings?.[platform] || 'main';
+
     const session = this.coworkStore.createSession(
       title,
       resolvedWorkspaceRoot,
       systemPrompt,
-      config.executionMode || 'auto'
+      config.executionMode || 'auto',
+      [],
+      agentId
     );
 
     // Save mapping
@@ -353,17 +360,17 @@ export class IMCoworkHandler extends EventEmitter {
     message?: IMMessage
   ): string {
     if (platform === 'nim') {
+      const nimLabel = t('channelPrefixNim');
       if (message?.chatSubType === 'qchat') {
         const channelLabel = message.groupName || _imConversationId;
-        return `云信-圈组-${channelLabel}`;
+        return `${nimLabel}-${t('nimQChat')}-${channelLabel}`;
       }
       if (message?.chatType === 'group') {
         const groupLabel = message.groupName || senderId || _imConversationId;
-        return `云信-群聊-${groupLabel}`;
+        return `${nimLabel}-${t('nimGroup')}-${groupLabel}`;
       }
-      // P2P direct message
       const peerLabel = message?.senderName || senderId || _imConversationId;
-      return `云信-P2P-${peerLabel}`;
+      return `${nimLabel}-P2P-${peerLabel}`;
     }
     return `IM-${platform}-${Date.now()}`;
   }
@@ -535,9 +542,12 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handleMessage(sessionId: string, message: CoworkMessage): void {
     // Only process messages from IM sessions
-    if (!this.ensureTrackedSession(sessionId)) return;
+    const tracked = this.ensureTrackedSession(sessionId);
+    console.log('[IMCoworkHandler:handleMessage] sessionId:', sessionId, 'tracked:', tracked, 'messageType:', message.type);
+    if (!tracked) return;
 
     const accumulator = this.messageAccumulators.get(sessionId) ?? this.ensureBackgroundAccumulator(sessionId);
+    console.log('[IMCoworkHandler:handleMessage] accumulator exists:', !!accumulator, 'backgroundDelivery:', !!(accumulator as any)?.backgroundDelivery);
     if (accumulator) {
       accumulator.messages.push(message);
     }
@@ -813,7 +823,9 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handleComplete(sessionId: string): void {
     // Only process complete events from IM sessions
-    if (!this.ensureTrackedSession(sessionId)) return;
+    const tracked = this.ensureTrackedSession(sessionId);
+    console.log('[IMCoworkHandler:handleComplete] sessionId:', sessionId, 'tracked:', tracked, 'hasAccumulator:', this.messageAccumulators.has(sessionId));
+    if (!tracked) return;
 
     this.clearPendingPermissionsBySessionId(sessionId);
     const accumulator = this.messageAccumulators.get(sessionId);

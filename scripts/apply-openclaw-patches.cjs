@@ -80,7 +80,7 @@ for (const patchFile of patchFiles) {
 
   let reverseOk = false;
   try {
-    execFileSync('git', ['apply', '--check', '--reverse', patchPath], {
+    execFileSync('git', ['apply', '--check', '--reverse', '--ignore-whitespace', patchPath], {
       cwd: openclawSrc,
       stdio: 'pipe',
     });
@@ -98,7 +98,7 @@ for (const patchFile of patchFiles) {
   // Try forward apply check.
   let forwardErr = null;
   try {
-    execFileSync('git', ['apply', '--check', patchPath], {
+    execFileSync('git', ['apply', '--check', '--ignore-whitespace', patchPath], {
       cwd: openclawSrc,
       stdio: 'pipe',
     });
@@ -130,7 +130,7 @@ for (const patchFile of patchFiles) {
 
   // Apply the patch.
   try {
-    execFileSync('git', ['apply', patchPath], {
+    execFileSync('git', ['apply', '--ignore-whitespace', patchPath], {
       cwd: openclawSrc,
       stdio: 'pipe',
     });

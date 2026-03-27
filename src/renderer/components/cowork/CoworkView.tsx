@@ -53,6 +53,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const skills = useSelector((state: RootState) => state.skill.skills);
   const quickActions = useSelector((state: RootState) => state.quickAction.actions);
   const selectedActionId = useSelector((state: RootState) => state.quickAction.selectedActionId);
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
 
   const buildApiConfigNotice = (error?: string) => {
     const baseNotice = i18nService.t('coworkModelSettingsRequired');
@@ -204,6 +205,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         systemPrompt: '',
         executionMode: config.executionMode || 'local',
         activeSkillIds: sessionSkillIds,
+        agentId: currentAgentId,
         messages: [
           {
             id: `msg-${now}`,
@@ -229,10 +231,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       dispatch(clearActiveSkills());
       dispatch(clearSelection());
 
-      // Combine skill prompt with system prompt
-      // If no manual skill selected, use auto-routing prompt
+      // Combine skill prompt with system prompt.
+      // OpenClaw loads skills natively via skills.load.extraDirs, so skip the
+      // auto-routing prompt to avoid injecting Claude SDK tool-calling instructions
+      // that confuse non-Claude models (e.g. kimi-k2.5 falls back to text-based
+      // tool calls, producing empty tool names and err=true failures).
       let effectiveSkillPrompt = skillPrompt;
-      if (!skillPrompt) {
+      if (!skillPrompt && !isOpenClawEngine) {
         effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
       }
       const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
@@ -246,6 +251,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         cwd: config.workingDirectory || undefined,
         systemPrompt: combinedSystemPrompt,
         activeSkillIds: sessionSkillIds,
+        agentId: currentAgentId,
         imageAttachments,
       });
 
@@ -310,10 +316,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       dispatch(clearActiveSkills());
     }
 
-    // Combine skill prompt with system prompt for continuation
-    // If no manual skill selected, use auto-routing prompt
+    // Combine skill prompt with system prompt for continuation.
+    // Skip auto-routing prompt for OpenClaw — skills are loaded natively.
     let effectiveSkillPrompt = skillPrompt;
-    if (!skillPrompt) {
+    if (!skillPrompt && !isOpenClawEngine) {
       effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
     }
     const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
