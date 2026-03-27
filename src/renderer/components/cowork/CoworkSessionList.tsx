@@ -4,6 +4,7 @@ import { RootState } from '../../store';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionItem from './CoworkSessionItem';
 import { i18nService } from '../../services/i18n';
+import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 
 interface CoworkSessionListProps {
   sessions: CoworkSessionSummary[];
@@ -54,9 +55,13 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
 
   if (sessions.length === 0) {
     return (
-      <div className="text-center py-8">
-        <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+      <div className="flex flex-col items-center justify-center py-10 px-4">
+        <ChatBubbleLeftRightIcon className="h-10 w-10 dark:text-claude-darkTextSecondary/40 text-claude-textSecondary/40 mb-3" />
+        <p className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
           {i18nService.t('coworkNoSessions')}
+        </p>
+        <p className="text-xs dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 text-center">
+          {i18nService.t('coworkNoSessionsHint')}
         </p>
       </div>
     );

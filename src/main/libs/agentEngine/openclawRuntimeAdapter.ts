@@ -520,6 +520,16 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly gatewayHistoryCountBySession = new Map<string, number>();
   private readonly latestTurnTokenBySession = new Map<string, number>();
 
+  /**
+   * Sessions that were manually stopped by the user via stopSession().
+   * Maps sessionId → timestamp of when stop was requested.
+   * Used to suppress automatic ActiveTurn re-creation from late-arriving
+   * OpenClaw Gateway events (e.g. POPO/Telegram channel events that arrive
+   * after the user clicked Stop).  Entries expire after STOP_COOLDOWN_MS.
+   */
+  private readonly stoppedSessions = new Map<string, number>();
+  private static readonly STOP_COOLDOWN_MS = 10_000; // 10 seconds
+
   private gatewayClient: GatewayClientLike | null = null;
   private gatewayClientVersion: string | null = null;
   private gatewayClientEntryPath: string | null = null;
@@ -984,6 +994,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
     }
 
+    // Record the stop timestamp so that late-arriving gateway events
+    // (e.g. from POPO/Telegram channels) don't re-create the ActiveTurn.
+    this.stoppedSessions.set(sessionId, Date.now());
+
     this.cleanupSessionTurn(sessionId);
     this.clearPendingApprovalsBySession(sessionId);
     this.store.updateSession(sessionId, { status: 'idle' });
@@ -1048,6 +1062,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!prompt.trim()) {
       throw new Error('Prompt is required.');
     }
+    // Clear stop cooldown when user explicitly starts/continues a session
+    this.stoppedSessions.delete(sessionId);
+    this.manuallyStoppedSessions.delete(sessionId);
     if (this.activeTurns.has(sessionId)) {
       throw new Error(`Session ${sessionId} is still running.`);
     }
@@ -1097,7 +1114,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const completionPromise = new Promise<void>((resolve, reject) => {
       this.pendingTurns.set(sessionId, { resolve, reject });
     });
-    this.manuallyStoppedSessions.delete(sessionId);
     this.activeTurns.set(sessionId, {
       sessionId,
       sessionKey,
@@ -1440,6 +1456,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.channelSessionSync?.clearCache();
     this.knownChannelSessionIds.clear();
     this.heartbeatSessionKeys.clear();
+    this.stoppedSessions.clear();
     this.browserPrewarmAttempted = false;
     this.lastTickTimestamp = 0;
     // Clear messageUpdate throttle state
@@ -2625,6 +2642,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
 
+    // Suppress approval popups for sessions in stop cooldown — the user
+    // already stopped the session, so showing a new permission dialog
+    // would be confusing.  The Gateway-side run will time out on its own.
+    if (this.isSessionInStopCooldown(sessionId)) {
+      return;
+    }
+
     this.pendingApprovals.set(requestId, { requestId, sessionId });
 
     const permissionRequest: PermissionRequest = {
@@ -3475,6 +3499,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.reCreatedChannelSessionIds.delete(sessionId);
     this.gatewayHistoryCountBySession.delete(sessionId);
     this.latestTurnTokenBySession.delete(sessionId);
+    this.stoppedSessions.delete(sessionId);
 
     // Clean up active turn and related run-id mappings
     this.cleanupSessionTurn(sessionId);
@@ -3495,10 +3520,25 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Ensure an ActiveTurn exists for a session. Used for channel-originated sessions
    * where new turns arrive after the previous turn was cleaned up.
    */
+  private isSessionInStopCooldown(sessionId: string): boolean {
+    const stoppedAt = this.stoppedSessions.get(sessionId);
+    if (stoppedAt === undefined) return false;
+    if (Date.now() - stoppedAt < OpenClawRuntimeAdapter.STOP_COOLDOWN_MS) {
+      return true;
+    }
+    // Cooldown expired, remove the entry
+    this.stoppedSessions.delete(sessionId);
+    return false;
+  }
+
   private ensureActiveTurn(sessionId: string, sessionKey: string, runId: string): void {
     if (this.activeTurns.has(sessionId)) return;
-    if (this.manuallyStoppedSessions.has(sessionId)) {
-      console.warn('[OpenClawRuntime] ensureActiveTurn called after manual stop — sessionId:', sessionId, 'runId:', runId, 'sessionKey:', sessionKey);
+    // Suppress automatic turn re-creation for sessions that were recently
+    // stopped by the user.  This prevents late-arriving OpenClaw events
+    // (e.g. from POPO/Telegram) from restarting a stopped session.
+    if (this.isSessionInStopCooldown(sessionId) || this.manuallyStoppedSessions.has(sessionId)) {
+      console.log('[Debug:ensureActiveTurn] suppressed — session was manually stopped, sessionId:', sessionId);
+      return;
     }
     const turnRunId = runId || randomUUID();
     const turnToken = this.nextTurnToken(sessionId);
