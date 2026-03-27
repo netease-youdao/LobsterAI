@@ -355,6 +355,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       systemPrompt: '',
       executionMode: config.executionMode || 'local',
       activeSkillIds: [],
+      agentId: '',
       messages: [],
       createdAt: now,
       updatedAt: now,
@@ -400,6 +401,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         systemPrompt: '',
         executionMode: config.executionMode || 'local',
         activeSkillIds: sessionSkillIds,
+        agentId: '',
         messages: [
           {
             id: `msg-${now}`,
