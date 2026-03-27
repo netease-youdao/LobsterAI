@@ -9,7 +9,7 @@ import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangl
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { RootState } from '../../store';
 import { imService } from '../../services/im';
-import { setDingTalkConfig, setFeishuConfig, setTelegramOpenClawConfig, setQQConfig, setDiscordConfig, setNimConfig, setXiaomifengConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
+import { setDingTalkConfig, setFeishuConfig, setTelegramOpenClawConfig, setQQConfig, setDiscordConfig, setNimConfig, setNeteaseBeeChanConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
 import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, FeishuOpenClawConfig, DingTalkOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
@@ -27,7 +27,7 @@ const platformLogos: Record<IMPlatform, string> = {
   telegram: 'telegram.svg',
   discord: 'discord.svg',
   nim: 'nim.png',
-  xiaomifeng: 'xiaomifeng.png',
+  'netease-bee': 'netease-bee.png',
   weixin: 'weixin.png',
   wecom: 'wecom.png',
   popo: 'popo.png',
@@ -411,9 +411,9 @@ const IMSettings: React.FC = () => {
   const [popoGroupAllowIdInput, setPopoGroupAllowIdInput] = useState('');
 
 
-  // Handle Xiaomifeng config change
-  const handleXiaomifengChange = (field: 'clientId' | 'secret', value: string) => {
-    dispatch(setXiaomifengConfig({ [field]: value }));
+  // Handle NetEase Bee config change
+  const handleNeteaseBeeChanChange = (field: 'clientId' | 'secret', value: string) => {
+    dispatch(setNeteaseBeeChanConfig({ [field]: value }));
   };
 
   // Handle WeCom OpenClaw config change
@@ -773,7 +773,7 @@ const IMSettings: React.FC = () => {
   const telegramConnected = status.telegram.connected;
   const discordConnected = status.discord.connected;
   const nimConnected = status.nim.connected;
-  const xiaomifengConnected = status.xiaomifeng?.connected ?? false;
+  const neteaseBeeChanConnected = status['netease-bee']?.connected ?? false;
   const qqConnected = status.qq?.connected ?? false;
   const wecomConnected = status.wecom?.connected ?? false;
   const weixinConnected = status.weixin?.connected ?? false;
@@ -806,8 +806,8 @@ const IMSettings: React.FC = () => {
     if (platform === 'nim') {
       return !!(config.nim.appKey && config.nim.account && config.nim.token);
     }
-    if (platform === 'xiaomifeng') {
-      return !!(config.xiaomifeng.clientId && config.xiaomifeng.secret);
+    if (platform === 'netease-bee') {
+      return !!(config['netease-bee'].clientId && config['netease-bee'].secret);
     }
     if (platform === 'qq') {
       return !!(config.qq.appId && config.qq.appSecret);
@@ -839,7 +839,7 @@ const IMSettings: React.FC = () => {
     if (platform === 'telegram') return telegramConnected;
     if (platform === 'discord') return discordConnected;
     if (platform === 'nim') return nimConnected;
-    if (platform === 'xiaomifeng') return xiaomifengConnected;
+    if (platform === 'netease-bee') return neteaseBeeChanConnected;
     if (platform === 'qq') return qqConnected;
     if (platform === 'wecom') return wecomConnected;
     if (platform === 'weixin') return weixinConnected;
@@ -946,7 +946,7 @@ const IMSettings: React.FC = () => {
     // The backend's testNimConnectivity already manages the SDK lifecycle
     // (stop main → probe with temp instance → restart main) under a mutex,
     // so doing stop/start here would cause a race condition and potential crash.
-    if (isEnabled && platform === 'xiaomifeng') {
+    if (isEnabled && platform === 'netease-bee') {
       await imService.stopGateway(platform);
       await imService.startGateway(platform);
     }
@@ -993,7 +993,7 @@ const IMSettings: React.FC = () => {
       qq: setQQConfig,
       discord: setDiscordConfig,
       nim: setNimConfig,
-      xiaomifeng: setXiaomifengConfig,
+      'netease-bee': setNeteaseBeeChanConfig,
       wecom: setWecomConfig,
       weixin: setWeixinConfig,
       popo: setPopoConfig,
@@ -2892,7 +2892,7 @@ const IMSettings: React.FC = () => {
         )}
 
         {/* 小蜜蜂设置*/}
-        {activePlatform === 'xiaomifeng' && (
+        {activePlatform === 'netease-bee' && (
           <div className="space-y-3">
             {/* Client ID */}
             <div className="space-y-1.5">
@@ -2902,17 +2902,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config.xiaomifeng.clientId}
-                  onChange={(e) => handleXiaomifengChange('clientId', e.target.value)}
+                  value={config['netease-bee'].clientId}
+                  onChange={(e) => handleNeteaseBeeChanChange('clientId', e.target.value)}
                   onBlur={handleSaveConfig}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder={i18nService.t('xiaomifengClientIdPlaceholder') || '您的Client ID'}
+                  placeholder={i18nService.t('neteaseBeeChanClientIdPlaceholder') || '您的Client ID'}
                 />
-                {config.xiaomifeng.clientId && (
+                {config['netease-bee'].clientId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleXiaomifengChange('clientId', ''); void imService.persistConfig({ xiaomifeng: { ...config.xiaomifeng, clientId: '' } }); }}
+                      onClick={() => { handleNeteaseBeeChanChange('clientId', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], clientId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2930,18 +2930,18 @@ const IMSettings: React.FC = () => {
               </label>
               <div className="relative">
                 <input
-                  type={showSecrets['xiaomifeng.secret'] ? 'text' : 'password'}
-                  value={config.xiaomifeng.secret}
-                  onChange={(e) => handleXiaomifengChange('secret', e.target.value)}
+                  type={showSecrets['netease-bee.secret'] ? 'text' : 'password'}
+                  value={config['netease-bee'].secret}
+                  onChange={(e) => handleNeteaseBeeChanChange('secret', e.target.value)}
                   onBlur={handleSaveConfig}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.xiaomifeng.secret && (
+                  {config['netease-bee'].secret && (
                     <button
                       type="button"
-                      onClick={() => { handleXiaomifengChange('secret', ''); void imService.persistConfig({ xiaomifeng: { ...config.xiaomifeng, secret: '' } }); }}
+                      onClick={() => { handleNeteaseBeeChanChange('secret', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], secret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2950,31 +2950,31 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'xiaomifeng.secret': !prev['xiaomifeng.secret'] }))}
+                    onClick={() => setShowSecrets(prev => ({ ...prev, 'netease-bee.secret': !prev['netease-bee.secret'] }))}
                     className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
-                    title={showSecrets['xiaomifeng.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    title={showSecrets['netease-bee.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
-                    {showSecrets['xiaomifeng.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['netease-bee.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
             </div>
 
             <div className="pt-1">
-              {renderConnectivityTestButton('xiaomifeng')}
+              {renderConnectivityTestButton('netease-bee')}
             </div>
 
             {/* Bot account display */}
-            {status.xiaomifeng?.botAccount && (
+            {status['netease-bee']?.botAccount && (
               <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
-                Account: {status.xiaomifeng.botAccount}
+                Account: {status['netease-bee'].botAccount}
               </div>
             )}
 
             {/* Error display */}
-            {status.xiaomifeng?.lastError && (
+            {status['netease-bee']?.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {translateIMError(status.xiaomifeng.lastError)}
+                {translateIMError(status['netease-bee'].lastError)}
               </div>
             )}
           </div>

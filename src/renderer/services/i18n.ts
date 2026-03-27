@@ -755,7 +755,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     telegram: 'Telegram',
     discord: 'Discord',
     nim: '云信',
-    xiaomifeng: '小蜜蜂',
+    'netease-bee': '小蜜蜂',
     weixin: '微信',
     wecom: '企业微信',
     popo: 'POPO',
@@ -836,7 +836,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimQChatServerIds: '圈组服务器 ID',
     nimQChatServerIdsPlaceholder: '留空自动发现所有已加入的服务器',
     nimQChatServerIdsHint: '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。',
-    xiaomifengClientIdPlaceholder: '小蜜蜂助理Client ID',
+    neteaseBeeChanClientIdPlaceholder: '小蜜蜂助理Client ID',
 
     // IM 设置页面国际化
     imAdvancedSettings: '高级设置',
@@ -1907,7 +1907,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     telegram: 'Telegram',
     discord: 'Discord',
     nim: 'NetEase IM',
-    xiaomifeng: 'Netease Bee',
+    'netease-bee': 'Netease Bee',
     weixin: 'WeChat',
     wecom: 'WeCom',    popo: 'POPO',
     connected: 'Connected',
@@ -1987,7 +1987,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimQChatServerIds: 'QChat Server IDs',
     nimQChatServerIdsPlaceholder: 'Leave empty to auto-discover all joined servers',
     nimQChatServerIdsHint: 'Specify server IDs to subscribe, separated by commas. Leave empty to auto-subscribe all joined servers.',
-    xiaomifengClientIdPlaceholder: 'Netease Bee IM Client ID',
+    neteaseBeeChanClientIdPlaceholder: 'Netease Bee IM Client ID',
 
     // IM settings page i18n
     imAdvancedSettings: 'Advanced Settings',

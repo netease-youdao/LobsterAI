@@ -71,7 +71,7 @@ export const CHANNEL_PLATFORM_MAP: Record<string, IMPlatform> = {
   'moltbot-popo': 'popo',
   nim: 'nim',
   'openclaw-weixin': 'weixin',
-  xiaomifeng: 'xiaomifeng',
+  'netease-bee': 'netease-bee',
 };
 
 /** Reverse map: IM platform → preferred OpenClaw channel name. */
@@ -194,6 +194,7 @@ function getChannelTitlePrefix(platform: string): string {
     'wecom-openclaw-plugin': t('channelPrefixWecom'),
     nim: t('channelPrefixNim'),
     weixin: t('channelPrefixWeixin'),
+    'netease-bee': t('channelPrefixNeteaseBee'),
   };
   const staticMap: Record<string, string> = {
     telegram: 'TG',

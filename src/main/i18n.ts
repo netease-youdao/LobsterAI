@@ -28,6 +28,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     channelPrefixWecom: '企微',
     channelPrefixNim: '云信',
     channelPrefixWeixin: '微信',
+    channelPrefixNeteaseBee: '小蜜蜂',
     // NIM chat type labels
     nimQChat: '圈组',
     nimGroup: '群聊',
@@ -77,6 +78,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     channelPrefixWecom: 'WeCom',
     channelPrefixNim: 'NIM',
     channelPrefixWeixin: 'WeChat',
+    channelPrefixNeteaseBee: 'Xiaomifeng',
     // NIM chat type labels
     nimQChat: 'QChat',
     nimGroup: 'Group',

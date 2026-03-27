@@ -19,7 +19,7 @@ const IM_PLATFORMS: { key: IMPlatform; logo: string }[] = [
   { key: 'telegram', logo: 'telegram.svg' },
   { key: 'discord', logo: 'discord.svg' },
   { key: 'nim', logo: 'nim.png' },
-  { key: 'xiaomifeng', logo: 'xiaomifeng.png' },
+  { key: 'netease-bee', logo: 'netease-bee.png' },
   { key: 'weixin', logo: 'weixin.png' },
   { key: 'wecom', logo: 'wecom.png' },
   { key: 'popo', logo: 'popo.png' },
