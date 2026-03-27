@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { RootState } from '../store';
 import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
@@ -66,7 +66,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   const sessions = useSelector((state: RootState) => state.cowork.sessions);
   const filteredSessions = sessions.filter((s) => !s.agentId || s.agentId === currentAgentId);
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
-  const dispatch = useDispatch();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -93,7 +92,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   }, [isCollapsed]);
 
   const handleSelectSession = async (sessionId: string) => {
-    dispatch(clearTempSession());
+    coworkService.dismissTempSession();
     onShowCowork();
     await coworkService.loadSession(sessionId);
   };

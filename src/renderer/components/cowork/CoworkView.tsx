@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, store } from '../../store';
-import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus, setTempSession, clearTempSession } from '../../store/slices/coworkSlice';
+import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus, setTempSession } from '../../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
 import { setActions, selectAction, clearSelection } from '../../store/slices/quickActionSlice';
 import { coworkService } from '../../services/cowork';
@@ -521,7 +521,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   useEffect(() => {
     const handleNewSession = () => {
       dispatch(clearCurrentSession());
-      dispatch(clearTempSession());
+      coworkService.dismissTempSession();
       dispatch(clearSelection());
       window.dispatchEvent(new CustomEvent('cowork:focus-input', {
         detail: { clear: true },
@@ -692,7 +692,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           onStop={tempSession ? handleStopTempSession : handleStopSession}
           onNavigateHome={() => {
             dispatch(clearCurrentSession());
-            if (tempSession) dispatch(clearTempSession());
+            if (tempSession) coworkService.dismissTempSession();
           }}
           isSidebarCollapsed={isSidebarCollapsed}
           onToggleSidebar={onToggleSidebar}

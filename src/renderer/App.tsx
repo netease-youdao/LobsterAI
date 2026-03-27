@@ -23,7 +23,6 @@ import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, 
 import { defaultConfig } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
-import { clearTempSession } from './store/slices/coworkSlice';
 import type { ApiConfig } from './services/api';
 import type { CoworkPermissionResult } from './types/cowork';
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
@@ -260,7 +259,7 @@ const App: React.FC = () => {
     const shouldClearInput = mainView === 'cowork' || !!currentSessionId;
     coworkService.clearSession();
     dispatch(clearSelection());
-    dispatch(clearTempSession());
+    coworkService.dismissTempSession();
     setMainView('cowork');
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent('cowork:focus-input', {

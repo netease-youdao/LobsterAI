@@ -17,6 +17,7 @@ import {
   clearPendingPermissions,
   setConfig,
   clearCurrentSession,
+  clearTempSession,
 } from '../store/slices/coworkSlice';
 import type {
   CoworkSession,
@@ -49,6 +50,15 @@ class CoworkService {
 
   clearTempExclude(): void {
     this._tempExcludeId = null;
+  }
+
+  dismissTempSession(): void {
+    const tempId = store.getState().cowork.tempSession?.id ?? this._tempExcludeId;
+    store.dispatch(clearTempSession());
+    this._tempExcludeId = null;
+    if (tempId && tempId !== '__pending__') {
+      this.deleteSession(tempId).catch(() => {});
+    }
   }
 
   async init(): Promise<void> {
