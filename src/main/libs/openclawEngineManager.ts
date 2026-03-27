@@ -1172,7 +1172,7 @@ export class OpenClawEngineManager extends EventEmitter {
           phase: 'starting',
           version: this.status.version,
           progressPercent: progress,
-          message: `Starting OpenClaw gateway... (${Math.round(elapsedMs / 1000)}s)`,
+          message: 'AI engine is starting...',
           canRetry: false,
         });
 
