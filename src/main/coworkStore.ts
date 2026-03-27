@@ -444,6 +444,15 @@ export interface CoworkConversationSearchRecord {
   assistant: string;
 }
 
+export type ObservabilityProvider = 'opik';
+
+export interface ObservabilityOpikConfig {
+  url: string;
+  workspace: string;
+  apiKey: string;
+  project: string;
+}
+
 export interface CoworkConfig {
   workingDirectory: string;
   systemPrompt: string;
@@ -454,6 +463,8 @@ export interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: CoworkMemoryGuardLevel;
   memoryUserMemoriesMaxItems: number;
+  observabilityProviders: ObservabilityProvider[];
+  observabilityOpik: ObservabilityOpikConfig;
 }
 
 export type CoworkConfigUpdate = Partial<Pick<
@@ -466,6 +477,8 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'memoryLlmJudgeEnabled'
   | 'memoryGuardLevel'
   | 'memoryUserMemoriesMaxItems'
+  | 'observabilityProviders'
+  | 'observabilityOpik'
 >>;
 
 export interface ApplyTurnMemoryUpdatesOptions {
@@ -1004,8 +1017,27 @@ export class CoworkStore {
     const memoryLlmJudgeEnabledRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryLlmJudgeEnabled']);
     const memoryGuardLevelRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryGuardLevel']);
     const memoryUserMemoriesMaxItemsRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['memoryUserMemoriesMaxItems']);
+    const observabilityProvidersRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['observabilityProviders']);
+    const observabilityOpikRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['observabilityOpik']);
 
     const normalizedAgentEngine = normalizeCoworkAgentEngineValue(agentEngineRow?.value);
+
+    let observabilityProviders: ObservabilityProvider[] = [];
+    try {
+      const parsed = observabilityProvidersRow?.value ? JSON.parse(observabilityProvidersRow.value) : [];
+      if (Array.isArray(parsed)) {
+        observabilityProviders = parsed.filter((p: unknown) => p === 'opik');
+      }
+    } catch { /* ignore */ }
+
+    const defaultOpikConfig: ObservabilityOpikConfig = { url: '', workspace: 'default', apiKey: '', project: 'LobsterAI' };
+    let observabilityOpik = defaultOpikConfig;
+    try {
+      if (observabilityOpikRow?.value) {
+        const parsed = JSON.parse(observabilityOpikRow.value);
+        observabilityOpik = { ...defaultOpikConfig, ...parsed };
+      }
+    } catch { /* ignore */ }
 
     return {
       workingDirectory: workingDirRow?.value || getDefaultWorkingDirectory(),
@@ -1023,6 +1055,8 @@ export class CoworkStore {
       ),
       memoryGuardLevel: normalizeMemoryGuardLevel(memoryGuardLevelRow?.value),
       memoryUserMemoriesMaxItems: clampMemoryUserMemoriesMaxItems(Number(memoryUserMemoriesMaxItemsRow?.value)),
+      observabilityProviders,
+      observabilityOpik,
     };
   }
 
@@ -1108,6 +1142,26 @@ export class CoworkStore {
           value = excluded.value,
           updated_at = excluded.updated_at
       `, [String(clampMemoryUserMemoriesMaxItems(config.memoryUserMemoriesMaxItems)), now]);
+    }
+
+    if (config.observabilityProviders !== undefined) {
+      this.db.run(`
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('observabilityProviders', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `, [JSON.stringify(config.observabilityProviders), now]);
+    }
+
+    if (config.observabilityOpik !== undefined) {
+      this.db.run(`
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('observabilityOpik', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `, [JSON.stringify(config.observabilityOpik), now]);
     }
 
     this.saveDb();

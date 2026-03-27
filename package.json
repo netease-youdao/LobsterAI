@@ -47,6 +47,11 @@
         "id": "nim",
         "npm": "openclaw-nim",
         "version": "0.3.0"
+      },
+      {
+        "id": "opik-openclaw",
+        "npm": "@opik/opik-openclaw",
+        "version": "0.2.9"
       }
     ]
   },

@@ -56,6 +56,16 @@ export interface CoworkSession {
   updatedAt: number;
 }
 
+// Observability provider types
+export type ObservabilityProvider = 'opik';
+
+export interface ObservabilityOpikConfig {
+  url: string;
+  workspace: string;
+  apiKey: string;
+  project: string;
+}
+
 // Cowork configuration
 export interface CoworkConfig {
   workingDirectory: string;
@@ -67,6 +77,8 @@ export interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: 'strict' | 'standard' | 'relaxed';
   memoryUserMemoriesMaxItems: number;
+  observabilityProviders: ObservabilityProvider[];
+  observabilityOpik: ObservabilityOpikConfig;
 }
 
 export type CoworkConfigUpdate = Partial<Pick<
@@ -79,6 +91,8 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'memoryLlmJudgeEnabled'
   | 'memoryGuardLevel'
   | 'memoryUserMemoriesMaxItems'
+  | 'observabilityProviders'
+  | 'observabilityOpik'
 >>;
 
 export interface CoworkApiConfig {

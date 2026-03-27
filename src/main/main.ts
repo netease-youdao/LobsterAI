@@ -3061,6 +3061,8 @@ if (!gotTheLock) {
     memoryLlmJudgeEnabled?: boolean;
     memoryGuardLevel?: 'strict' | 'standard' | 'relaxed';
     memoryUserMemoriesMaxItems?: number;
+    observabilityProviders?: ('opik')[];
+    observabilityOpik?: { url: string; workspace: string; apiKey: string; project: string };
   }) => {
     try {
       const normalizedExecutionMode =
@@ -3130,7 +3132,9 @@ if (!gotTheLock) {
 
       const shouldSyncOpenClawConfig = normalizedExecutionMode !== undefined
         || normalizedAgentEngine !== undefined
-        || (normalizedConfig.workingDirectory !== undefined && normalizedConfig.workingDirectory !== previousWorkingDir);
+        || (normalizedConfig.workingDirectory !== undefined && normalizedConfig.workingDirectory !== previousWorkingDir)
+        || config.observabilityProviders !== undefined
+        || config.observabilityOpik !== undefined;
       if (shouldSyncOpenClawConfig) {
         const syncResult = await syncOpenClawConfig({
           reason: 'cowork-config-change',
