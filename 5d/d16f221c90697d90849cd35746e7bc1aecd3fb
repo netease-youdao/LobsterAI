@@ -1,0 +1,47 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "5dd16f221c90697d90849cd35746e7bc1aecd3fb",
+  "prompts": {
+    "36222f03dbf2ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebd67c3b-7a81-4593-bf03-cfdbb53671b8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 561,
+      "total_deletions": 14,
+      "accepted_lines": 158,
+      "overriden_lines": 0
+    },
+    "85d7c7adb8e93d00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7f3ebc38-d97e-4ade-ab75-ba50d4d6e41b",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "8d888da9bf34b84f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "86bf0770-5cc4-4105-a08e-3d2c873e2d9c",
+        "model": "unknown"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
