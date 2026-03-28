@@ -5,7 +5,9 @@ import { i18nService } from '../../services/i18n';
 import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import CoworkPromptInput from './CoworkPromptInput';
+import type { CoworkPromptInputRef } from './CoworkPromptInput';
 import MarkdownContent from '../MarkdownContent';
+import { SelectionToolbar } from '../selection-toolbar';
 import {
   CheckIcon,
   InformationCircleIcon,
@@ -1294,6 +1296,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const promptInputRef = useRef<CoworkPromptInputRef>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
   // Clear lazy-render height cache when session changes
@@ -2204,6 +2207,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         )}
       </div>
 
+      <SelectionToolbar
+        containerRef={scrollContainerRef}
+        scrollContainerRef={scrollContainerRef}
+        promptInputRef={promptInputRef}
+        sessionId={currentSession?.id || ''}
+      />
+
       {/* Streaming Activity Bar */}
       {isStreaming && <StreamingActivityBar messages={currentSession.messages} />}
 
@@ -2211,6 +2221,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       <div className="p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
           <CoworkPromptInput
+            ref={promptInputRef}
             onSubmit={onContinue}
             onStop={onStop}
             isStreaming={isStreaming}
