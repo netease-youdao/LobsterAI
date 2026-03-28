@@ -11,6 +11,8 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { McpServerRecord } from '../mcpStore';
 import { getElectronNodeRuntimePath, getEnhancedEnv } from './coworkUtil';
 
@@ -24,7 +26,7 @@ export interface McpToolManifestEntry {
 interface ManagedMcpServer {
   record: McpServerRecord;
   client: Client;
-  transport: StdioClientTransport;
+  transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport;
   tools: McpToolManifestEntry[];
 }
 
@@ -267,12 +269,10 @@ export class McpServerManager {
    * Start MCP servers and discover their tools.
    */
   async startServers(enabledServers: McpServerRecord[]): Promise<McpToolManifestEntry[]> {
-    // Only handle stdio servers for now
-    const stdioServers = enabledServers.filter(s => s.transportType === 'stdio');
-    log('INFO', `Starting ${stdioServers.length} stdio MCP servers`);
+    log('INFO', `Starting ${enabledServers.length} MCP servers (stdio, sse, http)`);
 
     const results = await Promise.allSettled(
-      stdioServers.map(server => this.startSingleServer(server))
+      enabledServers.map(server => this.startSingleServer(server))
     );
 
     // Collect tools from all successfully started servers
@@ -281,7 +281,7 @@ export class McpServerManager {
       if (result.status === 'fulfilled' && result.value) {
         this._toolManifest.push(...result.value.tools);
       } else if (result.status === 'rejected') {
-        log('WARN', `Failed to start MCP server "${stdioServers[i].name}": ${result.reason}`);
+        log('WARN', `Failed to start MCP server "${enabledServers[i].name}": ${result.reason}`);
       }
     }
 
@@ -290,18 +290,26 @@ export class McpServerManager {
   }
 
   private async startSingleServer(record: McpServerRecord): Promise<ManagedMcpServer | null> {
-    if (record.transportType !== 'stdio') {
-      log('WARN', `Skipping non-stdio server "${record.name}" (type=${record.transportType})`);
-      return null;
+    if (record.transportType === 'stdio') {
+      return this.startStdioServer(record);
+    } else if (record.transportType === 'sse') {
+      return this.startSseServer(record);
+    } else if (record.transportType === 'http') {
+      return this.startHttpServer(record);
     }
 
+    log('WARN', `Unknown transport type "${record.transportType}" for server "${record.name}"`);
+    return null;
+  }
+
+  private async startStdioServer(record: McpServerRecord): Promise<ManagedMcpServer | null> {
     const resolved = await resolveStdioCommand(record);
     if (!resolved.command) {
       log('WARN', `Server "${record.name}" has no command, skipping`);
       return null;
     }
 
-    log('INFO', `Starting "${record.name}": command=${resolved.command}, args=${JSON.stringify(resolved.args)}`);
+    log('INFO', `Starting stdio "${record.name}": command=${resolved.command}, args=${JSON.stringify(resolved.args)}`);
 
     const enhancedEnv = await getEnhancedEnv();
     const spawnEnv: Record<string, string> = {
@@ -328,6 +336,56 @@ export class McpServerManager {
       });
     }
 
+    return this.connectAndDiscoverTools(record, transport, stderrChunks);
+  }
+
+  private async startSseServer(record: McpServerRecord): Promise<ManagedMcpServer | null> {
+    if (!record.url) {
+      log('WARN', `SSE server "${record.name}" has no URL, skipping`);
+      return null;
+    }
+
+    log('INFO', `Starting SSE "${record.name}": url=${record.url}`);
+
+    const headers = record.headers || {};
+    const transport = new SSEClientTransport(new URL(record.url), {
+      requestInit: {
+        headers: Object.entries(headers).reduce((acc, [key, value]) => {
+          acc[key] = value;
+          return acc;
+        }, {} as Record<string, string>),
+      },
+    });
+
+    return this.connectAndDiscoverTools(record, transport);
+  }
+
+  private async startHttpServer(record: McpServerRecord): Promise<ManagedMcpServer | null> {
+    if (!record.url) {
+      log('WARN', `HTTP server "${record.name}" has no URL, skipping`);
+      return null;
+    }
+
+    log('INFO', `Starting HTTP "${record.name}": url=${record.url}`);
+
+    const headers = record.headers || {};
+    const transport = new StreamableHTTPClientTransport(new URL(record.url), {
+      requestInit: {
+        headers: Object.entries(headers).reduce((acc, [key, value]) => {
+          acc[key] = value;
+          return acc;
+        }, {} as Record<string, string>),
+      },
+    });
+
+    return this.connectAndDiscoverTools(record, transport);
+  }
+
+  private async connectAndDiscoverTools(
+    record: McpServerRecord,
+    transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport,
+    stderrChunks?: string[],
+  ): Promise<ManagedMcpServer | null> {
     const client = new Client(
       { name: `lobsterai-mcp-bridge`, version: '1.0.0' },
       { capabilities: {} },
@@ -338,7 +396,7 @@ export class McpServerManager {
       log('INFO', `Connected to MCP server "${record.name}"`);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      const stderrSummary = stderrChunks.length > 0
+      const stderrSummary = stderrChunks && stderrChunks.length > 0
         ? ` | stderr: ${stderrChunks.join(' ').slice(0, 500)}`
         : '';
       log('ERROR', `Failed to connect to "${record.name}": ${errMsg}${stderrSummary}`);
