@@ -1,0 +1,135 @@
+src/scheduled-task/cronJobService.ts
+  843874de27223375 141-162
+  6821a2321718253d 344
+  a24b81fc84b957b5 88-91
+  ec557ffa6f03c2c9 123-124
+  8f3bb8d920f14462 260-262,264,268-282,287
+  d9a1068b3d4f9c59 351,355-368,378
+src/scheduled-task/cronJobService.test.ts
+  d2ada61bd58380d6 1-8,10-24,26-39,41-52,54-64,66-75,77-83,85-91,93-99,101-113,115-127,129-136
+  14c1babbeaea0fd5 9,25,40,53,65,76,84,92,100,114,128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "c8c5193bed5c0198b75694824fd082fa0b2a4f47",
+  "prompts": {
+    "14c1babbeaea0fd5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-87aa3a43-df99-4d21-aae2-4da92fcb143a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 11,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    },
+    "5bd0a5289a352cc9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-7c6b6f26-5b17-4217-b456-e19f80fbdef2",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "6821a2321718253d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-087aa32c-893f-4c5b-b14a-c941e3b5c647",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "843874de27223375": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-d07a7c9e-10e9-4a46-b398-6ccfffe102d1",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 22,
+      "total_deletions": 0,
+      "accepted_lines": 22,
+      "overriden_lines": 0
+    },
+    "8f3bb8d920f14462": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-1eb0b10d-fcf1-4571-bc81-b64e678e007c",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 21,
+      "total_deletions": 3,
+      "accepted_lines": 20,
+      "overriden_lines": 0
+    },
+    "a24b81fc84b957b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-d931799a-e84c-46ef-9005-3f54deae608c",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "d2ada61bd58380d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-94ca0e16-0e24-41e9-8eba-3cb0f875a903",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 136,
+      "total_deletions": 0,
+      "accepted_lines": 125,
+      "overriden_lines": 0
+    },
+    "d9a1068b3d4f9c59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-3cc42866-ed4e-4dce-8682-d10cb49e7f25",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 16,
+      "total_deletions": 2,
+      "accepted_lines": 16,
+      "overriden_lines": 0
+    },
+    "ec557ffa6f03c2c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-e64d776d-51fe-4582-9cef-9f5435872e91",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
