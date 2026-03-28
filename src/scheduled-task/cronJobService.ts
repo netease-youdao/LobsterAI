@@ -85,6 +85,10 @@ interface GatewayJobState {
   lastError?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  /** Delivery status from the last run. */
+  lastDeliveryStatus?: string;
+  /** Delivery error message from the last run. */
+  lastDeliveryError?: string;
 }
 
 interface GatewayJob {
@@ -116,6 +120,8 @@ interface GatewayRunLogEntry {
   durationMs?: number;
   jobName?: string;
   summary?: string;
+  deliveryStatus?: string;
+  deliveryError?: string;
 }
 
 interface CronJobServiceDeps {
@@ -130,6 +136,28 @@ function mapGatewayResultStatus(
   if (status === GatewayStatus.Error) return TaskStatus.Error;
   if (status === GatewayStatus.Skipped) return TaskStatus.Skipped;
   return null;
+}
+
+/**
+ * Returns true when a gateway error is exclusively a delivery failure —
+ * the agent turn itself completed successfully but the gateway reports an
+ * error because delivery was attempted and failed (or was not requested).
+ *
+ * The gateway currently conflates delivery failure with job failure for
+ * `delivery.mode: "none"` jobs, setting `status: "error"` even though the
+ * agent turn produced a valid summary.  This helper lets callers downgrade
+ * such errors to success.
+ */
+function isDeliveryOnlyError(opts: {
+  status?: GatewayStatusType;
+  error?: string;
+  deliveryError?: string;
+  deliveryStatus?: string;
+}): boolean {
+  if (opts.status !== GatewayStatus.Error) return false;
+  if (!opts.error) return false;
+  // The error is delivery-only when its text matches the deliveryError exactly.
+  return !!opts.deliveryError && opts.error === opts.deliveryError;
 }
 
 export function mapGatewaySchedule(schedule: GatewaySchedule): Schedule {
@@ -229,16 +257,34 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
   return result;
 }
 
-export function mapGatewayTaskState(state: GatewayJobState): TaskState {
-  const lastStatus = state.runningAtMs
+export function mapGatewayTaskState(
+  state: GatewayJobState,
+  deliveryMode?: DeliveryModeType,
+): TaskState {
+  let lastStatus = state.runningAtMs
     ? TaskStatus.Running
     : mapGatewayResultStatus(state.lastRunStatus ?? state.lastStatus);
+
+  // When delivery.mode is "none" and the gateway reports an error that is
+  // purely a delivery failure, downgrade to success.
+  if (
+    lastStatus === TaskStatus.Error
+    && deliveryMode === DeliveryMode.None
+    && isDeliveryOnlyError({
+      status: state.lastRunStatus ?? state.lastStatus,
+      error: state.lastError,
+      deliveryError: state.lastDeliveryError,
+      deliveryStatus: state.lastDeliveryStatus,
+    })
+  ) {
+    lastStatus = TaskStatus.Success;
+  }
 
   return {
     nextRunAtMs: state.nextRunAtMs ?? null,
     lastRunAtMs: state.lastRunAtMs ?? null,
     lastStatus,
-    lastError: state.lastError ?? null,
+    lastError: lastStatus === TaskStatus.Success ? null : (state.lastError ?? null),
     lastDurationMs: state.lastDurationMs ?? null,
     runningAtMs: state.runningAtMs ?? null,
     consecutiveErrors: state.consecutiveErrors ?? 0,
@@ -295,16 +341,30 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
     },
     agentId: job.agentId ?? null,
     sessionKey: job.sessionKey ?? null,
-    state: mapGatewayTaskState(job.state),
+    state: mapGatewayTaskState(job.state, delivery.mode),
     createdAt: new Date(job.createdAtMs).toISOString(),
     updatedAt: new Date(job.updatedAtMs).toISOString(),
   };
 }
 
 export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
-  const status = entry.action && entry.action !== 'finished'
+  let status = entry.action && entry.action !== 'finished'
     ? TaskStatus.Running
     : (mapGatewayResultStatus(entry.status) ?? TaskStatus.Error);
+
+  // Suppress delivery-only errors: the agent turn succeeded but the
+  // gateway conflated a delivery failure with the job status.
+  if (
+    status === TaskStatus.Error
+    && isDeliveryOnlyError({
+      status: entry.status,
+      error: entry.error,
+      deliveryError: entry.deliveryError,
+      deliveryStatus: entry.deliveryStatus,
+    })
+  ) {
+    status = TaskStatus.Success;
+  }
 
   return {
     id: `${entry.jobId}-${entry.ts}`,
@@ -315,7 +375,7 @@ export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
     startedAt: new Date(entry.runAtMs ?? entry.ts).toISOString(),
     finishedAt: status === TaskStatus.Running ? null : new Date(entry.ts).toISOString(),
     durationMs: entry.durationMs ?? null,
-    error: entry.error ?? null,
+    error: status === TaskStatus.Success ? null : (entry.error ?? null),
   };
 }
 
