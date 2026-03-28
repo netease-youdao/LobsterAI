@@ -116,6 +116,7 @@
     "@wecom/wecom-aibot-sdk": "^0.1.0",
     "bufferutil": "^4.1.0",
     "cheerio": "^1.2.0",
+    "cmdk": "^1.1.1",
     "cron-parser": "^5.5.0",
     "cronstrue": "^3.14.0",
     "dompurify": "^3.3.1",

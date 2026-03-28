@@ -457,6 +457,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
+    commandPalette: 'CmdOrCtrl+K',
   });
 
   // State for model editing
@@ -3270,6 +3271,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     type="text"
                     value={shortcuts.settings}
                     onChange={(e) => handleShortcutChange('settings', e.target.value)}
+                    data-shortcut-input="true"
+                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('commandPaletteLabel')}</span>
+                  <input
+                    type="text"
+                    value={shortcuts.commandPalette}
+                    onChange={(e) => handleShortcutChange('commandPalette', e.target.value)}
                     data-shortcut-input="true"
                     className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
                   />
