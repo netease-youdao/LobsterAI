@@ -1,3 +1,120 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Security Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+type SystemPermissionId =
+  | 'file_system_read'
+  | 'file_system_write'
+  | 'shell_execution'
+  | 'network_access'
+  | 'clipboard_access'
+  | 'screen_capture'
+  | 'calendar_access'
+  | 'browser_control'
+  | 'process_management'
+  | 'system_settings';
+
+type EnvironmentRiskLevel = 'secure' | 'low' | 'medium' | 'high' | 'critical';
+
+type SecurityIssueSeverity = 'info' | 'warning' | 'danger' | 'critical';
+
+interface SystemPermission {
+  id: SystemPermissionId;
+  name: string;
+  description: string;
+  category: 'data' | 'system' | 'privacy' | 'network';
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  status: 'granted' | 'denied' | 'not_determined' | 'restricted';
+  enabled: boolean;
+  lastChecked?: number;
+}
+
+interface SecurityIssue {
+  id: string;
+  category: 'skills' | 'permissions' | 'system' | 'network' | 'credentials';
+  severity: SecurityIssueSeverity;
+  title: string;
+  description: string;
+  recommendation?: string;
+  affectedItems?: string[];
+  detectedAt: number;
+}
+
+interface SkillSecurityFinding {
+  ruleId: string;
+  dimension: string;
+  severity: 'info' | 'warning' | 'danger' | 'critical';
+  file: string;
+  line?: number;
+  matchedPattern: string;
+  description: string;
+}
+
+interface SkillSecuritySummary {
+  skillId: string;
+  skillName: string;
+  skillPath: string;
+  riskLevel: EnvironmentRiskLevel;
+  riskScore: number;
+  findingsCount: number;
+  criticalCount: number;
+  dangerCount: number;
+  warningCount: number;
+  enabled: boolean;
+  findings: SkillSecurityFinding[];
+}
+
+interface EnvironmentSecurityReport {
+  scannedAt: number;
+  scanDurationMs: number;
+  overallRiskLevel: EnvironmentRiskLevel;
+  overallRiskScore: number;
+  permissions: {
+    summary: {
+      total: number;
+      granted: number;
+      denied: number;
+      notDetermined: number;
+    };
+    items: SystemPermission[];
+    issues: SecurityIssue[];
+  };
+  skills: {
+    summary: {
+      total: number;
+      enabled: number;
+      highRisk: number;
+      criticalRisk: number;
+    };
+    items: SkillSecuritySummary[];
+    issues: SecurityIssue[];
+  };
+  system: {
+    issues: SecurityIssue[];
+  };
+  allIssues: SecurityIssue[];
+  issuesBySeverity: {
+    critical: number;
+    danger: number;
+    warning: number;
+    info: number;
+  };
+}
+
+interface SecuritySettings {
+  permissions: Record<SystemPermissionId, boolean>;
+  autoScanOnStartup: boolean;
+  autoScanOnSkillInstall: boolean;
+  notifyOnHighRisk: boolean;
+  notifyOnNewIssue: boolean;
+  lastScanAt?: number;
+  lastScanRiskLevel?: EnvironmentRiskLevel;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API Types
+// ─────────────────────────────────────────────────────────────────────────────
+
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -472,6 +589,13 @@ interface IElectronAPI {
   permissions: {
     checkCalendar: () => Promise<{ success: boolean; status?: string; error?: string; autoRequested?: boolean }>;
     requestCalendar: () => Promise<{ success: boolean; granted?: boolean; status?: string; error?: string }>;
+  };
+  security: {
+    scan: () => Promise<{ success: boolean; report?: EnvironmentSecurityReport; error?: string }>;
+    getSettings: () => Promise<{ success: boolean; settings?: SecuritySettings; error?: string }>;
+    setSettings: (settings: SecuritySettings) => Promise<{ success: boolean; settings?: SecuritySettings; error?: string }>;
+    togglePermission: (permissionId: string, enabled: boolean) => Promise<{ success: boolean; permission?: string; enabled?: boolean; error?: string }>;
+    getLastScanReport: () => Promise<{ success: boolean; lastScanAt?: number; lastScanRiskLevel?: string; error?: string }>;
   };
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;

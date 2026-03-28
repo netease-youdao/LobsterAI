@@ -3511,6 +3511,94 @@ if (!gotTheLock) {
     }
   });
 
+  // ==================== Security Scanner IPC Handlers ====================
+
+  ipcMain.handle('security:scan', async () => {
+    try {
+      const { scanEnvironmentSecurity, validateSecuritySettings } = await import('./libs/security');
+      const rawSettings = getStore().get('security_settings');
+      const settings = validateSecuritySettings(rawSettings);
+      const manager = getSkillManager();
+      const skillsDir = manager.getSkillsRoot();
+      const allSkills = manager.listSkills();
+
+      const report = await scanEnvironmentSecurity({
+        settings,
+        skillsDir,
+        getSkillEnabled: (skillId) => allSkills.find(s => s.id === skillId)?.enabled ?? false,
+      });
+
+      // Update last scan info in settings
+      const updatedSettings = {
+        ...settings,
+        lastScanAt: report.scannedAt,
+        lastScanRiskLevel: report.overallRiskLevel,
+      };
+      getStore().set('security_settings', updatedSettings);
+
+      return { success: true, report };
+    } catch (error) {
+      console.error('[Security] Scan failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Scan failed' };
+    }
+  });
+
+  ipcMain.handle('security:getSettings', async () => {
+    try {
+      const { validateSecuritySettings, getDefaultSecuritySettings } = await import('./libs/security');
+      const rawSettings = getStore().get('security_settings');
+      const settings = rawSettings ? validateSecuritySettings(rawSettings) : getDefaultSecuritySettings();
+      return { success: true, settings };
+    } catch (error) {
+      console.error('[Security] Failed to get settings:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get settings' };
+    }
+  });
+
+  ipcMain.handle('security:setSettings', async (_event, newSettings) => {
+    try {
+      const { validateSecuritySettings } = await import('./libs/security');
+      const validated = validateSecuritySettings(newSettings);
+      getStore().set('security_settings', validated);
+      return { success: true, settings: validated };
+    } catch (error) {
+      console.error('[Security] Failed to set settings:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set settings' };
+    }
+  });
+
+  ipcMain.handle('security:togglePermission', async (_event, permissionId: string, enabled: boolean) => {
+    try {
+      const { validateSecuritySettings } = await import('./libs/security');
+      const rawSettings = getStore().get('security_settings');
+      const settings = validateSecuritySettings(rawSettings);
+      
+      settings.permissions[permissionId as keyof typeof settings.permissions] = enabled;
+      getStore().set('security_settings', settings);
+      
+      return { success: true, permission: permissionId, enabled };
+    } catch (error) {
+      console.error('[Security] Failed to toggle permission:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to toggle permission' };
+    }
+  });
+
+  ipcMain.handle('security:getLastScanReport', async () => {
+    try {
+      const { validateSecuritySettings } = await import('./libs/security');
+      const rawSettings = getStore().get('security_settings');
+      const settings = validateSecuritySettings(rawSettings);
+      
+      return {
+        success: true,
+        lastScanAt: settings.lastScanAt,
+        lastScanRiskLevel: settings.lastScanRiskLevel,
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get last scan info' };
+    }
+  });
+
   // ==================== IM Gateway IPC Handlers ====================
 
   ipcMain.handle('im:config:get', async () => {
@@ -4426,8 +4514,14 @@ if (!gotTheLock) {
     mainWindow.once('ready-to-show', () => {
       emitWindowState();
       // 开机自启时不显示窗口，仅显示托盘图标
-      if (!isAutoLaunched()) {
-        mainWindow?.show();
+      if (!isAutoLaunched() && mainWindow) {
+        mainWindow.show();
+        // Windows 11 has strict foreground window policy, need extra steps to bring window to front
+        if (isWindows) {
+          mainWindow.setAlwaysOnTop(true);
+          mainWindow.setAlwaysOnTop(false);
+        }
+        mainWindow.focus();
       }
       // Initialize main-process i18n from stored language before creating UI elements.
       const initLang = getStore().get<{ language?: string }>('app_config')?.language;

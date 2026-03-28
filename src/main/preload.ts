@@ -42,6 +42,14 @@ contextBridge.exposeInMainWorld('electron', {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),
     requestCalendar: () => ipcRenderer.invoke('permissions:requestCalendar'),
   },
+  security: {
+    scan: () => ipcRenderer.invoke('security:scan'),
+    getSettings: () => ipcRenderer.invoke('security:getSettings'),
+    setSettings: (settings: unknown) => ipcRenderer.invoke('security:setSettings', settings),
+    togglePermission: (permissionId: string, enabled: boolean) =>
+      ipcRenderer.invoke('security:togglePermission', permissionId, enabled),
+    getLastScanReport: () => ipcRenderer.invoke('security:getLastScanReport'),
+  },
   api: {
     // 普通 API 请求（非流式）
     fetch: (options: {

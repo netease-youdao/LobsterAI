@@ -118,7 +118,7 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
         {/* Summary - outside scroll area */}
         <div className="px-5 pt-4 pb-3">
           <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-            {i18nService.t('securityIssuesFound').replace('{name}', report.skillName)}
+            {i18nService.t('securitySkillBehaviorNotice').replace('{name}', report.skillName)}
           </p>
         </div>
 
