@@ -68,6 +68,37 @@ export class SqliteStore {
   }
 
   private initializeTables(basePath: string) {
+    // SQLite performance optimization parameters
+    try {
+      // WAL mode - Write-Ahead Logging for better concurrency and crash recovery
+      this.db.run('PRAGMA journal_mode = WAL;');
+      
+      // Synchronous mode - balance performance and data safety
+      this.db.run('PRAGMA synchronous = NORMAL;');
+      
+      // Cache size - increase page cache for better query performance (~40MB)
+      this.db.run('PRAGMA cache_size = 10000;');
+      
+      // Enable foreign key constraints - ensure data integrity
+      this.db.run('PRAGMA foreign_keys = ON;');
+      
+      // Temp store - use memory for temporary tables and sorting
+      this.db.run('PRAGMA temp_store = MEMORY;');
+      
+      // Memory mapping - use memory-mapped I/O for large files (256MB)
+      this.db.run('PRAGMA mmap_size = 268435456;');
+      
+      // Page size optimization - 4KB pages for modern storage devices
+      this.db.run('PRAGMA page_size = 4096;');
+      
+      // Analyze statistics - enable query optimizer statistics
+      this.db.run('PRAGMA optimize;');
+      
+      console.info('[SqliteStore] Performance optimization parameters applied');
+    } catch (error) {
+      console.warn('[SqliteStore] Failed to apply some performance optimizations:', error);
+    }
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
