@@ -26,6 +26,7 @@ import type {
   CoworkMemoryStats,
 } from '../types/cowork';
 import IMSettings from './im/IMSettings';
+import ShortcutInput from './ShortcutInput';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
@@ -454,10 +455,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
-    newChat: 'Ctrl+N',
-    search: 'Ctrl+F',
-    settings: 'Ctrl+,',
+    newChat: 'CmdOrCtrl+N',
+    search: 'CmdOrCtrl+F',
+    settings: 'CmdOrCtrl+,',
   });
+  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
 
   // State for model editing
   const [isAddingModel, setIsAddingModel] = useState(false);
@@ -3242,36 +3244,35 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             <div>
               <label className="block text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
                 {i18nService.t('keyboardShortcuts')}
+                {isRecordingShortcut && (
+                  <span className="ml-2 text-xs font-normal text-claude-accent">
+                    ({i18nService.t('shortcutRecordingHint')})
+                  </span>
+                )}
               </label>
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('newChat')}</span>
-                  <input
-                    type="text"
+                  <ShortcutInput
                     value={shortcuts.newChat}
-                    onChange={(e) => handleShortcutChange('newChat', e.target.value)}
-                    data-shortcut-input="true"
-                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                    onChange={(v) => handleShortcutChange('newChat', v)}
+                    onRecordingChange={setIsRecordingShortcut}
                   />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('search')}</span>
-                  <input
-                    type="text"
+                  <ShortcutInput
                     value={shortcuts.search}
-                    onChange={(e) => handleShortcutChange('search', e.target.value)}
-                    data-shortcut-input="true"
-                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                    onChange={(v) => handleShortcutChange('search', v)}
+                    onRecordingChange={setIsRecordingShortcut}
                   />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('openSettings')}</span>
-                  <input
-                    type="text"
+                  <ShortcutInput
                     value={shortcuts.settings}
-                    onChange={(e) => handleShortcutChange('settings', e.target.value)}
-                    data-shortcut-input="true"
-                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                    onChange={(v) => handleShortcutChange('settings', v)}
+                    onRecordingChange={setIsRecordingShortcut}
                   />
                 </div>
               </div>

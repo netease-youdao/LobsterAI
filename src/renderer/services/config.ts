@@ -158,10 +158,20 @@ class ConfigService {
             ...defaultConfig.app,
             ...storedConfig.app,
           },
-          shortcuts: {
-            ...defaultConfig.shortcuts!,
-            ...(storedConfig.shortcuts ?? {}),
-          } as AppConfig['shortcuts'],
+          shortcuts: (() => {
+            const merged = {
+              ...defaultConfig.shortcuts!,
+              ...(storedConfig.shortcuts ?? {}),
+            };
+            // Migrate legacy "Ctrl+" shortcuts to cross-platform "CmdOrCtrl+"
+            for (const key of Object.keys(merged)) {
+              const val = merged[key];
+              if (typeof val === 'string' && /^Ctrl\+/i.test(val) && !/^CmdOrCtrl\+/i.test(val)) {
+                merged[key] = val.replace(/^Ctrl\+/i, 'CmdOrCtrl+');
+              }
+            }
+            return merged;
+          })() as AppConfig['shortcuts'],
           providers: mergedProviders as AppConfig['providers'],
         };
       }

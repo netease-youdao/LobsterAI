@@ -415,9 +415,9 @@ export const defaultConfig: AppConfig = {
     testMode: process.env.NODE_ENV === 'development',
   },
   shortcuts: {
-    newChat: 'Ctrl+N',
-    search: 'Ctrl+F',
-    settings: 'Ctrl+,',
+    newChat: 'CmdOrCtrl+N',
+    search: 'CmdOrCtrl+F',
+    settings: 'CmdOrCtrl+,',
   }
 };
 
