@@ -14,6 +14,7 @@ import {
   ExclamationTriangleIcon,
   ChevronRightIcon,
   PhotoIcon,
+  CommandLineIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
@@ -1135,6 +1136,60 @@ export const AssistantTurnBlock: React.FC<{
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
   const renderSystemMessage = (message: CoworkMessage) => {
+    // Shell command output: render with a terminal-style block
+    if (typeof message.metadata?.shellCommand === 'string') {
+      const cmd = message.metadata.shellCommand as string;
+      const exitCode = typeof message.metadata.exitCode === 'number' ? message.metadata.exitCode : null;
+      const isError = Boolean(message.metadata.isError);
+      const stdout = typeof message.metadata.stdout === 'string' ? message.metadata.stdout : '';
+      const stderr = typeof message.metadata.stderr === 'string' ? message.metadata.stderr : '';
+      const hasOutput = stdout.trim() || stderr.trim();
+
+      return (
+        <div className="rounded-lg border dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/60 bg-claude-bg/60 overflow-hidden">
+          {/* Header bar */}
+          <div className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono ${
+            isError
+              ? 'dark:bg-red-950/40 bg-red-50 dark:border-red-800/50 border-red-200 border-b'
+              : 'dark:bg-claude-darkSurface/60 bg-claude-surface/60 dark:border-claude-darkBorder/40 border-claude-border/40 border-b'
+          }`}>
+            <CommandLineIcon className={`h-3.5 w-3.5 flex-shrink-0 ${isError ? 'text-red-500' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary'}`} />
+            <span className={`flex-1 truncate ${isError ? 'text-red-600 dark:text-red-400' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary'}`}>
+              {cmd}
+            </span>
+            {exitCode !== null && (
+              <span className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                exitCode === 0
+                  ? 'dark:bg-green-900/50 bg-green-100 dark:text-green-400 text-green-700'
+                  : 'dark:bg-red-900/50 bg-red-100 dark:text-red-400 text-red-700'
+              }`}>
+                {exitCode === 0 ? i18nService.t('shellExitOk') : `exit ${exitCode}`}
+              </span>
+            )}
+          </div>
+          {/* Output area */}
+          {hasOutput ? (
+            <div className="px-3 py-2 max-h-64 overflow-y-auto">
+              {stdout.trim() && (
+                <pre className="text-xs font-mono whitespace-pre-wrap break-words dark:text-claude-darkText text-claude-text leading-relaxed">
+                  {stdout}
+                </pre>
+              )}
+              {stderr.trim() && (
+                <pre className="text-xs font-mono whitespace-pre-wrap break-words text-red-500 dark:text-red-400 leading-relaxed mt-1">
+                  {stderr}
+                </pre>
+              )}
+            </div>
+          ) : (
+            <div className="px-3 py-2 text-xs dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 italic">
+              {i18nService.t('shellCommandNoOutput')}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     const rawContent = hasText(message.content)
       ? message.content
       : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');

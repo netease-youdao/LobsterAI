@@ -542,6 +542,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
 
+    // Shell bang command (!command)
+    shellCommandNoOutput: '（无输出）',
+    shellCommandFailed: '命令执行失败',
+    shellExitOk: '✓ 成功',
+
     // Skills
     skills: '技能',
     searchSkills: '搜索技能',
@@ -1708,6 +1713,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionContinueFailed: 'Failed to send message: {error}',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
+
+    // Shell bang command (!command)
+    shellCommandNoOutput: '(no output)',
+    shellCommandFailed: 'Command failed',
+    shellExitOk: '✓ ok',
 
     // Skills
     skills: 'Skills',

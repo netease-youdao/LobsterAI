@@ -4014,6 +4014,64 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('shell:exec', async (_event, options: { command: string; cwd?: string }) => {
+    const { execFile } = await import('child_process');
+    const { promisify } = await import('util');
+    const execFileAsync = promisify(execFile);
+    const { command, cwd } = options;
+    const EXEC_TIMEOUT_MS = 30_000;
+    const MAX_OUTPUT_CHARS = 50_000;
+
+    const resolveCwd = (): string | undefined => {
+      if (!cwd?.trim()) return undefined;
+      try {
+        const resolved = path.resolve(cwd);
+        if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+          return resolved;
+        }
+      } catch {
+        // ignore resolution errors
+      }
+      return undefined;
+    };
+
+    const truncate = (s: string): string =>
+      s.length > MAX_OUTPUT_CHARS ? s.slice(0, MAX_OUTPUT_CHARS) + '\n[output truncated]' : s;
+
+    const resolvedCwd = resolveCwd();
+    const shellBin = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
+    const shellArgs = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+
+    try {
+      const { stdout, stderr } = await execFileAsync(shellBin, shellArgs, {
+        cwd: resolvedCwd,
+        timeout: EXEC_TIMEOUT_MS,
+        maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
+      });
+      return {
+        success: true,
+        stdout: truncate(stdout ?? ''),
+        stderr: truncate(stderr ?? ''),
+        exitCode: 0,
+      };
+    } catch (error: any) {
+      const stdout = truncate(error?.stdout ?? '');
+      const stderr = truncate(error?.stderr ?? '');
+      const exitCode: number = typeof error?.code === 'number' ? error.code : 1;
+      const isTimeout = error?.signal === 'SIGTERM' || /timed out/i.test(error?.message ?? '');
+      return {
+        success: false,
+        stdout,
+        stderr,
+        exitCode,
+        error: isTimeout
+          ? `Command timed out after ${EXEC_TIMEOUT_MS / 1000}s`
+          : (error instanceof Error ? error.message : 'Command failed'),
+      };
+    }
+  });
+
   // App update download & install
   ipcMain.handle('appUpdate:download', async (event, url: string) => {
     try {
