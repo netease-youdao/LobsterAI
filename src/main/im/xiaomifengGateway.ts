@@ -223,10 +223,11 @@ export class XiaomifengGateway extends EventEmitter {
         const data = fs.readFileSync(this.stateFilePath, 'utf8');
         const state = JSON.parse(data);
         this.lastProcessedTimestamp = state.lastProcessedTimestamp || 0;
-        console.log('[Xiaomifeng Gateway] Loaded persisted state, lastProcessedTimestamp:', this.lastProcessedTimestamp);
       }
-    } catch (error: any) {
-      console.warn('[Xiaomifeng Gateway] Failed to load persisted state:', error.message);
+    } catch (error) {
+      console.warn('[Xiaomifeng Gateway] Failed to load persisted state:', error);
+      // 使用默认值
+      this.lastProcessedTimestamp = 0;
     }
   }
 
