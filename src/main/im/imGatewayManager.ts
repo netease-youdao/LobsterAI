@@ -402,11 +402,13 @@ export class IMGatewayManager extends EventEmitter {
           console.log('[IMGatewayManager] Xiaomifeng credentials changed, restarting gateway...');
           this.restartGateway('xiaomifeng').catch((err) => {
             console.error('[IMGatewayManager] Failed to restart Xiaomifeng after config change:', err.message);
+            this.emit('statusChange', this.getStatus());
           });
         } else {
           console.log('[IMGatewayManager] Xiaomifeng credentials changed, starting gateway...');
           this.startGateway('xiaomifeng').catch((err) => {
             console.error('[IMGatewayManager] Failed to start Xiaomifeng after config change:', err.message);
+            this.emit('statusChange', this.getStatus());
           });
         }
       }
