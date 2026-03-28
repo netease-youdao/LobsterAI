@@ -337,6 +337,8 @@ export class CronJobService {
   private firstPollDone = false;
   /** Synchronous jobId → name cache, populated during polling. */
   private jobNameCache: Map<string, string> = new Map();
+  /** Job IDs currently running (non-null `runningAtMs`), updated during polling. */
+  private runningJobIds: Set<string> = new Set();
 
   private static readonly POLL_INTERVAL_MS = 15_000;
 
@@ -351,6 +353,10 @@ export class CronJobService {
    */
   getJobNameSync(jobId: string): string | null {
     return this.jobNameCache.get(jobId) ?? null;
+  }
+
+  hasRunningJobs(): boolean {
+    return this.runningJobIds.size > 0;
   }
 
   private async client(): Promise<GatewayClientLike> {
@@ -552,6 +558,7 @@ export class CronJobService {
     this.lastKnownStates.clear();
     this.lastKnownRunAtMs.clear();
     this.jobNameCache.clear();
+    this.runningJobIds.clear();
     this.firstPollDone = false;
   }
 
@@ -571,8 +578,12 @@ export class CronJobService {
 
       // Refresh jobId → name cache for synchronous lookups (used by session naming).
       this.jobNameCache.clear();
+      this.runningJobIds.clear();
       for (const job of jobs) {
         this.jobNameCache.set(job.id, job.name);
+        if (job.state.runningAtMs) {
+          this.runningJobIds.add(job.id);
+        }
       }
 
       for (const job of jobs) {

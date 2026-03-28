@@ -873,13 +873,23 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
 };
 
 // Deferred gateway restart: when a config change requires a gateway restart
-// but active cowork sessions exist, we defer the restart until all sessions
-// complete.  A polling interval checks periodically; a hard timeout ensures
-// the restart eventually happens even if a session hangs.
+// but active cowork sessions or cron jobs exist, we defer the restart until
+// all workloads complete.  A polling interval checks periodically; a hard
+// timeout ensures the restart eventually happens even if a session hangs.
 let deferredRestartTimer: ReturnType<typeof setInterval> | null = null;
 let deferredRestartTimeout: ReturnType<typeof setTimeout> | null = null;
 const DEFERRED_RESTART_POLL_MS = 3_000;
 const DEFERRED_RESTART_MAX_WAIT_MS = 5 * 60_000; // 5 minutes hard cap
+
+const hasActiveGatewayWorkloads = (): boolean => {
+  if (openClawRuntimeAdapter?.hasActiveSessions()) return true;
+  try {
+    if (cronJobService?.hasRunningJobs()) return true;
+  } catch {
+    // CronJobService may not be initialized yet.
+  }
+  return false;
+};
 
 const clearDeferredRestart = () => {
   if (deferredRestartTimer) { clearInterval(deferredRestartTimer); deferredRestartTimer = null; }
@@ -901,7 +911,7 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   }
 
   deferredRestartTimer = setInterval(() => {
-    if (!openClawRuntimeAdapter?.hasActiveSessions()) {
+    if (!hasActiveGatewayWorkloads()) {
       void executeDeferredGatewayRestart(reason);
     }
   }, DEFERRED_RESTART_POLL_MS);
@@ -916,15 +926,15 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
 const syncOpenClawConfig = async (
   options: { reason: string; restartGatewayIfRunning?: boolean } = { reason: 'unknown' },
 ): Promise<{ success: boolean; changed: boolean; status?: OpenClawEngineStatus; error?: string }> => {
-  // When a restart would be needed and there are active sessions, defer the
-  // entire sync (including the config file write) to avoid triggering
-  // OpenClaw's built-in file-watcher reload (SIGUSR1) which would kill
-  // in-flight conversations even without our explicit gateway restart.
-  if (options.restartGatewayIfRunning && openClawRuntimeAdapter?.hasActiveSessions()) {
+  // When the gateway is running and there are active workloads (cowork
+  // sessions OR running cron jobs), defer the entire sync — including the
+  // config file write — to avoid triggering OpenClaw's built-in file-watcher
+  // reload (SIGUSR1) which would drain in-flight conversations and cron tasks.
+  if (hasActiveGatewayWorkloads()) {
     const manager = getOpenClawEngineManager();
     const status = manager.getStatus();
     if (status.phase === 'running') {
-      console.log(`[OpenClaw] syncOpenClawConfig: deferring entire config sync because active sessions exist (reason: ${options.reason})`);
+      console.log(`[OpenClaw] syncOpenClawConfig: deferring entire config sync because active workloads exist (reason: ${options.reason})`);
       scheduleDeferredGatewayRestart(options.reason);
       return {
         success: true,

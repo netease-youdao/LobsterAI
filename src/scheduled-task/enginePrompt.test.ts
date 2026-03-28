@@ -15,6 +15,12 @@ test('openclaw prompt points scheduled task requests to the native cron tool', (
   expect(prompt).toMatch(/do not use `sessions_spawn`, `subagents`, or ad-hoc background workflows as a substitute for `cron\.add`/i);
   expect(prompt).toMatch(/never emulate reminders .*bash.*sleep.*openclaw.*claw/i);
   expect(prompt).toMatch(/if the native `cron` tool is unavailable/i);
+
+  // Message delivery guard for cron sessions
+  expect(prompt).toMatch(/do NOT.*call the `message` tool directly/i);
+  expect(prompt).toMatch(/cron system handles result delivery automatically/i);
+  expect(prompt).toMatch(/Channel is required/i);
+  expect(prompt).toMatch(/output your results as plain text/i);
 });
 
 test('yd_cowork prompt tells the user to switch engines', () => {
