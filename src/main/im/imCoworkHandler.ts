@@ -10,7 +10,7 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
 import type { CoworkStore, CoworkMessage } from '../coworkStore';
 import type { IMStore } from './imStore';
-import type { IMMessage, IMPlatform, IMMediaAttachment, IMSessionMapping } from './types';
+import type { IMMessage, Platform, IMMediaAttachment, IMSessionMapping } from './types';
 import { buildIMMediaInstruction } from './imMediaInstruction';
 import { analyzeIMReply, DEFAULT_IM_EMPTY_REPLY } from './imReplyGuard';
 import {
@@ -29,7 +29,7 @@ interface MessageAccumulator {
   timeoutId?: NodeJS.Timeout;
   backgroundDelivery?: {
     conversationId: string;
-    platform: IMPlatform;
+    platform: Platform;
   };
 }
 
@@ -38,7 +38,7 @@ interface PendingIMPermission {
   sessionId: string;
   request: PermissionRequest;
   conversationId: string;
-  platform: IMPlatform;
+  platform: Platform;
   createdAt: number;
   timeoutId?: NodeJS.Timeout;
 }
@@ -60,7 +60,7 @@ export interface IMCoworkHandlerOptions {
     message: IMMessage;
     request: ParsedIMScheduledTaskRequest;
   }) => Promise<IMScheduledTaskCreationResult>;
-  sendAsyncReply?: (platform: IMPlatform, conversationId: string, text: string) => Promise<boolean>;
+  sendAsyncReply?: (platform: Platform, conversationId: string, text: string) => Promise<boolean>;
 }
 
 export class IMCoworkHandler extends EventEmitter {
@@ -74,14 +74,14 @@ export class IMCoworkHandler extends EventEmitter {
     message: IMMessage;
     request: ParsedIMScheduledTaskRequest;
   }) => Promise<IMScheduledTaskCreationResult>;
-  private sendAsyncReply?: (platform: IMPlatform, conversationId: string, text: string) => Promise<boolean>;
+  private sendAsyncReply?: (platform: Platform, conversationId: string, text: string) => Promise<boolean>;
 
   // Track active sessions' message accumulation
   private messageAccumulators: Map<string, MessageAccumulator> = new Map();
 
   // Track which sessions are created by IM (to filter events)
   private imSessionIds: Set<string> = new Set();
-  private sessionConversationMap: Map<string, { conversationId: string; platform: IMPlatform }> = new Map();
+  private sessionConversationMap: Map<string, { conversationId: string; platform: Platform }> = new Map();
   private pendingPermissionByConversation: Map<string, PendingIMPermission> = new Map();
   private readonly onMessage = this.handleMessage.bind(this);
   private readonly onMessageUpdate = this.handleMessageUpdate.bind(this);
@@ -263,7 +263,7 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private async getOrCreateCoworkSession(
     imConversationId: string,
-    platform: IMPlatform,
+    platform: Platform,
     forceNewSession: boolean = false,
     senderId?: string,
     message?: IMMessage
@@ -305,7 +305,7 @@ export class IMCoworkHandler extends EventEmitter {
 
   private async createCoworkSessionForConversation(
     imConversationId: string,
-    platform: IMPlatform,
+    platform: Platform,
     senderId?: string,
     message?: IMMessage
   ): Promise<string> {
@@ -354,7 +354,7 @@ export class IMCoworkHandler extends EventEmitter {
    * Other platforms use the original "IM-{platform}-{timestamp}" style.
    */
   private buildSessionTitle(
-    platform: IMPlatform,
+    platform: Platform,
     _imConversationId: string,
     senderId?: string,
     message?: IMMessage
@@ -570,7 +570,7 @@ export class IMCoworkHandler extends EventEmitter {
     }
   }
 
-  private createConversationKey(conversationId: string, platform: IMPlatform): string {
+  private createConversationKey(conversationId: string, platform: Platform): string {
     return `${platform}:${conversationId}`;
   }
 

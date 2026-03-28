@@ -8,6 +8,7 @@ import type {
   ScheduledTaskInput,
 } from '../../../scheduled-task/types';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
+import { PlatformRegistry } from '@shared/platform';
 
 interface TaskFormProps {
   mode: 'create' | 'edit';
@@ -57,21 +58,8 @@ const DEFAULT_FORM_STATE: FormState = {
   notifyTo: '',
 };
 
-const IM_CHANNEL_VALUES = new Set([
-  'dingtalk',
-  'feishu',
-  'telegram',
-  'discord',
-  'qqbot',
-  'wecom',
-  'popo',
-  'nim',
-  'openclaw-weixin',
-  'netease-bee',
-]);
-
 function isIMChannel(channel: string): boolean {
-  return IM_CHANNEL_VALUES.has(channel);
+  return PlatformRegistry.isIMChannel(channel);
 }
 
 function createFormState(task?: ScheduledTask): FormState {

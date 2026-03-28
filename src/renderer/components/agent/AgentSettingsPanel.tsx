@@ -6,24 +6,13 @@ import { imService } from '../../services/im';
 import { i18nService } from '../../services/i18n';
 import { XMarkIcon, TrashIcon } from '@heroicons/react/24/outline';
 import type { Agent } from '../../types/agent';
-import type { IMPlatform, IMGatewayConfig } from '../../types/im';
+import type { Platform } from '@shared/platform';
+import type { IMGatewayConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
+import { PlatformRegistry } from '@shared/platform';
 import AgentSkillSelector from './AgentSkillSelector';
 
 type SettingsTab = 'basic' | 'skills' | 'im';
-
-const IM_PLATFORMS: { key: IMPlatform; logo: string }[] = [
-  { key: 'dingtalk', logo: 'dingding.png' },
-  { key: 'feishu', logo: 'feishu.png' },
-  { key: 'qq', logo: 'qq_bot.jpeg' },
-  { key: 'telegram', logo: 'telegram.svg' },
-  { key: 'discord', logo: 'discord.svg' },
-  { key: 'nim', logo: 'nim.png' },
-  { key: 'netease-bee', logo: 'netease-bee.png' },
-  { key: 'weixin', logo: 'weixin.png' },
-  { key: 'wecom', logo: 'wecom.png' },
-  { key: 'popo', logo: 'popo.png' },
-];
 
 interface AgentSettingsPanelProps {
   agentId: string | null;
@@ -46,8 +35,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
   // IM binding state
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
-  const [boundPlatforms, setBoundPlatforms] = useState<Set<IMPlatform>>(new Set());
-  const [initialBoundPlatforms, setInitialBoundPlatforms] = useState<Set<IMPlatform>>(new Set());
+  const [boundPlatforms, setBoundPlatforms] = useState<Set<Platform>>(new Set());
+  const [initialBoundPlatforms, setInitialBoundPlatforms] = useState<Set<Platform>>(new Set());
 
   useEffect(() => {
     if (!agentId) return;
@@ -69,10 +58,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       if (cfg) {
         setImConfig(cfg);
         const bindings = cfg.settings?.platformAgentBindings || {};
-        const bound = new Set<IMPlatform>();
+        const bound = new Set<Platform>();
         for (const [platform, boundAgentId] of Object.entries(bindings)) {
           if (boundAgentId === agentId) {
-            bound.add(platform as IMPlatform);
+            bound.add(platform as Platform);
           }
         }
         setBoundPlatforms(bound);
@@ -129,7 +118,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     }
   };
 
-  const handleToggleIMBinding = (platform: IMPlatform) => {
+  const handleToggleIMBinding = (platform: Platform) => {
     const next = new Set(boundPlatforms);
     if (next.has(platform)) {
       next.delete(platform);
@@ -139,7 +128,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     setBoundPlatforms(next);
   };
 
-  const isPlatformConfigured = (platform: IMPlatform): boolean => {
+  const isPlatformConfigured = (platform: Platform): boolean => {
     if (!imConfig) return false;
     return imConfig[platform]?.enabled === true;
   };
@@ -264,11 +253,12 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 {i18nService.t('agentIMBindHint') || 'Select IM channels this Agent responds to'}
               </p>
               <div className="space-y-1">
-                {IM_PLATFORMS
-                  .filter(({ key }) => (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(key))
-                  .map(({ key: platform, logo }) => {
-                  const configured = isPlatformConfigured(platform);
-                  const bound = boundPlatforms.has(platform);
+               {PlatformRegistry.platforms
+                  .filter((platform) => (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(platform))
+                  .map((platform) => {
+                    const logo = PlatformRegistry.logo(platform);
+                   const configured = isPlatformConfigured(platform);
+                   const bound = boundPlatforms.has(platform);
                   return (
                     <div
                       key={platform}

@@ -3,6 +3,8 @@
  * Mirrors src/main/im/types.ts for use in React components
  */
 
+import type { Platform } from '@shared/platform';
+
 // ==================== DingTalk Types ====================
 
 export interface DingTalkOpenClawConfig {
@@ -300,8 +302,6 @@ export interface WeixinGatewayStatus {
 
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin';
-
 export interface IMGatewayConfig {
   dingtalk: DingTalkOpenClawConfig;
   feishu: FeishuOpenClawConfig;
@@ -352,7 +352,7 @@ export interface IMMediaAttachment {
 }
 
 export interface IMMessage {
-  platform: IMPlatform;
+  platform: Platform;
   messageId: string;
   conversationId: string;
   senderId: string;
@@ -413,7 +413,7 @@ export interface IMConnectivityCheck {
 }
 
 export interface IMConnectivityTestResult {
-  platform: IMPlatform;
+  platform: Platform;
   testedAt: number;
   verdict: IMConnectivityVerdict;
   checks: IMConnectivityCheck[];

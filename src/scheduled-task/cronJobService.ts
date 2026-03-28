@@ -9,7 +9,8 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
 } from './types';
-import { parseChannelSessionKey, CHANNEL_PLATFORM_MAP, PLATFORM_TO_CHANNEL_MAP } from '../main/libs/openclawChannelSessionSync';
+import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
+import { PlatformRegistry } from '../shared/platform';
 import {
   ScheduleKind,
   PayloadKind,
@@ -211,8 +212,8 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
   // e.g. 'popo' (UI/config key) → 'moltbot-popo' (OpenClaw plugin name).
   const openclawChannel = delivery.channel
     ? (() => {
-        const platform = CHANNEL_PLATFORM_MAP[delivery.channel];
-        return platform ? (PLATFORM_TO_CHANNEL_MAP[platform] ?? delivery.channel) : delivery.channel;
+        const platform = PlatformRegistry.platformOfChannel(delivery.channel);
+        return platform ? PlatformRegistry.channelOf(platform) : delivery.channel;
       })()
     : undefined;
 
@@ -255,7 +256,7 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
   if (!delivery.channel && job.sessionKey) {
     const parsed = parseChannelSessionKey(job.sessionKey);
     if (parsed) {
-      const channelName = PLATFORM_TO_CHANNEL_MAP[parsed.platform];
+      const channelName = PlatformRegistry.channelOf(parsed.platform);
       if (channelName) {
         inferredChannel = channelName;
         inferredTo = parsed.conversationId;

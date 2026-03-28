@@ -217,6 +217,7 @@ interface McpMarketplaceData {
 }
 
 import type { Agent, PresetAgent } from './agent';
+import type { Platform } from '@shared/platform';
 
 interface CreditItem {
   type: 'subscription' | 'boost' | 'free';
@@ -416,10 +417,10 @@ interface IElectronAPI {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
     setConfig: (config: Partial<IMGatewayConfig>, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
     syncConfig: () => Promise<{ success: boolean; error?: string }>;
-    startGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin') => Promise<{ success: boolean; error?: string }>;
-    stopGateway: (platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin') => Promise<{ success: boolean; error?: string }>;
+    startGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
+    stopGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
     testGateway: (
-      platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin',
+      platform: Platform,
       configOverride?: Partial<IMGatewayConfig>
     ) => Promise<{ success: boolean; result?: IMConnectivityTestResult; error?: string }>;
     getStatus: () => Promise<{ success: boolean; status?: IMGatewayStatus; error?: string }>;
@@ -749,7 +750,7 @@ interface IMConnectivityCheck {
 }
 
 interface IMConnectivityTestResult {
-  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo';
+  platform: Platform;
   testedAt: number;
   verdict: IMConnectivityVerdict;
   checks: IMConnectivityCheck[];
@@ -843,7 +844,7 @@ interface WeixinGatewayStatus {
 }
 
 interface IMMessage {
-  platform: 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin';
+  platform: Platform;
   messageId: string;
   conversationId: string;
   senderId: string;

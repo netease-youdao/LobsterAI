@@ -27,7 +27,7 @@ import { fetchJsonWithTimeout } from './http';
 import {
   IMGatewayConfig,
   IMGatewayStatus,
-  IMPlatform,
+  Platform,
   IMMessage,
   IMConnectivityCheck,
   IMConnectivityTestResult,
@@ -250,7 +250,7 @@ export class IMGatewayManager extends EventEmitter {
   /**
    * Persist the notification target for a platform after receiving a message.
    */
-  private persistNotificationTarget(platform: IMPlatform): void {
+  private persistNotificationTarget(platform: Platform): void {
     try {
       let target: any = null;
       if (platform === 'nim') {
@@ -270,7 +270,7 @@ export class IMGatewayManager extends EventEmitter {
   /**
    * Restore notification target from SQLite after gateway starts.
    */
-  private restoreNotificationTarget(platform: IMPlatform): void {
+  private restoreNotificationTarget(platform: Platform): void {
     try {
       const target = this.imStore.getNotificationTarget(platform);
       if (target == null) return;
@@ -385,7 +385,7 @@ export class IMGatewayManager extends EventEmitter {
 
   }
 
-  private async restartGateway(platform: IMPlatform): Promise<void> {
+  private async restartGateway(platform: Platform): Promise<void> {
     console.log(`[IMGatewayManager] Restarting ${platform} gateway...`);
     await this.stopGateway(platform);
     await this.startGateway(platform);
@@ -485,7 +485,7 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   async testGateway(
-    platform: IMPlatform,
+    platform: Platform,
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult> {
     // Telegram always uses OpenClaw mode
@@ -678,7 +678,7 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   // ==================== Gateway Control ====================
-  async startGateway(platform: IMPlatform): Promise<void> {
+  async startGateway(platform: Platform): Promise<void> {
     const config = this.getConfig();
 
     // Ensure chat handler is ready
@@ -750,7 +750,7 @@ export class IMGatewayManager extends EventEmitter {
     this.restoreNotificationTarget(platform);
   }
 
-  async stopGateway(platform: IMPlatform): Promise<void> {
+  async stopGateway(platform: Platform): Promise<void> {
     if (platform === 'dingtalk') {
       // DingTalk runs via OpenClaw gateway
       console.log('[IMGatewayManager] DingTalk in OpenClaw mode, syncing disabled config');
@@ -821,7 +821,7 @@ export class IMGatewayManager extends EventEmitter {
 
     // --- OpenClaw platforms: collect and batch into a single sync ---
 
-    const openClawPlatformsToStart: IMPlatform[] = [];
+    const openClawPlatformsToStart: Platform[] = [];
 
     if (config.dingtalk.enabled && config.dingtalk.clientId && config.dingtalk.clientSecret) {
       openClawPlatformsToStart.push('dingtalk');
@@ -873,7 +873,7 @@ export class IMGatewayManager extends EventEmitter {
     return false;
   }
 
-  isConnected(platform: IMPlatform): boolean {
+  isConnected(platform: Platform): boolean {
     if (platform === 'dingtalk') {
       // DingTalk runs via OpenClaw; consider it connected when enabled and configured
       const config = this.getConfig();
@@ -921,7 +921,7 @@ export class IMGatewayManager extends EventEmitter {
     return false;
   }
 
-  async sendNotification(platform: IMPlatform, text: string): Promise<boolean> {
+  async sendNotification(platform: Platform, text: string): Promise<boolean> {
     if (!this.isConnected(platform)) {
       console.warn(`[IMGatewayManager] Cannot send notification: ${platform} is not connected`);
       return false;
@@ -954,7 +954,7 @@ export class IMGatewayManager extends EventEmitter {
     }
   }
 
-  async sendNotificationWithMedia(platform: IMPlatform, text: string): Promise<boolean> {
+  async sendNotificationWithMedia(platform: Platform, text: string): Promise<boolean> {
     if (!this.isConnected(platform)) {
       console.warn(`[IMGatewayManager] Cannot send notification: ${platform} is not connected`);
       return false;
@@ -992,7 +992,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'telegram';
+    const platform: Platform = 'telegram';
 
     // Resolve the Telegram config (now TelegramOpenClawConfig type)
     const mergedConfig = this.buildMergedConfig(configOverride);
@@ -1067,7 +1067,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'discord';
+    const platform: Platform = 'discord';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
     const dcConfig = mergedConfig.discord;
@@ -1141,7 +1141,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'feishu';
+    const platform: Platform = 'feishu';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
     const fsConfig = mergedConfig.feishu;
@@ -1230,7 +1230,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'dingtalk';
+    const platform: Platform = 'dingtalk';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
     const dtConfig = mergedConfig.dingtalk;
@@ -1304,7 +1304,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'wecom';
+    const platform: Platform = 'wecom';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
     const wcConfig = mergedConfig.wecom;
@@ -1351,7 +1351,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'weixin';
+    const platform: Platform = 'weixin';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
     const wxConfig = mergedConfig.weixin;
@@ -1455,7 +1455,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'nim';
+    const platform: Platform = 'nim';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
     const nimConfig = mergedConfig.nim;
@@ -1511,7 +1511,7 @@ export class IMGatewayManager extends EventEmitter {
   ): Promise<IMConnectivityTestResult> {
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
-    const platform: IMPlatform = 'popo';
+    const platform: Platform = 'popo';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
     const popoConfig = mergedConfig.popo;
@@ -1582,7 +1582,7 @@ export class IMGatewayManager extends EventEmitter {
     };
   }
 
-  private getMissingCredentials(platform: IMPlatform, config: IMGatewayConfig): string[] {
+  private getMissingCredentials(platform: Platform, config: IMGatewayConfig): string[] {
     if (platform === 'dingtalk') {
       const fields: string[] = [];
       if (!config.dingtalk.clientId) fields.push('clientId');
@@ -1638,7 +1638,7 @@ export class IMGatewayManager extends EventEmitter {
     return config.discord.botToken ? [] : ['botToken'];
   }
 
-  private async runAuthProbe(platform: IMPlatform, config: IMGatewayConfig): Promise<string> {
+  private async runAuthProbe(platform: Platform, config: IMGatewayConfig): Promise<string> {
     if (platform === 'dingtalk') {
       const tokenUrl = `https://oapi.dingtalk.com/gettoken?appkey=${encodeURIComponent(config.dingtalk.clientId)}&appsecret=${encodeURIComponent(config.dingtalk.clientSecret)}`;
       const resp = await fetchJsonWithTimeout<{ errcode?: number; errmsg?: string }>(tokenUrl, {}, CONNECTIVITY_TIMEOUT_MS);
@@ -1735,7 +1735,7 @@ export class IMGatewayManager extends EventEmitter {
   }
 
 
-  async sendConversationReply(platform: IMPlatform, conversationId: string, text: string): Promise<boolean> {
+  async sendConversationReply(platform: Platform, conversationId: string, text: string): Promise<boolean> {
     try {
       switch (platform) {
         default:
@@ -1823,7 +1823,7 @@ export class IMGatewayManager extends EventEmitter {
     return false;
   }
   async primeConversationReplyRoute(
-    platform: IMPlatform,
+    platform: Platform,
     conversationId: string,
     coworkSessionId: string,
   ): Promise<void> {
@@ -1994,7 +1994,7 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   private cacheConversationReplyRoute(
-    platform: IMPlatform,
+    platform: Platform,
     conversationId: string,
     route: OpenClawDeliveryRoute,
   ): void {
@@ -2169,7 +2169,7 @@ export class IMGatewayManager extends EventEmitter {
     });
   }
 
-  private getStartedAtMs(platform: IMPlatform, status: IMGatewayStatus): number | null {
+  private getStartedAtMs(platform: Platform, status: IMGatewayStatus): number | null {
     if (platform === 'feishu') {
       return status.feishu.startedAt ? Date.parse(status.feishu.startedAt) : null;
     }
@@ -2184,7 +2184,7 @@ export class IMGatewayManager extends EventEmitter {
     return status.discord.startedAt;
   }
 
-  private getLastInboundAt(platform: IMPlatform, status: IMGatewayStatus): number | null {
+  private getLastInboundAt(platform: Platform, status: IMGatewayStatus): number | null {
     if (platform === 'dingtalk') return status.dingtalk.lastInboundAt;
     if (platform === 'feishu') return status.feishu.lastInboundAt;
     if (platform === 'telegram') return status.telegram.lastInboundAt;
@@ -2197,7 +2197,7 @@ export class IMGatewayManager extends EventEmitter {
     return status.discord.lastInboundAt;
   }
 
-  private getLastOutboundAt(platform: IMPlatform, status: IMGatewayStatus): number | null {
+  private getLastOutboundAt(platform: Platform, status: IMGatewayStatus): number | null {
     if (platform === 'dingtalk') return status.dingtalk.lastOutboundAt;
     if (platform === 'feishu') return status.feishu.lastOutboundAt;
     if (platform === 'telegram') return status.telegram.lastOutboundAt;
@@ -2210,7 +2210,7 @@ export class IMGatewayManager extends EventEmitter {
     return status.discord.lastOutboundAt;
   }
 
-  private getLastError(platform: IMPlatform, status: IMGatewayStatus): string | null {
+  private getLastError(platform: Platform, status: IMGatewayStatus): string | null {
     if (platform === 'dingtalk') return status.dingtalk.lastError;
     if (platform === 'feishu') return status.feishu.error;
     if (platform === 'telegram') return status.telegram.lastError;

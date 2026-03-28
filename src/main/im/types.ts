@@ -3,7 +3,8 @@
  * Types for DingTalk, Feishu and Telegram IM bot integration
  */
 
-// ==================== DingTalk Types ====================
+import type { Platform } from '../../shared/platform';
+export type { Platform } from '../../shared/platform';
 
 export interface DingTalkOpenClawConfig {
   enabled: boolean;
@@ -299,8 +300,6 @@ export interface WeixinGatewayStatus {
 
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'netease-bee' | 'wecom' | 'popo' | 'weixin';
-
 export interface IMGatewayConfig {
   dingtalk: DingTalkOpenClawConfig;
   feishu: FeishuOpenClawConfig;
@@ -351,7 +350,7 @@ export interface IMMediaAttachment {
 }
 
 export interface IMMessage {
-  platform: IMPlatform;
+  platform: Platform;
   messageId: string;
   conversationId: string;
   senderId: string;
@@ -367,7 +366,7 @@ export interface IMMessage {
 }
 
 export interface IMReplyContext {
-  platform: IMPlatform;
+  platform: Platform;
   conversationId: string;
   messageId?: string;
   // DingTalk specific
@@ -380,7 +379,7 @@ export interface IMReplyContext {
 
 export interface IMSessionMapping {
   imConversationId: string;
-  platform: IMPlatform;
+  platform: Platform;
   coworkSessionId: string;
   agentId: string;
   createdAt: number;
@@ -436,7 +435,7 @@ export interface IMConnectivityCheck {
 }
 
 export interface IMConnectivityTestResult {
-  platform: IMPlatform;
+  platform: Platform;
   testedAt: number;
   verdict: IMConnectivityVerdict;
   checks: IMConnectivityCheck[];

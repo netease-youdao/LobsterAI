@@ -4,6 +4,7 @@ import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode, Agent } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig, IMSettings } from '../im/types';
 import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig, NeteaseBeeChanConfig } from '../im/types';
+import { PlatformRegistry } from '../../shared/platform';
 import { resolveRawApiConfig, resolveAllProviderApiKeys } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
@@ -1032,26 +1033,16 @@ export class OpenClawConfigSync {
     // forcing those channels to restart when the binding changes.  OpenClaw
     // channel plugins capture their config at startup and never refresh it,
     // so bindings-only config changes (kind: "none" in the reload plan) are
-    // invisible to running plugins.  By touching the channel config we trigger
-    // a "channels.*" diff path which forces the plugin to restart.
-    const platformBindingsForSentinel = this.getIMSettings?.()?.platformAgentBindings;
-    if (platformBindingsForSentinel) {
-      // Map openclaw channel key → platform key
-      const channelToPlatform: Record<string, string> = {
-        dingtalk: 'dingtalk',
-        feishu: 'feishu',
-        telegram: 'telegram',
-        discord: 'discord',
-        qqbot: 'qq',
-        wecom: 'wecom',
-        'moltbot-popo': 'popo',
-        nim: 'nim',
-        'openclaw-weixin': 'weixin',
-      };
-      const channels = (managedConfig.channels ?? {}) as Record<string, Record<string, unknown>>;
+     // invisible to running plugins.  By touching the channel config we trigger
+     // a "channels.*" diff path which forces the plugin to restart.
+     const platformBindingsForSentinel = this.getIMSettings?.()?.platformAgentBindings;
+     if (platformBindingsForSentinel) {
+       // Map openclaw channel key → platform key
+      const channelToPlatform = PlatformRegistry;
+       const channels = (managedConfig.channels ?? {}) as Record<string, Record<string, unknown>>;
       for (const channelKey of Object.keys(channels)) {
         if (!channels[channelKey] || typeof channels[channelKey] !== 'object') continue;
-        const platformKey = channelToPlatform[channelKey];
+        const platformKey = channelToPlatform.platformOfChannel(channelKey);
         const boundAgentId = platformKey ? platformBindingsForSentinel[platformKey] : undefined;
         if (boundAgentId && boundAgentId !== 'main') {
           channels[channelKey]._agentBinding = boundAgentId;
