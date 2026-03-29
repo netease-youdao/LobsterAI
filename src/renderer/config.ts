@@ -351,7 +351,9 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.xiaomimimo.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false }
+        { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false },
+        { id: 'mimo-v2-pro', name: 'MiMo V2 Pro', supportsImage: true },
+        { id: 'mimo-v2-omni', name: 'MiMo V2 Omni', supportsImage: true }
       ]
     },
     stepfun: {
