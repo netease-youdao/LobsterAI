@@ -1323,6 +1323,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [isExportingMarkdown, setIsExportingMarkdown] = useState(false);
+  const [isExportingJSON, setIsExportingJSON] = useState(false);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1668,6 +1670,68 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const handleCancelDelete = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     setShowConfirmDelete(false);
+  };
+
+  const handleExportMarkdownClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // 检查是否有其他导出操作正在进行
+    if (!currentSession || isExportingMarkdown || isExportingJSON || isExportingImage) return;
+    closeMenu();
+    setIsExportingMarkdown(true);
+
+    try {
+      const timestamp = formatExportTimestamp(new Date());
+      const result = await coworkService.exportSessionMarkdown(
+        currentSession.id,
+        `${currentSession.title}-${timestamp}.md`
+      );
+
+      if (result.success && !result.canceled) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkExportMarkdownSuccess'),
+        }));
+      } else if (!result.success) {
+        throw new Error(result.error || 'Failed to export Markdown');
+      }
+    } catch (error) {
+      console.error('Failed to export session as Markdown:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportMarkdownFailed'),
+      }));
+    } finally {
+      setIsExportingMarkdown(false);
+    }
+  };
+
+  const handleExportJSONClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // 检查是否有其他导出操作正在进行
+    if (!currentSession || isExportingJSON || isExportingMarkdown || isExportingImage) return;
+    closeMenu();
+    setIsExportingJSON(true);
+
+    try {
+      const timestamp = formatExportTimestamp(new Date());
+      const result = await coworkService.exportSessionJSON(
+        currentSession.id,
+        `${currentSession.title}-${timestamp}.json`
+      );
+
+      if (result.success && !result.canceled) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkExportJSONSuccess'),
+        }));
+      } else if (!result.success) {
+        throw new Error(result.error || 'Failed to export JSON');
+      }
+    } catch (error) {
+      console.error('Failed to export session as JSON:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportJSONFailed'),
+      }));
+    } finally {
+      setIsExportingJSON(false);
+    }
   };
 
   const handleMessagesScroll = useCallback(() => {
@@ -2057,6 +2121,28 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           >
             <ShareIcon className="h-4 w-4" />
             {i18nService.t('coworkShareSession')}
+          </button>
+          <button
+            type="button"
+            onClick={handleExportMarkdownClick}
+            disabled={isExportingMarkdown}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+            </svg>
+            {i18nService.t('coworkExportMarkdown')}
+          </button>
+          <button
+            type="button"
+            onClick={handleExportJSONClick}
+            disabled={isExportingJSON}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
+            </svg>
+            {i18nService.t('coworkExportJSON')}
           </button>
           <button
             type="button"

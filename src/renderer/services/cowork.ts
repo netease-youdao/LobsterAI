@@ -459,6 +459,46 @@ class CoworkService {
     }
   }
 
+  async exportSessionMarkdown(
+    sessionId: string,
+    defaultFileName?: string
+  ): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.exportMarkdown) {
+      return { success: false, error: 'Cowork export Markdown API not available' };
+    }
+
+    try {
+      const result = await cowork.exportMarkdown({ sessionId, defaultFileName });
+      return result ?? { success: false, error: 'Failed to export session as Markdown' };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export session as Markdown',
+      };
+    }
+  }
+
+  async exportSessionJSON(
+    sessionId: string,
+    defaultFileName?: string
+  ): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.exportJSON) {
+      return { success: false, error: 'Cowork export JSON API not available' };
+    }
+
+    try {
+      const result = await cowork.exportJSON({ sessionId, defaultFileName });
+      return result ?? { success: false, error: 'Failed to export session as JSON' };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export session as JSON',
+      };
+    }
+  }
+
   async loadSession(sessionId: string): Promise<CoworkSession | null> {
     const cowork = window.electron?.cowork;
     if (!cowork) return null;

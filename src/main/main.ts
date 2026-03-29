@@ -2918,6 +2918,210 @@ if (!gotTheLock) {
     }
   });
 
+  // Export session as Markdown
+  ipcMain.handle('cowork:session:exportMarkdown', async (
+    event,
+    options: {
+      sessionId: string;
+      defaultFileName?: string;
+    }
+  ) => {
+    try {
+      const { sessionId, defaultFileName } = options || {};
+      if (!sessionId) {
+        return { success: false, error: 'Session ID is required' };
+      }
+
+      const session = getCoworkStore().getSession(sessionId);
+      if (!session) {
+        return { success: false, error: 'Session not found' };
+      }
+
+      // Helper function to escape Markdown special characters
+      const escapeMarkdown = (text: string): string => {
+        return text
+          .replace(/\\/g, '\\\\')  // Escape backslashes first
+          .replace(/\*/g, '\\*')    // Escape asterisks
+          .replace(/_/g, '\\_')     // Escape underscores
+          .replace(/\[/g, '\\[')    // Escape opening brackets
+          .replace(/\]/g, '\\]')    // Escape closing brackets
+          .replace(/\(/g, '\\(')    // Escape opening parentheses
+          .replace(/\)/g, '\\)')    // Escape closing parentheses
+          .replace(/`/g, '\\`')     // Escape backticks
+          .replace(/#/g, '\\#')     // Escape hash symbols
+          .replace(/\+/g, '\\+')    // Escape plus signs
+          .replace(/-/g, '\\-')     // Escape minus signs
+          .replace(/!/g, '\\!')     // Escape exclamation marks
+          .replace(/\./g, '\\.');   // Escape dots
+      };
+
+      // Build Markdown content
+      const lines: string[] = [];
+      lines.push(`# ${escapeMarkdown(session.title || 'Untitled Session')}`);
+      lines.push('');
+      lines.push(`**Exported at**: ${new Date().toISOString()}`);
+      lines.push(`**Session ID**: ${session.id}`);
+      lines.push(`**Created at**: ${new Date(session.createdAt).toISOString()}`);
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+
+      for (const message of session.messages) {
+        const timestamp = new Date(message.timestamp).toISOString();
+        const content = message.content || '';
+
+        switch (message.type) {
+          case 'user':
+            lines.push(`## User (${timestamp})`);
+            lines.push('');
+            lines.push(escapeMarkdown(content));
+            lines.push('');
+            break;
+          case 'assistant':
+            lines.push(`## Assistant (${timestamp})`);
+            lines.push('');
+            lines.push(content);  // Assistant content may contain markdown, don't escape
+            lines.push('');
+            break;
+          case 'tool_use':
+            lines.push(`### Tool: ${escapeMarkdown(message.metadata?.toolName || 'Unknown')} (${timestamp})`);
+            lines.push('');
+            // Include content if present
+            if (content) {
+              lines.push(escapeMarkdown(content));
+              lines.push('');
+            }
+            lines.push('**Input:**');
+            lines.push('```json');
+            lines.push(JSON.stringify(message.metadata?.toolInput || {}, null, 2));
+            lines.push('```');
+            lines.push('');
+            break;
+          case 'tool_result':
+            lines.push(`### Tool Result (${timestamp})`);
+            lines.push('');
+            lines.push('```');
+            lines.push(message.metadata?.toolResult || content);
+            lines.push('```');
+            lines.push('');
+            break;
+          case 'system':
+            lines.push(`> **System** (${timestamp}): ${escapeMarkdown(content)}`);
+            lines.push('');
+            break;
+        }
+      }
+
+      lines.push('---');
+      lines.push('');
+      lines.push('*Exported from LobsterAI*');
+
+      const markdownContent = lines.join('\n');
+      const sanitizedFileName = sanitizeExportFileName(defaultFileName || `${session.title || 'session'}.md`);
+      const finalFileName = sanitizedFileName.toLowerCase().endsWith('.md') ? sanitizedFileName : `${sanitizedFileName}.md`;
+
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const saveOptions = {
+        title: 'Export Session as Markdown',
+        defaultPath: path.join(app.getPath('downloads'), finalFileName),
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      };
+
+      const saveResult = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+        : await dialog.showSaveDialog(saveOptions);
+
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: true, canceled: true };
+      }
+
+      const outputPath = saveResult.filePath.toLowerCase().endsWith('.md') ? saveResult.filePath : `${saveResult.filePath}.md`;
+      await fs.promises.writeFile(outputPath, markdownContent, 'utf-8');
+
+      return { success: true, canceled: false, path: outputPath };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export session as Markdown',
+      };
+    }
+  });
+
+  // Export session as JSON
+  ipcMain.handle('cowork:session:exportJSON', async (
+    event,
+    options: {
+      sessionId: string;
+      defaultFileName?: string;
+    }
+  ) => {
+    try {
+      const { sessionId, defaultFileName } = options || {};
+      if (!sessionId) {
+        return { success: false, error: 'Session ID is required' };
+      }
+
+      const session = getCoworkStore().getSession(sessionId);
+      if (!session) {
+        return { success: false, error: 'Session not found' };
+      }
+
+      // Build JSON export object
+      const exportData = {
+        version: '1.0',
+        exportedAt: new Date().toISOString(),
+        session: {
+          id: session.id,
+          title: session.title,
+          status: session.status,
+          pinned: session.pinned,
+          cwd: session.cwd,
+          systemPrompt: session.systemPrompt,
+          executionMode: session.executionMode,
+          activeSkillIds: session.activeSkillIds,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messages: session.messages.map((msg) => ({
+            id: msg.id,
+            type: msg.type,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            metadata: msg.metadata,
+          })),
+        },
+      };
+
+      const jsonContent = JSON.stringify(exportData, null, 2);
+      const sanitizedFileName = sanitizeExportFileName(defaultFileName || `${session.title || 'session'}.json`);
+      const finalFileName = sanitizedFileName.toLowerCase().endsWith('.json') ? sanitizedFileName : `${sanitizedFileName}.json`;
+
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const saveOptions = {
+        title: 'Export Session as JSON',
+        defaultPath: path.join(app.getPath('downloads'), finalFileName),
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      };
+
+      const saveResult = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+        : await dialog.showSaveDialog(saveOptions);
+
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: true, canceled: true };
+      }
+
+      const outputPath = saveResult.filePath.toLowerCase().endsWith('.json') ? saveResult.filePath : `${saveResult.filePath}.json`;
+      await fs.promises.writeFile(outputPath, jsonContent, 'utf-8');
+
+      return { success: true, canceled: false, path: outputPath };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export session as JSON',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:permission:respond', async (_event, options: {
     requestId: string;
     result: PermissionResult;
