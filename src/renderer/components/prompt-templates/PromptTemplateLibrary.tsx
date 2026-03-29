@@ -141,7 +141,6 @@ export const PromptTemplateLibrary: React.FC<PromptTemplateLibraryProps> = ({
     } catch {
       showToast(i18nService.t('promptTemplates.copyError'));
     }
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
   }, [showToast]);
 
   const handleCopy = useCallback((template: PromptTemplate) => {
