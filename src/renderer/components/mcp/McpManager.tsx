@@ -249,6 +249,28 @@ const McpManager: React.FC = () => {
     triggerBridgeRefresh();
   };
 
+  const handleBatchSave = async (entries: McpServerFormData[]) => {
+    setActionError('');
+    let lastServers: McpServerConfig[] | undefined;
+    const failed: string[] = [];
+    for (const entry of entries) {
+      const result = await mcpService.createServer(entry);
+      if (result.success && result.servers) {
+        lastServers = result.servers;
+      } else {
+        failed.push(entry.name);
+      }
+    }
+    if (lastServers) {
+      dispatch(setMcpServers(lastServers));
+      triggerBridgeRefresh();
+    }
+    if (failed.length > 0) {
+      setActionError(i18nService.t('mcpPasteSomeFailed').replace('{names}', failed.join(', ')));
+    }
+    handleCloseForm();
+  };
+
   const handleOpenCreateForm = () => {
     setEditingServer(null);
     setInstallingRegistry(null);
@@ -721,6 +743,7 @@ const McpManager: React.FC = () => {
         existingNames={existingNames}
         onClose={handleCloseForm}
         onSave={handleSaveForm}
+        onBatchSave={handleBatchSave}
       />
     </div>
   );
