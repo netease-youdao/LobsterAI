@@ -5,7 +5,7 @@ import { RootState } from '../../store';
 import { setViewMode } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
-import type { ScheduledTask } from '../../../scheduled-task/types';
+import type { ScheduledTask, ScheduledTaskRun } from '../../../scheduled-task/types';
 import TaskRunHistory from './TaskRunHistory';
 import {
   formatDateTime,
@@ -23,9 +23,11 @@ interface TaskDetailProps {
   onRequestDelete: (taskId: string, taskName: string) => void;
 }
 
+const EMPTY_RUNS: ScheduledTaskRun[] = [];
+
 const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const dispatch = useDispatch();
-  const runs = useSelector((state: RootState) => state.scheduledTask.runs[task.id] ?? []);
+  const runs = useSelector((state: RootState) => state.scheduledTask.runs[task.id] ?? EMPTY_RUNS);
 
   useEffect(() => {
     void scheduledTaskService.loadRuns(task.id);

@@ -92,6 +92,8 @@ interface CoworkPromptInputProps {
   remoteManaged?: boolean;
 }
 
+const EMPTY_ATTACHMENTS: CoworkAttachment[] = [];
+
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
   (props, ref) => {
     const {
@@ -112,7 +114,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const dispatch = useDispatch();
     const draftKey = sessionId || '__home__';
     const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[draftKey] || '');
-    const attachments = useSelector((state: RootState) => state.cowork.draftAttachments[draftKey] || []) as CoworkAttachment[];
+    const attachments = useSelector(
+      (state: RootState) => state.cowork.draftAttachments[draftKey] ?? EMPTY_ATTACHMENTS
+    ) as CoworkAttachment[];
     const [value, setValue] = useState(draftPrompt);
     const [showFolderMenu, setShowFolderMenu] = useState(false);
     const [showFolderRequiredWarning, setShowFolderRequiredWarning] = useState(false);

@@ -1,8 +1,12 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
+import { setActiveArtifact, selectActiveArtifact } from '../../store/slices/artifactSlice';
+import ArtifactPanel from '../artifacts/ArtifactPanel';
+import ResizeHandle from '../artifacts/ResizeHandle';
+import type { ActiveArtifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import CoworkPromptInput from './CoworkPromptInput';
@@ -988,11 +992,15 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
+  isStreaming?: boolean;
+  onOpenArtifact?: (artifact: ActiveArtifact) => void;
 }> = ({
   message,
   resolveLocalFilePath,
   mapDisplayText,
   showCopyButton = false,
+  isStreaming,
+  onOpenArtifact,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
@@ -1008,6 +1016,8 @@ const AssistantMessageItem: React.FC<{
           content={displayContent}
           className="prose dark:prose-invert max-w-none"
           resolveLocalFilePath={resolveLocalFilePath}
+          isStreaming={isStreaming}
+          onOpenArtifact={onOpenArtifact}
         />
       </div>
       {showCopyButton && (
@@ -1125,12 +1135,16 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  isStreaming?: boolean;
+  onOpenArtifact?: (artifact: ActiveArtifact) => void;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  isStreaming,
+  onOpenArtifact,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1234,6 +1248,8 @@ export const AssistantTurnBlock: React.FC<{
                     resolveLocalFilePath={resolveLocalFilePath}
                     mapDisplayText={mapDisplayText}
                     showCopyButton={showCopyButtons && !hasToolGroupAfter}
+                    isStreaming={isStreaming}
+                    onOpenArtifact={onOpenArtifact}
                   />
                 );
               }
@@ -1292,9 +1308,31 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
   const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
   const skills = useSelector((state: RootState) => state.skill.skills);
+  const activeArtifact = useSelector(selectActiveArtifact);
+  const dispatch = useDispatch();
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+
+  const handleOpenArtifact = useCallback((artifact: ActiveArtifact) => {
+    dispatch(setActiveArtifact(artifact));
+  }, [dispatch]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setViewportWidth(window.innerWidth);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const artifactLayout = activeArtifact && viewportWidth < 960 ? 'overlay' : 'split';
+  const artifactPanelWidth = activeArtifact
+    ? artifactLayout === 'overlay'
+      ? Math.min(520, Math.max(320, viewportWidth - 32))
+      : undefined
+    : undefined;
 
   // Clear lazy-render height cache when session changes
   const sessionId = currentSession?.id;
@@ -1899,6 +1937,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             resolveLocalFilePath={resolveLocalFilePath}
             showTypingIndicator
             showCopyButtons={!isStreaming}
+            isStreaming={isStreaming}
+            onOpenArtifact={handleOpenArtifact}
           />
         </div>
       );
@@ -1936,6 +1976,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                isStreaming={isStreaming}
+                onOpenArtifact={handleOpenArtifact}
               />
             </div>
           )}
@@ -2115,6 +2157,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         </div>
       )}
 
+      {/* Content area: messages + artifact panel */}
+      <div className="relative flex-1 flex flex-row min-h-0">
+        <div className="flex-1 flex flex-col min-w-0">
       {/* Messages */}
       <div className="relative flex-1 min-h-0">
         <div
@@ -2354,6 +2399,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             sessionId={currentSession?.id}
           />
         </div>
+      </div>
+        </div>
+
+        {/* Artifact Panel */}
+        {activeArtifact && (
+          <>
+            {artifactLayout === 'split' && <ResizeHandle />}
+            <ArtifactPanel layout={artifactLayout} width={artifactPanelWidth} />
+          </>
+        )}
       </div>
     </div>
   );

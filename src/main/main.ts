@@ -3,6 +3,7 @@ import type { WebContents } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { createRequire } from 'module';
 import { SqliteStore } from './sqliteStore';
 import { CoworkStore } from './coworkStore';
 import { AgentManager } from './agentManager';
@@ -73,6 +74,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { IpcChannel as ArtifactIpcChannel } from '../artifacts/constants';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -113,6 +115,12 @@ const MIME_EXTENSION_MAP: Record<string, string> = {
   'text/markdown': '.md',
   'application/json': '.json',
   'text/csv': '.csv',
+};
+
+const runtimeRequire = createRequire(__filename);
+
+const loadEsbuild = (): typeof import('esbuild') => {
+  return runtimeRequire('esbuild') as typeof import('esbuild');
 };
 
 const sanitizeExportFileName = (value: string): string => {
@@ -1901,6 +1909,33 @@ if (!gotTheLock) {
 
   ipcMain.handle('window:isMaximized', () => {
     return mainWindow?.isMaximized() ?? false;
+  });
+
+  ipcMain.handle(ArtifactIpcChannel.TransformReact, async (_event, source: string) => {
+    if (typeof source !== 'string' || !source.trim()) {
+      return { success: false, error: 'React artifact source is empty.' };
+    }
+
+    try {
+      const { transform } = loadEsbuild();
+      const result = await transform(source, {
+        loader: 'tsx',
+        format: 'iife',
+        globalName: 'ArtifactModule',
+        platform: 'browser',
+        target: 'es2020',
+        jsx: 'transform',
+        jsxFactory: 'React.createElement',
+        jsxFragment: 'React.Fragment',
+      });
+      return { success: true, code: result.code };
+    } catch (error) {
+      console.error('[Artifacts] failed to compile React artifact:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 
   ipcMain.on('window:showSystemMenu', (_event, position: { x?: number; y?: number } | undefined) => {

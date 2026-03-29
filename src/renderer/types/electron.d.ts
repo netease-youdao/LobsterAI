@@ -267,6 +267,9 @@ interface IElectronAPI {
     fetchMarketplace: () => Promise<{ success: boolean; data?: McpMarketplaceData; error?: string }>;
     refreshBridge: () => Promise<{ success: boolean; tools: number; error?: string }>;
   };
+  artifacts: {
+    transformReact: (source: string) => Promise<{ success: boolean; code?: string; error?: string }>;
+  };
   agents: {
     list: () => Promise<Agent[]>;
     get: (id: string) => Promise<Agent | null>;

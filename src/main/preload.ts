@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduled-task/constants';
+import { IpcChannel as ArtifactIpcChannel } from '../artifacts/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -41,6 +42,9 @@ contextBridge.exposeInMainWorld('electron', {
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),
     requestCalendar: () => ipcRenderer.invoke('permissions:requestCalendar'),
+  },
+  artifacts: {
+    transformReact: (source: string) => ipcRenderer.invoke(ArtifactIpcChannel.TransformReact, source),
   },
   api: {
     // 普通 API 请求（非流式）
