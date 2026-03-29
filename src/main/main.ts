@@ -89,6 +89,20 @@ const IPC_MAX_KEYS = 80;
 const IPC_MAX_ITEMS = 40;
 const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const ENGINE_NOT_READY_CODE = 'ENGINE_NOT_READY';
+
+/**
+ * 验证 URL 协议是否允许打开
+ * 仅允许 http: 和 https: 协议，防止 javascript: 等恶意协议
+ */
+const validateUrlProtocol = (url: string): boolean => {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.protocol === 'https:' || urlObj.protocol === 'http:';
+  } catch {
+    return false;
+  }
+};
+
 const SCHEDULED_TASK_CHANNEL_OPTIONS = [
   { value: 'dingtalk', label: 'DingTalk' },
   { value: 'feishu', label: 'Feishu' },
@@ -2006,6 +2020,9 @@ if (!gotTheLock) {
     try {
       const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
       const finalUrl = `${baseUrl}?source=electron`;
+      if (!validateUrlProtocol(finalUrl)) {
+        return { success: false, error: 'Invalid URL protocol' };
+      }
       await shell.openExternal(finalUrl);
       return { success: true };
     } catch (error) {
@@ -4007,6 +4024,9 @@ if (!gotTheLock) {
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     try {
+      if (!validateUrlProtocol(url)) {
+        return { success: false, error: 'Invalid URL protocol. Only http and https are allowed.' };
+      }
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
