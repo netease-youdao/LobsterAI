@@ -128,7 +128,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   React.useImperativeHandle(ref, () => ({
     setValue: (newValue: string) => {
       setValue(newValue);
-      // 触发自动调整高度
       requestAnimationFrame(() => {
         const textarea = textareaRef.current;
         if (textarea) {

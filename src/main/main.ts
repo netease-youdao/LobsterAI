@@ -54,6 +54,8 @@ import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import { setLanguage, t } from './i18n';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
 import { McpStore } from './mcpStore';
+import { PromptTemplateStore } from './promptTemplateStore';
+import { IpcChannel as PromptTemplateIpc } from '../prompt-template/constants';
 import { CronJobService } from '../scheduled-task/cronJobService';
 import { migrateScheduledTasksToOpenclaw, migrateScheduledTaskRunsToOpenclaw } from '../scheduled-task/migrate';
 import { buildScheduledTaskEnginePrompt } from '../scheduled-task/enginePrompt';
@@ -561,6 +563,7 @@ let openClawRuntimeAdapter: OpenClawRuntimeAdapter | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let skillManager: SkillManager | null = null;
 let mcpStore: McpStore | null = null;
+let promptTemplateStore: PromptTemplateStore | null = null;
 let mcpServerManager: McpServerManager | null = null;
 let mcpBridgeServer: McpBridgeServer | null = null;
 let mcpBridgeSecret: string | null = null;
@@ -1142,6 +1145,14 @@ const getMcpStore = () => {
     mcpStore = new McpStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction());
   }
   return mcpStore;
+};
+
+const getPromptTemplateStore = () => {
+  if (!promptTemplateStore) {
+    const sqliteStore = getStore();
+    promptTemplateStore = new PromptTemplateStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction());
+  }
+  return promptTemplateStore;
 };
 
 /**
@@ -2446,6 +2457,75 @@ if (!gotTheLock) {
       return { success: true, tools: result.tools, error: result.error };
     } catch (error) {
       return { success: false, tools: 0, error: error instanceof Error ? error.message : 'Failed to refresh MCP bridge' };
+    }
+  });
+
+  // ==================== Prompt Template IPC Handlers ====================
+
+  ipcMain.handle(PromptTemplateIpc.List, async (_event, query?: { search?: string; category?: string }) => {
+    try {
+      const templates = getPromptTemplateStore().list(query);
+      return templates;
+    } catch (error) {
+      console.error('[PromptTemplate] failed to list templates:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle(PromptTemplateIpc.Get, async (_event, id: string) => {
+    try {
+      return getPromptTemplateStore().getById(id);
+    } catch (error) {
+      console.error('[PromptTemplate] failed to get template:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle(PromptTemplateIpc.Create, async (_event, data: {
+    title: string;
+    content: string;
+    description?: string;
+    category?: string;
+    variables: string;
+  }) => {
+    try {
+      return getPromptTemplateStore().create(data);
+    } catch (error) {
+      console.error('[PromptTemplate] failed to create template:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle(PromptTemplateIpc.Update, async (_event, id: string, updates: {
+    title?: string;
+    content?: string;
+    description?: string | null;
+    category?: string | null;
+    variables?: string;
+    is_starred?: number;
+  }) => {
+    try {
+      return getPromptTemplateStore().update(id, updates);
+    } catch (error) {
+      console.error('[PromptTemplate] failed to update template:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle(PromptTemplateIpc.Delete, async (_event, id: string) => {
+    try {
+      return getPromptTemplateStore().delete(id);
+    } catch (error) {
+      console.error('[PromptTemplate] failed to delete template:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle(PromptTemplateIpc.IncrementUsedCount, async (_event, id: string) => {
+    try {
+      getPromptTemplateStore().incrementUsedCount(id);
+    } catch (error) {
+      console.error('[PromptTemplate] failed to increment used count:', error);
     }
   });
 

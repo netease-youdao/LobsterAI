@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduled-task/constants';
+import { IpcChannel as PromptTemplateIpc } from '../prompt-template/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -453,5 +454,19 @@ contextBridge.exposeInMainWorld('electron', {
           error?: string;
         }>,
     },
+  },
+  promptTemplates: {
+    list: (query?: { search?: string; category?: string }) =>
+      ipcRenderer.invoke(PromptTemplateIpc.List, query),
+    get: (id: string) =>
+      ipcRenderer.invoke(PromptTemplateIpc.Get, id),
+    create: (data: { title: string; content: string; description?: string; category?: string; variables: string }) =>
+      ipcRenderer.invoke(PromptTemplateIpc.Create, data),
+    update: (id: string, data: { title?: string; content?: string; description?: string | null; category?: string | null; variables?: string; is_starred?: number }) =>
+      ipcRenderer.invoke(PromptTemplateIpc.Update, id, data),
+    delete: (id: string) =>
+      ipcRenderer.invoke(PromptTemplateIpc.Delete, id),
+    incrementUsedCount: (id: string) =>
+      ipcRenderer.invoke(PromptTemplateIpc.IncrementUsedCount, id),
   },
 });

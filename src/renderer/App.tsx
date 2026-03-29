@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, store } from './store';
+import { setDraftPrompt } from './store/slices/coworkSlice';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import Toast from './components/Toast';
@@ -10,6 +11,7 @@ import { SkillsView } from './components/skills';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import { McpView } from './components/mcp';
 import AgentsView from './components/agent/AgentsView';
+import { PromptTemplateLibrary } from './components/prompt-templates';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
@@ -35,7 +37,7 @@ import PrivacyDialog from './components/PrivacyDialog';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents' | 'promptTemplates'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -47,6 +49,7 @@ const App: React.FC = () => {
   const [downloadProgress, setDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [pendingTemplateContent, setPendingTemplateContent] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
   const dispatch = useDispatch();
@@ -248,6 +251,16 @@ const App: React.FC = () => {
 
   const handleShowAgents = useCallback(() => {
     setMainView('agents');
+  }, []);
+
+  const handleShowPromptTemplates = useCallback(() => {
+    setMainView('promptTemplates');
+  }, []);
+
+  const handleUseTemplate = useCallback((resolvedContent: string) => {
+    setPendingTemplateContent(resolvedContent);
+    store.dispatch(setDraftPrompt({ sessionId: '__home__', draft: resolvedContent }));
+    setMainView('cowork');
   }, []);
 
   const handleToggleSidebar = useCallback(() => {
@@ -643,6 +656,7 @@ const App: React.FC = () => {
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowMcp={handleShowMcp}
           onShowAgents={handleShowAgents}
+          onShowPromptTemplates={handleShowPromptTemplates}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -680,6 +694,14 @@ const App: React.FC = () => {
                 onShowCowork={handleShowCowork}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
               />
+            ) : mainView === 'promptTemplates' ? (
+              <PromptTemplateLibrary
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+                onUseTemplate={handleUseTemplate}
+              />
             ) : (
               <CoworkView
                 onRequestAppSettings={handleShowSettings}
@@ -688,6 +710,8 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
+                pendingContent={pendingTemplateContent}
+                onPendingContentConsumed={() => setPendingTemplateContent(null)}
               />
             )}
           </div>

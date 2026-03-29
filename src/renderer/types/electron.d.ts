@@ -276,6 +276,14 @@ interface IElectronAPI {
     presets: () => Promise<PresetAgent[]>;
     addPreset: (presetId: string) => Promise<Agent>;
   };
+  promptTemplates: {
+    list: (query?: { category?: string; search?: string }) => Promise<import('../../prompt-template/constants').RawPromptTemplate[]>;
+    get: (id: string) => Promise<import('../../prompt-template/constants').RawPromptTemplate | null>;
+    create: (input: import('../../prompt-template/constants').RawCreateInput) => Promise<import('../../prompt-template/constants').RawPromptTemplate>;
+    update: (id: string, updates: import('../../prompt-template/constants').RawUpdateInput) => Promise<import('../../prompt-template/constants').RawPromptTemplate | null>;
+    delete: (id: string) => Promise<void>;
+    incrementUsedCount: (id: string) => Promise<void>;
+  };
   api: {
     fetch: (options: {
       url: string;

@@ -26,9 +26,11 @@ export interface CoworkViewProps {
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
+  pendingContent?: string | null;
+  onPendingContentConsumed?: () => void;
 }
 
-const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSkills, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
+const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSkills, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge, pendingContent, onPendingContentConsumed }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const [isInitialized, setIsInitialized] = useState(false);
@@ -41,6 +43,14 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const startRequestIdRef = useRef(0);
   // Ref for CoworkPromptInput
   const promptInputRef = useRef<CoworkPromptInputRef>(null);
+
+  useEffect(() => {
+    if (pendingContent && isInitialized && promptInputRef.current) {
+      promptInputRef.current.setValue(pendingContent);
+      promptInputRef.current.focus();
+      onPendingContentConsumed?.();
+    }
+  }, [pendingContent, onPendingContentConsumed, isInitialized]);
 
   const {
     currentSession,
