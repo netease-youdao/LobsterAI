@@ -3,6 +3,7 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../store';
 import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
+import { configService } from '../services/config';
 import { i18nService } from '../services/i18n';
 import CoworkSessionList from './cowork/CoworkSessionList';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
@@ -19,12 +20,13 @@ import { ExclamationTriangleIcon, UserGroupIcon } from '@heroicons/react/24/outl
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents' | 'promptTemplates';
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowMcp: () => void;
   onShowAgents: () => void;
+  onShowPromptTemplates: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -39,6 +41,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowScheduledTasks,
   onShowMcp,
   onShowAgents,
+  onShowPromptTemplates,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
@@ -208,6 +211,28 @@ const Sidebar: React.FC<SidebarProps> = ({
             <PuzzleIcon className="h-4 w-4" />
             {i18nService.t('skills')}
           </button>
+          {configService.getConfig().features?.promptTemplates !== false && (
+          <button
+            type="button"
+            onClick={() => {
+              setIsSearchOpen(false);
+              onShowPromptTemplates();
+            }}
+            className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+              activeView === 'promptTemplates'
+                ? 'bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20'
+                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" />
+              <rect x="14" y="14" width="7" height="7" rx="1" />
+            </svg>
+            {i18nService.t('sidebar.promptTemplates')}
+          </button>
+          )}
           <button
             type="button"
             onClick={() => {

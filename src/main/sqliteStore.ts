@@ -195,6 +195,32 @@ export class SqliteStore {
       );
     `);
 
+    // Create prompt templates table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS prompt_templates (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        description TEXT,
+        category TEXT,
+        variables TEXT NOT NULL DEFAULT '[]',
+        is_starred INTEGER NOT NULL DEFAULT 0,
+        used_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_prompt_templates_category
+        ON prompt_templates(category);
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_prompt_templates_starred_used
+        ON prompt_templates(is_starred DESC, used_count DESC);
+    `);
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists

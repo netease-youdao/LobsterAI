@@ -234,6 +234,9 @@ export interface AppConfig {
     settings: string;
     [key: string]: string | undefined;
   };
+  features?: {
+    promptTemplates?: boolean;
+  };
 }
 
 // 默认配置
@@ -418,7 +421,10 @@ export const defaultConfig: AppConfig = {
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
-  }
+  },
+  features: {
+    promptTemplates: true,
+  },
 };
 
 // 配置存储键
