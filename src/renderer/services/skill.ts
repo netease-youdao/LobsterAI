@@ -84,6 +84,13 @@ class SkillService {
     error?: string;
     auditReport?: any;
     pendingInstallId?: string;
+    duplicate?: {
+      existingSkill: Skill;
+      existingSkillPath: string;
+      existingVersion?: string;
+      newVersion?: string;
+      pendingInstallId: string;
+    };
   }> {
     try {
       const result = await window.electron.skills.download(source);

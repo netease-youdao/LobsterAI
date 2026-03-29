@@ -247,10 +247,19 @@ type SkillsConfig = {
   defaults: Record<string, SkillDefaultConfig>;
 };
 
+type SkillMeta = {
+  hash: string;
+  installedAt: number;
+  version?: string;
+  source: string;
+  originalPath?: string;
+};
+
 const SKILLS_DIR_NAME = 'SKILLs';
 const SKILL_FILE_NAME = 'SKILL.md';
 const SKILLS_CONFIG_FILE = 'skills.config.json';
 const SKILL_STATE_KEY = 'skills_state';
+const SKILL_META_FILE_NAME = '.skill-meta.json';
 const WATCH_DEBOUNCE_MS = 250;
 const CLAUDE_SKILLS_DIR_NAME = '.claude';
 const CLAUDE_SKILLS_SUBDIR = 'skills';
@@ -1087,6 +1096,7 @@ export class SkillManager {
     root: string;
     skillDirs: string[];
     timer: NodeJS.Timeout;
+    existingSkillPath?: string;
   }>();
 
   constructor(private getStore: () => SqliteStore) {}
@@ -1348,12 +1358,98 @@ export class SkillManager {
     return this.listSkills();
   }
 
+  private calculateSkillHash(skillDir: string): string {
+    const skillFile = path.join(skillDir, SKILL_FILE_NAME);
+    if (!fs.existsSync(skillFile)) {
+      throw new Error('SKILL.md not found');
+    }
+    const content = fs.readFileSync(skillFile, 'utf8');
+    const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+    return crypto.createHash('sha256').update(normalized).digest('hex');
+  }
+
+  private readSkillMeta(skillDir: string): SkillMeta | null {
+    const metaPath = path.join(skillDir, SKILL_META_FILE_NAME);
+    if (!fs.existsSync(metaPath)) {
+      return null;
+    }
+    try {
+      const raw = fs.readFileSync(metaPath, 'utf8');
+      return JSON.parse(raw) as SkillMeta;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeSkillMeta(skillDir: string, meta: SkillMeta): void {
+    const metaPath = path.join(skillDir, SKILL_META_FILE_NAME);
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+  }
+
+  private findDuplicateSkill(newSkillDir: string): { skillId: string; skill: SkillRecord; skillPath: string; meta: SkillMeta } | null {
+    let newHash: string;
+    try {
+      newHash = this.calculateSkillHash(newSkillDir);
+    } catch {
+      return null;
+    }
+
+    const primaryRoot = this.ensureSkillsRoot();
+    const roots = this.getSkillRoots(primaryRoot);
+    const state = this.loadSkillStateMap();
+    const defaults = this.loadSkillsDefaults(roots);
+    const builtInSkillIds = this.listBuiltInSkillIds();
+
+    for (const root of roots) {
+      if (!fs.existsSync(root)) continue;
+      const skillDirs = listSkillDirs(root);
+      for (const skillDir of skillDirs) {
+        if (path.normalize(skillDir) === path.normalize(newSkillDir)) continue;
+
+        let meta = this.readSkillMeta(skillDir);
+
+        if (!meta) {
+          try {
+            const hash = this.calculateSkillHash(skillDir);
+            const skillFile = path.join(skillDir, SKILL_FILE_NAME);
+            const { frontmatter } = parseFrontmatter(fs.readFileSync(skillFile, 'utf8'));
+            meta = {
+              hash,
+              installedAt: fs.statSync(skillFile).mtimeMs,
+              version: typeof frontmatter.version === 'string' ? frontmatter.version : undefined,
+              source: 'unknown',
+            };
+            this.writeSkillMeta(skillDir, meta);
+          } catch {
+            continue;
+          }
+        }
+
+        if (meta.hash === newHash) {
+          const skill = this.parseSkillDir(skillDir, state, defaults, builtInSkillIds.has(path.basename(skillDir)));
+          if (skill) {
+            return { skillId: skill.id, skill, skillPath: skillDir, meta };
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
   async downloadSkill(source: string): Promise<{
     success: boolean;
     skills?: SkillRecord[];
     error?: string;
     auditReport?: SkillSecurityReport;
     pendingInstallId?: string;
+    duplicate?: {
+      existingSkill: SkillRecord;
+      existingSkillPath: string;
+      existingVersion?: string;
+      newVersion?: string;
+      pendingInstallId: string;
+    };
   }> {
     let cleanupPath: string | null = null;
     try {
@@ -1514,7 +1610,45 @@ export class SkillManager {
         };
       }
 
-      // Safe or scan failed — install directly
+      for (const skillDir of skillDirs) {
+        const duplicate = this.findDuplicateSkill(skillDir);
+        if (duplicate) {
+          const pendingId = crypto.randomUUID();
+          const timer = setTimeout(() => {
+            const pending = this.pendingInstalls.get(pendingId);
+            if (pending) {
+              cleanupPathSafely(pending.cleanupPath);
+              this.pendingInstalls.delete(pendingId);
+            }
+          }, 5 * 60 * 1000);
+
+          this.pendingInstalls.set(pendingId, {
+            tempDir: localSource,
+            cleanupPath,
+            root,
+            skillDirs,
+            timer,
+            existingSkillPath: duplicate.skillPath,
+          });
+
+          const { frontmatter } = parseFrontmatter(fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8'));
+          const newVersion = typeof frontmatter.version === 'string' ? frontmatter.version : undefined;
+
+          return {
+            success: true,
+            auditReport,
+            pendingInstallId: pendingId,
+            duplicate: {
+              existingSkill: duplicate.skill,
+              existingSkillPath: duplicate.skillPath,
+              existingVersion: duplicate.meta.version,
+              newVersion,
+              pendingInstallId: pendingId,
+            },
+          };
+        }
+      }
+
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
@@ -1525,6 +1659,20 @@ export class SkillManager {
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);
+
+        try {
+          const hash = this.calculateSkillHash(skillDir);
+          const { frontmatter } = parseFrontmatter(fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8'));
+          this.writeSkillMeta(targetDir, {
+            hash,
+            installedAt: Date.now(),
+            version: typeof frontmatter.version === 'string' ? frontmatter.version : undefined,
+            source: fs.existsSync(source) ? 'local_zip' : 'remote',
+            originalPath: fs.existsSync(source) ? source : undefined,
+          });
+        } catch (err) {
+          console.warn('[SkillManager] Failed to write skill metadata:', err);
+        }
       }
 
       cleanupPathSafely(cleanupPath);
@@ -1541,7 +1689,7 @@ export class SkillManager {
 
   confirmPendingInstall(
     pendingId: string,
-    action: SecurityReportAction
+    action: SecurityReportAction | 'overwrite'
   ): { success: boolean; skills?: SkillRecord[]; error?: string } {
     console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
     const pending = this.pendingInstalls.get(pendingId);
@@ -1558,23 +1706,65 @@ export class SkillManager {
       return { success: true };
     }
 
-    // Install the skill(s)
     const installedIds: string[] = [];
     for (const skillDir of pending.skillDirs) {
-      const folderName = normalizeFolderName(path.basename(skillDir));
-      let targetDir = resolveWithin(pending.root, folderName);
-      let suffix = 1;
-      while (fs.existsSync(targetDir)) {
-        targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
-        suffix += 1;
+      let targetDir: string;
+      let existingEnvContent: string | null = null;
+
+      if (action === 'overwrite') {
+        if (!pending.existingSkillPath) {
+          cleanupPathSafely(pending.cleanupPath);
+          return { success: false, error: 'Cannot overwrite: existing skill path not found' };
+        }
+        const existingEnvPath = path.join(pending.existingSkillPath, '.env');
+        if (fs.existsSync(existingEnvPath)) {
+          existingEnvContent = fs.readFileSync(existingEnvPath, 'utf8');
+        }
+        targetDir = pending.existingSkillPath;
+
+        for (const entry of fs.readdirSync(targetDir)) {
+          const entryPath = path.join(targetDir, entry);
+          fs.rmSync(entryPath, { recursive: true, force: true });
+        }
+
+        for (const entry of fs.readdirSync(skillDir)) {
+          const srcPath = path.join(skillDir, entry);
+          const destPath = path.join(targetDir, entry);
+          cpRecursiveSync(srcPath, destPath);
+        }
+      } else {
+        const folderName = normalizeFolderName(path.basename(skillDir));
+        targetDir = resolveWithin(pending.root, folderName);
+        let suffix = 1;
+        while (fs.existsSync(targetDir)) {
+          targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
+          suffix += 1;
+        }
+        cpRecursiveSync(skillDir, targetDir);
       }
-      cpRecursiveSync(skillDir, targetDir);
+
       installedIds.push(path.basename(targetDir));
+
+      if (existingEnvContent !== null) {
+        fs.writeFileSync(path.join(targetDir, '.env'), existingEnvContent, 'utf8');
+      }
+
+      try {
+        const hash = this.calculateSkillHash(skillDir);
+        const { frontmatter } = parseFrontmatter(fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8'));
+        this.writeSkillMeta(targetDir, {
+          hash,
+          installedAt: Date.now(),
+          version: typeof frontmatter.version === 'string' ? frontmatter.version : undefined,
+          source: 'remote',
+        });
+      } catch (err) {
+        console.warn('[SkillManager] Failed to write skill metadata:', err);
+      }
     }
 
     cleanupPathSafely(pending.cleanupPath);
 
-    // If user chose 'installDisabled', disable all newly installed skills
     if (action === 'installDisabled') {
       for (const id of installedIds) {
         try {

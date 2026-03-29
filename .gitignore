@@ -30,6 +30,7 @@ SKILLs/**/.connection
 SKILLs/**/.server.log
 SKILLs/**/.server.pid
 SKILLs/**/.venv/
+SKILLs/**/.skill-meta.json
 
 package-lock.json
 

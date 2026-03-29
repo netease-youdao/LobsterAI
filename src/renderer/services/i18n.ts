@@ -570,6 +570,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillInstalling: '安装中',
     skillInstallFailed: '安装失败',
     skillAlreadyInstalled: '已安装',
+    skillDuplicateDescription: '该技能与已安装的版本相同',
+    skillName: '技能名称',
+    existingVersion: '已安装版本',
+    newVersion: '新版本',
+    installing: '安装中...',
+    overwriteInstall: '覆盖安装',
 
     // Security scan
     lobsterGuardEnabled: '安全防护中',
@@ -1737,6 +1743,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillInstalling: 'Installing',
     skillInstallFailed: 'Install failed',
     skillAlreadyInstalled: 'Installed',
+    skillDuplicateDescription: 'This skill is identical to the installed version',
+    skillName: 'Skill Name',
+    existingVersion: 'Installed Version',
+    newVersion: 'New Version',
+    installing: 'Installing...',
+    overwriteInstall: 'Overwrite Install',
 
     // Security scan
     lobsterGuardEnabled: 'Security Active',
