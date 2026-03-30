@@ -4007,6 +4007,12 @@ if (!gotTheLock) {
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     try {
+      // Only allow http/https URLs to prevent exploitation via file://, custom
+      // protocol handlers (ms-excel://, steam://, etc.) or other OS-level vectors.
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return { success: false, error: `Blocked unsafe protocol: ${parsed.protocol}` };
+      }
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
