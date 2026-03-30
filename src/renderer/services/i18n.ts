@@ -1110,6 +1110,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: '网易有道LobsterAI服务协议',
     privacyDialogAccept: '我已阅读并同意',
     privacyDialogReject: '拒绝',
+
+    // ErrorBoundary
+    errorBoundaryTitle: '页面发生错误',
+    errorBoundaryMessage: '应用渲染时遇到了意外错误',
+    errorBoundaryReload: '重新加载',
   },
   en: {
     // Common
@@ -2214,6 +2219,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
+
+    // Error boundary
+    errorBoundaryTitle: 'Something went wrong',
+    errorBoundaryMessage: 'The application encountered an unexpected error',
+    errorBoundaryReload: 'Reload',
   }
 };
 
