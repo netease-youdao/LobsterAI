@@ -301,13 +301,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       return false;
     }
 
-    console.log('[CoworkView] handleContinueSession called', {
-      hasImageAttachments: !!imageAttachments,
-      imageAttachmentsCount: imageAttachments?.length ?? 0,
-      imageAttachmentsNames: imageAttachments?.map(a => a.name),
-      imageAttachmentsBase64Lengths: imageAttachments?.map(a => a.base64Data.length),
-    });
-
     // Capture active skill IDs before clearing
     const sessionSkillIds = [...activeSkillIds];
 
