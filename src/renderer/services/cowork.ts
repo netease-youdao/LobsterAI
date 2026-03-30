@@ -11,6 +11,7 @@ import {
   setStreaming,
   setRemoteManaged,
   updateSessionPinned,
+  updateSessionFolder,
   updateSessionTitle,
   enqueuePendingPermission,
   dequeuePendingPermission,
@@ -397,6 +398,20 @@ class CoworkService {
     }
 
     console.error('Failed to rename session:', result.error);
+    return false;
+  }
+
+  async setSessionFolder(sessionId: string, folder: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.setSessionFolder) return false;
+
+    const result = await cowork.setSessionFolder({ sessionId, folder });
+    if (result.success) {
+      store.dispatch(updateSessionFolder({ sessionId, folder }));
+      return true;
+    }
+
+    console.error('Failed to update session folder:', result.error);
     return false;
   }
 

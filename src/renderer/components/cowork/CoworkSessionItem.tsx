@@ -20,6 +20,8 @@ interface CoworkSessionItemProps {
   onRename: (title: string) => void;
   onToggleSelection: () => void;
   onEnterBatchMode: () => void;
+  onMoveToFolder?: (folder: string) => void;
+  existingFolders?: string[];
 }
 
 const statusLabels: Record<CoworkSessionStatus, string> = {
@@ -50,40 +52,24 @@ const PushPinIcon: React.FC<React.SVGProps<SVGSVGElement> & { slashed?: boolean 
   </svg>
 );
 
+const FolderIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+  </svg>
+);
+
 const formatRelativeTime = (timestamp: number): { compact: string; full: string } => {
   const now = Date.now();
   const diff = now - timestamp;
-
   const minutes = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
   const days = Math.floor(diff / 86400000);
 
-  if (minutes < 1) {
-    return {
-      compact: 'now',
-      full: i18nService.t('justNow'),
-    };
-  } else if (minutes < 60) {
-    return {
-      compact: `${minutes}m`,
-      full: `${minutes} ${i18nService.t('minutesAgo')}`,
-    };
-  } else if (hours < 24) {
-    return {
-      compact: `${hours}h`,
-      full: `${hours} ${i18nService.t('hoursAgo')}`,
-    };
-  } else if (days === 1) {
-    return {
-      compact: '1d',
-      full: i18nService.t('yesterday'),
-    };
-  } else {
-    return {
-      compact: `${days}d`,
-      full: `${days} ${i18nService.t('daysAgo')}`,
-    };
-  }
+  if (minutes < 1) return { compact: 'now', full: i18nService.t('justNow') };
+  if (minutes < 60) return { compact: `${minutes}m`, full: `${minutes} ${i18nService.t('minutesAgo')}` };
+  if (hours < 24) return { compact: `${hours}h`, full: `${hours} ${i18nService.t('hoursAgo')}` };
+  if (days === 1) return { compact: '1d', full: i18nService.t('yesterday') };
+  return { compact: `${days}d`, full: `${days} ${i18nService.t('daysAgo')}` };
 };
 
 const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
@@ -99,15 +85,26 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   onRename,
   onToggleSelection,
   onEnterBatchMode,
+  onMoveToFolder,
+  existingFolders = [],
 }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  // Sub-menu: null = hidden, {x,y} = visible at position
+  const [subMenuPos, setSubMenuPos] = useState<{ x: number; y: number } | null>(null);
+  // New folder dialog
+  const [showNewFolderDialog, setShowNewFolderDialog] = useState(false);
+  const [newFolderValue, setNewFolderValue] = useState('');
+
   const menuRef = useRef<HTMLDivElement>(null);
+  const subMenuRef = useRef<HTMLDivElement>(null);
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const newFolderInputRef = useRef<HTMLInputElement>(null);
   const ignoreNextBlurRef = useRef(false);
+  const subMenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!isRenaming) {
@@ -121,10 +118,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     if (!rect) return null;
     const menuWidth = 180;
     const padding = 8;
-    const x = Math.min(
-      Math.max(padding, rect.right - menuWidth),
-      window.innerWidth - menuWidth - padding
-    );
+    const x = Math.min(Math.max(padding, rect.right - menuWidth), window.innerWidth - menuWidth - padding);
     const y = Math.min(rect.bottom + 8, window.innerHeight - height - padding);
     return { x, y };
   };
@@ -132,21 +126,43 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const openMenu = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isRenaming) return;
-    if (menuPosition) {
-      closeMenu();
-      return;
-    }
-    const menuHeight = showBatchOption ? 156 : 120;
-    const position = calculateMenuPosition(menuHeight);
-    if (position) {
-      setMenuPosition(position);
-    }
+    if (menuPosition) { closeMenu(); return; }
+    const itemCount = (showBatchOption ? 1 : 0) + 2 + (onMoveToFolder ? 1 : 0) + 1; // batch+rename+pin+folder+delete
+    const position = calculateMenuPosition(itemCount * 36 + 8);
+    if (position) setMenuPosition(position);
     setShowConfirmDelete(false);
   };
 
   const closeMenu = () => {
     setMenuPosition(null);
     setShowConfirmDelete(false);
+    closeSubMenu();
+  };
+
+  const openSubMenu = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (subMenuTimerRef.current) clearTimeout(subMenuTimerRef.current);
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const subMenuWidth = 160;
+    const subMenuHeight = (existingFolders.length + (session.folder ? 1 : 0) + 1) * 36 + 8;
+    const padding = 4;
+    let x = rect.right + padding;
+    if (x + subMenuWidth > window.innerWidth - padding) x = rect.left - subMenuWidth - padding;
+    const y = Math.min(rect.top, window.innerHeight - subMenuHeight - padding);
+    setSubMenuPos({ x, y });
+  };
+
+  const closeSubMenu = () => {
+    if (subMenuTimerRef.current) clearTimeout(subMenuTimerRef.current);
+    setSubMenuPos(null);
+  };
+
+  const scheduleCloseSubMenu = () => {
+    subMenuTimerRef.current = setTimeout(() => setSubMenuPos(null), 150);
+  };
+
+  const cancelCloseSubMenu = () => {
+    if (subMenuTimerRef.current) clearTimeout(subMenuTimerRef.current);
   };
 
   const handleTogglePin = (e: React.MouseEvent) => {
@@ -168,9 +184,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     e?.stopPropagation();
     ignoreNextBlurRef.current = true;
     const nextTitle = renameValue.trim();
-    if (nextTitle && nextTitle !== session.title) {
-      onRename(nextTitle);
-    }
+    if (nextTitle && nextTitle !== session.title) onRename(nextTitle);
     setIsRenaming(false);
   };
 
@@ -182,10 +196,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   };
 
   const handleRenameBlur = (event: React.FocusEvent<HTMLInputElement>) => {
-    if (ignoreNextBlurRef.current) {
-      ignoreNextBlurRef.current = false;
-      return;
-    }
+    if (ignoreNextBlurRef.current) { ignoreNextBlurRef.current = false; return; }
     handleRenameSave(event);
   };
 
@@ -195,15 +206,8 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     setMenuPosition(null);
   };
 
-  const handleConfirmDelete = () => {
-    onDelete();
-    setShowConfirmDelete(false);
-  };
-
-  const handleCancelDelete = (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    setShowConfirmDelete(false);
-  };
+  const handleConfirmDelete = () => { onDelete(); setShowConfirmDelete(false); };
+  const handleCancelDelete = (e?: React.MouseEvent) => { e?.stopPropagation(); setShowConfirmDelete(false); };
 
   const handleBatchClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -211,19 +215,39 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     onEnterBatchMode();
   };
 
+  const handleFolderSelect = (folderName: string) => {
+    if (onMoveToFolder) onMoveToFolder(folderName);
+    closeMenu();
+  };
+
+  const handleNewFolderClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setNewFolderValue('');
+    setShowNewFolderDialog(true);
+    closeMenu();
+    // focus is handled by the useEffect below
+  };
+
+  const handleNewFolderConfirm = () => {
+    const name = newFolderValue.trim();
+    if (name && onMoveToFolder) onMoveToFolder(name);
+    setShowNewFolderDialog(false);
+  };
+
+  // Close main menu on outside click / escape / scroll
   useEffect(() => {
     if (!menuPosition) return;
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (!menuRef.current?.contains(target) && !actionButtonRef.current?.contains(target)) {
+      if (
+        !menuRef.current?.contains(target) &&
+        !subMenuRef.current?.contains(target) &&
+        !actionButtonRef.current?.contains(target)
+      ) {
         closeMenu();
       }
     };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        closeMenu();
-      }
-    };
+    const handleEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') closeMenu(); };
     const handleScroll = () => closeMenu();
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
@@ -238,52 +262,35 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   }, [menuPosition]);
 
   useEffect(() => {
-    if (!menuPosition) return;
-    const menuHeight = showConfirmDelete ? 112 : (showBatchOption ? 156 : 120);
-    const position = calculateMenuPosition(menuHeight);
-    if (position && (position.x !== menuPosition.x || position.y !== menuPosition.y)) {
-      setMenuPosition(position);
-    }
-  }, [menuPosition, showConfirmDelete]);
-
-  useEffect(() => {
     if (!isRenaming) return;
-    requestAnimationFrame(() => {
-      renameInputRef.current?.focus();
-      renameInputRef.current?.select();
-    });
+    requestAnimationFrame(() => { renameInputRef.current?.focus(); renameInputRef.current?.select(); });
   }, [isRenaming]);
 
-  const pinButtonLabel = session.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
-  const actionLabel = i18nService.t('coworkSessionActions');
-  const renameLabel = i18nService.t('renameConversation');
-  const deleteLabel = i18nService.t('deleteSession');
+  useEffect(() => {
+    if (!showNewFolderDialog) return;
+    requestAnimationFrame(() => newFolderInputRef.current?.focus());
+  }, [showNewFolderDialog]);
+
   const relativeTime = formatRelativeTime(session.updatedAt);
   const showRunningIndicator = session.status === 'running';
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
   const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
-  const batchLabel = i18nService.t('batchOperations');
+
+  // menuItems only changes when the structural props change; handlers are stable refs via useCallback
   const menuItems = useMemo(() => {
-    const items = [
-      { key: 'rename', label: renameLabel, onClick: handleRenameClick, tone: 'neutral' as const },
-      { key: 'pin', label: pinButtonLabel, onClick: handleTogglePin, tone: 'neutral' as const },
-      { key: 'delete', label: deleteLabel, onClick: handleDeleteClick, tone: 'danger' as const },
+    type MenuItem = { key: string; label: string; onClick: (e: React.MouseEvent) => void; tone: 'neutral' | 'danger'; hasArrow?: boolean };
+    const items: MenuItem[] = [
+      { key: 'rename', label: i18nService.t('renameConversation'), onClick: handleRenameClick, tone: 'neutral' },
+      { key: 'pin', label: session.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession'), onClick: handleTogglePin, tone: 'neutral' },
+      ...(onMoveToFolder ? [{ key: 'folder', label: i18nService.t('moveToFolder'), onClick: (e: React.MouseEvent) => e.stopPropagation(), tone: 'neutral' as const, hasArrow: true }] : []),
+      { key: 'delete', label: i18nService.t('deleteSession'), onClick: handleDeleteClick, tone: 'danger' },
     ];
     if (showBatchOption) {
-      items.unshift({ key: 'batch', label: batchLabel, onClick: handleBatchClick, tone: 'neutral' as const });
+      items.unshift({ key: 'batch', label: i18nService.t('batchOperations'), onClick: handleBatchClick, tone: 'neutral' });
     }
     return items;
-  }, [
-    batchLabel,
-    deleteLabel,
-    handleBatchClick,
-    handleDeleteClick,
-    handleRenameClick,
-    handleTogglePin,
-    pinButtonLabel,
-    renameLabel,
-    showBatchOption,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.pinned, !!onMoveToFolder, showBatchOption]);
 
   return (
     <div
@@ -378,7 +385,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
           ref={actionButtonRef}
           onClick={openMenu}
           className="p-1.5 rounded-lg bg-claude-surfaceMuted dark:bg-claude-darkSurfaceMuted dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurface hover:bg-claude-surface transition-colors"
-          aria-label={actionLabel}
+          aria-label={i18nService.t('coworkSessionActions')}
         >
           {session.pinned ? (
             <span className="relative block h-4 w-4">
@@ -404,24 +411,129 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
               key={item.key}
               type="button"
               onClick={item.onClick}
+              onMouseEnter={item.key === 'folder' ? openSubMenu : scheduleCloseSubMenu}
+              onMouseLeave={item.key === 'folder' ? scheduleCloseSubMenu : undefined}
               className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
                 item.tone === 'danger'
                   ? 'text-red-500 hover:bg-red-500/10'
                   : 'dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
               }`}
             >
-              {item.key === 'batch' && <ListChecksIcon className="h-4 w-4" />}
-              {item.key === 'rename' && <PencilSquareIcon className="h-4 w-4" />}
-              {item.key === 'pin' && (
-                <PushPinIcon
-                  slashed={session.pinned}
-                  className={`h-4 w-4 ${session.pinned ? 'opacity-60' : ''}`}
-                />
+              {item.key === 'batch' && <ListChecksIcon className="h-4 w-4 flex-shrink-0" />}
+              {item.key === 'rename' && <PencilSquareIcon className="h-4 w-4 flex-shrink-0" />}
+              {item.key === 'pin' && <PushPinIcon slashed={session.pinned} className={`h-4 w-4 flex-shrink-0 ${session.pinned ? 'opacity-60' : ''}`} />}
+              {item.key === 'folder' && <FolderIcon className="h-4 w-4 flex-shrink-0" />}
+              {item.key === 'delete' && <TrashIcon className="h-4 w-4 flex-shrink-0" />}
+              <span className="flex-1">{item.label}</span>
+              {item.hasArrow && (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5 flex-shrink-0 opacity-50">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
               )}
-              {item.key === 'delete' && <TrashIcon className="h-4 w-4" />}
-              {item.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Folder sub-menu */}
+      {subMenuPos && (
+        <div
+          ref={subMenuRef}
+          className="fixed z-50 min-w-[160px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-lg py-1"
+          style={{ top: subMenuPos.y, left: subMenuPos.x }}
+          onMouseEnter={cancelCloseSubMenu}
+          onMouseLeave={scheduleCloseSubMenu}
+        >
+          {existingFolders.map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleFolderSelect(f); }}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover ${session.folder === f ? 'opacity-50 cursor-default pointer-events-none' : ''}`}
+            >
+              <FolderIcon className="h-4 w-4 flex-shrink-0 opacity-60" />
+              <span className="flex-1 truncate">{f}</span>
+              {session.folder === f && (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-3.5 w-3.5 flex-shrink-0">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              )}
+            </button>
+          ))}
+          {session.folder && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleFolderSelect(''); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors text-red-500 hover:bg-red-500/10"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 flex-shrink-0">
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                <line x1="9" y1="10" x2="15" y2="16" /><line x1="15" y1="10" x2="9" y2="16" />
+              </svg>
+              <span>{i18nService.t('removeFromFolder')}</span>
+            </button>
+          )}
+          {(existingFolders.length > 0 || session.folder) && (
+            <div className="my-1 border-t dark:border-claude-darkBorder border-claude-border" />
+          )}
+          <button
+            type="button"
+            onClick={handleNewFolderClick}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 flex-shrink-0">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+              <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
+            </svg>
+            <span>{i18nService.t('newFolderPlaceholder').replace('…', '')}</span>
+          </button>
+        </div>
+      )}
+
+      {/* New folder dialog */}
+      {showNewFolderDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setShowNewFolderDialog(false)}
+        >
+          <div
+            className="w-full max-w-xs mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 pt-5 pb-3">
+              <h2 className="text-sm font-semibold dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('newFolderPlaceholder').replace('…', '')}
+              </h2>
+              <input
+                ref={newFolderInputRef}
+                value={newFolderValue}
+                onChange={(e) => setNewFolderValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleNewFolderConfirm();
+                  if (e.key === 'Escape') setShowNewFolderDialog(false);
+                }}
+                placeholder={i18nService.t('newFolderPlaceholder')}
+                className="w-full rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t dark:border-claude-darkBorder border-claude-border">
+              <button
+                type="button"
+                onClick={() => setShowNewFolderDialog(false)}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleNewFolderConfirm}
+                disabled={!newFolderValue.trim()}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {i18nService.t('confirm') || '确定'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -435,7 +547,6 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
             className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header */}
             <div className="flex items-center gap-3 px-5 py-4">
               <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
                 <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
@@ -445,14 +556,12 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
               </h2>
             </div>
 
-            {/* Content */}
             <div className="px-5 pb-4">
               <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
                 {i18nService.t('deleteTaskConfirmMessage')}
               </p>
             </div>
 
-            {/* Footer */}
             <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
               <button
                 onClick={handleCancelDelete}

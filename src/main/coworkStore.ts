@@ -392,6 +392,7 @@ export interface CoworkSessionSummary {
   title: string;
   status: CoworkSessionStatus;
   pinned: boolean;
+  folder: string;
   agentId: string;
   createdAt: number;
   updatedAt: number;
@@ -718,6 +719,7 @@ export class CoworkStore {
       title: string;
       status: string;
       pinned: number | null;
+      folder: string | null;
       agent_id: string | null;
       created_at: number;
       updated_at: number;
@@ -726,14 +728,14 @@ export class CoworkStore {
     let rows: SessionSummaryRow[];
     if (agentId) {
       rows = this.getAll<SessionSummaryRow>(`
-        SELECT id, title, status, pinned, agent_id, created_at, updated_at
+        SELECT id, title, status, pinned, folder, agent_id, created_at, updated_at
         FROM cowork_sessions
         WHERE agent_id = ?
         ORDER BY pinned DESC, updated_at DESC
       `, [agentId]);
     } else {
       rows = this.getAll<SessionSummaryRow>(`
-        SELECT id, title, status, pinned, agent_id, created_at, updated_at
+        SELECT id, title, status, pinned, folder, agent_id, created_at, updated_at
         FROM cowork_sessions
         ORDER BY pinned DESC, updated_at DESC
       `);
@@ -744,10 +746,16 @@ export class CoworkStore {
       title: row.title,
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
+      folder: row.folder || '',
       agentId: row.agent_id || 'main',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
+  }
+
+  setSessionFolder(id: string, folder: string): void {
+    this.db.run('UPDATE cowork_sessions SET folder = ? WHERE id = ?', [folder, id]);
+    this.saveDb();
   }
 
   resetRunningSessions(): number {

@@ -2705,6 +2705,19 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:setFolder', async (_event, options: { sessionId: string; folder: string }) => {
+    try {
+      const coworkStoreInstance = getCoworkStore();
+      coworkStoreInstance.setSessionFolder(options.sessionId, options.folder || '');
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update session folder',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:get', async (_event, sessionId: string) => {
     try {
       const session = getCoworkStore().getSession(sessionId);

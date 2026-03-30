@@ -153,6 +153,7 @@ export interface CoworkSessionSummary {
   title: string;
   status: CoworkSessionStatus;
   pinned: boolean;
+  folder: string;
   agentId?: string;
   createdAt: number;
   updatedAt: number;

@@ -90,6 +90,10 @@ const Sidebar: React.FC<SidebarProps> = ({
     await coworkService.renameSession(sessionId, title);
   };
 
+  const handleMoveToFolder = async (sessionId: string, folder: string) => {
+    await coworkService.setSessionFolder(sessionId, folder);
+  };
+
   const handleEnterBatchMode = useCallback((sessionId: string) => {
     setIsBatchMode(true);
     setSelectedIds(new Set([sessionId]));
@@ -258,6 +262,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           onRenameSession={handleRenameSession}
           onToggleSelection={handleToggleSelection}
           onEnterBatchMode={handleEnterBatchMode}
+          onMoveToFolder={handleMoveToFolder}
         />
       </div>
       <CoworkSearchModal
