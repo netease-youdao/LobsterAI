@@ -223,9 +223,10 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto"
+        className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+       <div className="p-6 max-h-[80vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
             {modalTitle}
@@ -434,6 +435,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             </button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
