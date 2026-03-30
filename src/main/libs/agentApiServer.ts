@@ -4,9 +4,11 @@ import os from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
+import { AgentBridgeSessionStore } from './agentBridgeSessionStore';
 
 const AGENT_API_PORT = 19888;
 const AGENT_API_HOST = '127.0.0.1';
+const BRIDGE_PERMISSION_TTL_MS = 60_000;
 
 type AgentChatContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url?: { url?: string } | string };
 
@@ -15,6 +17,38 @@ interface AgentChatRequest {
   model?: string;
   stream?: boolean;
   skillIds?: string[];
+}
+
+interface AgentBridgeBindRequest {
+  airiSessionId: string;
+}
+
+interface AgentBridgeChatRequest extends AgentChatRequest {
+  airiSessionId: string;
+  fileIds?: string[];
+  systemPrompt?: string;
+}
+
+interface AgentBridgePermissionRequest {
+  airiSessionId: string;
+  requestId: string;
+  decision: 'allow' | 'deny';
+}
+
+interface AgentBridgePermissionStatusRequest {
+  airiSessionId: string;
+  requestId: string;
+}
+
+interface AgentBridgePermissionListRequest {
+  airiSessionId: string;
+}
+
+interface AgentUploadFileRequest {
+  airiSessionId: string;
+  name: string;
+  mimeType?: string;
+  base64Data: string;
 }
 
 interface AgentChatResponse {
@@ -47,6 +81,80 @@ interface AgentStateChangedEvent {
   reason?: string;
   fallbackEmotion: AgentAnimationEmotion;
 }
+
+type AgentBridgeEvent =
+  | {
+      type: 'session.bound';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+      lobsterSessionId: string;
+    }
+  | {
+      type: 'state.changed';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+      state: AgentAnimationState;
+      emotion: AgentAnimationEmotion;
+      toolName?: string;
+      reason?: string;
+    }
+  | {
+      type: 'assistant.delta' | 'assistant.final' | 'reasoning.delta' | 'reasoning.final';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+      text: string;
+    }
+  | {
+      type: 'tool.call';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+      toolCallId: string;
+      name: string;
+      arguments: string;
+    }
+  | {
+      type: 'tool.result';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+      toolCallId: string;
+      result: string;
+      isError?: boolean;
+    }
+  | {
+      type: 'permission.request';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+      requestId: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+    }
+  | {
+      type: 'done';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+    }
+  | {
+      type: 'error';
+      sessionId: string;
+      turnId: string;
+      seq: number;
+      createdAt: number;
+      message: string;
+    };
 
 function buildActSpecialToken(emotion: AgentAnimationEmotion): string {
   return `<|ACT:${JSON.stringify({ emotion: { name: emotion, intensity: 1 } })}|>`;
@@ -153,6 +261,7 @@ export class AgentApiServer {
   private getSkillManager: () => any | null = () => null;
   private publishStateChanged: (event: AgentStateChangedEvent) => void = () => {};
   private uploadRoot: string;
+  private bridgeSessions = new AgentBridgeSessionStore();
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -326,8 +435,53 @@ export class AgentApiServer {
       return;
     }
 
+    if (pathname === '/api/agent/bridge/bind' && req.method === 'POST') {
+      await this.handleBridgeBind(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/bridge/chat' && req.method === 'POST') {
+      await this.handleBridgeChat(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/bridge/permission' && req.method === 'POST') {
+      await this.handleBridgePermission(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/bridge/permission/status' && req.method === 'POST') {
+      await this.handleBridgePermissionStatus(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/bridge/permission/list' && req.method === 'POST') {
+      await this.handleBridgePermissionList(req, res);
+      return;
+    }
+
     if (pathname === '/api/agent/skills/set-enabled' && req.method === 'POST') {
       await this.handleSetSkillEnabled(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/skills/get-config' && req.method === 'POST') {
+      await this.handleGetSkillConfig(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/skills/set-config' && req.method === 'POST') {
+      await this.handleSetSkillConfig(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/skills/download' && req.method === 'POST') {
+      await this.handleDownloadSkill(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/skills/confirm-install' && req.method === 'POST') {
+      await this.handleConfirmInstall(req, res);
       return;
     }
 
@@ -362,16 +516,42 @@ export class AgentApiServer {
     prompt: string,
     imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [],
     skillIds: string[] = [],
+    systemPrompt?: string,
   ): Promise<void> {
+    const normalizedSystemPrompt = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
+    const store = runner?.store;
+    if (normalizedSystemPrompt && store && typeof store.updateSession === 'function') {
+      store.updateSession(sessionId, { systemPrompt: normalizedSystemPrompt });
+    }
     if (typeof runner?.startCoworkSession === 'function') {
-      await runner.startCoworkSession(sessionId, prompt, { imageAttachments, skillIds });
+      await runner.startCoworkSession(sessionId, prompt, { imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined });
       return;
     }
     if (typeof runner?.startSession === 'function') {
-      await runner.startSession(sessionId, prompt, { confirmationMode: 'text', imageAttachments, skillIds });
+      await runner.startSession(sessionId, prompt, { confirmationMode: 'text', imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined });
       return;
     }
     throw new Error('CoworkRunner start method not available');
+  }
+
+  private async continueRunnerSession(
+    runner: any,
+    sessionId: string,
+    prompt: string,
+    imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [],
+    skillIds: string[] = [],
+    systemPrompt?: string,
+  ): Promise<void> {
+    const normalizedSystemPrompt = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
+    const store = runner?.store;
+    if (normalizedSystemPrompt && store && typeof store.updateSession === 'function') {
+      store.updateSession(sessionId, { systemPrompt: normalizedSystemPrompt });
+    }
+    if (typeof runner?.continueSession === 'function') {
+      await runner.continueSession(sessionId, prompt, { imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined });
+      return;
+    }
+    await this.startRunnerSession(runner, sessionId, prompt, imageAttachments, skillIds, normalizedSystemPrompt || undefined);
   }
 
   private async readRequestBody(req: http.IncomingMessage): Promise<any | null> {
@@ -405,6 +585,138 @@ export class AgentApiServer {
     res.end(JSON.stringify({ skills }));
   }
 
+  private createBridgeEvent<T extends Omit<AgentBridgeEvent, 'seq' | 'createdAt'>>(event: T): AgentBridgeEvent {
+    return {
+      ...event,
+      seq: this.bridgeSessions.nextSeq(event.sessionId),
+      createdAt: Date.now(),
+    } as AgentBridgeEvent;
+  }
+
+  private writeBridgeEvent(res: http.ServerResponse, event: AgentBridgeEvent): void {
+    res.write(createSSEEvent(event));
+  }
+
+  private emitBridgeStateChanged(
+    res: http.ServerResponse,
+    sessionId: string,
+    turnId: string,
+    state: AgentAnimationState,
+    options?: { toolName?: string; reason?: string }
+  ): void {
+    const defaults = this.getStateDefaults(state);
+    this.writeBridgeEvent(res, this.createBridgeEvent({
+      type: 'state.changed',
+      sessionId,
+      turnId,
+      state,
+      emotion: defaults.emotion,
+      toolName: options?.toolName,
+      reason: options?.reason,
+    }));
+  }
+
+  private getOrCreateBridgeBinding(runner: any, airiSessionId: string): { lobsterSessionId: string; isNew: boolean } {
+    const existing = this.bridgeSessions.get(airiSessionId);
+    if (existing) {
+      this.bridgeSessions.touch(airiSessionId);
+      return { lobsterSessionId: existing.lobsterSessionId, isNew: false };
+    }
+    const lobsterSessionId = this.createRunnerSession(runner);
+    this.bridgeSessions.bind(airiSessionId, lobsterSessionId);
+    return { lobsterSessionId, isNew: true };
+  }
+
+  private resolveBridgeFilePaths(airiSessionId: string, fileIds: string[] = []): string[] {
+    const resolved: string[] = [];
+    for (const fileId of fileIds) {
+      const file = this.bridgeSessions.getFile(fileId);
+      if (!file || file.airiSessionId !== airiSessionId) {
+        continue;
+      }
+      resolved.push(file.path);
+    }
+    return resolved;
+  }
+
+  private resolvePermissionStatus(airiSessionId: string, requestId: string): { status: 'pending' | 'expired' | 'not_found'; expiresAt?: number } {
+    const permission = this.bridgeSessions.getPermission(requestId);
+    if (!permission || permission.airiSessionId !== airiSessionId) {
+      return { status: 'not_found' };
+    }
+    const expiresAt = permission.createdAt + BRIDGE_PERMISSION_TTL_MS;
+    if (Date.now() > expiresAt) {
+      this.bridgeSessions.deletePermission(requestId);
+      return { status: 'expired', expiresAt };
+    }
+    return { status: 'pending', expiresAt };
+  }
+
+  private listPendingPermissions(airiSessionId: string): Array<{
+    requestId: string;
+    toolName: string;
+    toolInput: Record<string, unknown>;
+    createdAt: number;
+    expiresAt: number;
+    turnId: string;
+  }> {
+    const permissions = this.bridgeSessions.listPermissions(airiSessionId);
+    const now = Date.now();
+    const pending: Array<{
+      requestId: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+      createdAt: number;
+      expiresAt: number;
+      turnId: string;
+    }> = [];
+    for (const permission of permissions) {
+      const expiresAt = permission.createdAt + BRIDGE_PERMISSION_TTL_MS;
+      if (now > expiresAt) {
+        this.bridgeSessions.deletePermission(permission.requestId);
+        continue;
+      }
+      pending.push({
+        requestId: permission.requestId,
+        toolName: permission.toolName,
+        toolInput: permission.toolInput,
+        createdAt: permission.createdAt,
+        expiresAt,
+        turnId: permission.turnId,
+      });
+    }
+    return pending;
+  }
+
+  private async handleBridgeBind(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const parsed = await this.readRequestBody(req) as AgentBridgeBindRequest | null;
+    if (!parsed?.airiSessionId?.trim()) {
+      sendError(res, 400, 'Missing airiSessionId');
+      return;
+    }
+    const runner = this.getCoworkRunner();
+    if (!runner) {
+      sendError(res, 503, 'CoworkRunner not available');
+      return;
+    }
+    const binding = this.getOrCreateBridgeBinding(runner, parsed.airiSessionId.trim());
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({
+      session: {
+        airiSessionId: parsed.airiSessionId.trim(),
+        lobsterSessionId: binding.lobsterSessionId,
+      },
+    }));
+  }
+
   private async handleSetSkillEnabled(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (!this.verifyAuth(req)) {
       sendError(res, 401, 'Invalid or missing API key');
@@ -433,14 +745,141 @@ export class AgentApiServer {
     }
   }
 
+  private async handleGetSkillConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const manager = this.getSkillManager();
+    if (!manager || typeof manager.getSkillConfig !== 'function') {
+      sendError(res, 503, 'SkillManager not available');
+      return;
+    }
+    const parsed = await this.readRequestBody(req);
+    if (!parsed || typeof parsed.id !== 'string' || !parsed.id.trim()) {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const result = manager.getSkillConfig(parsed.id.trim());
+    if (!result?.success) {
+      sendError(res, 400, String(result?.error || 'Get config failed'));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({ config: result.config || {} }));
+  }
+
+  private async handleSetSkillConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const manager = this.getSkillManager();
+    if (!manager || typeof manager.setSkillConfig !== 'function') {
+      sendError(res, 503, 'SkillManager not available');
+      return;
+    }
+    const parsed = await this.readRequestBody(req);
+    if (!parsed || typeof parsed.id !== 'string' || typeof parsed.config !== 'object' || !parsed.config) {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const config = Object.fromEntries(
+      Object.entries(parsed.config as Record<string, unknown>)
+        .filter(([key, value]) => typeof key === 'string' && typeof value === 'string'),
+    ) as Record<string, string>;
+    const result = manager.setSkillConfig(parsed.id.trim(), config);
+    if (!result?.success) {
+      sendError(res, 400, String(result?.error || 'Set config failed'));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({ success: true }));
+  }
+
+  private async handleDownloadSkill(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const manager = this.getSkillManager();
+    if (!manager || typeof manager.downloadSkill !== 'function') {
+      sendError(res, 503, 'SkillManager not available');
+      return;
+    }
+    const parsed = await this.readRequestBody(req);
+    if (!parsed || typeof parsed.source !== 'string' || !parsed.source.trim()) {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const result = await manager.downloadSkill(parsed.source.trim());
+    if (!result?.success) {
+      sendError(res, 400, String(result?.error || 'Download skill failed'));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify(result));
+  }
+
+  private async handleConfirmInstall(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const manager = this.getSkillManager();
+    if (!manager || typeof manager.confirmPendingInstall !== 'function') {
+      sendError(res, 503, 'SkillManager not available');
+      return;
+    }
+    const parsed = await this.readRequestBody(req);
+    if (!parsed || typeof parsed.pendingInstallId !== 'string' || typeof parsed.action !== 'string') {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const action = parsed.action;
+    if (!['install', 'installDisabled', 'cancel'].includes(action)) {
+      sendError(res, 400, 'Invalid install action');
+      return;
+    }
+    const result = manager.confirmPendingInstall(parsed.pendingInstallId.trim(), action);
+    if (!result?.success) {
+      sendError(res, 400, String(result?.error || 'Confirm install failed'));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify(result));
+  }
+
   private async handleUploadFile(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (!this.verifyAuth(req)) {
       sendError(res, 401, 'Invalid or missing API key');
       return;
     }
-    const parsed = await this.readRequestBody(req);
-    if (!parsed || typeof parsed.name !== 'string' || typeof parsed.base64Data !== 'string') {
+    const parsed = await this.readRequestBody(req) as AgentUploadFileRequest | null;
+    if (!parsed || typeof parsed.airiSessionId !== 'string' || typeof parsed.name !== 'string' || typeof parsed.base64Data !== 'string') {
       sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const airiSessionId = parsed.airiSessionId.trim();
+    const binding = this.bridgeSessions.get(airiSessionId);
+    if (!airiSessionId || !binding) {
+      sendError(res, 400, 'Unknown bridge session');
       return;
     }
     const safeName = path.basename(parsed.name).replace(/[^a-zA-Z0-9._-]/g, '_') || 'file.bin';
@@ -461,6 +900,17 @@ export class AgentApiServer {
     const fileId = uuidv4();
     const fullPath = path.join(this.uploadRoot, `${fileId}-${safeName}`);
     fs.writeFileSync(fullPath, buffer);
+    this.bridgeSessions.bindFile({
+      id: fileId,
+      airiSessionId,
+      lobsterSessionId: binding.lobsterSessionId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      name: safeName,
+      mimeType: typeof parsed.mimeType === 'string' ? parsed.mimeType : 'application/octet-stream',
+      path: fullPath,
+      size: buffer.length,
+    });
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
@@ -470,10 +920,348 @@ export class AgentApiServer {
       file: {
         id: fileId,
         name: safeName,
-        path: fullPath,
+        mimeType: typeof parsed.mimeType === 'string' ? parsed.mimeType : 'application/octet-stream',
         size: buffer.length,
       },
     }));
+  }
+
+  private async handleBridgePermission(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const parsed = await this.readRequestBody(req) as AgentBridgePermissionRequest | null;
+    if (!parsed?.airiSessionId?.trim() || !parsed?.requestId?.trim() || !parsed?.decision) {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const airiSessionId = parsed.airiSessionId.trim();
+    const requestId = parsed.requestId.trim();
+    const permissionStatus = this.resolvePermissionStatus(airiSessionId, requestId);
+    if (permissionStatus.status === 'expired') {
+      sendError(res, 410, 'Permission request expired');
+      return;
+    }
+    const permission = this.bridgeSessions.consumePermission(requestId);
+    if (!permission || permission.airiSessionId !== airiSessionId) {
+      sendError(res, 404, 'Permission request not found');
+      return;
+    }
+    const runner = this.getCoworkRunner();
+    if (!runner || typeof runner.respondToPermission !== 'function') {
+      sendError(res, 503, 'CoworkRunner not available');
+      return;
+    }
+    runner.respondToPermission(requestId, parsed.decision === 'allow' ? 'allow' : 'deny');
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({ ok: true }));
+  }
+
+  private async handleBridgePermissionStatus(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const parsed = await this.readRequestBody(req) as AgentBridgePermissionStatusRequest | null;
+    if (!parsed?.airiSessionId?.trim() || !parsed?.requestId?.trim()) {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const status = this.resolvePermissionStatus(parsed.airiSessionId.trim(), parsed.requestId.trim());
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify(status));
+  }
+
+  private async handleBridgePermissionList(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const parsed = await this.readRequestBody(req) as AgentBridgePermissionListRequest | null;
+    if (!parsed?.airiSessionId?.trim()) {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const permissions = this.listPendingPermissions(parsed.airiSessionId.trim());
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({ permissions }));
+  }
+
+  private async handleBridgeChat(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+
+    const parsed = await this.readRequestBody(req) as AgentBridgeChatRequest | null;
+    if (!parsed?.airiSessionId?.trim()) {
+      sendError(res, 400, 'Missing airiSessionId');
+      return;
+    }
+    const { messages, skillIds = [], fileIds = [], systemPrompt } = parsed;
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      sendError(res, 400, 'Missing messages');
+      return;
+    }
+    const { prompt: rawUserPrompt, imageAttachments } = parsePromptAndAttachments(messages);
+    const bridgeFilePaths = this.resolveBridgeFilePaths(parsed.airiSessionId.trim(), fileIds);
+    const userPrompt = bridgeFilePaths.length > 0
+      ? `${rawUserPrompt || '请先查看我上传的文件并回答问题。'}\n${bridgeFilePaths.map(filePath => `input file: ${filePath}`).join('\n')}`
+      : rawUserPrompt;
+    if (!userPrompt && imageAttachments.length === 0) {
+      sendError(res, 400, 'Missing message content');
+      return;
+    }
+
+    const runner = this.getCoworkRunner();
+    if (!runner) {
+      sendError(res, 503, 'CoworkRunner not available');
+      return;
+    }
+
+    const airiSessionId = parsed.airiSessionId.trim();
+    const binding = this.getOrCreateBridgeBinding(runner, airiSessionId);
+    const lobsterSessionId = binding.lobsterSessionId;
+    const turnId = uuidv4();
+    const assistantMessageIds = new Set<string>();
+    const thinkingMessageIds = new Set<string>();
+    const messageOffsets = new Map<string, number>();
+    let fullAssistantText = '';
+    let fullThinkingText = '';
+    let hasError = false;
+    let isCompleted = false;
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+      'Connection': 'keep-alive',
+    });
+
+    this.writeBridgeEvent(res, this.createBridgeEvent({
+      type: 'session.bound',
+      sessionId: airiSessionId,
+      turnId,
+      lobsterSessionId,
+    }));
+
+    const onMessage = (sid: string, message: CoworkMessage) => {
+      if (sid !== lobsterSessionId) return;
+      const content = typeof message.content === 'string' ? message.content : '';
+      if (message.type === 'assistant' && message.metadata?.isThinking) {
+        thinkingMessageIds.add(message.id);
+        messageOffsets.set(message.id, content.length);
+        fullThinkingText = content;
+        if (content) {
+          this.writeBridgeEvent(res, this.createBridgeEvent({
+            type: 'reasoning.delta',
+            sessionId: airiSessionId,
+            turnId,
+            text: content,
+          }));
+        }
+        return;
+      }
+      if (message.type === 'assistant') {
+        assistantMessageIds.add(message.id);
+        messageOffsets.set(message.id, content.length);
+        fullAssistantText = content;
+        if (content) {
+          this.writeBridgeEvent(res, this.createBridgeEvent({
+            type: 'assistant.delta',
+            sessionId: airiSessionId,
+            turnId,
+            text: content,
+          }));
+        }
+        return;
+      }
+      if (message.type === 'tool_use') {
+        let toolArguments = content;
+        try {
+          toolArguments = JSON.stringify(message.metadata?.toolInput || {}, null, 2);
+        } catch {}
+        this.emitBridgeStateChanged(res, airiSessionId, turnId, 'tool_use', {
+          toolName: message.metadata?.toolName || undefined,
+        });
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'tool.call',
+          sessionId: airiSessionId,
+          turnId,
+          toolCallId: message.metadata?.toolUseId || `call_${message.id}`,
+          name: message.metadata?.toolName || '',
+          arguments: toolArguments,
+        }));
+        return;
+      }
+      if (message.type === 'tool_result') {
+        this.emitBridgeStateChanged(res, airiSessionId, turnId, 'think');
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'tool.result',
+          sessionId: airiSessionId,
+          turnId,
+          toolCallId: message.metadata?.toolUseId || `call_${message.id}`,
+          result: content,
+          isError: !!message.metadata?.isError,
+        }));
+      }
+    };
+
+    const onMessageUpdate = (sid: string, messageId: string, content: string) => {
+      if (sid !== lobsterSessionId) return;
+      const previousLength = messageOffsets.get(messageId) || 0;
+      const normalizedContent = typeof content === 'string' ? content : '';
+      const nextLength = normalizedContent.length;
+      if (nextLength <= previousLength) {
+        messageOffsets.set(messageId, nextLength);
+        return;
+      }
+      const deltaContent = normalizedContent.slice(previousLength);
+      messageOffsets.set(messageId, nextLength);
+      if (!deltaContent) return;
+      if (thinkingMessageIds.has(messageId)) {
+        fullThinkingText = normalizedContent;
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'reasoning.delta',
+          sessionId: airiSessionId,
+          turnId,
+          text: deltaContent,
+        }));
+        return;
+      }
+      if (assistantMessageIds.has(messageId)) {
+        fullAssistantText = normalizedContent;
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'assistant.delta',
+          sessionId: airiSessionId,
+          turnId,
+          text: deltaContent,
+        }));
+      }
+    };
+
+    const onPermissionRequest = (sid: string, request: { requestId: string; toolName: string; toolInput: Record<string, unknown> }) => {
+      if (sid !== lobsterSessionId) return;
+      this.bridgeSessions.bindPermission({
+        requestId: request.requestId,
+        airiSessionId,
+        lobsterSessionId,
+        turnId,
+        toolName: request.toolName,
+        toolInput: request.toolInput || {},
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      this.emitBridgeStateChanged(res, airiSessionId, turnId, 'ask_user', {
+        toolName: request.toolName,
+      });
+      this.writeBridgeEvent(res, this.createBridgeEvent({
+        type: 'permission.request',
+        sessionId: airiSessionId,
+        turnId,
+        requestId: request.requestId,
+        toolName: request.toolName,
+        toolInput: request.toolInput || {},
+      }));
+    };
+
+    const onComplete = (sid: string) => {
+      if (sid !== lobsterSessionId) return;
+      isCompleted = true;
+    };
+
+    runner.on('message', onMessage);
+    runner.on('messageUpdate', onMessageUpdate);
+    runner.on('permissionRequest', onPermissionRequest);
+    runner.on('complete', onComplete);
+
+    try {
+      this.emitStateChanged(lobsterSessionId, turnId, 'think');
+      this.emitBridgeStateChanged(res, airiSessionId, turnId, 'think');
+      if (binding.isNew) {
+        await this.startRunnerSession(runner, lobsterSessionId, userPrompt, imageAttachments, skillIds, systemPrompt);
+      }
+      else {
+        await this.continueRunnerSession(runner, lobsterSessionId, userPrompt, imageAttachments, skillIds, systemPrompt);
+      }
+
+      await new Promise<void>((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (isCompleted) {
+            clearInterval(checkInterval);
+            resolve();
+            return;
+          }
+          const status = this.getRunnerSessionStatus(runner, lobsterSessionId);
+          if (status === 'completed' || status === 'error' || status === 'idle') {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 500);
+
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          resolve();
+        }, 60000);
+      });
+    }
+    catch (error) {
+      hasError = true;
+      const message = String(error);
+      console.error('[AgentApiServer] Bridge cowork error:', error);
+      this.emitStateChanged(lobsterSessionId, turnId, 'error', { reason: message });
+      this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: message });
+      this.writeBridgeEvent(res, this.createBridgeEvent({
+        type: 'error',
+        sessionId: airiSessionId,
+        turnId,
+        message,
+      }));
+    }
+    finally {
+      runner.off('message', onMessage);
+      runner.off('messageUpdate', onMessageUpdate);
+      runner.off('permissionRequest', onPermissionRequest);
+      runner.off('complete', onComplete);
+      if (!hasError) {
+        this.emitStateChanged(lobsterSessionId, turnId, 'success');
+        this.emitBridgeStateChanged(res, airiSessionId, turnId, 'success');
+        if (fullThinkingText) {
+          this.writeBridgeEvent(res, this.createBridgeEvent({
+            type: 'reasoning.final',
+            sessionId: airiSessionId,
+            turnId,
+            text: fullThinkingText,
+          }));
+        }
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'assistant.final',
+          sessionId: airiSessionId,
+          turnId,
+          text: fullAssistantText,
+        }));
+      }
+      this.writeBridgeEvent(res, this.createBridgeEvent({
+        type: 'done',
+        sessionId: airiSessionId,
+        turnId,
+      }));
+      sendSSEDone(res);
+    }
   }
 
   private getRunnerSessionStatus(runner: any, sessionId: string): string | null {
