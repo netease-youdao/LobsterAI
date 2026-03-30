@@ -43,6 +43,11 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
+  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
+  const [pendingSwitchAgentId, setPendingSwitchAgentId] = useState<string | null>(null);
+
+  // Initial (saved) values to detect unsaved changes
+  const [initialValues, setInitialValues] = useState({ name: '', description: '', systemPrompt: '', identity: '', icon: '', skillIds: [] as string[] });
 
   // IM binding state
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
@@ -62,6 +67,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         setIdentity(a.identity);
         setIcon(a.icon);
         setSkillIds(a.skillIds ?? []);
+        // Track initial values
+        setInitialValues({ name: a.name, description: a.description, systemPrompt: a.systemPrompt, identity: a.identity, icon: a.icon, skillIds: a.skillIds ?? [] });
       }
     });
     // Load IM config for bindings
@@ -82,6 +89,45 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   }, [agentId]);
 
   if (!agentId) return null;
+
+  const hasUnsavedChanges = (): boolean => {
+    const basicChanged =
+      name !== initialValues.name ||
+      description !== initialValues.description ||
+      systemPrompt !== initialValues.systemPrompt ||
+      identity !== initialValues.identity ||
+      icon !== initialValues.icon ||
+      skillIds.length !== initialValues.skillIds.length ||
+      skillIds.some((id, i) => id !== initialValues.skillIds[i]);
+    const bindingsChanged =
+      boundPlatforms.size !== initialBoundPlatforms.size ||
+      [...boundPlatforms].some((p) => !initialBoundPlatforms.has(p));
+    return basicChanged || bindingsChanged;
+  };
+
+  const handleSwitchAgent = (targetAgentId: string) => {
+    if (hasUnsavedChanges()) {
+      setPendingSwitchAgentId(targetAgentId);
+      setShowSwitchConfirm(true);
+    } else {
+      onSwitchAgent?.(targetAgentId);
+    }
+  };
+
+  const handleSaveAndSwitch = async () => {
+    if (!pendingSwitchAgentId) return;
+    await handleSave();
+    onSwitchAgent?.(pendingSwitchAgentId);
+    setShowSwitchConfirm(false);
+    setPendingSwitchAgentId(null);
+  };
+
+  const handleDiscardAndSwitch = () => {
+    if (!pendingSwitchAgentId) return;
+    onSwitchAgent?.(pendingSwitchAgentId);
+    setShowSwitchConfirm(false);
+    setPendingSwitchAgentId(null);
+  };
 
   const handleSave = async () => {
     if (!name.trim()) return;
@@ -358,7 +404,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
             {onSwitchAgent && agentId !== currentAgentId && (
               <button
                 type="button"
-                onClick={() => onSwitchAgent(agentId)}
+                onClick={() => handleSwitchAgent(agentId)}
                 className="px-4 py-2 text-sm font-medium rounded-lg border border-claude-accent text-claude-accent hover:bg-claude-accent/10 transition-colors"
               >
                 {i18nService.t('switchToAgent') || 'Use this Agent'}
@@ -382,6 +428,47 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
           </div>
         </div>
       </div>
+
+      {/* Unsaved changes confirm before switching Agent */}
+      {showSwitchConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50" onClick={() => setShowSwitchConfirm(false)}>
+          <div
+            className="w-full max-w-sm mx-4 rounded-xl shadow-xl bg-white dark:bg-claude-darkSurface border dark:border-claude-darkBorder border-claude-border p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h4 className="text-sm font-semibold dark:text-claude-darkText text-claude-text mb-1">
+              {i18nService.t('switchAgentUnsavedTitle') || 'Unsaved Changes'}
+            </h4>
+            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
+              {i18nService.t('switchAgentUnsavedHint') || 'Do you want to save your changes before switching Agent?'}
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleSaveAndSwitch}
+                disabled={!name.trim() || saving}
+                className="w-full px-4 py-2 text-sm font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {saving ? (i18nService.t('saving') || 'Saving...') : (i18nService.t('saveAndSwitch') || 'Save & Switch')}
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardAndSwitch}
+                className="w-full px-4 py-2 text-sm font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              >
+                {i18nService.t('discardAndSwitch') || 'Discard & Switch'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSwitchConfirm(false)}
+                className="w-full px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              >
+                {i18nService.t('cancel') || 'Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
