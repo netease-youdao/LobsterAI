@@ -74,10 +74,29 @@ export const CHANNEL_PLATFORM_MAP: Record<string, IMPlatform> = {
   xiaomifeng: 'xiaomifeng',
 };
 
-/** Reverse map: IM platform → preferred OpenClaw channel name. */
-export const PLATFORM_TO_CHANNEL_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(CHANNEL_PLATFORM_MAP).map(([channel, platform]) => [platform, channel]),
-);
+/**
+ * Reverse map: IM platform → preferred OpenClaw channel key.
+ *
+ * Explicitly defined rather than auto-derived from CHANNEL_PLATFORM_MAP because
+ * multiple channel names map to the same platform (e.g. 'popo' and 'moltbot-popo'
+ * both map to platform 'popo').  Auto-deriving via Object.fromEntries would
+ * silently pick whichever entry appears last, making correctness depend on
+ * insertion order — a fragile invariant.
+ *
+ * Each value here MUST match the channel key used in openclaw.json `channels.*`.
+ */
+export const PLATFORM_TO_CHANNEL_MAP: Record<string, string> = {
+  telegram: 'telegram',
+  discord: 'discord',
+  feishu: 'feishu',
+  dingtalk: 'dingtalk-connector',
+  qq: 'qqbot',
+  wecom: 'wecom',
+  popo: 'moltbot-popo',
+  nim: 'nim',
+  weixin: 'openclaw-weixin',
+  xiaomifeng: 'xiaomifeng',
+};
 
 /** Parse a channel sessionKey into platform + conversationId.
  *  Supports three formats:
