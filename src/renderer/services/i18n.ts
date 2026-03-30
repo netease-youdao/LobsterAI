@@ -1339,6 +1339,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authValueAddedServices: 'Premium Services',
     authZeroCredits: '0 credits',
     planFree: 'Free',
+    planStandard: 'Standard',
     planAdvanced: 'Advanced',
     planPro: 'Pro',
     
