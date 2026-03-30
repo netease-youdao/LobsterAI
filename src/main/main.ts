@@ -578,7 +578,12 @@ const initStore = async (): Promise<SqliteStore> => {
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Store initialization timed out after 15s')), 15_000)
       ),
-    ]);
+    ]).catch((err) => {
+      // Reset the cached promise so that subsequent calls can retry
+      // instead of permanently returning the same rejected promise.
+      storeInitPromise = null;
+      throw err;
+    });
   }
   return storeInitPromise;
 };

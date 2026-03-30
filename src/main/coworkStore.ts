@@ -691,6 +691,11 @@ export class CoworkStore {
 
   deleteSession(id: string): void {
     this.markMemorySourcesInactiveBySession(id);
+    // Explicitly delete child messages before the session row.
+    // CASCADE should handle this when PRAGMA foreign_keys = ON, but older
+    // databases may have been created without that pragma, so we delete
+    // defensively to avoid orphan accumulation.
+    this.db.run('DELETE FROM cowork_messages WHERE session_id = ?', [id]);
     this.db.run('DELETE FROM cowork_sessions WHERE id = ?', [id]);
     this.markOrphanImplicitMemoriesStale();
     this.saveDb();
@@ -702,6 +707,8 @@ export class CoworkStore {
       this.markMemorySourcesInactiveBySession(id);
     }
     const placeholders = ids.map(() => '?').join(',');
+    // Explicitly delete child messages before session rows (see deleteSession comment).
+    this.db.run(`DELETE FROM cowork_messages WHERE session_id IN (${placeholders})`, ids);
     this.db.run(`DELETE FROM cowork_sessions WHERE id IN (${placeholders})`, ids);
     this.markOrphanImplicitMemoriesStale();
     this.saveDb();

@@ -68,6 +68,10 @@ export class SqliteStore {
   }
 
   private initializeTables(basePath: string) {
+    // Enable foreign key enforcement so that ON DELETE CASCADE actually works.
+    // SQLite has this OFF by default; without it, cascade constraints are ignored.
+    this.db.run('PRAGMA foreign_keys = ON;');
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
@@ -304,7 +308,19 @@ export class SqliteStore {
   save() {
     const data = this.db.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(this.dbPath, buffer);
+    // Atomic write: write to a temporary file first, then rename.
+    // A direct writeFileSync can leave a truncated/corrupt database if the
+    // process crashes or is killed mid-write.  Rename is atomic on the same
+    // filesystem, so readers always see either the old or the new complete file.
+    const tmpPath = `${this.dbPath}.tmp-${Date.now()}`;
+    try {
+      fs.writeFileSync(tmpPath, buffer);
+      fs.renameSync(tmpPath, this.dbPath);
+    } catch (err) {
+      // Clean up the temp file on failure so it does not accumulate.
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw err;
+    }
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
