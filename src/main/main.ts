@@ -73,6 +73,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { isSafeExternalUrl } from './libs/urlSafety';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -2006,6 +2007,9 @@ if (!gotTheLock) {
     try {
       const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
       const finalUrl = `${baseUrl}?source=electron`;
+      if (!isSafeExternalUrl(finalUrl)) {
+        return { success: false, error: 'Blocked: unsafe URL protocol' };
+      }
       await shell.openExternal(finalUrl);
       return { success: true };
     } catch (error) {
@@ -4007,6 +4011,9 @@ if (!gotTheLock) {
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     try {
+      if (!isSafeExternalUrl(url)) {
+        return { success: false, error: 'Blocked: unsafe URL protocol' };
+      }
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
@@ -4315,7 +4322,9 @@ if (!gotTheLock) {
           },
         };
       }
-      shell.openExternal(url);
+      if (isSafeExternalUrl(url)) {
+        shell.openExternal(url);
+      }
       return { action: 'deny' };
     });
 
