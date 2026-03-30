@@ -27,7 +27,14 @@ function resolveBashExecutable(rootDir) {
     });
     if (result.status === 0 && result.stdout) {
       const paths = result.stdout.trim().split(/\r?\n/).map(p => p.trim()).filter(Boolean);
-      const gitBash = paths.find(p => !p.toLowerCase().includes('windowsapps'));
+      // Exclude both WSL bash locations:
+      //   - C:\Windows\System32\bash.exe  (WSL shim, not Git Bash)
+      //   - ...\WindowsApps\bash.exe       (WSL store version)
+      // Neither can access Windows-installed node/npm/pnpm.
+      const gitBash = paths.find(p => {
+        const lower = p.toLowerCase();
+        return !lower.includes('windowsapps') && !lower.includes('system32\\bash');
+      });
       if (gitBash) return gitBash;
     }
   } catch {}
@@ -94,6 +101,15 @@ if (process.platform === 'win32') {
   const pathValue = pathEntries.map(([, v]) => v).join(path.delimiter);
   for (const [k] of pathEntries) delete env[k];
   env.PATH = `${nodeDir}${path.delimiter}${pathValue}`;
+
+  // Convert node dir to MSYS2 Unix-style path (e.g. D:\foo\bar -> /d/foo/bar).
+  // MSYS2 auto-conversion is unreliable in nested npm/cmd.exe/node chains.
+  // Passing the MSYS2-format path via env lets the bash script prepend it
+  // to PATH before any command checks, bypassing the conversion issue.
+  const msysNodeDir = nodeDir
+    .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`)
+    .split(path.sep).join('/');
+  env.LOBSTER_NODE_MSYS_DIR = msysNodeDir;
 }
 
 // Use a relative path so bash never sees Windows drive-letter paths like
