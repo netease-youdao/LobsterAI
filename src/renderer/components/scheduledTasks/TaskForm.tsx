@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDownIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type {
@@ -31,6 +32,15 @@ interface FormState {
   payloadText: string;
   notifyChannel: string;
   notifyTo: string;
+  targetSessionId: string;
+}
+
+type CoworkSessionOption = { id: string; title: string; createdAt: number; updatedAt: number };
+
+function parseSessionIdFromKey(sessionKey: string | null | undefined): string {
+  const sk = (sessionKey ?? '').trim();
+  const prefix = 'agent:main:lobsterai:';
+  return sk.startsWith(prefix) ? sk.slice(prefix.length) : '';
 }
 
 function nowDefaults() {
@@ -55,6 +65,7 @@ const DEFAULT_FORM_STATE: FormState = {
   payloadText: '',
   notifyChannel: 'none',
   notifyTo: '',
+  targetSessionId: '',
 };
 
 const IM_CHANNEL_VALUES = new Set([
@@ -93,6 +104,7 @@ function createFormState(task?: ScheduledTask): FormState {
     payloadText: task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message,
     notifyChannel: task.delivery.channel || 'none',
     notifyTo: task.delivery.to || '',
+    targetSessionId: parseSessionIdFromKey(task.sessionKey),
   };
 }
 
@@ -138,8 +150,12 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   });
   const [conversations, setConversations] = useState<ScheduledTaskConversationOption[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [coworkSessions, setCoworkSessions] = useState<CoworkSessionOption[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [sessionDropdownOpen, setSessionDropdownOpen] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState('');
+  const sessionDropdownRef = useRef<HTMLDivElement>(null);
 
   const isAdvanced = form.planType === 'advanced';
   const showConversationSelector = isIMChannel(form.notifyChannel);
@@ -168,6 +184,14 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void scheduledTaskService.listCoworkSessions().then((sessions) => {
+      if (!cancelled) setCoworkSessions(sessions);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     if (!showConversationSelector) {
       setConversations([]);
       return;
@@ -189,6 +213,25 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       cancelled = true;
     };
   }, [form.notifyChannel]);
+
+  useEffect(() => {
+    if (!sessionDropdownOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (sessionDropdownRef.current && !sessionDropdownRef.current.contains(event.target as Node)) {
+        setSessionDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [sessionDropdownOpen]);
+
+  const filteredCoworkSessions = useMemo(() => {
+    if (!sessionSearch.trim()) return coworkSessions;
+    const q = sessionSearch.toLowerCase();
+    return coworkSessions.filter(
+      (s) => (s.title || '').toLowerCase().includes(q) || s.id.toLowerCase().includes(q),
+    );
+  }, [coworkSessions, sessionSearch]);
 
   const updateForm = (patch: Partial<FormState>) => {
     setForm((current) => ({ ...current, ...patch }));
@@ -233,12 +276,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         description: '',
         enabled: true,
         schedule,
-        sessionTarget: 'isolated',
+        sessionTarget: form.targetSessionId ? 'main' : 'isolated',
         wakeMode: 'now',
-        payload: {
-          kind: 'agentTurn',
-          message: form.payloadText.trim(),
-        },
+        payload: form.targetSessionId
+          ? { kind: 'systemEvent', text: form.payloadText.trim() }
+          : { kind: 'agentTurn', message: form.payloadText.trim() },
         delivery: form.notifyChannel === 'none'
           ? { mode: 'none' }
           : {
@@ -246,6 +288,9 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               channel: form.notifyChannel,
               ...(form.notifyTo ? { to: form.notifyTo } : {}),
             },
+        ...(form.targetSessionId
+          ? { sessionKey: `agent:main:lobsterai:${form.targetSessionId}` }
+          : {}),
       };
 
       if (mode === 'create') {
@@ -409,6 +454,87 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     );
   };
 
+  const renderSessionRow = () => {
+    const selectedSession = coworkSessions.find((s) => s.id === form.targetSessionId);
+    const displayLabel = form.targetSessionId
+      ? (selectedSession?.title || i18nService.t('scheduledTasksFormTargetSessionUntitled'))
+      : i18nService.t('scheduledTasksFormTargetSessionNew');
+
+    const handleSelect = (sessionId: string) => {
+      updateForm({ targetSessionId: sessionId });
+      setSessionDropdownOpen(false);
+      setSessionSearch('');
+    };
+
+    return (
+      <div>
+        <label className={labelClass}>{i18nService.t('scheduledTasksFormTargetSession')}</label>
+        <div className="relative" ref={sessionDropdownRef}>
+          <button
+            type="button"
+            onClick={() => setSessionDropdownOpen(!sessionDropdownOpen)}
+            className={`${inputClass} flex items-center justify-between`}
+          >
+            <span className="truncate">{displayLabel}</span>
+            <ChevronDownIcon className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${sessionDropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {sessionDropdownOpen && (
+            <div className="absolute z-20 w-full mt-1 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white shadow-lg">
+              {coworkSessions.length > 5 && (
+                <div className="px-3 py-2 border-b dark:border-claude-darkBorder border-claude-border">
+                  <div className="relative">
+                    <MagnifyingGlassIcon className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary/50 text-claude-textSecondary/50" />
+                    <input
+                      type="text"
+                      value={sessionSearch}
+                      onChange={(e) => setSessionSearch(e.target.value)}
+                      placeholder={i18nService.t('scheduledTasksFormTargetSessionSearch')}
+                      className="w-full pl-8 pr-3 py-1.5 text-sm rounded border dark:border-claude-darkBorder border-claude-border bg-transparent dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-1 focus:ring-claude-accent/50"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+              )}
+              <ul className="max-h-48 overflow-y-auto py-1 text-sm">
+                {!sessionSearch.trim() && (
+                  <li
+                    className={`cursor-pointer select-none px-3 py-1.5 dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover ${
+                      !form.targetSessionId ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover font-medium' : ''
+                    }`}
+                    onClick={() => handleSelect('')}
+                  >
+                    <span className="dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('scheduledTasksFormTargetSessionNew')}
+                    </span>
+                  </li>
+                )}
+                {filteredCoworkSessions.map((session) => (
+                  <li
+                    key={session.id}
+                    className={`cursor-pointer select-none px-3 py-1.5 dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover ${
+                      session.id === form.targetSessionId ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover font-medium' : ''
+                    }`}
+                    onClick={() => handleSelect(session.id)}
+                  >
+                    <span className="dark:text-claude-darkText text-claude-text truncate block">
+                      {session.title || i18nService.t('scheduledTasksFormTargetSessionUntitled')}
+                    </span>
+                  </li>
+                ))}
+                {filteredCoworkSessions.length === 0 && sessionSearch.trim() && (
+                  <li className="px-3 py-2 text-sm dark:text-claude-darkTextSecondary/50 text-claude-textSecondary/50 text-center">
+                    {i18nService.t('scheduledTasksFormTargetSessionNoMatch')}
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderNotifyRow = () => {
     return (
       <div>
@@ -489,6 +615,8 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
       {renderScheduleRow()}
       {errors.schedule && <p className={errorClass}>{errors.schedule}</p>}
+
+      {renderSessionRow()}
 
       {renderNotifyRow()}
 
