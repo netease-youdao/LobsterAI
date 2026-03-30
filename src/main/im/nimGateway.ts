@@ -30,8 +30,6 @@ import {
 import { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
 import { NimQChatClient, QChatInboundMessage } from './nimQChatClient';
 
-// Message deduplication cache
-const processedMessages = new Map<string, number>();
 const MESSAGE_DEDUP_TTL = 5 * 60 * 1000; // 5 minutes
 
 /** Maximum characters per text message */
@@ -219,6 +217,13 @@ export class NimGateway extends EventEmitter {
    * QChat client instance for circle group messages
    */
   private qchatClient: NimQChatClient | null = null;
+
+  /**
+   * Per-instance message deduplication cache. Kept as an instance field so
+   * that stop()/start() cycles (reconnects) start with a clean slate and
+   * cannot accidentally suppress messages from a fresh session.
+   */
+  private processedMessages: Map<string, number> = new Map();
 
   constructor() {
     super();
@@ -721,10 +726,10 @@ export class NimGateway extends EventEmitter {
    */
   private isMessageProcessed(messageId: string): boolean {
     this.cleanupProcessedMessages();
-    if (processedMessages.has(messageId)) {
+    if (this.processedMessages.has(messageId)) {
       return true;
     }
-    processedMessages.set(messageId, Date.now());
+    this.processedMessages.set(messageId, Date.now());
     return false;
   }
 
@@ -733,9 +738,9 @@ export class NimGateway extends EventEmitter {
    */
   private cleanupProcessedMessages(): void {
     const now = Date.now();
-    processedMessages.forEach((timestamp, messageId) => {
+    this.processedMessages.forEach((timestamp, messageId) => {
       if (now - timestamp > MESSAGE_DEDUP_TTL) {
-        processedMessages.delete(messageId);
+        this.processedMessages.delete(messageId);
       }
     });
   }
