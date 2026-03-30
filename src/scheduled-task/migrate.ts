@@ -315,6 +315,7 @@ export async function migrateScheduledTaskRunsToOpenclaw(
 
   let succeeded = 0;
   let skipped = 0;
+  let writeErrors = 0;
 
   // 5. Group runs by task_id (used as-is for the JSONL filename)
   const runsByTaskId = new Map<string, LegacyRunRow[]>();
@@ -362,18 +363,28 @@ export async function migrateScheduledTaskRunsToOpenclaw(
       if (jobName) entry['summary'] = jobName;
 
       lines.push(JSON.stringify(entry));
-      succeeded++;
     }
 
     if (lines.length > 0) {
       try {
         fs.appendFileSync(jsonlPath, lines.join('\n') + '\n', 'utf-8');
+        succeeded += lines.length;
       } catch (err) {
         console.error(`[MigrateRunHistory] Failed to write runs for task ${taskId}:`, err);
+        writeErrors++;
       }
     }
   }
 
-  console.log(`[MigrateRunHistory] Done. succeeded=${succeeded}, skipped=${skipped}`);
-  setKv(RUN_HISTORY_MIGRATION_KEY, 'true');
+  console.log(`[MigrateRunHistory] Done. succeeded=${succeeded}, skipped=${skipped}, writeErrors=${writeErrors}`);
+
+  // Mark as done only when there are no write errors.
+  // Skipped runs (duplicates) are safe and don't block completion.
+  // Write errors may be transient (disk full, permissions), so leave the flag
+  // unset to allow a retry on next launch.
+  if (writeErrors === 0) {
+    setKv(RUN_HISTORY_MIGRATION_KEY, 'true');
+  } else {
+    console.warn(`[MigrateRunHistory] ${writeErrors} write error(s), will retry on next launch`);
+  }
 }
