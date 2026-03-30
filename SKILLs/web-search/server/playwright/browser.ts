@@ -2,7 +2,7 @@
  * Browser Launcher - Manages Chrome browser lifecycle
  */
 
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, execFileSync } from 'child_process';
 import { existsSync, mkdirSync, accessSync, constants } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -16,10 +16,158 @@ export interface BrowserInstance {
 }
 
 /**
- * Detect Chromium-based browser executable path across platforms
+ * Chromium-based browser executable names used to validate Windows registry results
+ */
+const CHROMIUM_EXE_NAMES = new Set([
+  'chrome.exe',
+  'msedge.exe',
+  'brave.exe',
+  'chromium.exe',
+  'vivaldi.exe',
+  'opera.exe',
+]);
+
+/**
+ * Read a Windows registry value using reg.exe.
+ * Pass an empty string as valueName to query the default (unnamed) value.
+ * Returns the value string or null if not found / on error.
+ */
+function readWindowsRegistryValue(key: string, valueName: string): string | null {
+  try {
+    const args = valueName
+      ? ['query', key, '/v', valueName]
+      : ['query', key, '/ve'];
+    const output = execFileSync('reg', args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 3000,
+    });
+    // Output format: "    ValueName    REG_SZ    <value>"
+    const match = output.match(/REG_(?:SZ|EXPAND_SZ|DWORD)\s+(.+)/);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Expand Windows environment variable strings like %SystemRoot%\foo
+ */
+function expandWindowsEnvVars(str: string): string {
+  return str.replace(/%([^%]+)%/g, (_, name) => process.env[name] || `%${name}%`);
+}
+
+/**
+ * Extract the executable path from a Windows shell command string.
+ * Handles both quoted ("C:\\path\\to\\exe.exe" ...) and unquoted forms.
+ */
+function extractExePath(command: string): string {
+  const trimmed = command.trim();
+  if (trimmed.startsWith('"')) {
+    const end = trimmed.indexOf('"', 1);
+    return end !== -1 ? trimmed.slice(1, end) : trimmed.slice(1);
+  }
+  const spaceIdx = trimmed.indexOf(' ');
+  return spaceIdx !== -1 ? trimmed.slice(0, spaceIdx) : trimmed;
+}
+
+/**
+ * Detect the system default Chromium-based browser on Windows via the registry.
+ *
+ * Windows stores the user's default browser choice in:
+ *   HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice
+ * We read the ProgId from there, then look up its shell open command to get the
+ * actual executable path.
+ *
+ * Returns the executable path, or null if unavailable / not a Chromium browser.
+ */
+function detectWindowsDefaultBrowser(): string | null {
+  try {
+    // 1. Read ProgId - HTTPS handler takes precedence over HTTP
+    const progId =
+      readWindowsRegistryValue(
+        'HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice',
+        'ProgId'
+      ) ||
+      readWindowsRegistryValue(
+        'HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice',
+        'ProgId'
+      );
+
+    if (!progId) {
+      return null;
+    }
+
+    // 2. Look up the shell open command for that ProgId
+    const command =
+      readWindowsRegistryValue(`HKCR\\${progId}\\shell\\open\\command`, '') ||
+      readWindowsRegistryValue(`HKLM\\SOFTWARE\\Classes\\${progId}\\shell\\open\\command`, '');
+
+    if (!command) {
+      return null;
+    }
+
+    // 3. Extract and expand the executable path
+    const exePath = extractExePath(expandWindowsEnvVars(command));
+    if (!exePath) {
+      return null;
+    }
+
+    // 4. Validate it is a known Chromium-based browser and that the file exists
+    const exeName = exePath.split('\\').pop()?.toLowerCase() ?? '';
+    if (CHROMIUM_EXE_NAMES.has(exeName) && existsSync(exePath)) {
+      console.log(`[Browser] Detected system default browser via registry: ${exePath}`);
+      return exePath;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Detect Chromium-based browser executable path across platforms.
+ *
+ * On Windows the system default browser (read from the registry) is tried first
+ * so that the user's explicit browser choice is always respected before falling
+ * back to fixed-path scanning.
  */
 export function getChromePath(): string {
   const platform = process.platform;
+
+  if (platform === 'win32') {
+    // --- Priority 1: honour the system default browser set by the user ---
+    const defaultBrowser = detectWindowsDefaultBrowser();
+    if (defaultBrowser) {
+      return defaultBrowser;
+    }
+
+    // --- Priority 2: fixed-path scan (Chrome always before Edge) ---
+    const programFiles    = process.env['ProgramFiles']      || 'C:\\Program Files';
+    const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    const localAppData    = process.env['LOCALAPPDATA']       || '';
+
+    const paths = [
+      join(programFiles,    'Google\\Chrome\\Application\\chrome.exe'),
+      join(programFilesX86, 'Google\\Chrome\\Application\\chrome.exe'),
+      join(localAppData,    'Google\\Chrome\\Application\\chrome.exe'),
+      join(programFiles,    'Microsoft\\Edge\\Application\\msedge.exe'),
+      join(programFilesX86, 'Microsoft\\Edge\\Application\\msedge.exe'),
+      join(localAppData,    'Microsoft\\Edge\\Application\\msedge.exe'),
+    ];
+
+    for (const p of paths) {
+      if (existsSync(p)) {
+        return p;
+      }
+    }
+
+    throw new Error(
+      'No Chromium-based browser found (Chrome/Edge/Chromium). Please install one and retry.'
+    );
+  }
+
   const paths: string[] = [];
 
   if (platform === 'darwin') {
@@ -29,18 +177,6 @@ export function getChromePath(): string {
       '/Applications/Chromium.app/Contents/MacOS/Chromium',
       '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
       join(process.env.HOME || '', 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
-    );
-  } else if (platform === 'win32') {
-    // Windows
-    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
-    const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
-    paths.push(
-      join(programFiles, 'Google\\Chrome\\Application\\chrome.exe'),
-      join(programFilesX86, 'Google\\Chrome\\Application\\chrome.exe'),
-      join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
-      join(programFiles, 'Microsoft\\Edge\\Application\\msedge.exe'),
-      join(programFilesX86, 'Microsoft\\Edge\\Application\\msedge.exe'),
-      join(process.env.LOCALAPPDATA || '', 'Microsoft\\Edge\\Application\\msedge.exe')
     );
   } else {
     // Linux
@@ -270,7 +406,7 @@ export async function closeBrowser(instance: BrowserInstance): Promise<void> {
       });
     });
 
-    console.log(`[Browser] Browser closed`);
+    console.log('[Browser] Browser closed');
   }
 }
 
