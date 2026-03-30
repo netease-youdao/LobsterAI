@@ -2000,48 +2000,48 @@ async function handleResponsesStreamResponse(
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-
-    let boundary = findSSEPacketBoundary(buffer);
-    while (boundary) {
-      const packet = buffer.slice(0, boundary.index);
-      buffer = buffer.slice(boundary.index + boundary.separatorLength);
-
-      const parsedPacket = parseSSEPacket(packet);
-      const payload = parsedPacket.payload;
-      if (!payload) {
-        boundary = findSSEPacketBoundary(buffer);
-        continue;
-      }
-
-      if (payload === '[DONE]') {
-        flushDone();
-        sawDoneMarker = true;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
         break;
       }
 
-      try {
-        const parsed = JSON.parse(payload) as Record<string, unknown>;
-        processResponsesStreamEvent(res, state, context, parsedPacket.event, parsed);
-      } catch {
-        // Ignore malformed stream chunks.
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary = findSSEPacketBoundary(buffer);
+      while (boundary) {
+        const packet = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.separatorLength);
+
+        const parsedPacket = parseSSEPacket(packet);
+        const payload = parsedPacket.payload;
+        if (!payload) {
+          boundary = findSSEPacketBoundary(buffer);
+          continue;
+        }
+
+        if (payload === '[DONE]') {
+          flushDone();
+          sawDoneMarker = true;
+          break;
+        }
+
+        try {
+          const parsed = JSON.parse(payload) as Record<string, unknown>;
+          processResponsesStreamEvent(res, state, context, parsedPacket.event, parsed);
+        } catch {
+          // Ignore malformed stream chunks.
+        }
+
+        boundary = findSSEPacketBoundary(buffer);
       }
 
-      boundary = findSSEPacketBoundary(buffer);
+      if (sawDoneMarker) {
+        break;
+      }
     }
-
-    if (sawDoneMarker) {
-      break;
-    }
-  }
-
-  if (sawDoneMarker) {
+  } finally {
     try {
       await reader.cancel();
     } catch {
@@ -2094,58 +2094,58 @@ async function handleChatCompletionsStreamResponse(
 
   console.log('[CoworkProxy] Stream: starting to read upstream SSE chunks');
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      console.log(`[CoworkProxy] Stream: upstream done after ${chunkCount} chunks, sawDoneMarker=${sawDoneMarker}`);
-      break;
-    }
-
-    chunkCount++;
-    buffer += decoder.decode(value, { stream: true });
-
-    let boundary = findSSEPacketBoundary(buffer);
-    while (boundary) {
-      const packet = buffer.slice(0, boundary.index);
-      buffer = buffer.slice(boundary.index + boundary.separatorLength);
-
-      const lines = packet.split(/\r?\n/);
-      const dataLines: string[] = [];
-
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          dataLines.push(line.slice(5).trimStart());
-        }
-      }
-
-      const payload = dataLines.join('\n');
-      if (!payload) {
-        boundary = findSSEPacketBoundary(buffer);
-        continue;
-      }
-
-      if (payload === '[DONE]') {
-        flushDone();
-        sawDoneMarker = true;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        console.log(`[CoworkProxy] Stream: upstream done after ${chunkCount} chunks, sawDoneMarker=${sawDoneMarker}`);
         break;
       }
 
-      try {
-        const parsed = JSON.parse(payload) as OpenAIStreamChunk;
-        processOpenAIChunk(res, state, parsed);
-      } catch {
-        // Ignore malformed stream chunks.
+      chunkCount++;
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary = findSSEPacketBoundary(buffer);
+      while (boundary) {
+        const packet = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.separatorLength);
+
+        const lines = packet.split(/\r?\n/);
+        const dataLines: string[] = [];
+
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trimStart());
+          }
+        }
+
+        const payload = dataLines.join('\n');
+        if (!payload) {
+          boundary = findSSEPacketBoundary(buffer);
+          continue;
+        }
+
+        if (payload === '[DONE]') {
+          flushDone();
+          sawDoneMarker = true;
+          break;
+        }
+
+        try {
+          const parsed = JSON.parse(payload) as OpenAIStreamChunk;
+          processOpenAIChunk(res, state, parsed);
+        } catch {
+          // Ignore malformed stream chunks.
+        }
+
+        boundary = findSSEPacketBoundary(buffer);
       }
 
-      boundary = findSSEPacketBoundary(buffer);
+      if (sawDoneMarker) {
+        break;
+      }
     }
-
-    if (sawDoneMarker) {
-      break;
-    }
-  }
-
-  if (sawDoneMarker) {
+  } finally {
     try {
       await reader.cancel();
     } catch {
