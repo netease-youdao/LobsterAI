@@ -155,6 +155,7 @@
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.16",
+    "@types/diff": "^7.0.2",
     "@types/dompurify": "^3.0.5",
     "@types/extract-zip": "^2.0.1",
     "@types/js-yaml": "^4.0.9",
