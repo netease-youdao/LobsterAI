@@ -65,6 +65,16 @@
   - `git status --short`
   - `git diff --stat`
 
+## 本地 git 存档结果
+
+- LobsterAI 本地提交
+  - `526ac7a feat: add agent bridge workflow`
+- airi 本地提交
+  - `105f68c6 feat: integrate lobster bridge into chat ui`
+- 说明
+  - 两个子仓库已完成本地提交
+  - 各仓库仍存在与本轮 Bridge 工作无关的其他未提交改动，未纳入本次归档
+
 ## 下一步建议
 
 - 收紧默认 key 与 CORS
