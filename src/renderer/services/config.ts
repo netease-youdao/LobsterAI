@@ -163,6 +163,7 @@ class ConfigService {
             ...(storedConfig.shortcuts ?? {}),
           } as AppConfig['shortcuts'],
           providers: mergedProviders as AppConfig['providers'],
+          customProviderSavedConfigs: storedConfig.customProviderSavedConfigs ?? [],
         };
       }
     } catch (error) {

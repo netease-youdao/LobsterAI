@@ -1,3 +1,18 @@
+// Custom 提供商已保存配置条目
+export interface CustomProviderSavedConfig {
+  id: string;
+  name: string;
+  apiKey: string;
+  baseUrl: string;
+  apiFormat: 'anthropic' | 'openai';
+  models: Array<{
+    id: string;
+    name: string;
+    supportsImage?: boolean;
+  }>;
+  createdAt: number;
+}
+
 // 配置类型定义
 export interface AppConfig {
   // API 配置
@@ -234,6 +249,8 @@ export interface AppConfig {
     settings: string;
     [key: string]: string | undefined;
   };
+  // Custom 提供商已保存配置列表
+  customProviderSavedConfigs?: CustomProviderSavedConfig[];
 }
 
 // 默认配置

@@ -28,7 +28,7 @@ import type {
 import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
-import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
+import { defaultConfig, type AppConfig, getVisibleProviders, type CustomProviderSavedConfig } from '../config';
 import {
   OpenAIIcon,
   DeepSeekIcon,
@@ -444,8 +444,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
 
+  // Custom 提供商已保存配置 state
+  const [savedConfigs, setSavedConfigs] = useState<CustomProviderSavedConfig[]>([]);
+  const [isSavedConfigsExpanded, setIsSavedConfigsExpanded] = useState(true);
+  const [isSaveAsInputVisible, setIsSaveAsInputVisible] = useState(false);
+  const [saveAsName, setSaveAsName] = useState('');
+  const [saveAsNameError, setSaveAsNameError] = useState<string | null>(null);
+  const saveAsInputRef = useRef<HTMLInputElement>(null);
+
   const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'minimax' && providers.minimax.authType === 'oauth');
-  
+
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -835,6 +843,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           ...config.shortcuts,
         }));
       }
+
+      // 加载 Custom 提供商已保存配置
+      setSavedConfigs(config.customProviderSavedConfigs ?? []);
     } catch (error) {
       setError('Failed to load settings');
     }
@@ -1350,6 +1361,56 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         },
       };
     });
+  };
+
+  // Custom 提供商已保存配置 handlers
+  const handleLoadSavedConfig = (config: CustomProviderSavedConfig) => {
+    handleProviderConfigChange('custom', 'apiKey', config.apiKey);
+    handleProviderConfigChange('custom', 'baseUrl', config.baseUrl);
+    handleProviderConfigChange('custom', 'apiFormat', config.apiFormat);
+    setProviders(prev => ({
+      ...prev,
+      custom: {
+        ...prev.custom,
+        models: config.models,
+      },
+    }));
+  };
+
+  const handleDeleteSavedConfig = async (id: string) => {
+    const updated = savedConfigs.filter(c => c.id !== id);
+    setSavedConfigs(updated);
+    await configService.updateConfig({ customProviderSavedConfigs: updated });
+  };
+
+  const handleSaveSavedConfig = async (newConfig: CustomProviderSavedConfig) => {
+    const updated = [...savedConfigs, newConfig];
+    setSavedConfigs(updated);
+    await configService.updateConfig({ customProviderSavedConfigs: updated });
+    setIsSaveAsInputVisible(false);
+    setSaveAsName('');
+    setSaveAsNameError(null);
+    setNoticeMessage(i18nService.t('configSaved'));
+    setTimeout(() => setNoticeMessage(null), 2000);
+  };
+
+  const handleSaveAsConfirm = async () => {
+    const trimmed = saveAsName.trim();
+    if (!trimmed) {
+      setSaveAsNameError(i18nService.t('configNameRequired'));
+      return;
+    }
+    const customProvider = providers['custom'];
+    const newConfig: CustomProviderSavedConfig = {
+      id: crypto.randomUUID(),
+      name: trimmed,
+      apiKey: customProvider.apiKey,
+      baseUrl: customProvider.baseUrl,
+      apiFormat: (customProvider.apiFormat as 'anthropic' | 'openai') ?? 'openai',
+      models: customProvider.models ?? [],
+      createdAt: Date.now(),
+    };
+    await handleSaveSavedConfig(newConfig);
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -2603,6 +2664,74 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               </div>
 
+              {/* Custom 提供商已保存配置区域 */}
+              {activeProvider === 'custom' && (
+                <div className="rounded-xl border dark:border-claude-darkBorder border-claude-border overflow-hidden">
+                  {/* 标题行 */}
+                  <button
+                    type="button"
+                    onClick={() => setIsSavedConfigsExpanded(prev => !prev)}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-claude-surface dark:bg-claude-darkSurface hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                  >
+                    <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('savedConfigs')}
+                      {savedConfigs.length > 0 && (
+                        <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
+                          {savedConfigs.length}
+                        </span>
+                      )}
+                    </span>
+                    <svg
+                      className={`h-3.5 w-3.5 text-claude-textSecondary dark:text-claude-darkTextSecondary transition-transform ${isSavedConfigsExpanded ? 'rotate-180' : ''}`}
+                      fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  {/* 配置列表 */}
+                  {isSavedConfigsExpanded && (
+                    <div className="divide-y dark:divide-claude-darkBorder divide-claude-border">
+                      {savedConfigs.length === 0 ? (
+                        <p className="px-3 py-3 text-xs text-center dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                          {i18nService.t('noSavedConfigs')}
+                        </p>
+                      ) : (
+                        savedConfigs.map(cfg => (
+                          <div key={cfg.id} className="flex items-center justify-between px-3 py-2 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors">
+                            <div className="flex-1 min-w-0 mr-2">
+                              <p className="text-xs font-medium dark:text-claude-darkText text-claude-text truncate">{cfg.name}</p>
+                              {cfg.baseUrl && (
+                                <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">{cfg.baseUrl}</p>
+                              )}
+                            </div>
+                            <div className="flex items-center space-x-1 flex-shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleLoadSavedConfig(cfg)}
+                                className="px-2 py-1 text-[11px] rounded-lg bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors font-medium"
+                              >
+                                {i18nService.t('loadConfig')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteSavedConfig(cfg.id)}
+                                className="p-1 rounded-lg text-red-400 hover:bg-red-400/10 transition-colors"
+                                title={i18nService.t('delete') || 'Delete'}
+                              >
+                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* MiniMax OAuth auth section */}
               {activeProvider === 'minimax' && (
                 <div className="space-y-3">
@@ -3495,7 +3624,54 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             </div>
 
             {/* Footer buttons */}
-            <div className="flex justify-end space-x-4 p-4 dark:border-claude-darkBorder border-claude-border border-t dark:bg-claude-darkBg bg-claude-bg shrink-0">
+            <div className="flex items-center justify-end space-x-3 p-4 dark:border-claude-darkBorder border-claude-border border-t dark:bg-claude-darkBg bg-claude-bg shrink-0 flex-wrap gap-y-2">
+              {/* Custom 提供商另存为区域 */}
+              {activeTab === 'model' && activeProvider === 'custom' && (
+                <div className="flex items-center space-x-2 mr-auto">
+                  {isSaveAsInputVisible ? (
+                    <>
+                      <input
+                        ref={saveAsInputRef}
+                        type="text"
+                        value={saveAsName}
+                        onChange={e => { setSaveAsName(e.target.value); setSaveAsNameError(null); }}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleSaveAsConfirm(); } if (e.key === 'Escape') { setIsSaveAsInputVisible(false); setSaveAsName(''); setSaveAsNameError(null); } }}
+                        placeholder={i18nService.t('savedConfigName')}
+                        maxLength={50}
+                        className="w-36 rounded-lg bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border dark:border-claude-darkBorder border-claude-border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-2 py-1.5 text-xs"
+                        autoFocus
+                      />
+                      {saveAsNameError && (
+                        <span className="text-[11px] text-red-400">{saveAsNameError}</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveAsConfirm()}
+                        className="px-2.5 py-1.5 bg-claude-accent hover:bg-claude-accentHover text-white rounded-lg text-xs font-medium transition-colors"
+                      >
+                        {i18nService.t('save')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setIsSaveAsInputVisible(false); setSaveAsName(''); setSaveAsNameError(null); }}
+                        className="px-2.5 py-1.5 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover rounded-lg text-xs transition-colors border dark:border-claude-darkBorder border-claude-border"
+                      >
+                        {i18nService.t('cancel')}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={savedConfigs.length >= 20}
+                      onClick={() => { setIsSaveAsInputVisible(true); setTimeout(() => saveAsInputRef.current?.focus(), 0); }}
+                      title={savedConfigs.length >= 20 ? i18nService.t('savedConfigsLimit') : undefined}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {i18nService.t('saveAsNew')}
+                    </button>
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={onClose}
