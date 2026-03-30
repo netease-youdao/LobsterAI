@@ -58,7 +58,7 @@ const AgentSkillSelector: React.FC<AgentSkillSelectorProps> = ({ selectedSkillId
           </div>
         </div>
       )}
-      <div className={isExpanded ? 'flex-1 overflow-y-auto' : 'max-h-48 overflow-y-auto'}>
+      <div className={isExpanded ? 'flex-1 overflow-y-auto' : 'max-h-48 px-2 pb-2 overflow-y-auto'}>
         {filteredSkills.length === 0 ? (
           <div className="px-3 py-3 text-sm dark:text-claude-darkTextSecondary/50 text-claude-textSecondary/50 text-center">
             {enabledSkills.length === 0 ? 'No skills installed' : 'No matching skills'}
@@ -71,7 +71,7 @@ const AgentSkillSelector: React.FC<AgentSkillSelectorProps> = ({ selectedSkillId
                 key={skill.id}
                 type="button"
                 onClick={() => toggle(skill.id)}
-                className={`w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors rounded-lg ${
+                className={`w-full flex items-start gap-2.5 px-3 py-2 text-left mt-2 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors rounded-lg ${
                   isSelected ? 'bg-claude-accent/5 dark:bg-claude-accent/10' : ''
                 }`}
               >
