@@ -17,6 +17,7 @@ import {
   clearPendingPermissions,
   setConfig,
   clearCurrentSession,
+  clearTempSession,
 } from '../store/slices/coworkSlice';
 import type {
   CoworkSession,
@@ -45,6 +46,20 @@ class CoworkService {
   private openClawEngineListenerAttached = false;
   private latestLoadSessionsRequestId = 0;
   private latestLoadSessionRequestId = 0;
+  private _tempExcludeId: string | null = null;
+
+  clearTempExclude(): void {
+    this._tempExcludeId = null;
+  }
+
+  dismissTempSession(): void {
+    const tempId = store.getState().cowork.tempSession?.id ?? this._tempExcludeId;
+    store.dispatch(clearTempSession());
+    this._tempExcludeId = null;
+    if (tempId && tempId !== '__pending__') {
+      this.deleteSession(tempId).catch(() => {});
+    }
+  }
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -91,7 +106,8 @@ class CoworkService {
       const sessionExists = state.sessions.some(s => s.id === sessionId);
 
       console.log('[CoworkService] onStreamMessage: sessionId=', sessionId, 'type=', message.type, 'sessionExists=', sessionExists, 'totalSessions=', state.sessions.length);
-      if (!sessionExists) {
+      const isTempSession = state.tempSession?.id === sessionId || this._tempExcludeId === sessionId;
+      if (!sessionExists && !isTempSession) {
         // Session was created by IM or another source, refresh the session list
         console.log('[CoworkService] onStreamMessage: session NOT found in Redux, calling loadSessions...');
         await this.loadSessions();
@@ -146,17 +162,19 @@ class CoworkService {
     const errorCleanup = cowork.onStreamError(({ sessionId, error }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
       // Surface the error as a visible message so the user knows what happened.
-      if (error) {
-        store.dispatch(addMessage({
-          sessionId,
-          message: {
-            id: `error-${Date.now()}`,
-            type: 'system',
-            content: classifyError(error),
-            timestamp: Date.now(),
-          },
-        }));
-      }
+      const errorContent = error
+        ? classifyError(error)
+        : i18nService.t('errorOccurred');
+      console.error('[CoworkService] Stream error:', { sessionId, rawError: error, displayError: errorContent });
+      store.dispatch(addMessage({
+        sessionId,
+        message: {
+          id: `error-${Date.now()}`,
+          type: 'system',
+          content: errorContent,
+          timestamp: Date.now(),
+        },
+      }));
     });
     this.streamListenerCleanups.push(errorCleanup);
 
@@ -208,7 +226,12 @@ class CoworkService {
       if (requestId !== this.latestLoadSessionsRequestId) {
         return;
       }
-      store.dispatch(setSessions(result.sessions));
+      const tempId = store.getState().cowork.tempSession?.id ?? this._tempExcludeId;
+      if (tempId === '__pending__') return;
+      const filtered = tempId
+        ? result.sessions.filter(s => s.id !== tempId)
+        : result.sessions;
+      store.dispatch(setSessions(filtered));
     }
   }
 
@@ -240,11 +263,19 @@ class CoworkService {
       return { session: null, error: 'Cowork API not available' };
     }
 
+    if (options.isTemp) {
+      this._tempExcludeId = '__pending__';
+    }
+
     store.dispatch(setStreaming(true));
 
     const result = await cowork.startSession(options);
     if (result.success && result.session) {
-      store.dispatch(addSession(result.session));
+      if (options.isTemp) {
+        this._tempExcludeId = result.session.id;
+      } else {
+        store.dispatch(addSession(result.session));
+      }
       if (result.session.status !== 'running') {
         store.dispatch(setStreaming(false));
       }
@@ -253,6 +284,10 @@ class CoworkService {
 
     if (result.engineStatus) {
       this.notifyOpenClawStatus(result.engineStatus);
+    }
+
+    if (options.isTemp) {
+      this._tempExcludeId = null;
     }
 
     // Show a user-visible error when session start fails
@@ -304,7 +339,6 @@ class CoworkService {
           }));
         }
       }
-      // Show a user-visible error message in the session
       if (result.error) {
         const errorContent = result.code === 'ENGINE_NOT_READY'
           ? i18nService.t('coworkErrorEngineNotReady')

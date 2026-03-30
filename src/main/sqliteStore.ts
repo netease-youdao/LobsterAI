@@ -260,6 +260,26 @@ export class SqliteStore {
       // Column already exists or migration not needed.
     }
 
+    // Migration: Add is_temp column to cowork_sessions
+    try {
+      const sessionCols2 = this.db.exec("PRAGMA table_info(cowork_sessions);");
+      const sessionColNames2 = sessionCols2[0]?.values.map((row) => row[1]) || [];
+      if (!sessionColNames2.includes('is_temp')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN is_temp INTEGER NOT NULL DEFAULT 0;');
+        this.save();
+      }
+    } catch {
+      // Column already exists or migration not needed.
+    }
+
+    // Startup cleanup: remove any temp sessions left over from previous run
+    try {
+      this.db.run('DELETE FROM cowork_sessions WHERE is_temp = 1;');
+      this.save();
+    } catch {
+      // Ignore if column doesn't exist yet.
+    }
+
     // Migration: Ensure default 'main' agent exists
     try {
       const mainAgent = this.db.exec("SELECT id FROM agents WHERE id = 'main'");

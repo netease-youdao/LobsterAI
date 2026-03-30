@@ -19,6 +19,7 @@ interface CoworkState {
   sessions: CoworkSessionSummary[];
   currentSessionId: string | null;
   currentSession: CoworkSession | null;
+  tempSession: CoworkSession | null;
   draftPrompts: Record<string, string>;
   /** Keyed by draftKey (sessionId or '__home__'), stores pending attachments */
   draftAttachments: Record<string, DraftAttachment[]>;
@@ -34,6 +35,7 @@ const initialState: CoworkState = {
   sessions: [],
   currentSessionId: null,
   currentSession: null,
+  tempSession: null,
   draftPrompts: {},
   draftAttachments: {},
   unreadSessionIds: [],
@@ -129,7 +131,8 @@ const coworkSlice = createSlice({
       state.currentSession = action.payload;
       if (action.payload) {
         state.currentSessionId = action.payload.id;
-        if (!action.payload.id.startsWith('temp-')) {
+        const isTempId = state.tempSession && state.tempSession.id === action.payload.id;
+        if (!isTempId) {
           const { id, title, status, pinned, createdAt, updatedAt } = action.payload;
           const summary: CoworkSessionSummary = {
             id,
@@ -163,6 +166,7 @@ const coworkSlice = createSlice({
     },
 
     addSession(state, action: PayloadAction<CoworkSession>) {
+      if (state.tempSession && state.tempSession.id === action.payload.id) return;
       const summary: CoworkSessionSummary = {
         id: action.payload.id,
         title: action.payload.title,
@@ -180,19 +184,24 @@ const coworkSlice = createSlice({
     updateSessionStatus(state, action: PayloadAction<{ sessionId: string; status: CoworkSessionStatus }>) {
       const { sessionId, status } = action.payload;
 
-      // Update in sessions list
       const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
       if (sessionIndex !== -1) {
         state.sessions[sessionIndex].status = status;
         state.sessions[sessionIndex].updatedAt = Date.now();
       }
 
-      // Update current session if applicable
       if (state.currentSession?.id === sessionId) {
         state.currentSession.status = status;
         state.currentSession.updatedAt = Date.now();
-        // Streaming state is tied to the currently opened session only
         state.isStreaming = status === 'running';
+      }
+
+      if (state.tempSession?.id === sessionId) {
+        state.tempSession.status = status;
+        state.tempSession.updatedAt = Date.now();
+        if (!state.currentSession) {
+          state.isStreaming = status === 'running';
+        }
       }
     },
 
@@ -229,7 +238,14 @@ const coworkSlice = createSlice({
         }
       }
 
-      // Update session in list
+      if (state.tempSession?.id === sessionId) {
+        const exists = state.tempSession.messages.some((item) => item.id === message.id);
+        if (!exists) {
+          state.tempSession.messages.push(message);
+          state.tempSession.updatedAt = message.timestamp;
+        }
+      }
+
       const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
       if (sessionIndex !== -1) {
         state.sessions[sessionIndex].updatedAt = message.timestamp;
@@ -241,17 +257,21 @@ const coworkSlice = createSlice({
     updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string }>) {
       const { sessionId, messageId, content } = action.payload;
 
-      if (state.currentSession?.id === sessionId) {
-        const messageIndex = state.currentSession.messages.findIndex(m => m.id === messageId);
+      const updateSession = (session: CoworkSession | null) => {
+        if (!session || session.id !== sessionId) return;
+        const messageIndex = session.messages.findIndex(m => m.id === messageId);
         if (messageIndex !== -1) {
-          const previousContent = state.currentSession.messages[messageIndex].content || '';
+          const previousContent = session.messages[messageIndex].content || '';
           if (state.config.agentEngine === 'yd_cowork') {
-            state.currentSession.messages[messageIndex].content = mergeStreamingMessageContent(previousContent, content);
+            session.messages[messageIndex].content = mergeStreamingMessageContent(previousContent, content);
           } else {
-            state.currentSession.messages[messageIndex].content = content;
+            session.messages[messageIndex].content = content;
           }
         }
-      }
+      };
+
+      updateSession(state.currentSession);
+      updateSession(state.tempSession);
 
       markSessionUnread(state, sessionId);
     },
@@ -338,6 +358,22 @@ const coworkSlice = createSlice({
     clearDraftAttachments(state, action: PayloadAction<string>) {
       delete state.draftAttachments[action.payload];
     },
+
+    setTempSession(state, action: PayloadAction<CoworkSession | null>) {
+      state.tempSession = action.payload;
+    },
+
+    clearTempSession(state) {
+      const tempId = state.tempSession?.id;
+      state.tempSession = null;
+      if (tempId) {
+        state.sessions = state.sessions.filter(s => s.id !== tempId);
+        if (state.currentSession?.id === tempId) {
+          state.currentSession = null;
+          state.currentSessionId = null;
+        }
+      }
+    },
   },
 });
 
@@ -365,6 +401,8 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  setTempSession,
+  clearTempSession,
 } = coworkSlice.actions;
 
 export default coworkSlice.reducer;

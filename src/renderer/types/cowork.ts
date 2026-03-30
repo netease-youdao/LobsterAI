@@ -167,6 +167,7 @@ export interface CoworkStartOptions {
   activeSkillIds?: string[];
   agentId?: string;
   imageAttachments?: CoworkImageAttachment[];
+  isTemp?: boolean;
 }
 
 // Continue session options

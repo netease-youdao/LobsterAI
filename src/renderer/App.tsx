@@ -52,6 +52,7 @@ const App: React.FC = () => {
   const dispatch = useDispatch();
   const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
+  const tempSession = useSelector((state: RootState) => state.cowork.tempSession);
   const pendingPermissions = useSelector((state: RootState) => state.cowork.pendingPermissions);
   const pendingPermission = pendingPermissions[0] ?? null;
   const isWindows = window.electron.platform === 'win32';
@@ -258,6 +259,7 @@ const App: React.FC = () => {
     const shouldClearInput = mainView === 'cowork' || !!currentSessionId;
     coworkService.clearSession();
     dispatch(clearSelection());
+    coworkService.dismissTempSession();
     setMainView('cowork');
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent('cowork:focus-input', {
@@ -265,6 +267,13 @@ const App: React.FC = () => {
       }));
     }, 0);
   }, [dispatch, mainView, currentSessionId]);
+
+  const handleNewTempSession = useCallback(() => {
+    setMainView('cowork');
+    coworkService.clearSession();
+    dispatch(clearSelection());
+    window.dispatchEvent(new CustomEvent('cowork:open-temp-session'));
+  }, [dispatch]);
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -644,6 +653,8 @@ const App: React.FC = () => {
           onShowMcp={handleShowMcp}
           onShowAgents={handleShowAgents}
           onNewChat={handleNewChat}
+          onNewTempSession={handleNewTempSession}
+          isTempSessionActive={!!tempSession}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
           updateBadge={!isSidebarCollapsed ? updateBadge : null}

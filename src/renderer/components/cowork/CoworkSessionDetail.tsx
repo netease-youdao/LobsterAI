@@ -37,6 +37,7 @@ interface CoworkSessionDetailProps {
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
+  isTempSession?: boolean;
 }
 
 const AUTO_SCROLL_THRESHOLD = 120;
@@ -1142,11 +1143,27 @@ export const AssistantTurnBlock: React.FC<{
     const content = mapDisplayText ? mapDisplayText(normalizedContent) : normalizedContent;
     if (!content.trim()) return null;
 
+    const isError = Boolean(message.metadata?.error)
+      || message.content?.startsWith('Error:')
+      || message.id?.startsWith('error-');
+
     return (
-      <div className="rounded-lg border dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/40 bg-claude-bg/60 px-3 py-2">
+      <div className={`rounded-lg border px-3 py-2 ${
+        isError
+          ? 'dark:border-red-500/30 border-red-300/70 dark:bg-red-950/30 bg-red-50/60'
+          : 'dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/40 bg-claude-bg/60'
+      }`}>
         <div className="flex items-start gap-2">
-          <InformationCircleIcon className="h-4 w-4 mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0" />
-          <div className="text-xs whitespace-pre-wrap dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          {isError ? (
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-red-500 flex-shrink-0" />
+          ) : (
+            <InformationCircleIcon className="h-4 w-4 mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0" />
+          )}
+          <div className={`text-xs whitespace-pre-wrap ${
+            isError
+              ? 'text-red-600 dark:text-red-400'
+              : 'dark:text-claude-darkTextSecondary text-claude-textSecondary'
+          }`}>
             {content}
           </div>
         </div>
@@ -1286,6 +1303,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onToggleSidebar,
   onNewChat,
   updateBadge,
+  isTempSession = false,
 }) => {
   const isMac = window.electron.platform === 'darwin';
   const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
@@ -1987,9 +2005,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               className="non-draggable min-w-0 max-w-[300px] rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-2 py-1 text-sm font-medium dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent"
             />
           ) : (
-            <h1 className="text-sm leading-none font-medium dark:text-claude-darkText text-claude-text truncate max-w-[360px]">
-              {currentSession.title || i18nService.t('coworkNewSession')}
-            </h1>
+            <>
+              <h1 className="text-sm leading-none font-medium dark:text-claude-darkText text-claude-text truncate max-w-[360px]">
+                {currentSession.title || i18nService.t('coworkNewSession')}
+              </h1>
+              {isTempSession && (
+                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border border-dashed dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary whitespace-nowrap flex-shrink-0">
+                  {i18nService.t('tempSession')}
+                </span>
+              )}
+            </>
           )}
         </div>
 
@@ -2009,15 +2034,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </button>
 
           {/* Menu button */}
-          <button
-            ref={actionButtonRef}
-            type="button"
-            onClick={openMenu}
-            className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
-            aria-label={i18nService.t('coworkSessionActions')}
-          >
-            <EllipsisHorizontalIcon className="h-5 w-5" />
-          </button>
+          {!isTempSession && (
+            <button
+              ref={actionButtonRef}
+              type="button"
+              onClick={openMenu}
+              className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+              aria-label={i18nService.t('coworkSessionActions')}
+            >
+              <EllipsisHorizontalIcon className="h-5 w-5" />
+            </button>
+          )}
           <WindowTitleBar inline className="ml-1" />
         </div>
       </div>

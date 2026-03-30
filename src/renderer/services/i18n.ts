@@ -474,6 +474,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     creating: '创建中...',
 
     coworkNewSession: '新会话',
+    tempSession: '临时会话',
+    tempSessionHint: '临时会话，轻量聊天，随用随清，让对话随风而去',
     coworkContinuePlaceholder: '继续对话...',
     coworkRemoteManagedPlaceholder: '该会话由 IM 通道创建，请在对应的 IM 平台操作',
     updateAvailablePill: '有新版本',
@@ -1641,6 +1643,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     creating: 'Creating...',
 
     coworkNewSession: 'New Session',
+    tempSession: 'Private Chat',
+    tempSessionHint: 'Lightweight, off-the-record — your words vanish like smoke in the wind',
     coworkContinuePlaceholder: 'Continue the conversation...',
     coworkRemoteManagedPlaceholder: 'This session was created via IM. Please use the corresponding IM platform.',
     updateAvailablePill: 'New update',
