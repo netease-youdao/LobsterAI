@@ -1,0 +1,1559 @@
+src/renderer/services/i18n.ts
+  f7d3308e0d83288f 478
+  acab45a24518ae9a 1117
+  e21a4a600b976a54 1156-1159
+  9bcf8777dc448c8d 1160,2326
+  f5bb3669b4ddd39e 1645
+  c4459412cd8be665 2283
+  0461a500375ceb81 2322-2325
+src/main/im/imGatewayManager.ts
+  f8141415ca2ae4af 452,454-455,457-460
+  58396b465a6221f4 690,696,702,709,715,726,732,738,744,757,762,767,772,777,782,787,792,797,802
+scripts/ensure-openclaw-plugins.cjs
+  d01f8d6411d37e23 2,17,22,26,28,31-32,36-37,49,52,59-60,62-63,66-67,70-71,77-79,89-90,108,110-111,115,119-120,124,128-129,137-139,143,150-151,153,155,161,163,174-175,178,182,198,209,218,220,227,234,241,257,274-275,283-284,288,290,295-296,298-299,301,320,322-343
+src/renderer/components/scheduledTasks/TaskDetail.tsx
+  a1d8f4746ad843e8 29,44
+  7db0c5d85c8aa6e2 62,111-116,121-122,138,146
+  d2dc4f9ea0391a47 135
+  ea43890be95b9ee0 144
+  3c079d7ef1f65341 8
+  e6f2844ce17cbcb7 38-43
+  297f8e27ba74b122 11
+src/scheduledTask/types.ts
+  669aaad835220f01 32
+src/scheduledTask/cronJobService.ts
+  8c01407da839e670 218
+  178f585250638e40 330
+src/main/main.ts
+  6fb9d197fb0c017b 67,1806
+  fc3ad94cf0b0c508 77,81,118,123,131,143,150,154,158,162,164,171,176,203,209,215,218,223,228,244,253,263,265,276,292,299,315,319,324,329,335,338,361,369,372,375,380,384,391,397,400,402,411,416,428,431,433,437,441,452,455,457,460,467,473,476,479,481,488,491-493,513,520,522,536,543,548,552,556,579,584,594,601,608,613,615,617-618,620,626,630,640,645,648,653,655,663,669-670,678,682,687,691,694,696,700-701,705,709,719,725,732,737,741,745,748,756,760,768,773,873,882,887,893,901,905,907,914,933,935,948,956,961,968,978,986,1003,1007,1015,1019,1030,1032-1033,1043,1045-1046,1050,1059,1061-1062,1070,1078,1081-1083,1092-1093,1096,1101,1119-1120,1129,1136,1144,1161,1166-1167,1171,1176,1180-1181,1185,1188,1192-1193,1214,1228,1234-1235,1244,1247,1255,1258,1263,1270,1276,1278,1282-1283,1288,1297-1298,1301,1305,1308,1311,1315,1319,1410,1412,1418,1432,1441,1448,1458,1467,1495,1530,1535,1546,1549,1551,1561,1565,1575,1580,1590,1601,1608,1610,1616,1619,1626,1634,1636,1640,1649,1654,1656,1671-1672,1675,1681,1684,1689,1700,1703,1705,1711-1712,1717-1718,1721,1726-1727,1733-1735,1739-1740,1751-1754,1757-1758,1764,1768-1770,1774-1775,1780-1782,1784,1788-1789,1795,1797,1800-1801,1810,1817,1823-1825,1835-1836,1840-1841,1845,1850-1852,1856-1857,1861-1862,1872,1875,1880-1882,1886-1887,1893-1895,1898-1899,1902-1903,1906-1907,1910,1912,1919,1923,1927,1934,1940,1942,1956-1958,1961,1970,1992-1993,2002,2004,2009,2012-2014,2016,2025,2038,2041,2044-2046,2048,2065,2069-2071,2073,2084-2086,2088,2099-2101,2103,2111,2119-2121,2123,2139-2141,2145-2146,2148,2153,2162,2172-2174,2177,2180,2182-2184,2186,2189,2191-2193,2195,2198,2200-2202,2205-2206,2211,2216-2217,2219,2222,2224-2226,2228,2231,2233-2235,2238-2239,2242-2243,2250-2251,2253,2259,2264-2266,2268,2277,2284-2286,2288,2297,2304-2306,2312-2313,2321,2330-2332,2335,2338,2340-2342,2353,2359,2361-2363,2374,2379,2381-2383,2385,2390,2392-2394,2396,2401,2403-2405,2410,2432,2435,2437-2439,2442,2445,2447-2449,2460,2467-2468,2476,2482-2483,2488,2497,2501,2506,2509,2515,2517,2521,2546,2552,2557-2559,2567,2574-2575,2599,2602,2607-2609,2611,2615,2620-2622,2624,2633,2640,2642,2647-2649,2651,2666,2668,2673-2675,2677,2681,2686-2688,2690,2694,2698,2703-2705,2707,2710,2715-2717,2719,2722,2728-2730,2732,2735,2740-2742,2744,2746,2749,2751-2753,2755,2758,2760-2762,2764,2770,2772-2774,2776,2780,2782-2784,2786,2788,2811-2812,2815,2817-2819,2821,2824,2826-2828,2830,2834,2836-2838,2844,2846,2851-2852,2855,2860-2862,2867,2869,2873-2874,2877,2884,2889-2891,2897,2899,2903-2904,2908-2909,2911,2916-2918,2923,2936,2947-2948,2952,2957-2959,2961,2964,2969-2971,2979,2982,2998-2999,3005,3010-3011,3017,3022,3027-3028,3036,3041,3045,3047,3052-3053,3057,3064,3069-3070,3072,3087,3092-3093,3095,3099,3105-3106,3108,3112,3117-3118,3129,3186-3187,3191,3194,3211-3212,3217,3219,3224-3226,3424,3434,3442,3471-3472,3474,3476,3491,3494,3497-3499,3501,3506,3509-3511,3513,3515,3518,3523-3525,3536,3539,3552-3553,3560-3561,3563,3569,3576,3578,3580,3590,3592,3597-3599,3604,3607,3609,3614-3616,3618,3624,3629-3631,3633,3639,3644-3646,3652,3655,3660-3662,3665,3668,3670-3672,3674,3681,3683,3685-3687,3689,3692,3697-3699,3707-3708,3710,3712,3715,3720-3722,3724,3726,3731,3738-3740,3742,3747,3755,3760-3762,3764,3769,3771,3776-3778,3781,3783,3785-3787,3789,3791,3793-3795,3797,3799,3801-3803,3806-3807,3811-3812,3815-3816,3823-3824,3826-3827,3834,3837,3842-3844,3856,3858-3859,3872,3874-3875,3888,3890-3891,3903,3915,3918,3925,3934-3935,3937,3977-3978,3980,3983,3989,3991,3993-3995,3997,4001,4003-4005,4007,4010,4012-4014,4017,4024,4026-4028,4032-4033,4035,4038,4040-4042,4051,4057,4060,4068-4069,4079,4089-4091,4101,4104-4105,4112,4122-4123,4131-4132,4136,4159,4162,4168,4176-4178,4186,4188-4189,4196,4198,4203,4205,4213-4214,4228,4237,4246-4247,4286,4292-4294,4297,4315,4319,4329,4332,4338,4340,4349,4351,4359,4361,4367,4372,4389,4397-4398,4407,4409,4414,4422,4429,4435,4443,4453,4466,4469,4474,4479-4480,4486,4490,4496-4497,4502-4503,4507,4509,4512,4516-4517,4520,4530-4531,4535,4549,4552,4558,4561,4567,4569,4576,4581,4588,4602,4636,4651,4669,4672,4679,4691-4692,4696,4704,4707,4710,4712-4714,4720-4721,4723-4725,4728,4730-4731,4733,4738,4740-4741,4744,4748,4751,4756,4771-4773,4778,4783,4785,4791-4792,4800-4802,4813-4814,4825,4828,4835,4838,4841,4844,4849-4850
+  fe9e3c31b76336ba 495-497,500
+  a94bfd541163bf60 928,932,1794,1811,1816,1819-1820,1822,1846-1847,1849,1876-1877,1879,2035,2255,2258,2260-2261,2263,2273,2276,2279-2280,2283,2293,2296,2299-2300,2303,2317,2320,2323-2324,2327,2550,2553-2554,2556,2603-2604,2606,2616-2617,2619,2643-2644,2646,2669-2670,2672,2682-2683,2685,2699-2700,2702,2711-2712,2714,2720,2723-2724,2727,2736-2737,2739,2856-2857,2859,2878,2883,2885-2886,2888,2912-2913,2915,2953-2954,2956,2965-2966,2968,3006-3007,3009,3023-3024,3026,3048-3049,3051,3065-3066,3068,3076,3086,3088-3089,3091,3100-3101,3104,3113-3114,3116,3169,3220-3221,3223,3519-3520,3522,3593-3594,3596,3610-3611,3613,3625-3626,3628,3640-3641,3643,3656-3657,3659,3693-3694,3696,3716-3717,3719,3732-3733,3737,3756-3757,3759,3772-3773,3775,3838-3839,3841,4076,4081,4088,4158,4163,4167,4170,4175,4388
+  6512312b18cff032 1329,1333,1345,1351,1375,1430,1698,2418,2807,4147,4154,4257,4386,4626,4767,4823
+  7ab229055549fd06 1368
+  9eca475419364917 1369-1374,1392,2803,2806,4144,4262,4385,4625
+  58ee379fb8721a52 1384,1386-1388,1390,1395
+  e17bae2d4e3d01ad 1391
+  ea57ddaece7d75ca 1404-1406
+  5e757d64f4489415 1429,2926,2930,2934
+  d81d6171adca4393 2718,2721,2725-2726
+src/renderer/components/ModelSelector.tsx
+  8e667e145edb39f4 11-19,22-26,32-34
+  78760de38d9bace1 47,54-59
+  8d808237fbf2dccc 124,131-141,152
+  0e7fed0807e115d5 8,21,31,36,44,48,53,61-62,71,75,79-84,90,106,111,117,127,159
+src/renderer/components/scheduledTasks/utils.ts
+  f02e37c6b0f8e433 242,246-248
+  ec0a6c024726eec9 10
+  b96e82bee7428efb 180-185
+  79ffe881277c52a1 11,21-22,24,27-29,31,34-36,40,49-51,54,60-62,65,69,76,79,84-85,90-91,95-96,100,107-108,164-165,173-174,176-177,186-188,196-197,207-208,210-223,229-230,234,239-240,244-245,249-250,255-256,260-261,263,275-276,289,306-307,310-311,314,320,323-324,328-329,332-333,339,343-344,348-349,356-357,361-362,364-365,368-369,376-377,384
+  e145d27a37d5236f 154-157
+  2a70575cc796ccde 193
+  e7b9581b8775dabf 163,194,202,205,321,325-327,330,347,350-355
+  04c8d954f306b823 283
+  9afd4395a73f5434 262
+  3a8d1bf4afe55953 92,94
+  9d209d96943b273f 1
+  abe297cd611e9b90 303
+  cb2ce3a6c5ba6a31 67,71-73,75,190-191,198,264-269,271-274,277-282,284-288,290-302,304-305,308-309,312-313,315-319,322,331,334-338,340-342,345-346,358-360,363
+  92bc29a0f37a807d 270
+  3d0e6082aef06a47 52-53,55-59
+  70b1bf42d58e29a8 77-78
+  65914b672b83a88a 81,87,93,102,111-153,158-162,167
+src/renderer/components/scheduledTasks/TaskForm.tsx
+  6ef5d389d790f8b5 7,33,45,57,73,95-96,139-140,145,152,164-167,171-173,176-181,183-186,188-191,195,211,220,247,255,262,274,304,321,335,352,365,369,373,378,385-386,388,408-410,412-416,418-420,434-453,455-457,465,475,477,488,493,515
+  cfa2fde00db92564 10,22-28,30,32,36-44,51-52,54,56,78,80-81,84-90,92,100-102,105-106,108-109,112,116,144,208-209,214-215,227-229,234-237,239-240,242-243,245,277-278,282-283,285-286,298,309,343,360,372,399,422,459-463,466-474,479
+  7df5054f34d8e263 11,18,35,47,72,76,79,98,104,107,111,115,118,143,146,150,169,175,182,187,192,196,199,206,213,217,221,224,230,250,263,267,275,292,305,341,358,384,411,458,464,476,489,492,494,519
+  108b3ecbc00281c3 17,34,46,75,97,117
+  1b099438c685ed6b 103,110,114
+  1067eb5621cb5f43 131-138,174,202,205,212,216,261,273,291,340,357,383
+  616545f28e180149 207,268-272,276,280-281,284,287,299-303,306-308,311,314-320,323-334,342,345,348-351,362,374-377,387,391-392,395-397,401-404
+  ab04e2ca16e51a99 233
+  f2310db032286784 246
+  6477b4772fcba45d 249,290,339,356,382
+  65247d28543fde30 288-289,337-338,354-355,380-381,406-407,454
+  0a47f745895273e9 293-297,389,393,405
+  3e9fdd44a976cb39 312-313,346-347,363-364,425,431-432
+  7023aab0139ff6d4 322,336,353,379
+  9bcf8777dc448c8d 423,426-430
+  d69c610ee5231714 490
+  4569f04087043102 491
+src/renderer/components/im/IMSettings.tsx
+  2962ab337c2b70f3 618
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "7c424a4cfef271f8238e3fe5c16a72243d48e738",
+  "prompts": {
+    "0461a500375ceb81": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-f27a5a1d-a80d-42f7-a9c5-aea5a6adf448",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "04c8d954f306b823": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-bad126fd-e1bf-4a14-bd5d-6be6bb2e741e",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "0a47f745895273e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-b55544fa-cf36-4439-9fd1-b0ce7b15b14b",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    },
+    "0cc207922677edb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-1a5d2e24-d213-4e1b-97cb-595c89e75c43",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "0d69f155b3d9ccdf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-094680e5-4d18-4681-8cbb-85c6cce9c186",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "0de45980e0761ba2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-b1872926-d455-4995-b7a1-1817695a2804",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "0e7fed0807e115d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-4fa16f51-c27e-4e9a-a340-82ed33d5df9c",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 7,
+      "total_deletions": 2,
+      "accepted_lines": 23,
+      "overriden_lines": 0
+    },
+    "1067eb5621cb5f43": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-501ce15b-f3c9-4a7d-9dac-e8fb2f0e2e2b",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    },
+    "108b3ecbc00281c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-8c22cfe5-e5ad-44b5-a664-e9d65844dac5",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 0,
+      "accepted_lines": 18,
+      "overriden_lines": 0
+    },
+    "14c1babbeaea0fd5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-87aa3a43-df99-4d21-aae2-4da92fcb143a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 11,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "178f585250638e40": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-6e6b43b8-642b-4043-a4fc-08224a38f2eb",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "18050fca08951fca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-423d0c4d-b709-4e38-8a25-ba1807a08f1e",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "1b099438c685ed6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-caf972eb-bc3c-4ea0-b9bd-0954d1eeabfd",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 1,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    },
+    "1e966ad525674f61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-215ecff2-97fa-48d7-b466-9267225e3a08",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "1eb8d0c1b747b9ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-86e9543b-50f7-4fea-aafa-bec0b61dd49a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "1fe8013d5dfc70c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-a8eed5c2-4488-4972-81af-31bf91cf1091",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "21876e0cb6854bff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-d8ea0696-82e7-431f-801f-808861d4af3f",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "2962ab337c2b70f3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78516584-ce63-4b0d-9aa8-c132cf6e782e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "297f8e27ba74b122": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2efde5369ffeNevG5frkTUdXYi-f520eaf7-d357-4a89-9f81-07f7d75709ed",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "2a70575cc796ccde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2efde5369ffeNevG5frkTUdXYi-76f175dd-1bb4-49cb-85b3-7719322d2d9a",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "354d281a014ef376": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-470e27fc-9357-42cc-a527-6756138ef0f6",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 10,
+      "total_deletions": 13,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "3a8d1bf4afe55953": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e1b6e8f0ffeot9m3qoG15fwgl-823f8355-0e45-47b0-ac44-d94153ee8a75",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "3c079d7ef1f65341": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb99d938ffetfcuARwO63iGx3-1d4a1cc5-b6cb-4b99-9e9b-d30c2290fa6a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "3d0e6082aef06a47": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-adaa0d8c-7a3b-473d-8ee6-c25049ef0dba",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 0,
+      "accepted_lines": 7,
+      "overriden_lines": 0
+    },
+    "3e9fdd44a976cb39": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-3b96727d-09c6-4959-a284-12ab17d149ff",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 22,
+      "total_deletions": 32,
+      "accepted_lines": 29,
+      "overriden_lines": 0
+    },
+    "44bce3a999a82c74": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-2dfd08f1-1a95-482d-9d52-25970bdd85b9",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 0,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    },
+    "4569f04087043102": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-aecb295f-60f1-4675-82b1-6c3c51a6fc9a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "5528bfabfe747131": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-cb4d8c9d-ae53-4844-b45b-37df530fb6fd",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "5600e6fd34e45ae2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb99d938ffetfcuARwO63iGx3-79b336b4-6ba7-439b-8634-d581fa02f384",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "58396b465a6221f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c8436fd9ffekJgLcJs37Ph5CY-bfdbdaf3-22ad-41bd-bdef-0a1afe7f2980",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 20,
+      "overriden_lines": 0
+    },
+    "58ee379fb8721a52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-18d7393a-f6b6-4b6f-9c9b-8ce6c53c56fa",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    },
+    "5b02b0ea62806f45": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb425583ffe2nBsbFlYqGwHpM-5b267a18-f3e9-4ac6-a2d7-8cbffc6ffb9e",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 43,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "5e1e75f23dddb4fa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-e613fe96-7cdf-4734-9132-f1a66b9c1f15",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 3,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "5e757d64f4489415": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-f2ed7f65-f21d-4e3c-b9e0-b03a5581e3c7",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "616545f28e180149": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-9dc32d9f-33e6-4612-8cce-a395a6bebde7",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 62,
+      "overriden_lines": 0
+    },
+    "6477b4772fcba45d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-43b85536-aa46-4bbf-a006-2cc7386164e5",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 62,
+      "total_deletions": 9,
+      "accepted_lines": 14,
+      "overriden_lines": 0
+    },
+    "6512312b18cff032": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-97bdd107-6378-490e-985c-6e107c8ee146",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 16,
+      "overriden_lines": 0
+    },
+    "651a75c4c246be01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-62588edf-cbc2-47d2-9f06-f697562455c5",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "65247d28543fde30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb425583ffe2nBsbFlYqGwHpM-fc3b6f2c-edde-491b-947c-d1c3e48adc28",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 51,
+      "total_deletions": 22,
+      "accepted_lines": 23,
+      "overriden_lines": 0
+    },
+    "65914b672b83a88a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-3d0c8c35-eaef-4782-bdc7-1916d4acf60e",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 54,
+      "total_deletions": 35,
+      "accepted_lines": 53,
+      "overriden_lines": 0
+    },
+    "669aaad835220f01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-2f1d826b-3848-4086-a5d4-b4122024fdec",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "69415614fcf21d1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-f9a739cb-2462-493c-9a00-35617ec503f5",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "6a3942926d610e89": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-7fec2fbd-3e56-4095-b507-1ac61b94dd48",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 39,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "6ef5d389d790f8b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-545aa372-6450-4864-9732-75420b526561",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 91,
+      "overriden_lines": 0
+    },
+    "7023aab0139ff6d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-a05e0b83-83ec-4076-b166-be8ed411a465",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 42,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    },
+    "70b1bf42d58e29a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-85c51b7c-e401-426b-b21d-c55602cb366f",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "71cd3c283b9d31b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-a9a90065-075f-4121-a659-33fcad9b0301",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "78760de38d9bace1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-4b44ed45-5aba-4515-b95a-53cc3766930d",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 2,
+      "accepted_lines": 7,
+      "overriden_lines": 0
+    },
+    "79ffe881277c52a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2efde5369ffeNevG5frkTUdXYi-16aa5832-00e0-4f62-8ca7-db8863b3e16f",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 0,
+      "accepted_lines": 104,
+      "overriden_lines": 0
+    },
+    "7ab229055549fd06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-b7162b2d-e13b-44e8-b666-9e69bb0b3e5f",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "7cbdf868f826a0a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-462ffe1a-1af9-4a0e-a11a-71e5eac6cc7f",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "7db0c5d85c8aa6e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-a320d159-c047-4ed6-9bc2-e580d52fdfeb",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 0,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    },
+    "7df5054f34d8e263": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-916bd276-9399-4667-9be1-5d90c57bb56f",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 56,
+      "overriden_lines": 0
+    },
+    "8b79f5375df5c2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f00da362ffeP9XrIxNoR9LgGY-bfa7a5b2-3bf2-4012-a6de-6b36c4e7e022",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "8c01407da839e670": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-59228215-755e-461a-a889-d01349006189",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "8d808237fbf2dccc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-07006836-29be-4934-a464-d8af213f5850",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 1,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    },
+    "8e667e145edb39f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-2015e77d-12e7-430b-8f78-5b55087ca288",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 19,
+      "total_deletions": 2,
+      "accepted_lines": 17,
+      "overriden_lines": 0
+    },
+    "92bc29a0f37a807d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-57b2a75b-47bc-4257-8094-989fe07a1320",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "93857204c2487215": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c8436fd9ffekJgLcJs37Ph5CY-d29fec62-5ba2-49d3-bc49-f4062a3b500b",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 4,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "95459e1c3e7f15f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-2eb8fbc9-8915-4206-9e01-9683e9b0d366",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "9afd4395a73f5434": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-251be132-52ce-4bef-9882-e5a00cf5dd9a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "9bcf8777dc448c8d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1acab4a5-7129-47b4-86bd-031903bd3609",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 9,
+      "total_deletions": 4,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    },
+    "9d209d96943b273f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e1b6e8f0ffeot9m3qoG15fwgl-a15d23d0-1b74-44f4-b731-5f979a4c7828",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "9eca475419364917": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-4d322595-d056-4881-a51e-423b51caf445",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    },
+    "a0f81c3fa084165d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-4a6bdc9d-e851-44e2-adc7-a2e2e75be115",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "a1d8f4746ad843e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-5da957bd-a998-40c4-9338-e06d935d133d",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "a94bfd541163bf60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-14cf3c1b-3fa2-409b-bca2-f28141622318",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 0,
+      "accepted_lines": 156,
+      "overriden_lines": 0
+    },
+    "ab04e2ca16e51a99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-d2ec96be-807d-4dff-88d5-68ac3b996d73",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "abe297cd611e9b90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-2d9b4ce1-c015-444c-a022-6f0bd1dd234b",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "ac265deeec6db4fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e96a6233-4b93-4948-9d6d-e217e6b733f0",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 3,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "acab45a24518ae9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e1b6e8f0ffeot9m3qoG15fwgl-7d28578a-3fcd-451b-9fdd-0de8b32bf57b",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "ad5b3e1888a2e4ca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ac8b994-9aef-43b2-a98a-4ad7cf5fc91d",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "b67ebc49a7c5b91c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e5ce9bfdffema08K9CFtbIVzC-dfc84065-00ae-4a65-91f6-e4de05c9990f",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 7,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "b6ff3ddee742f4a3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f00da362ffeP9XrIxNoR9LgGY-3d399ff3-7ad9-482a-b554-4d2110e6801b",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 22,
+      "total_deletions": 23,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "b81e9f7d579ca3f7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-ed97de05-3754-4b73-8ca2-68f6adf88bb1",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "b96e82bee7428efb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e1b6e8f0ffeot9m3qoG15fwgl-d0676fa0-ee2b-4095-b551-c2ffee99f8ca",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 7,
+      "total_deletions": 1,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    },
+    "c4459412cd8be665": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2e1b6e8f0ffeot9m3qoG15fwgl-bca21c84-70b3-4c1a-b318-10fbc9136352",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "c47bbc1a5a880335": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-7ebfb2e2-b538-42bb-9a7b-8f303b9144f6",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "cb2ce3a6c5ba6a31": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-de6b88f5-90e1-44c3-b4b6-198068a9fc81",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 69,
+      "overriden_lines": 0
+    },
+    "cf961d6e04c157d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-4388e47a-412a-4dfc-9e24-51526aad65fc",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "cfa2fde00db92564": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-0d7e01ca-621c-4052-8dda-5f9350de9b47",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 89,
+      "overriden_lines": 0
+    },
+    "d01797e725b23a4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-769139ad-944b-49f7-bfac-7861daa00589",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "d01f8d6411d37e23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c79f2fd1ffeH8rPL2OqKK2Kxg-331f9d6a-a2ec-4e7a-8786-06901ccba451",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 0,
+      "accepted_lines": 89,
+      "overriden_lines": 0
+    },
+    "d1235968ea578c7e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-e7597fd1-2326-4a84-a310-cd592ecad970",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "d2ada61bd58380d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-94ca0e16-0e24-41e9-8eba-3cb0f875a903",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 136,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "d2dc4f9ea0391a47": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2efde5369ffeNevG5frkTUdXYi-1ac4c56b-9edc-4f41-a7f7-bee603966d93",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "d69c610ee5231714": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-85179bec-3335-40c7-8b03-d65aab13dc22",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "d81d6171adca4393": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-0ec8be42-65a5-4298-bef0-8fd3e26e9ed5",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 4,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "d94083aa14deea6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-fc4422d0-47d1-49a9-9c1b-2bc99ed3688b",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "d964327482935422": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-e9b07e7a-1867-4ce9-a7a8-d1dd66bbd393",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "ddb78a95021459fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-57042823-5eee-4129-a2db-b747ffc96c2d",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 23,
+      "total_deletions": 9,
+      "accepted_lines": 23,
+      "overriden_lines": 0
+    },
+    "ddc2a170e67f15ca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cd0cf051ffeJBofM7zXNr2x4M-a1778372-35e8-431e-b26a-4a7eaa987f17",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "dddbe13faf624a0b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-d0b8b832-3bf7-4423-9cd4-041577350317",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "e0a8735aa71e2ef5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-f4a2ff09-1692-4903-a4d4-b53d5a830140",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "e145d27a37d5236f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-d78a22bd-81f1-4c0b-81b4-996078eb04cf",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 1,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "e17bae2d4e3d01ad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-ac0d4804-bcae-4b5e-84e8-d19b0bf1b295",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "e21a4a600b976a54": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-4376138b-a41f-456c-a57e-1bd21c8f46d6",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "e6f2844ce17cbcb7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-fd0c34a8-130a-4844-94fe-d3676e8f21f1",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 3,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    },
+    "e794a879ef284bca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-4c46e0ea-bed5-42a4-8dd8-c87b75e4c228",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 0,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    },
+    "e7b9581b8775dabf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb2d8d4bffeasOFcSupAuanNm-03ecaa45-ca26-4881-96ed-c0257813a33e",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 19,
+      "total_deletions": 2,
+      "accepted_lines": 16,
+      "overriden_lines": 0
+    },
+    "e8dd4303f2604560": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-93969980-8982-45fa-a68e-d4dfed800d53",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "ea43890be95b9ee0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2efde5369ffeNevG5frkTUdXYi-9fe50c81-90f3-439a-89cf-8c6d1b80768e",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "ea57ddaece7d75ca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-8fce6812-5505-4733-92c3-5c61eb3c8f82",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "ec0a6c024726eec9": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_2cb99d938ffetfcuARwO63iGx3",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "f02e37c6b0f8e433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-c7edc170-86d1-49f1-a368-65bfa8bb32c0",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "f057028c24ff6573": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb425583ffe2nBsbFlYqGwHpM-26aa1ad6-81b0-4fd0-9e41-d5be27d31969",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 2,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "f2310db032286784": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f12d4470ffeJfabpZt2dGXQrM-35c7f12d-de33-4ce1-906e-3d3bc2e77d34",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "f5bb3669b4ddd39e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-103a322b-bf24-4495-9256-f895c01ca136",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "f7d3308e0d83288f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-535fc4d3-158b-4674-afcf-1b2faa4badb9",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "f8141415ca2ae4af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c8436fd9ffekJgLcJs37Ph5CY-3ace435c-5770-43b4-897a-6271a8383f59",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 1,
+      "accepted_lines": 18,
+      "overriden_lines": 0
+    },
+    "f99dd7ea71a07841": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "32afebc6-f8b2-40aa-bab6-eac91e5c3903",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "fbb9e0b3433d18e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2cb8b9e6fffeh0VQojvqnhFY6S-2f84a656-4003-4186-a485-091c588b17e4",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "fc3ad94cf0b0c508": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-da980ff3-9ff1-4e43-b8f8-a18714388c76",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 970,
+      "overriden_lines": 0
+    }
+  }
+}
