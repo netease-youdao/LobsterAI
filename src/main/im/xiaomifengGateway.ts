@@ -439,19 +439,13 @@ export class XiaomifengGateway extends EventEmitter {
         const isKickedByOtherClient = kickReason === 1 || kickReason === 3;
         
         if (isKickedByOtherClient) {
-          // 被其他客户端踢下线，设置错误消息并不再重连
           this.kickedByOtherClient = true;
-          
-          // 清理任何已存在的重连定时器
-          if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-          }
-          
           this.status.lastError = '账号已在其它地方登录';
           console.warn('[Xiaomifeng Gateway] 账号已在其它地方登录，不再自动重连');
           this.emit('error', new Error('账号已在其它地方登录'));
-          this.emit('kickedByOtherClient'); // 发出特殊事件以便上层处理
+          this.emit('kickedByOtherClient');
+          // 完整清理 SDK 连接，使上层可以在问题解决后重新调用 start()
+          void this.stop();
         } else {
           // 其他踢出原因，仍然尝试重连
           this.status.lastError = 'Kicked offline';
