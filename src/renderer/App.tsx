@@ -31,6 +31,7 @@ import { matchesShortcut } from './services/shortcuts';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
 import PrivacyDialog from './components/PrivacyDialog';
+import { CommandPalette, useCommandPalette } from './components/command-palette';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -47,6 +48,7 @@ const App: React.FC = () => {
   const [downloadProgress, setDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
   const dispatch = useDispatch();
@@ -394,6 +396,16 @@ const App: React.FC = () => {
     window.electron.window.close();
   }, []);
 
+  useCommandPalette({
+    onNavigateCowork: handleShowCowork,
+    onNavigateSkills: handleShowSkills,
+    onNavigateScheduledTasks: handleShowScheduledTasks,
+    onNavigateMcp: handleShowMcp,
+    onNavigateAgents: handleShowAgents,
+    onNewChat: handleNewChat,
+    onShowSettings: handleShowSettings,
+  });
+
   const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
     if (!pendingPermission) return;
     await coworkService.respondToPermission(pendingPermission.requestId, result);
@@ -443,6 +455,14 @@ const App: React.FC = () => {
         ...defaultConfig.shortcuts,
         ...(shortcuts ?? {}),
       };
+
+      if (!event.isComposing
+        && configService.getConfig().features?.commandPalette !== false
+        && matchesShortcut(event, activeShortcuts.commandPalette)) {
+        event.preventDefault();
+        setShowCommandPalette(prev => !prev);
+        return;
+      }
 
       if (matchesShortcut(event, activeShortcuts.newChat)) {
         event.preventDefault();
@@ -723,6 +743,12 @@ const App: React.FC = () => {
         />
       )}
       {permissionModal}
+      {configService.getConfig().features?.commandPalette !== false && (
+        <CommandPalette
+          open={showCommandPalette}
+          onClose={() => setShowCommandPalette(false)}
+        />
+      )}
       {privacyAgreed === false && (
         <PrivacyDialog
           onAccept={handlePrivacyAccept}

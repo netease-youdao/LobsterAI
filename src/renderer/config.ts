@@ -232,7 +232,11 @@ export interface AppConfig {
     newChat: string;
     search: string;
     settings: string;
+    commandPalette: string;
     [key: string]: string | undefined;
+  };
+  features?: {
+    commandPalette?: boolean;
   };
 }
 
@@ -418,7 +422,11 @@ export const defaultConfig: AppConfig = {
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
-  }
+    commandPalette: 'CmdOrCtrl+K',
+  },
+  features: {
+    commandPalette: true,
+  },
 };
 
 // 配置存储键

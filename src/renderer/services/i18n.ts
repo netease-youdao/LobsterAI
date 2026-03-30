@@ -1172,6 +1172,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: '网易有道LobsterAI服务协议',
     privacyDialogAccept: '我已阅读并同意',
     privacyDialogReject: '拒绝',
+
+    // Cmd+K 命令面板
+    commandPaletteLabel: '命令面板',
+    commandPalettePlaceholder: '搜索命令...',
+    commandPaletteNoResults: '未找到匹配命令',
+    commandPaletteGroupNavigation: '导航',
+    commandPaletteGroupSession: '会话',
+    commandPaletteGroupSettings: '设置',
+    commandPaletteGroupTools: '工具',
+    commandNavigationCowork: '切换至 Cowork',
+    commandNavigationSkills: '切换至 Skills',
+    commandNavigationScheduledTasks: '切换至计划任务',
+    commandNavigationMcp: '切换至 MCP 管理',
+    commandNavigationAgents: '切换至 Agents',
+    commandSettingsToggleTheme: '切换主题（明暗）',
+    commandSettingsToggleLanguage: '切换语言',
+    commandSettingsOpenSettings: '打开设置',
+    commandSessionNewSession: '新建会话',
   },
   en: {
     // Common
@@ -2338,6 +2356,23 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
+
+    commandPaletteLabel: 'Command Palette',
+    commandPalettePlaceholder: 'Search commands...',
+    commandPaletteNoResults: 'No commands found',
+    commandPaletteGroupNavigation: 'Navigation',
+    commandPaletteGroupSession: 'Session',
+    commandPaletteGroupSettings: 'Settings',
+    commandPaletteGroupTools: 'Tools',
+    commandNavigationCowork: 'Go to Cowork',
+    commandNavigationSkills: 'Go to Skills',
+    commandNavigationScheduledTasks: 'Go to Scheduled Tasks',
+    commandNavigationMcp: 'Go to MCP Manager',
+    commandNavigationAgents: 'Go to Agents',
+    commandSettingsToggleTheme: 'Toggle Theme (Dark / Light)',
+    commandSettingsToggleLanguage: 'Toggle Language',
+    commandSettingsOpenSettings: 'Open Settings',
+    commandSessionNewSession: 'New Session',
   }
 };
 
