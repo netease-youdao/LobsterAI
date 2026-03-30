@@ -74,30 +74,13 @@ class CoworkService {
 
     // Message listener - also check if session exists (for IM-created sessions)
     const messageCleanup = cowork.onStreamMessage(async ({ sessionId, message }) => {
-      // Debug: log user messages to check if imageAttachments are preserved
-      if (message.type === 'user') {
-        const meta = message.metadata as Record<string, unknown> | undefined;
-        console.log('[CoworkService] onStreamMessage received user message', {
-          sessionId,
-          messageId: message.id,
-          hasMetadata: !!meta,
-          metadataKeys: meta ? Object.keys(meta) : [],
-          hasImageAttachments: !!(meta?.imageAttachments),
-          imageAttachmentsCount: Array.isArray(meta?.imageAttachments) ? (meta.imageAttachments as unknown[]).length : 0,
-        });
-      }
       // Check if session exists in current list
       const state = store.getState().cowork;
       const sessionExists = state.sessions.some(s => s.id === sessionId);
 
-      console.log('[CoworkService] onStreamMessage: sessionId=', sessionId, 'type=', message.type, 'sessionExists=', sessionExists, 'totalSessions=', state.sessions.length);
       if (!sessionExists) {
         // Session was created by IM or another source, refresh the session list
-        console.log('[CoworkService] onStreamMessage: session NOT found in Redux, calling loadSessions...');
         await this.loadSessions();
-        const newState = store.getState().cowork;
-        const nowExists = newState.sessions.some(s => s.id === sessionId);
-        console.log('[CoworkService] onStreamMessage: after loadSessions, sessionExists=', nowExists, 'totalSessions=', newState.sessions.length);
       }
 
       // A new user turn means this session is actively running again
@@ -162,13 +145,8 @@ class CoworkService {
 
     // Sessions changed listener (new channel sessions discovered by polling)
     const sessionsChangedCleanup = cowork.onSessionsChanged(() => {
-      const beforeState = store.getState().cowork;
-      console.log('[CoworkService] onSessionsChanged: received IPC event, before sessions:', beforeState.sessions.length, 'sessionIds:', beforeState.sessions.map(s => s.id).slice(0, 5));
-      void this.loadSessions().then(() => {
-        const state = store.getState().cowork;
-        console.log('[CoworkService] onSessionsChanged: loadSessions complete, total sessions:', state.sessions.length, 'sessionIds:', state.sessions.map(s => s.id).slice(0, 5));
-      }).catch((err) => {
-        console.error('[CoworkService] onSessionsChanged: loadSessions FAILED:', err);
+      void this.loadSessions().catch((err) => {
+        console.error('[CoworkService] onSessionsChanged: loadSessions failed:', err);
       });
     });
     this.streamListenerCleanups.push(sessionsChangedCleanup);
