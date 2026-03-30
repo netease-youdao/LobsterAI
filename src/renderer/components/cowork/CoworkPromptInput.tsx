@@ -7,6 +7,7 @@ import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
+import McpButton from '../mcp/McpButton';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -710,6 +711,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                       onManageSkills={handleManageSkills}
                     />
                     <ActiveSkillBadge />
+                    <McpButton
+                      sessionId={sessionId}
+                      onManageMcp={() => window.dispatchEvent(new CustomEvent('app:show-mcp'))}
+                    />
                   </>
                 )}
               </div>

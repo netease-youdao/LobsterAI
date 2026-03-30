@@ -51,9 +51,56 @@ export class McpBridgeServer {
   private onAskUserCallback: ((request: AskUserRequest) => void) | null = null;
   private onAskUserDismissCallback: ((requestId: string) => void) | null = null;
 
+  /**
+   * Per-session MCP filter map: sessionId → Set of allowed server names.
+   * null value = all servers allowed (no restriction).
+   * An entry with an empty Set = no servers allowed.
+   */
+  private readonly sessionServerFilters = new Map<string, Set<string> | null>();
+
   constructor(mcpManager: McpServerManager, secret: string) {
     this.mcpManager = mcpManager;
     this.secret = secret;
+  }
+
+  /**
+   * Set the allowed MCP server names for a session.
+   * Pass null to allow all servers (default, same as no filter).
+   * Pass an empty array to block all MCP servers for this session.
+   */
+  setSessionFilter(sessionId: string, allowedServerNames: string[] | null): void {
+    if (allowedServerNames === null) {
+      this.sessionServerFilters.set(sessionId, null);
+    } else {
+      this.sessionServerFilters.set(sessionId, new Set(allowedServerNames));
+    }
+    log('INFO', `Session "${sessionId}" MCP filter set: ${allowedServerNames === null ? 'all allowed' : `[${allowedServerNames.join(', ')}]`}`);
+  }
+
+  /**
+   * Clear the MCP filter for a session (called when session ends).
+   */
+  clearSessionFilter(sessionId: string): void {
+    this.sessionServerFilters.delete(sessionId);
+  }
+
+  /**
+   * Check if a server is allowed for any currently active session filter.
+   * If no filters are active, all servers are allowed.
+   * If any active filter blocks the server, it is blocked.
+   */
+  private isServerAllowedForActiveSessions(serverName: string): boolean {
+    if (this.sessionServerFilters.size === 0) return true;
+    for (const filter of this.sessionServerFilters.values()) {
+      // null filter = this session allows all
+      if (filter === null) continue;
+      // non-null filter = only these servers allowed; if this server is NOT in it, block
+      if (!filter.has(serverName)) {
+        log('INFO', `MCP server "${serverName}" blocked by active session filter`);
+        return false;
+      }
+    }
+    return true;
   }
 
   get port(): number | null {
@@ -238,6 +285,15 @@ export class McpBridgeServer {
       if (!server || !tool) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Missing "server" or "tool" field' }));
+        return;
+      }
+
+      if (!this.isServerAllowedForActiveSessions(server)) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          content: [{ type: 'text', text: `MCP server "${server}" is disabled for this session.` }],
+          isError: true,
+        }));
         return;
       }
 

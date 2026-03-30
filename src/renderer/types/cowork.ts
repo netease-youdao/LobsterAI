@@ -50,6 +50,7 @@ export interface CoworkSession {
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
+  activeMcpIds?: string[] | null;
   agentId: string;
   messages: CoworkMessage[];
   createdAt: number;

@@ -581,14 +581,25 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Used to set a client-side fallback timer that fires slightly after the server timeout,
    * so LobsterAI can recover even when the gateway fails to deliver the abort event.
    */
-  agentTimeoutSeconds = OPENCLAW_AGENT_TIMEOUT_SECONDS;
-  private static readonly CLIENT_TIMEOUT_GRACE_MS = 30_000;
+   agentTimeoutSeconds = OPENCLAW_AGENT_TIMEOUT_SECONDS;
+   private static readonly CLIENT_TIMEOUT_GRACE_MS = 30_000;
 
-  constructor(store: CoworkStore, engineManager: OpenClawEngineManager) {
-    super();
-    this.store = store;
-    this.engineManager = engineManager;
-  }
+   private sessionFilterCallback: ((sessionId: string, allowedServerNames: string[] | null) => void) | null = null;
+   private sessionFilterClearCallback: ((sessionId: string) => void) | null = null;
+
+   constructor(store: CoworkStore, engineManager: OpenClawEngineManager) {
+     super();
+     this.store = store;
+     this.engineManager = engineManager;
+   }
+
+   setMcpSessionFilterCallbacks(
+     set: (sessionId: string, allowedServerNames: string[] | null) => void,
+     clear: (sessionId: string) => void,
+   ): void {
+     this.sessionFilterCallback = set;
+     this.sessionFilterClearCallback = clear;
+   }
 
   setChannelSessionSync(sync: OpenClawChannelSessionSync): void {
     this.channelSessionSync = sync;
@@ -657,6 +668,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         systemPrompt: '',
         executionMode: 'local' as CoworkExecutionMode,
         activeSkillIds: [],
+        activeMcpIds: null,
         messages,
         agentId: 'main',
         createdAt: now,
@@ -755,6 +767,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         systemPrompt: '',
         executionMode: 'local' as CoworkExecutionMode,
         activeSkillIds: [],
+        activeMcpIds: null,
         messages,
         createdAt: firstTimestamp,
         updatedAt: firstTimestamp,
@@ -1131,30 +1144,36 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.pendingTurns.set(sessionId, { resolve, reject });
     });
     this.manuallyStoppedSessions.delete(sessionId);
-    this.activeTurns.set(sessionId, {
-      sessionId,
-      sessionKey,
-      runId,
-      turnToken,
-      knownRunIds: new Set([runId]),
-      assistantMessageId: null,
-      committedAssistantText: '',
-      currentAssistantSegmentText: '',
-      currentText: '',
-      agentAssistantTextLength: 0,
-      currentContentText: '',
-      currentContentBlocks: [],
-      sawNonTextContentBlocks: false,
-      textStreamMode: 'unknown',
-      toolUseMessageIdByToolCallId: new Map(),
-      toolResultMessageIdByToolCallId: new Map(),
-      toolResultTextByToolCallId: new Map(),
-      stopRequested: false,
-      pendingUserSync: false,
-      bufferedChatPayloads: [],
-      bufferedAgentPayloads: [],
-    });
-    this.sessionIdByRunId.set(runId, sessionId);
+     this.activeTurns.set(sessionId, {
+       sessionId,
+       sessionKey,
+       runId,
+       turnToken,
+       knownRunIds: new Set([runId]),
+       assistantMessageId: null,
+       committedAssistantText: '',
+       currentAssistantSegmentText: '',
+       currentText: '',
+       agentAssistantTextLength: 0,
+       currentContentText: '',
+       currentContentBlocks: [],
+       sawNonTextContentBlocks: false,
+       textStreamMode: 'unknown',
+       toolUseMessageIdByToolCallId: new Map(),
+       toolResultMessageIdByToolCallId: new Map(),
+       toolResultTextByToolCallId: new Map(),
+       stopRequested: false,
+       pendingUserSync: false,
+       bufferedChatPayloads: [],
+       bufferedAgentPayloads: [],
+     });
+     this.sessionIdByRunId.set(runId, sessionId);
+
+     if (this.sessionFilterCallback) {
+       const freshSession = this.store.getSession(sessionId);
+       const activeMcpIds = freshSession?.activeMcpIds ?? null;
+       this.sessionFilterCallback(sessionId, activeMcpIds);
+     }
 
     // Start client-side timeout watchdog.
     // OpenClaw gateway has a known issue where embedded run timeouts may not
@@ -3512,7 +3531,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       });
     }
     this.activeTurns.delete(sessionId);
-    setCoworkProxySessionId(null);
+     this.sessionFilterClearCallback?.(sessionId);
+     setCoworkProxySessionId(null);
     // NOTE: Do NOT clear lastSystemPromptBySession here — it must persist
     // across turns so that the system prompt is only injected on the first
     // turn of a session (or when it actually changes).  Cleanup happens in

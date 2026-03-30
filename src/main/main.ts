@@ -1008,8 +1008,15 @@ const getCoworkRunner = () => {
     coworkRunner = new CoworkRunner(getCoworkStore());
 
     // Provide MCP server configuration to the runner
-    coworkRunner.setMcpServerProvider(() => {
-      return getMcpStore().getEnabledServers();
+    coworkRunner.setMcpServerProvider((sessionId: string) => {
+      const allEnabled = getMcpStore().getEnabledServers();
+      if (sessionId) {
+        const session = getCoworkStore().getSession(sessionId);
+        if (session?.activeMcpIds !== null && session?.activeMcpIds !== undefined) {
+          return allEnabled.filter((s) => session.activeMcpIds!.includes(s.id));
+        }
+      }
+      return allEnabled;
     });
   }
   return coworkRunner;
@@ -1101,9 +1108,26 @@ const getCoworkEngineRouter = () => {
     if (!claudeRuntimeAdapter) {
       claudeRuntimeAdapter = new ClaudeRuntimeAdapter(getCoworkRunner());
     }
-    if (!openClawRuntimeAdapter) {
-      openClawRuntimeAdapter = new OpenClawRuntimeAdapter(getCoworkStore(), getOpenClawEngineManager());
-      // Wire up channel session sync for IM conversations via OpenClaw
+     if (!openClawRuntimeAdapter) {
+       openClawRuntimeAdapter = new OpenClawRuntimeAdapter(getCoworkStore(), getOpenClawEngineManager());
+       openClawRuntimeAdapter.setMcpSessionFilterCallbacks(
+         (sessionId, activeMcpIds) => {
+           if (!mcpBridgeServer) return;
+           if (activeMcpIds === null) {
+             mcpBridgeServer.setSessionFilter(sessionId, null);
+           } else {
+             const allEnabled = getMcpStore().getEnabledServers();
+             const allowedNames = allEnabled
+               .filter(s => activeMcpIds.includes(s.id))
+               .map(s => s.name);
+             mcpBridgeServer.setSessionFilter(sessionId, allowedNames);
+           }
+         },
+         (sessionId) => {
+           mcpBridgeServer?.clearSessionFilter(sessionId);
+         },
+       );
+       // Wire up channel session sync for IM conversations via OpenClaw
       try {
         const imManager = getIMGatewayManager();
         const imStore = imManager.getIMStore();
@@ -2684,6 +2708,20 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to update session pin',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:setActiveMcpIds', async (_event, options: { sessionId: string; mcpIds: string[] | null }) => {
+    try {
+      const coworkStoreInstance = getCoworkStore();
+      coworkStoreInstance.setSessionActiveMcpIds(options.sessionId, options.mcpIds);
+      return { success: true };
+    } catch (error) {
+      console.error('[IPC] cowork:session:setActiveMcpIds error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update session MCP ids',
       };
     }
   });

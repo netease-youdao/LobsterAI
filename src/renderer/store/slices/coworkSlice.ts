@@ -27,6 +27,8 @@ interface CoworkState {
   isStreaming: boolean;
   remoteManaged: boolean;
   pendingPermissions: CoworkPermissionRequest[];
+  /** MCP toggle state staged before a session is created (null = all enabled) */
+  pendingActiveMcpIds: string[] | null;
   config: CoworkConfig;
 }
 
@@ -41,6 +43,7 @@ const initialState: CoworkState = {
   isStreaming: false,
   remoteManaged: false,
   pendingPermissions: [],
+  pendingActiveMcpIds: null,
   config: {
     workingDirectory: '',
     systemPrompt: '',
@@ -127,6 +130,7 @@ const coworkSlice = createSlice({
 
     setCurrentSession(state, action: PayloadAction<CoworkSession | null>) {
       state.currentSession = action.payload;
+      state.pendingActiveMcpIds = null;
       if (action.payload) {
         state.currentSessionId = action.payload.id;
         if (!action.payload.id.startsWith('temp-')) {
@@ -324,6 +328,18 @@ const coworkSlice = createSlice({
       state.currentSession = null;
       state.isStreaming = false;
       state.remoteManaged = false;
+      state.pendingActiveMcpIds = null;
+    },
+
+    updateSessionActiveMcpIds(state, action: PayloadAction<{ sessionId: string; mcpIds: string[] | null }>) {
+      const { sessionId, mcpIds } = action.payload;
+      if (state.currentSession?.id === sessionId) {
+        state.currentSession.activeMcpIds = mcpIds;
+      }
+    },
+
+    setPendingActiveMcpIds(state, action: PayloadAction<string[] | null>) {
+      state.pendingActiveMcpIds = action.payload;
     },
 
     setDraftAttachments(state, action: PayloadAction<{ draftKey: string; attachments: DraftAttachment[] }>) {
@@ -365,6 +381,8 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  updateSessionActiveMcpIds,
+  setPendingActiveMcpIds,
 } = coworkSlice.actions;
 
 export default coworkSlice.reducer;

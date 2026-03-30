@@ -484,6 +484,12 @@ const App: React.FC = () => {
     return () => window.removeEventListener('app:showToast', handler);
   }, [showToast]);
 
+  useEffect(() => {
+    const handler = () => handleShowMcp();
+    window.addEventListener('app:show-mcp', handler);
+    return () => window.removeEventListener('app:show-mcp', handler);
+  }, [handleShowMcp]);
+
   // 监听托盘菜单打开设置的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {
