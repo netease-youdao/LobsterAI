@@ -17,6 +17,8 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const os = require('os');
 const path = require('path');
 
@@ -33,6 +35,54 @@ function log(msg) {
 function die(msg) {
   console.error(`[openclaw-plugins] ERROR: ${msg}`);
   process.exit(1);
+}
+
+/**
+ * Quickly check whether a custom npm registry URL is reachable.
+ * Performs an HTTP(S) request to the registry root with a short timeout
+ * so that unreachable internal registries are detected in seconds rather
+ * than waiting for npm's full 5-minute timeout.
+ *
+ * @param {string} registryUrl - The registry base URL (e.g. "https://npm.nie.netease.com")
+ * @param {number} [timeoutMs=5000] - Connection timeout in milliseconds
+ * @returns {Promise<boolean>} Resolves to true if reachable, false otherwise
+ */
+function checkRegistryReachable(registryUrl, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    let url;
+    try {
+      url = new URL(registryUrl);
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    const lib = url.protocol === 'https:' ? https : http;
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname || '/',
+      method: 'HEAD',
+      timeout: timeoutMs,
+    };
+
+    const req = lib.request(options, () => {
+      // Any HTTP response means the registry is reachable
+      req.destroy();
+      resolve(true);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+
+    req.on('error', () => {
+      resolve(false);
+    });
+
+    req.end();
+  });
 }
 
 function runNpm(args, opts = {}) {
@@ -153,6 +203,7 @@ ensureDir(pluginCacheBase);
 
 log(`Processing ${plugins.length} plugin(s)...`);
 
+(async () => {
 for (const plugin of plugins) {
   const { id, npm: npmSpec, version, registry, optional } = plugin;
   const cacheDir = path.join(pluginCacheBase, id);
@@ -174,6 +225,21 @@ for (const plugin of plugins) {
   }
 
   if (needsDownload) {
+    // For optional plugins with a custom registry, perform a fast reachability
+    // check before attempting npm install. If the registry is not reachable
+    // (e.g. an internal corporate registry inaccessible to external users),
+    // skip immediately instead of waiting for npm's full 5-minute timeout.
+    if (registry && optional) {
+      log(`  Checking registry reachability: ${registry}`);
+      const reachable = await checkRegistryReachable(registry);
+      if (!reachable) {
+        log(`WARNING: Registry ${registry} is not reachable. Skipping optional plugin ${id}.`);
+        log(`Skipping ${id} — registry unavailable from this network.`);
+        continue;
+      }
+      log(`  Registry is reachable, proceeding with download.`);
+    }
+
     log(`Downloading ${npmSpec}@${version}...`);
 
     // Use a temp wrapper package to download the plugin via npm install.
@@ -321,3 +387,6 @@ if (fs.existsSync(weixinChannelPath)) {
     log('openclaw-weixin/src/channel.ts already has gatewayMethods, skipping patch');
   }
 }
+})().catch((err) => {
+  die(`Unexpected error: ${err.message}`);
+});
