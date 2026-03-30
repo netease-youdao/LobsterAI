@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useMaskClose } from '../../utils/useMaskClose';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { agentService } from '../../services/agent';
@@ -43,11 +44,11 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
-
   // IM binding state
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
   const [boundPlatforms, setBoundPlatforms] = useState<Set<IMPlatform>>(new Set());
   const [initialBoundPlatforms, setInitialBoundPlatforms] = useState<Set<IMPlatform>>(new Set());
+  const maskProps = useMaskClose(onClose);
 
   useEffect(() => {
     if (!agentId) return;
@@ -153,10 +154,9 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" {...maskProps}>
       <div
         className="w-full max-w-2xl mx-4 rounded-xl shadow-xl bg-white dark:bg-claude-darkSurface border dark:border-claude-darkBorder border-claude-border max-h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header: agent icon + name + close */}
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">

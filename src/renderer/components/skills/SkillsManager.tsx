@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useMaskClose } from '../../utils/useMaskClose';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   ArrowDownTrayIcon,
@@ -50,6 +51,10 @@ const SkillsManager: React.FC = () => {
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
   const githubImportInputRef = useRef<HTMLInputElement>(null);
+
+  const marketplaceSkillMaskProps = useMaskClose(() => setSelectedMarketplaceSkill(null));
+  const selectedSkillMaskProps = useMaskClose(() => setSelectedSkill(null));
+  const githubImportMaskProps = useMaskClose(() => setIsGithubImportOpen(false));
 
   useEffect(() => {
     let isActive = true;
@@ -632,11 +637,10 @@ const SkillsManager: React.FC = () => {
       {selectedMarketplaceSkill && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setSelectedMarketplaceSkill(null)}
+          {...marketplaceSkillMaskProps}
         >
           <div
             className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
@@ -721,11 +725,10 @@ const SkillsManager: React.FC = () => {
       {selectedSkill && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setSelectedSkill(null)}
+          {...selectedSkillMaskProps}
         >
           <div
             className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
@@ -877,11 +880,10 @@ const SkillsManager: React.FC = () => {
       {isGithubImportOpen && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setIsGithubImportOpen(false)}
+          {...githubImportMaskProps}
         >
           <div
             className="w-full max-w-md mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between">
               <div>

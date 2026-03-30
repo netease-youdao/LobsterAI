@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useMaskClose } from '../utils/useMaskClose';
 import { configService } from '../services/config';
 import { apiService } from '../services/api';
 import { checkForAppUpdate } from '../services/appUpdate';
@@ -411,6 +412,7 @@ const joinWorkspacePath = (dir: string | undefined, filename: string): string =>
 
 const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
   const dispatch = useDispatch();
+  const maskProps = useMaskClose(onClose);
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
@@ -3424,7 +3426,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   return (
     <div
       className="fixed inset-0 z-50 modal-backdrop flex items-center justify-center"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      {...maskProps}
     >
       <div
         className="relative flex w-[900px] h-[80vh] rounded-2xl dark:border-claude-darkBorder border-claude-border border shadow-modal overflow-hidden modal-content"

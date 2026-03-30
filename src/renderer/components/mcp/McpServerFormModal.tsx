@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useMaskClose } from '../../utils/useMaskClose';
 import { i18nService } from '../../services/i18n';
 import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
 
@@ -31,6 +32,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const [url, setUrl] = useState('');
   const [headerRows, setHeaderRows] = useState<{ key: string; value: string }[]>([]);
   const [error, setError] = useState('');
+  const maskProps = useMaskClose(onClose);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -220,11 +222,10 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onClose}
+      {...maskProps}
     >
       <div
         className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
           <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
