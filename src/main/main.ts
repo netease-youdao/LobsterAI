@@ -1008,8 +1008,19 @@ const getCoworkRunner = () => {
     coworkRunner = new CoworkRunner(getCoworkStore());
 
     // Provide MCP server configuration to the runner
-    coworkRunner.setMcpServerProvider(() => {
-      return getMcpStore().getEnabledServers();
+    coworkRunner.setMcpServerProvider((sessionId: string) => {
+      const allEnabled = getMcpStore().getEnabledServers();
+      if (sessionId) {
+        const session = getCoworkStore().getSession(sessionId);
+        const agentId = session?.agentId;
+        if (agentId && agentId !== 'main') {
+          const agent = getCoworkStore().getAgent(agentId);
+          if (agent?.mcpIds?.length) {
+            return allEnabled.filter((s) => agent.mcpIds.includes(s.id));
+          }
+        }
+      }
+      return allEnabled;
     });
   }
   return coworkRunner;

@@ -260,6 +260,18 @@ export class SqliteStore {
       // Column already exists or migration not needed.
     }
 
+    // Migration: Add mcp_ids column to agents table
+    try {
+      const agentCols = this.db.exec("PRAGMA table_info(agents);");
+      const agentColNames = agentCols[0]?.values.map((row) => row[1]) || [];
+      if (!agentColNames.includes('mcp_ids')) {
+        this.db.run("ALTER TABLE agents ADD COLUMN mcp_ids TEXT NOT NULL DEFAULT '[]';");
+        this.save();
+      }
+    } catch {
+      // Column already exists or migration not needed.
+    }
+
     // Migration: Ensure default 'main' agent exists
     try {
       const mainAgent = this.db.exec("SELECT id FROM agents WHERE id = 'main'");

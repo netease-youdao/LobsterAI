@@ -309,6 +309,7 @@ export interface Agent {
   model: string;
   icon: string;
   skillIds: string[];
+  mcpIds: string[];
   enabled: boolean;
   isDefault: boolean;
   source: AgentSource;
@@ -326,6 +327,7 @@ export interface CreateAgentRequest {
   model?: string;
   icon?: string;
   skillIds?: string[];
+  mcpIds?: string[];
   source?: AgentSource;
   presetId?: string;
 }
@@ -338,6 +340,7 @@ export interface UpdateAgentRequest {
   model?: string;
   icon?: string;
   skillIds?: string[];
+  mcpIds?: string[];
   enabled?: boolean;
 }
 
@@ -1703,6 +1706,7 @@ export class CoworkStore {
       model: string;
       icon: string;
       skill_ids: string;
+      mcp_ids: string;
       enabled: number;
       is_default: number;
       source: string;
@@ -1728,6 +1732,7 @@ export class CoworkStore {
       model: string;
       icon: string;
       skill_ids: string;
+      mcp_ids: string;
       enabled: number;
       is_default: number;
       source: string;
@@ -1753,8 +1758,8 @@ export class CoworkStore {
     }
 
     this.db.run(`
-      INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
+      INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, mcp_ids, enabled, is_default, source, preset_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
     `, [
       id,
       request.name,
@@ -1764,6 +1769,7 @@ export class CoworkStore {
       request.model || '',
       request.icon || '',
       JSON.stringify(request.skillIds || []),
+      JSON.stringify(request.mcpIds || []),
       request.source || 'custom',
       request.presetId || '',
       now,
@@ -1810,6 +1816,10 @@ export class CoworkStore {
       setClauses.push('skill_ids = ?');
       values.push(JSON.stringify(updates.skillIds));
     }
+    if (updates.mcpIds !== undefined) {
+      setClauses.push('mcp_ids = ?');
+      values.push(JSON.stringify(updates.mcpIds));
+    }
     if (updates.enabled !== undefined) {
       setClauses.push('enabled = ?');
       values.push(updates.enabled ? 1 : 0);
@@ -1838,6 +1848,7 @@ export class CoworkStore {
     model: string;
     icon: string;
     skill_ids: string;
+    mcp_ids: string;
     enabled: number;
     is_default: number;
     source: string;
@@ -1851,6 +1862,12 @@ export class CoworkStore {
     } catch {
       skillIds = [];
     }
+    let mcpIds: string[] = [];
+    try {
+      mcpIds = JSON.parse(row.mcp_ids || '[]');
+    } catch {
+      mcpIds = [];
+    }
     return {
       id: row.id,
       name: row.name,
@@ -1860,6 +1877,7 @@ export class CoworkStore {
       model: row.model,
       icon: row.icon,
       skillIds,
+      mcpIds,
       enabled: Boolean(row.enabled),
       isDefault: Boolean(row.is_default),
       source: row.source as AgentSource,

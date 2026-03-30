@@ -9,8 +9,9 @@ import type { Agent } from '../../types/agent';
 import type { IMPlatform, IMGatewayConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import AgentSkillSelector from './AgentSkillSelector';
+import AgentMcpSelector from './AgentMcpSelector';
 
-type SettingsTab = 'basic' | 'skills' | 'im';
+type SettingsTab = 'basic' | 'skills' | 'mcp' | 'im';
 
 const IM_PLATFORMS: { key: IMPlatform; logo: string }[] = [
   { key: 'dingtalk', logo: 'dingding.png' },
@@ -40,6 +41,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [identity, setIdentity] = useState('');
   const [icon, setIcon] = useState('');
   const [skillIds, setSkillIds] = useState<string[]>([]);
+  const [mcpIds, setMcpIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
@@ -62,6 +64,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         setIdentity(a.identity);
         setIcon(a.icon);
         setSkillIds(a.skillIds ?? []);
+        setMcpIds(a.mcpIds ?? []);
       }
     });
     // Load IM config for bindings
@@ -94,6 +97,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         identity: identity.trim(),
         icon: icon.trim(),
         skillIds,
+        mcpIds,
       });
       // Persist IM bindings if changed
       const bindingsChanged =
@@ -149,6 +153,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const tabs: { key: SettingsTab; label: string }[] = [
     { key: 'basic', label: i18nService.t('agentTabBasic') || 'Basic Info' },
     { key: 'skills', label: i18nService.t('agentTabSkills') || 'Skills' },
+    { key: 'mcp', label: i18nService.t('agentMcpTab') || 'MCP Tools' },
     { key: 'im', label: i18nService.t('agentTabIM') || 'IM Channels' },
   ];
 
@@ -256,6 +261,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
           {activeTab === 'skills' && (
             <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} variant="expanded" />
+          )}
+
+          {activeTab === 'mcp' && (
+            <AgentMcpSelector selectedMcpIds={mcpIds} onChange={setMcpIds} variant="expanded" />
           )}
 
           {activeTab === 'im' && (

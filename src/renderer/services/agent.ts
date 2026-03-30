@@ -74,6 +74,7 @@ class AgentService {
     model?: string;
     icon?: string;
     skillIds?: string[];
+    mcpIds?: string[];
     enabled?: boolean;
   }): Promise<Agent | null> {
     try {

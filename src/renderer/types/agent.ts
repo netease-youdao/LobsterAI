@@ -9,6 +9,7 @@ export interface Agent {
   model: string;
   icon: string;
   skillIds: string[];
+  mcpIds: string[];
   enabled: boolean;
   isDefault: boolean;
   source: AgentSource;
@@ -36,6 +37,7 @@ export interface CreateAgentRequest {
   model?: string;
   icon?: string;
   skillIds?: string[];
+  mcpIds?: string[];
   source?: string;
   presetId?: string;
 }
@@ -48,5 +50,6 @@ export interface UpdateAgentRequest {
   model?: string;
   icon?: string;
   skillIds?: string[];
+  mcpIds?: string[];
   enabled?: boolean;
 }
