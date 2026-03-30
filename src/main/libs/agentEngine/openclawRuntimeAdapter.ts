@@ -1318,8 +1318,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private async ensureGatewayClientReady(): Promise<void> {
     // Serialize concurrent calls: if another init is already in progress, wait for it.
     if (this.gatewayClientInitLock) {
-      await this.gatewayClientInitLock;
-      return;
+      await this.gatewayClientInitLock.catch(() => {});
+      // The first caller may have failed (e.g. engine not yet running). If the
+      // gateway client is still null after the lock releases, run our own init
+      // instead of silently returning — otherwise requireGatewayClient() would
+      // immediately throw and leave the session in a permanently broken state.
+      if (this.gatewayClient) return;
     }
     this.gatewayClientInitLock = this._ensureGatewayClientReadyImpl();
     try {
@@ -3594,7 +3598,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private ensureActiveTurn(sessionId: string, sessionKey: string, runId: string): void {
     if (this.activeTurns.has(sessionId)) return;
     if (this.manuallyStoppedSessions.has(sessionId)) {
-      console.warn('[OpenClawRuntime] ensureActiveTurn called after manual stop — sessionId:', sessionId, 'runId:', runId, 'sessionKey:', sessionKey);
+      // The session was manually stopped. Late-arriving gateway events must not
+      // create a new ActiveTurn — doing so would cause the next startSession()
+      // call to find activeTurns.has(sessionId) === true and throw
+      // "Session is still running", permanently blocking the user from restarting.
+      console.warn('[OpenClawRuntime] ensureActiveTurn: ignoring late event for manually-stopped session —', sessionId, 'runId:', runId);
+      return;
     }
     const turnRunId = runId || randomUUID();
     const turnToken = this.nextTurnToken(sessionId);
