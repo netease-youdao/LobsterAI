@@ -689,6 +689,9 @@ export class NimGateway extends EventEmitter {
       // If local cache miss, try fetching from cloud
       try {
         const nim = this.v2Client as any;
+        if (!nim?.V2NIMTeamService) {
+          return fallbackId;
+        }
         const team = await nim.V2NIMTeamService.getTeamInfoFromCloud(teamId, teamType);
         console.log('[NIM Gateway] getTeamInfoFromCloud result:', JSON.stringify(team, null, 2));
         const name = team?.name;
@@ -1147,18 +1150,28 @@ export class NimGateway extends EventEmitter {
     originalSenderId: string,
     sessionType: 'team' | 'superTeam'
   ): Promise<void> {
+    if (!this.v2Client?.V2NIMMessageService || !this.v2Client?.V2NIMMessageCreator) {
+      throw new Error('NIM SDK not ready');
+    }
+
     const chunks = splitMessageIntoChunks(text);
 
     for (let i = 0; i < chunks.length; i++) {
+      // Re-check after each await: stop() may have set v2Client to null mid-loop
+      if (!this.v2Client?.V2NIMMessageService || !this.v2Client?.V2NIMMessageCreator) {
+        console.warn('[NIM Gateway] v2Client became unavailable mid-reply, aborting remaining chunks');
+        break;
+      }
+
       const chunk = chunks[i];
-      const replyMsg = this.v2Client!.V2NIMMessageCreator.createTextMessage(chunk);
+      const replyMsg = this.v2Client.V2NIMMessageCreator.createTextMessage(chunk);
       if (!replyMsg) {
         this.log('[NIM Gateway] Failed to create team reply message');
         continue;
       }
 
       const conversationId = buildConversationId(
-        this.v2Client!.V2NIMConversationIdUtil,
+        this.v2Client.V2NIMConversationIdUtil,
         teamId,
         sessionType
       );
@@ -1176,7 +1189,7 @@ export class NimGateway extends EventEmitter {
       try {
         // Only quote the original message for the first chunk
         if (i === 0) {
-          await this.v2Client!.V2NIMMessageService.replyMessage(
+          await this.v2Client.V2NIMMessageService.replyMessage(
             replyMsg,
             originalMsg,
             sendParams,
@@ -1184,7 +1197,7 @@ export class NimGateway extends EventEmitter {
           );
         } else {
           // Subsequent chunks are sent as regular messages
-          await this.v2Client!.V2NIMMessageService.sendMessage(
+          await this.v2Client.V2NIMMessageService.sendMessage(
             replyMsg,
             conversationId,
             sendParams,
