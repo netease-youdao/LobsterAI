@@ -1912,6 +1912,12 @@ if (!gotTheLock) {
 
   // ── Auth IPC handlers ──
 
+  // Shared slot for the deduplicating token-refresh function. Populated once
+  // refreshOnce() is defined later in initApp(). fetchWithAuth() calls through
+  // this reference so that all 401-triggered refreshes go through the same
+  // in-flight deduplication guard as proactive and proxy refreshes.
+  let sharedRefreshOnce: ((reason: string) => Promise<string | null>) | null = null;
+
   /**
    * Helper: Persist auth tokens into the kv store.
    */
@@ -1943,18 +1949,31 @@ if (!gotTheLock) {
     let resp = await doFetch(tokens.accessToken);
 
     if (resp.status === 401 && tokens.refreshToken) {
-      const serverBaseUrl = getServerApiBaseUrl();
-      const refreshResp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: tokens.refreshToken }),
-      });
-      if (refreshResp.ok) {
-        const refreshBody = await refreshResp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-        if (refreshBody.code === 0 && refreshBody.data) {
-          saveAuthTokens(refreshBody.data.accessToken, refreshBody.data.refreshToken || tokens.refreshToken);
-          resp = await doFetch(refreshBody.data.accessToken);
+      // Route through sharedRefreshOnce so that concurrent fetchWithAuth callers
+      // (e.g. auth:getUser + auth:getQuota both returning 401 at the same time)
+      // share a single in-flight refresh and never double-consume the rolling
+      // refreshToken, which would permanently invalidate the session.
+      let newAccessToken: string | null = null;
+      if (sharedRefreshOnce) {
+        newAccessToken = await sharedRefreshOnce('fetchWithAuth-401');
+      } else {
+        // Fallback: refreshOnce not yet wired (very early startup); inline refresh.
+        const serverBaseUrl = getServerApiBaseUrl();
+        const refreshResp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: tokens.refreshToken }),
+        });
+        if (refreshResp.ok) {
+          const refreshBody = await refreshResp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+          if (refreshBody.code === 0 && refreshBody.data) {
+            saveAuthTokens(refreshBody.data.accessToken, refreshBody.data.refreshToken || tokens.refreshToken);
+            newAccessToken = refreshBody.data.accessToken;
+          }
         }
+      }
+      if (newAccessToken) {
+        resp = await doFetch(newAccessToken);
       }
     }
 
@@ -4633,6 +4652,9 @@ if (!gotTheLock) {
       })();
       return pendingTokenRefresh;
     };
+
+    // Wire fetchWithAuth's 401 handler to the same deduplicating refresh guard.
+    sharedRefreshOnce = refreshOnce;
 
     setAuthTokensGetter(() => {
       const tokens = getAuthTokens();
