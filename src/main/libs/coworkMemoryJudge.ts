@@ -146,8 +146,14 @@ function extractTextFromAnthropicResponse(payload: unknown): string {
   const content = record.content;
   if (Array.isArray(content)) {
     return content
+      .filter((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const block = item as Record<string, unknown>;
+        // Exclude thinking blocks — they contain internal chain-of-thought text
+        // that must not be mixed into the judgment output.
+        return block.type !== 'thinking';
+      })
       .map((item) => {
-        if (!item || typeof item !== 'object') return '';
         const block = item as Record<string, unknown>;
         return typeof block.text === 'string' ? block.text : '';
       })
