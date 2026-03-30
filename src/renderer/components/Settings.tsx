@@ -1400,7 +1400,23 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       setSaveAsNameError(i18nService.t('configNameRequired'));
       return;
     }
+    if (savedConfigs.some(c => c.name === trimmed)) {
+      setSaveAsNameError(i18nService.t('configNameDuplicate'));
+      return;
+    }
     const customProvider = providers['custom'];
+    if (!customProvider.apiKey?.trim()) {
+      setSaveAsNameError(i18nService.t('apiKeyRequired'));
+      return;
+    }
+    if (!customProvider.baseUrl?.trim()) {
+      setSaveAsNameError(i18nService.t('baseUrlRequired'));
+      return;
+    }
+    if (!customProvider.models?.length) {
+      setSaveAsNameError(i18nService.t('modelsRequired'));
+      return;
+    }
     const newConfig: CustomProviderSavedConfig = {
       id: crypto.randomUUID(),
       name: trimmed,
@@ -2732,6 +2748,62 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               )}
 
+              {/* Custom 提供商另存为区域 */}
+              {activeProvider === 'custom' && (
+                <div className="rounded-xl border dark:border-claude-darkBorder border-claude-border px-3 py-2.5">
+                  <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mb-2">
+                    {i18nService.t('saveAsCurrentConfig')}
+                  </p>
+                  {isSaveAsInputVisible ? (
+                    <div className="flex items-center space-x-2 flex-wrap gap-y-1.5">
+                      <input
+                        ref={saveAsInputRef}
+                        type="text"
+                        value={saveAsName}
+                        onChange={e => { setSaveAsName(e.target.value); setSaveAsNameError(null); }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); void handleSaveAsConfirm(); }
+                          if (e.key === 'Escape') { setIsSaveAsInputVisible(false); setSaveAsName(''); setSaveAsNameError(null); }
+                        }}
+                        placeholder={i18nService.t('savedConfigName')}
+                        maxLength={50}
+                        className="flex-1 min-w-0 rounded-lg bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border dark:border-claude-darkBorder border-claude-border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-2.5 py-1.5 text-xs"
+                        autoFocus
+                      />
+                      <div className="flex items-center space-x-1.5 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveAsConfirm()}
+                          className="px-2.5 py-1.5 bg-claude-accent hover:bg-claude-accentHover text-white rounded-lg text-xs font-medium transition-colors"
+                        >
+                          {i18nService.t('save')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setIsSaveAsInputVisible(false); setSaveAsName(''); setSaveAsNameError(null); }}
+                          className="px-2.5 py-1.5 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover rounded-lg text-xs transition-colors border dark:border-claude-darkBorder border-claude-border"
+                        >
+                          {i18nService.t('cancel')}
+                        </button>
+                      </div>
+                      {saveAsNameError && (
+                        <p className="w-full text-[11px] text-red-400 mt-0.5">{saveAsNameError}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={savedConfigs.length >= 20}
+                      onClick={() => { setIsSaveAsInputVisible(true); setTimeout(() => saveAsInputRef.current?.focus(), 0); }}
+                      title={savedConfigs.length >= 20 ? i18nService.t('savedConfigsLimit') : undefined}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {i18nService.t('saveAsNew')}
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* MiniMax OAuth auth section */}
               {activeProvider === 'minimax' && (
                 <div className="space-y-3">
@@ -3624,54 +3696,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             </div>
 
             {/* Footer buttons */}
-            <div className="flex items-center justify-end space-x-3 p-4 dark:border-claude-darkBorder border-claude-border border-t dark:bg-claude-darkBg bg-claude-bg shrink-0 flex-wrap gap-y-2">
-              {/* Custom 提供商另存为区域 */}
-              {activeTab === 'model' && activeProvider === 'custom' && (
-                <div className="flex items-center space-x-2 mr-auto">
-                  {isSaveAsInputVisible ? (
-                    <>
-                      <input
-                        ref={saveAsInputRef}
-                        type="text"
-                        value={saveAsName}
-                        onChange={e => { setSaveAsName(e.target.value); setSaveAsNameError(null); }}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleSaveAsConfirm(); } if (e.key === 'Escape') { setIsSaveAsInputVisible(false); setSaveAsName(''); setSaveAsNameError(null); } }}
-                        placeholder={i18nService.t('savedConfigName')}
-                        maxLength={50}
-                        className="w-36 rounded-lg bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border dark:border-claude-darkBorder border-claude-border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-2 py-1.5 text-xs"
-                        autoFocus
-                      />
-                      {saveAsNameError && (
-                        <span className="text-[11px] text-red-400">{saveAsNameError}</span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => void handleSaveAsConfirm()}
-                        className="px-2.5 py-1.5 bg-claude-accent hover:bg-claude-accentHover text-white rounded-lg text-xs font-medium transition-colors"
-                      >
-                        {i18nService.t('save')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setIsSaveAsInputVisible(false); setSaveAsName(''); setSaveAsNameError(null); }}
-                        className="px-2.5 py-1.5 dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover rounded-lg text-xs transition-colors border dark:border-claude-darkBorder border-claude-border"
-                      >
-                        {i18nService.t('cancel')}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={savedConfigs.length >= 20}
-                      onClick={() => { setIsSaveAsInputVisible(true); setTimeout(() => saveAsInputRef.current?.focus(), 0); }}
-                      title={savedConfigs.length >= 20 ? i18nService.t('savedConfigsLimit') : undefined}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      {i18nService.t('saveAsNew')}
-                    </button>
-                  )}
-                </div>
-              )}
+            <div className="flex items-center justify-end space-x-3 p-4 dark:border-claude-darkBorder border-claude-border border-t dark:bg-claude-darkBg bg-claude-bg shrink-0">
               <button
                 type="button"
                 onClick={onClose}
