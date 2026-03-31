@@ -131,16 +131,18 @@ export class McpBridgeServer {
     if (!this.server) return;
 
     return new Promise((resolve) => {
+      // Force-close open connections after a short timeout if server hasn't closed yet
+      const forceCloseTimer = setTimeout(() => {
+        this.server?.closeAllConnections?.();
+      }, 2000);
+
       this.server!.close(() => {
+        clearTimeout(forceCloseTimer);
         log('INFO', 'McpBridgeServer stopped');
         this.server = null;
         this._port = null;
         resolve();
       });
-      // Force-close open connections after a short timeout
-      setTimeout(() => {
-        this.server?.closeAllConnections?.();
-      }, 2000);
     });
   }
 
