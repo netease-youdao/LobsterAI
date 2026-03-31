@@ -12,11 +12,14 @@ import 'katex/contrib/mhchem';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 // @ts-ignore
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../services/i18n';
 
 const CODE_BLOCK_LINE_LIMIT = 200;
 const CODE_BLOCK_CHAR_LIMIT = 20000;
+const CODE_BLOCK_COLLAPSE_THRESHOLD = 15;
+const CODE_BLOCK_PREVIEW_LINES = 15;
+const LAZY_CODE_ROOT_MARGIN = 300;
 const SYNTAX_HIGHLIGHTER_STYLE = {
   margin: 0,
   borderRadius: 0,
@@ -175,6 +178,39 @@ const openExternalViaAnchorFallback = (url: string): void => {
   document.body.removeChild(anchor);
 };
 
+const LazyPlainCode: React.FC<{ code: string }> = ({ code }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: `${LAZY_CODE_ROOT_MARGIN}px 0px ${LAZY_CODE_ROOT_MARGIN}px 0px` },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={containerRef} className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
+      {isVisible ? (
+        <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+          {code}
+        </code>
+      ) : (
+        <div className="px-4 py-3" style={{ minHeight: 48 }} />
+      )}
+    </div>
+  );
+};
+
 const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
   const normalizedClassName = Array.isArray(className)
     ? className.join(' ')
@@ -188,10 +224,13 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
       : !match;
   const codeText = Array.isArray(children) ? children.join('') : String(children);
   const trimmedCodeText = codeText.replace(/\n$/, '');
+  const lineCount = trimmedCodeText.split('\n').length;
   const shouldHighlight = !isInline && match
     && trimmedCodeText.length <= CODE_BLOCK_CHAR_LIMIT
-    && trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
+    && lineCount <= CODE_BLOCK_LINE_LIMIT;
+  const isCollapsible = !isInline && lineCount > CODE_BLOCK_COLLAPSE_THRESHOLD;
   const [isCopied, setIsCopied] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -213,9 +252,15 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     }
   }, [trimmedCodeText]);
 
+  const previewText = useMemo(() => {
+    if (!isCollapsible || isExpanded) return trimmedCodeText;
+    return trimmedCodeText.split('\n').slice(0, CODE_BLOCK_PREVIEW_LINES).join('\n');
+  }, [trimmedCodeText, isCollapsible, isExpanded]);
+
   if (!isInline) {
-    // Simple code block without language - minimal styling
     if (!match) {
+      const isOversized = trimmedCodeText.length > CODE_BLOCK_CHAR_LIMIT
+        || lineCount > CODE_BLOCK_LINE_LIMIT;
       return (
         <div className="my-2 relative group">
           <div className="overflow-x-auto rounded-lg bg-[#282c34] text-[13px] leading-6">
@@ -232,15 +277,35 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
                 <ClipboardDocumentIcon className="h-4 w-4" />
               )}
             </button>
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
-              {trimmedCodeText}
-            </code>
+            {isOversized ? (
+              <LazyPlainCode code={trimmedCodeText} />
+            ) : (
+              <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+                {trimmedCodeText}
+              </code>
+            )}
           </div>
         </div>
       );
     }
 
-    // Code block with language - show header with language name
+    const codeBody = shouldHighlight ? (
+      <SyntaxHighlighter
+        style={oneDark}
+        language={match[1]}
+        PreTag="div"
+        customStyle={SYNTAX_HIGHLIGHTER_STYLE}
+      >
+        {previewText}
+      </SyntaxHighlighter>
+    ) : (
+      <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
+        <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+          {previewText}
+        </code>
+      </div>
+    );
+
     return (
       <div className="my-3 rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border relative shadow-subtle">
         <div className="dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted px-4 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary font-medium flex items-center justify-between">
@@ -259,21 +324,21 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
             )}
           </button>
         </div>
-        {shouldHighlight ? (
-          <SyntaxHighlighter
-            style={oneDark}
-            language={match[1]}
-            PreTag="div"
-            customStyle={SYNTAX_HIGHLIGHTER_STYLE}
+        {codeBody}
+        {isCollapsible && (
+          <button
+            type="button"
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="w-full flex items-center justify-center gap-1.5 px-4 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors border-t dark:border-claude-darkBorder border-claude-border"
+            aria-expanded={isExpanded}
           >
-            {trimmedCodeText}
-          </SyntaxHighlighter>
-        ) : (
-          <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
-              {trimmedCodeText}
-            </code>
-          </div>
+            <ChevronDownIcon
+              className={`h-3.5 w-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+            />
+            {isExpanded
+              ? i18nService.t('collapse')
+              : `${i18nService.t('expand')} (${lineCount} ${i18nService.t('lines')})`}
+          </button>
         )}
       </div>
     );
