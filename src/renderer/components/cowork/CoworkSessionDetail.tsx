@@ -14,6 +14,7 @@ import {
   ExclamationTriangleIcon,
   ChevronRightIcon,
   PhotoIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
@@ -1292,6 +1293,21 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
   const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
   const skills = useSelector((state: RootState) => state.skill.skills);
+
+  // Retry: re-send the last user message when the session has errored.
+  const lastUserMessage = useMemo(() => {
+    if (!currentSession) return null;
+    const msgs = currentSession.messages;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].type === 'user') return msgs[i];
+    }
+    return null;
+  }, [currentSession?.messages]);
+
+  const handleRetry = useCallback(() => {
+    if (!lastUserMessage || isStreaming) return;
+    void onContinue(lastUserMessage.content);
+  }, [lastUserMessage, isStreaming, onContinue]);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
@@ -2337,6 +2353,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
       {/* Streaming Activity Bar */}
       {isStreaming && <StreamingActivityBar messages={currentSession.messages} />}
+
+      {/* Error + Retry banner — shown when the session errored and has a retryable user message */}
+      {currentSession.status === 'error' && !isStreaming && lastUserMessage && (
+        <div className="px-4 pb-2 shrink-0">
+          <div className="max-w-3xl mx-auto flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <div className="flex items-center gap-2 min-w-0">
+              <ExclamationTriangleIcon className="h-4 w-4 text-red-500 flex-shrink-0" />
+              <span className="text-xs text-red-700 dark:text-red-400 truncate">
+                {i18nService.t('coworkSessionErrorBanner')}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleRetry}
+              title={i18nService.t('coworkSessionRetryTooltip')}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/70 border border-red-200 dark:border-red-700 transition-colors flex-shrink-0"
+            >
+              <ArrowPathIcon className="h-3.5 w-3.5" />
+              {i18nService.t('coworkSessionRetry')}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Input Area */}
       <div className="p-4 shrink-0">
