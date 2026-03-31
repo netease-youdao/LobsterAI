@@ -400,6 +400,20 @@ export class CronJobService {
   private jobNameCache: Map<string, string> = new Map();
   /** Job IDs currently running (non-null `runningAtMs`), updated during polling. */
   private runningJobIds: Set<string> = new Set();
+  /**
+   * Guard flag preventing overlapping pollOnce() invocations.
+   * Without this, a slow gateway response (>15 s) causes the setInterval
+   * to fire a second poll before the first completes, leading to concurrent
+   * writes to shared Maps and duplicate IPC status/run events.
+   */
+  private pollInFlight = false;
+  /**
+   * Monotonically-increasing counter incremented on every stopPolling().
+   * An in-flight pollOnce() captures the generation at entry and checks it
+   * before emitting any IPC events; a mismatch means stopPolling() was
+   * called while the poll was in flight, so all emission is suppressed.
+   */
+  private pollGeneration = 0;
 
   private static readonly POLL_INTERVAL_MS = 15_000;
 
@@ -612,6 +626,7 @@ export class CronJobService {
 
   stopPolling(): void {
     this.polling = false;
+    this.pollGeneration++;   // invalidates any in-flight pollOnce()
     if (this.pollingTimer) {
       clearInterval(this.pollingTimer);
       this.pollingTimer = null;
@@ -625,6 +640,17 @@ export class CronJobService {
 
   private async pollOnce(): Promise<void> {
     if (!this.polling) return;
+    // BUG-1 guard: skip if a previous poll is still in flight.
+    // The gateway can be slow (ensureGatewayReady, cron.list, listRuns per job),
+    // so a single invocation can easily exceed the 15 s interval.  Without this
+    // guard, concurrent polls race to clear and rewrite the shared state Maps,
+    // producing duplicate status/run IPC events and losing state-change signals.
+    if (this.pollInFlight) return;
+    this.pollInFlight = true;
+    // BUG-2 guard: capture generation so we can detect a stopPolling() call
+    // that arrived while we were awaiting the gateway.  If the generation
+    // changes between here and an emit call we skip the emission entirely.
+    const generation = this.pollGeneration;
 
     try {
       await this.ensureGatewayReady();
@@ -636,6 +662,10 @@ export class CronJobService {
         limit: 200,
       });
       const jobs = Array.isArray(result.jobs) ? result.jobs : [];
+
+      // Abort all mutations and emissions if stopPolling() was called while
+      // we were awaiting the gateway response.
+      if (this.pollGeneration !== generation) return;
 
       // Refresh jobId → name cache for synchronous lookups (used by session naming).
       this.jobNameCache.clear();
@@ -652,7 +682,7 @@ export class CronJobService {
         const previousHash = this.lastKnownStates.get(job.id);
         if (previousHash !== stateHash) {
           this.lastKnownStates.set(job.id, stateHash);
-          if (previousHash !== undefined) {
+          if (previousHash !== undefined && this.pollGeneration === generation) {
             const task = mapGatewayJob(job);
             this.emitStatusUpdate(task.id, task.state);
           }
@@ -663,7 +693,7 @@ export class CronJobService {
         if (lastRunAtMs > previousRunAtMs && previousRunAtMs > 0) {
           try {
             const runs = await this.listRuns(job.id, 1, 0);
-            if (runs[0]) {
+            if (runs[0] && this.pollGeneration === generation) {
               const task = mapGatewayJob(job);
               this.emitRunUpdate({ ...runs[0], taskName: task.name });
             }
@@ -682,12 +712,14 @@ export class CronJobService {
         }
       }
 
-      if (!this.firstPollDone) {
+      if (!this.firstPollDone && this.pollGeneration === generation) {
         this.firstPollDone = true;
         this.emitFullRefresh();
       }
     } catch (error) {
       console.warn('[CronJobService] Polling error:', error);
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
