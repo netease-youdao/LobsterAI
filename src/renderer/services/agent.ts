@@ -9,6 +9,7 @@ import {
 } from '../store/slices/agentSlice';
 import { setActiveSkillIds, clearActiveSkills } from '../store/slices/skillSlice';
 import { clearCurrentSession } from '../store/slices/coworkSlice';
+import { coworkService } from './cowork';
 import type { Agent, PresetAgent } from '../types/agent';
 
 class AgentService {
@@ -100,8 +101,15 @@ class AgentService {
 
   async deleteAgent(id: string): Promise<boolean> {
     try {
+      const currentAgentId = store.getState().agent.currentAgentId;
       await window.electron?.agents?.delete(id);
       store.dispatch(removeAgent(id));
+      // If the deleted agent was the current agent, the removeAgent reducer
+      // will auto-switch to 'main'. We need to refresh sessions for the new current agent.
+      if (currentAgentId === id) {
+        const newCurrentAgentId = store.getState().agent.currentAgentId;
+        await coworkService.loadSessions(newCurrentAgentId);
+      }
       return true;
     } catch (error) {
       console.error('Failed to delete agent:', error);
