@@ -79,15 +79,6 @@ export default defineConfig({
     hmr: {
       port: devPort,
     },
-    watch: {
-      usePolling: false,
-      ignored: [
-        '**/node_modules/**',
-        '**/.git/**',
-        '**/.npm-cache/**',
-        '**/vendor/**',
-      ],
-    },
   },
   optimizeDeps: {
     exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
