@@ -6,7 +6,7 @@ import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTask } from '../../../scheduledTask/types';
-import { formatScheduleLabel, getStatusLabelKey, getStatusTone } from './utils';
+import { formatScheduleLabel, formatDateTime, getStatusLabelKey, getStatusTone } from './utils';
 
 interface TaskListItemProps {
   task: ScheduledTask;
@@ -35,7 +35,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
 
   return (
     <div
-      className="grid grid-cols-[1.2fr_1fr_110px_40px] items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder/50 border-claude-border/50 hover:bg-claude-surfaceHover/50 dark:hover:bg-claude-darkSurfaceHover/50 cursor-pointer transition-colors"
+      className="grid grid-cols-[1.2fr_1fr_130px_40px] items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder/50 border-claude-border/50 hover:bg-claude-surfaceHover/50 dark:hover:bg-claude-darkSurfaceHover/50 cursor-pointer transition-colors"
       onClick={() => dispatch(selectTask(task.id))}
     >
       <div className="min-w-0">
@@ -54,7 +54,14 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
       </div>
 
       <div className="flex items-center justify-between gap-2">
-        <span className={`text-xs font-medium ${statusTone}`}>{statusLabel}</span>
+        <div className="min-w-0">
+          <span className={`text-xs font-medium ${statusTone}`}>{statusLabel}</span>
+          {task.state.lastRunAtMs && (
+            <div className="text-xs dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 mt-0.5 truncate">
+              {formatDateTime(new Date(task.state.lastRunAtMs))}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={(event) => {
@@ -164,7 +171,7 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
 
   return (
     <div>
-      <div className="grid grid-cols-[1.2fr_1fr_110px_40px] items-center gap-3 px-4 py-2 border-b dark:border-claude-darkBorder/50 border-claude-border/50">
+      <div className="grid grid-cols-[1.2fr_1fr_130px_40px] items-center gap-3 px-4 py-2 border-b dark:border-claude-darkBorder/50 border-claude-border/50">
         <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
           {i18nService.t('scheduledTasksListColTitle')}
         </div>

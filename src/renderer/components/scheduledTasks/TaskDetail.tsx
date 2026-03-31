@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { PlayIcon } from '@heroicons/react/24/outline';
+import { PlayIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
 import { setViewMode } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
@@ -67,9 +67,11 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             onClick={() => void scheduledTaskService.runManually(task.id)}
             disabled={Boolean(task.state.runningAtMs)}
             className="p-2 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
-            title={i18nService.t('scheduledTasksRun')}
+            title={task.state.runningAtMs ? i18nService.t('scheduledTasksStatusRunning') : i18nService.t('scheduledTasksRun')}
           >
-            <PlayIcon className="w-4 h-4" />
+            {task.state.runningAtMs
+              ? <ArrowPathIcon className="w-4 h-4 animate-spin" />
+              : <PlayIcon className="w-4 h-4" />}
           </button>
           <button
             type="button"
