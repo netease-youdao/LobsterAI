@@ -134,6 +134,10 @@ export default {
             strong: {
               color: '#1A1D23',
             },
+            table: {
+              marginTop: 0,
+              marginBottom: 0,
+            }
           },
         },
         dark: {
