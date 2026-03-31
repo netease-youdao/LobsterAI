@@ -150,7 +150,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         {/* Header: agent icon + name + close */}
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
           <div className="flex items-center gap-2">
-            <span className="text-xl">{icon || '🤖'}</span>
+            <span className="text-xl">{icon || '🦞'}</span>
             <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
               {name || (i18nService.t('agentSettings') || 'Agent Settings')}
             </h3>
