@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
 import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
@@ -92,6 +92,9 @@ interface CoworkPromptInputProps {
   remoteManaged?: boolean;
 }
 
+const SKILL_PICKER_ITEM_HEIGHT = 52;
+const SKILL_PICKER_VISIBLE_COUNT = 4;
+
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
   (props, ref) => {
     const {
@@ -120,9 +123,19 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
 
+    // Skill picker state
+    const [skillPickerVisible, setSkillPickerVisible] = useState(false);
+    const [skillQuery, setSkillQuery] = useState('');
+    const [activeSkillIndex, setActiveSkillIndex] = useState(0);
+
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const dragDepthRef = useRef(0);
+    // Tracks the position of the '/' that triggered the skill picker
+    const slashPosRef = useRef(-1);
+    const skillPickerRef = useRef<HTMLDivElement>(null);
+    const wrapperRef = useRef<HTMLDivElement>(null);
+    const [pickerPosition, setPickerPosition] = useState<{ left: number; top: number } | null>(null);
 
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
@@ -148,6 +161,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const isLarge = size === 'large';
   const minHeight = isLarge ? 60 : 24;
   const maxHeight = isLarge ? 200 : 200;
+
+  // Filtered skills for the slash-command picker (name-only matching)
+  const filteredSkills = useMemo(() => {
+    const enabled = skills.filter((s) => s.enabled);
+    if (!skillQuery) return enabled;
+    const lower = skillQuery.toLowerCase();
+    return enabled.filter((s) => s.name.toLowerCase().includes(lower));
+  }, [skills, skillQuery]);
 
   // Load skills on mount
   useEffect(() => {
@@ -214,6 +235,149 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       return () => clearTimeout(timer);
     }
   }, [value, draftPrompt, dispatch, draftKey]);
+
+  // Auto-hide picker when user typed a query but nothing matches
+  useEffect(() => {
+    if (skillPickerVisible && skillQuery && filteredSkills.length === 0) {
+      setSkillPickerVisible(false);
+    }
+  }, [filteredSkills, skillQuery, skillPickerVisible]);
+
+  // Reset highlighted index when the skill list changes
+  useEffect(() => {
+    setActiveSkillIndex(0);
+  }, [filteredSkills]);
+
+  // Close picker on outside click
+  useEffect(() => {
+    if (!skillPickerVisible) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const outsideTextarea = !textareaRef.current?.contains(target);
+      const outsidePicker = !skillPickerRef.current?.contains(target);
+      if (outsideTextarea && outsidePicker) {
+        setSkillPickerVisible(false);
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [skillPickerVisible]);
+
+  // Replace '/query' with '/<skillName> ' in the textarea
+  const applySkillSelection = useCallback((skill: Skill) => {
+    const textarea = textareaRef.current;
+    if (!textarea || slashPosRef.current < 0) return;
+
+    const slashPos = slashPosRef.current;
+    const cursorPos = textarea.selectionStart ?? value.length;
+    const insertion = `/${skill.name} `;
+    const newValue = value.substring(0, slashPos) + insertion + value.substring(cursorPos);
+
+    setValue(newValue);
+    setSkillPickerVisible(false);
+    setSkillQuery('');
+    slashPosRef.current = -1;
+
+    // Restore focus and move cursor past insertion
+    setTimeout(() => {
+      textarea.focus();
+      const newCursor = slashPos + insertion.length;
+      textarea.setSelectionRange(newCursor, newCursor);
+    }, 0);
+  }, [value]);
+
+  // Calculate absolute pixel position of the picker relative to the wrapper div,
+  // anchored just below the '/' character using a hidden mirror element.
+  const calculatePickerPosition = useCallback(() => {
+    const textarea = textareaRef.current;
+    const wrapper = wrapperRef.current;
+    if (!textarea || !wrapper || slashPosRef.current < 0) return;
+
+    const style = window.getComputedStyle(textarea);
+    const lineHeight = parseFloat(style.lineHeight) || 20;
+
+    // Create a hidden mirror div matching the textarea's font and layout
+    const mirror = document.createElement('div');
+    Object.assign(mirror.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      overflowWrap: 'break-word',
+      overflow: 'hidden',
+      fontSize: style.fontSize,
+      fontFamily: style.fontFamily,
+      fontWeight: style.fontWeight,
+      lineHeight: style.lineHeight,
+      letterSpacing: style.letterSpacing,
+      paddingTop: style.paddingTop,
+      paddingBottom: style.paddingBottom,
+      paddingLeft: style.paddingLeft,
+      paddingRight: style.paddingRight,
+      borderTopWidth: style.borderTopWidth,
+      borderRightWidth: style.borderRightWidth,
+      borderBottomWidth: style.borderBottomWidth,
+      borderLeftWidth: style.borderLeftWidth,
+      borderStyle: 'solid',
+      borderColor: 'transparent',
+      boxSizing: style.boxSizing,
+      width: `${textarea.offsetWidth}px`,
+    });
+    mirror.appendChild(document.createTextNode(textarea.value.substring(0, slashPosRef.current)));
+    const caretSpan = document.createElement('span');
+    caretSpan.textContent = '\u200b';
+    mirror.appendChild(caretSpan);
+    document.body.appendChild(mirror);
+
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const textareaRect = textarea.getBoundingClientRect();
+    const spanRect = caretSpan.getBoundingClientRect();
+    document.body.removeChild(mirror);
+
+    // spanRect is in viewport coords; mirror is at (0,0) so spanRect.left/top = offset within textarea content
+    const slashViewportTop = textareaRect.top + spanRect.top - textarea.scrollTop;
+    const slashViewportBottom = slashViewportTop + lineHeight;
+
+    const pickerHeight = SKILL_PICKER_VISIBLE_COUNT * SKILL_PICKER_ITEM_HEIGHT + 40;
+    let top: number;
+    if (slashViewportBottom + pickerHeight > window.innerHeight) {
+      // Not enough space below — flip above the slash
+      top = slashViewportTop - pickerHeight - wrapperRect.top;
+    } else {
+      top = slashViewportBottom - wrapperRect.top;
+    }
+
+    const left = textareaRect.left + spanRect.left - wrapperRect.left;
+    setPickerPosition({ left: Math.max(0, left), top });
+  }, []);
+
+  // Detect '/' trigger and update live query as the user continues typing
+  const handleValueChange = useCallback((newValue: string) => {
+    setValue(newValue);
+
+    const cursorPos = textareaRef.current?.selectionStart ?? newValue.length;
+    const textBeforeCursor = newValue.substring(0, cursorPos);
+
+    // Find the last '/' before the cursor with no space/newline between it and the cursor
+    const lastSlashIndex = textBeforeCursor.lastIndexOf('/');
+    if (lastSlashIndex >= 0) {
+      const textAfterSlash = textBeforeCursor.substring(lastSlashIndex + 1);
+      if (!textAfterSlash.includes(' ') && !textAfterSlash.includes('\n')) {
+        slashPosRef.current = lastSlashIndex;
+        setSkillQuery(textAfterSlash);
+        setSkillPickerVisible(true);
+        calculatePickerPosition();
+        return;
+      }
+    }
+
+    setSkillPickerVisible(false);
+    setSkillQuery('');
+    slashPosRef.current = -1;
+  }, [calculatePickerPosition]);
 
   const handleSubmit = useCallback(async () => {
     if (showFolderSelector && !workingDirectory?.trim()) {
@@ -286,6 +450,33 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [onManageSkills]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Skill picker keyboard navigation
+    if (skillPickerVisible && filteredSkills.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setActiveSkillIndex((prev) => (prev + 1) % filteredSkills.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setActiveSkillIndex((prev) => (prev - 1 + filteredSkills.length) % filteredSkills.length);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSkillPickerVisible(false);
+        return;
+      }
+      if (event.key === 'Enter') {
+        const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+        if (!isComposing) {
+          event.preventDefault();
+          applySkillSelection(filteredSkills[activeSkillIndex]);
+          return;
+        }
+      }
+    }
+
     // Enter to submit, any modifier+Enter (Shift/Ctrl/Cmd/Alt) for new line
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
     if (event.key === 'Enter' && !isComposing) {
@@ -587,8 +778,73 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     ? `${containerClass} ring-2 ring-claude-accent/50 border-claude-accent/60`
     : containerClass;
 
+  // Skill picker: absolutely positioned relative to the wrapper div, anchored below the '/' character.
+  const renderSkillPicker = () => {
+    if (!skillPickerVisible || filteredSkills.length === 0) return null;
+
+    if (!pickerPosition) return null;
+
+    return (
+      <div
+        ref={skillPickerRef}
+        className="absolute z-50 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white shadow-lg overflow-hidden"
+        style={{ left: pickerPosition.left, top: pickerPosition.top, width: '33%' }}
+      >
+        <div
+          className="overflow-y-auto"
+          style={{ maxHeight: `${SKILL_PICKER_VISIBLE_COUNT * SKILL_PICKER_ITEM_HEIGHT}px` }}
+        >
+          {filteredSkills.map((skill, index) => (
+            <button
+              key={skill.id}
+              type="button"
+              onMouseDown={(e) => {
+                // Prevent textarea blur so selectionStart remains valid
+                e.preventDefault();
+                applySkillSelection(skill);
+              }}
+              onMouseEnter={() => setActiveSkillIndex(index)}
+              className={`w-full text-left px-3 py-2.5 flex items-start gap-2 transition-colors ${
+                index === activeSkillIndex
+                  ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover'
+                  : 'hover:dark:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
+                  {skill.name}
+                </div>
+                {skill.description && (
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary truncate mt-0.5">
+                    {skill.description}
+                  </div>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+        <div className="border-t dark:border-claude-darkBorder border-claude-border">
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setSkillPickerVisible(false);
+              onManageSkills?.();
+            }}
+            className="w-full text-left px-3 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+            </svg>
+            {i18nService.t('skillPickerGoToSkills')}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="relative">
+    <div className="relative" ref={wrapperRef}>
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
@@ -650,7 +906,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => handleValueChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={placeholder}
@@ -742,7 +998,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => handleValueChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={placeholder}
@@ -789,6 +1045,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           </>
         )}
       </div>
+      {renderSkillPicker()}
       {showFolderRequiredWarning && (
         <div className="mt-2 text-xs text-red-500 dark:text-red-400">
           {i18nService.t('coworkSelectFolderFirst')}
