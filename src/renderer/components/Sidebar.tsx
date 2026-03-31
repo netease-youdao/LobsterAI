@@ -47,6 +47,16 @@ const Sidebar: React.FC<SidebarProps> = ({
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const sessions = useSelector((state: RootState) => state.cowork.sessions);
   const filteredSessions = sessions.filter((s) => !s.agentId || s.agentId === currentAgentId);
+  const [allAgentSessions, setAllAgentSessions] = useState<{ agentId?: string; status: string }[]>([]);
+
+  // 直接查询全量 sessions 用于 badge 显示，不写入 Redux，不影响当前 agent 的会话列表
+  useEffect(() => {
+    window.electron?.cowork?.listSessions().then((result: { success?: boolean; sessions?: { agentId?: string; status: string }[] }) => {
+      if (result?.success && Array.isArray(result.sessions)) {
+        setAllAgentSessions(result.sessions);
+      }
+    });
+  }, [sessions]); // sessions 变化（新增/完成/切换）时同步刷新
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
@@ -136,7 +146,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`shrink-0 dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted flex flex-col sidebar-transition overflow-hidden ${
+      className={`shrink-0 dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted flex flex-col h-full min-h-0 sidebar-transition overflow-hidden ${
         isCollapsed ? 'w-0' : 'w-60'
       }`}
     >
@@ -223,30 +233,18 @@ const Sidebar: React.FC<SidebarProps> = ({
             <ConnectorIcon className="h-4 w-4" />
             {i18nService.t('mcpServers')}
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setIsSearchOpen(false);
-              onShowAgents();
-            }}
-            className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
-              activeView === 'agents'
-                ? 'bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
-            }`}
-          >
-            <UserGroupIcon className="h-4 w-4" />
-            {i18nService.t('myAgents')}
-          </button>
         </div>
       </div>
+      <SidebarAgentList
+        onShowCowork={onShowCowork}
+        onShowAgents={() => { setIsSearchOpen(false); onShowAgents(); }}
+        activeView={activeView}
+        allSessions={allAgentSessions}
+      />
+      <div className="px-3 pb-1 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        {i18nService.t('coworkHistory')}
+      </div>
       <div className="flex-1 overflow-y-auto px-2.5 pb-4">
-        <SidebarAgentList
-          onShowCowork={onShowCowork}
-        />
-        <div className="px-3 pb-2 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-          {i18nService.t('coworkHistory')}
-        </div>
         <CoworkSessionList
           sessions={filteredSessions}
           currentSessionId={currentSessionId}
@@ -367,9 +365,13 @@ const Sidebar: React.FC<SidebarProps> = ({
 
 const SidebarAgentList: React.FC<{
   onShowCowork: () => void;
-}> = ({ onShowCowork }) => {
+  onShowAgents: () => void;
+  activeView: string;
+  allSessions: { agentId?: string; status: string }[];
+}> = ({ onShowCowork, onShowAgents, activeView, allSessions }) => {
   const agents = useSelector((state: RootState) => state.agent.agents);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const [isListCollapsed, setIsListCollapsed] = useState(false);
 
   useEffect(() => {
     agentService.loadAgents();
@@ -389,24 +391,70 @@ const SidebarAgentList: React.FC<{
     onShowCowork();
   };
 
+  const isActive = activeView === 'agents';
+
   return (
     <div className="px-3 pb-2">
-      <div className="space-y-0.5">
-        {enabledAgents.map((agent) => (
-          <div
-            key={agent.id}
-            className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer transition-colors ${
-              currentAgentId === agent.id
-                ? 'bg-claude-accent/10 text-claude-accent'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
-            }`}
-            onClick={() => handleSwitch(agent.id)}
+      {/* 复用原导航按钮样式，右侧加收起 chevron */}
+      <div
+        className={`w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors cursor-pointer ${
+          isActive
+            ? 'bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20'
+            : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+        }`}
+        onClick={onShowAgents}
+      >
+        <UserGroupIcon className="h-4 w-4 shrink-0" />
+        <span className="flex-1 text-left">{i18nService.t('myAgents')}</span>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setIsListCollapsed((v) => !v); }}
+          className="shrink-0 rounded p-0.5 hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+          aria-label={isListCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className={`h-3 w-3 transition-transform duration-200 ${isListCollapsed ? '-rotate-90' : ''}`}
+            viewBox="0 0 20 20"
+            fill="currentColor"
           >
-            <span className="text-base leading-none">{agent.icon || '🦞'}</span>
-            <span className="truncate flex-1 text-xs font-medium">{agent.name}</span>
-          </div>
-        ))}
+            <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+          </svg>
+        </button>
       </div>
+      {!isListCollapsed && (
+        <div className="mt-0.5 space-y-0.5">
+          {enabledAgents.map((agent) => (
+            <div
+              key={agent.id}
+              className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer transition-colors ${
+                currentAgentId === agent.id
+                  ? 'bg-claude-accent/10 text-claude-accent'
+                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+              }`}
+              onClick={() => handleSwitch(agent.id)}
+            >
+              <span className="text-base leading-none">{agent.icon || '🦞'}</span>
+              <span className="truncate flex-1 text-xs font-medium">{agent.name}</span>
+              {(() => {
+                const agentSessions = allSessions.filter((s) => !s.agentId || s.agentId === agent.id);
+                const total = agentSessions.length;
+                const running = agentSessions.filter((s) => s.status === 'running').length;
+                if (total === 0) return null;
+                return (
+                  <span className={`shrink-0 text-[10px] font-bold leading-none rounded-full px-1.5 py-0.5 text-center ${
+                    running > 0
+                      ? 'bg-claude-accent text-white'
+                      : 'bg-black/10 dark:bg-white/15 text-claude-textSecondary dark:text-claude-darkTextSecondary'
+                  }`}>
+                    {running > 99 ? '99+' : running}/{total > 99 ? '99+' : total}
+                  </span>
+                );
+              })()}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
