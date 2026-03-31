@@ -24,6 +24,7 @@ import PuzzleIcon from '../icons/PuzzleIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
+import ForkIcon from '../icons/ForkIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
@@ -1494,6 +1495,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   };
 
   // Delete handlers
+  const handleForkClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentSession) return;
+    closeMenu();
+    const forked = await coworkService.forkSession(currentSession.id);
+    if (forked) {
+      await coworkService.loadSession(forked.id);
+    }
+  };
+
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShowConfirmDelete(true);
@@ -2057,6 +2068,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           >
             <ShareIcon className="h-4 w-4" />
             {i18nService.t('coworkShareSession')}
+          </button>
+          <button
+            type="button"
+            onClick={handleForkClick}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+          >
+            <ForkIcon className="h-4 w-4" />
+            {i18nService.t('forkSession')}
           </button>
           <button
             type="button"

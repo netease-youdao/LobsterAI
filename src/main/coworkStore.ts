@@ -594,6 +594,48 @@ export class CoworkStore {
     };
   }
 
+  forkSession(sessionId: string, afterMessageId?: string): CoworkSession | null {
+    const sourceSession = this.getSession(sessionId);
+    if (!sourceSession) return null;
+
+    const newId = uuidv4();
+    const now = Date.now();
+    const forkTitle = `${sourceSession.title} (Fork)`;
+
+    this.db.run(`
+      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, 0, ?, ?)
+    `, [newId, forkTitle, sourceSession.cwd, sourceSession.systemPrompt, sourceSession.executionMode, JSON.stringify(sourceSession.activeSkillIds), sourceSession.agentId, now, now]);
+
+    let messagesToCopy = sourceSession.messages;
+    if (afterMessageId) {
+      const cutIndex = messagesToCopy.findIndex(m => m.id === afterMessageId);
+      if (cutIndex !== -1) {
+        messagesToCopy = messagesToCopy.slice(0, cutIndex + 1);
+      }
+    }
+
+    for (let i = 0; i < messagesToCopy.length; i++) {
+      const msg = messagesToCopy[i];
+      this.db.run(`
+        INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        uuidv4(),
+        newId,
+        msg.type,
+        msg.content,
+        msg.metadata ? JSON.stringify(msg.metadata) : null,
+        msg.timestamp,
+        i + 1,
+      ]);
+    }
+
+    this.saveDb();
+
+    return this.getSession(newId);
+  }
+
   getSession(id: string): CoworkSession | null {
     interface SessionRow {
       id: string;
