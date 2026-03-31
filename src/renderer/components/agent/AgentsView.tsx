@@ -123,16 +123,19 @@ const AgentsView: React.FC<AgentsViewProps> = ({
                   />
                 ))}
                 {/* Uninstalled presets */}
-                {uninstalledPresets.map((preset) => (
-                  <UninstalledPresetCard
-                    key={preset.id}
-                    icon={preset.icon}
-                    name={preset.name}
-                    description={preset.description}
-                    isAdding={addingPreset === preset.id}
-                    onAdd={() => handleAddPreset(preset.id)}
-                  />
-                ))}
+                {uninstalledPresets.map((preset) => {
+                  const isEn = i18nService.getLanguage() === 'en';
+                  return (
+                    <UninstalledPresetCard
+                      key={preset.id}
+                      icon={preset.icon}
+                      name={isEn && preset.nameEn ? preset.nameEn : preset.name}
+                      description={isEn && preset.descriptionEn ? preset.descriptionEn : preset.description}
+                      isAdding={addingPreset === preset.id}
+                      onAdd={() => handleAddPreset(preset.id)}
+                    />
+                  );
+                })}
               </div>
             </div>
           )}
@@ -244,7 +247,7 @@ const UninstalledPresetCard: React.FC<{
       disabled={isAdding}
       className="self-end px-3 py-1 text-xs font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 transition-colors"
     >
-      {isAdding ? '...' : (i18nService.t('addAgent') || 'Add')}
+      {isAdding ? '...' : i18nService.t('addAgent')}
     </button>
   </div>
 );
