@@ -1,0 +1,25 @@
+scripts/nsis-installer.nsh
+  bb632bb2c04d93dc 14,16-18,86-98
+src/main/libs/openclawEngineManager.ts
+  bb632bb2c04d93dc 344,543-545,1200,1203-1218,1220-1221,1223,1225,1229-1245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "48df1851478ed0bb31f712394a1450c26321f803",
+  "prompts": {
+    "bb632bb2c04d93dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "41eda3a4-45f7-4573-ad40-ac273d79bfb2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 84,
+      "total_deletions": 40,
+      "accepted_lines": 60,
+      "overriden_lines": 0
+    }
+  }
+}
