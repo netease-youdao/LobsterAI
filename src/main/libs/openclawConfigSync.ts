@@ -20,9 +20,13 @@ export type McpBridgeConfig = {
   tools: McpToolManifestEntry[];
 };
 
-const mapExecutionModeToSandboxMode = (_mode: CoworkExecutionMode): 'off' | 'non-main' | 'all' => {
-  // Sandbox mode disabled — always run locally
-  return 'off';
+const mapExecutionModeToSandboxMode = (mode: CoworkExecutionMode): 'off' | 'non-main' | 'all' => {
+  switch (mode) {
+    case 'sandbox': return 'all';
+    case 'local':   return 'off';
+    case 'auto':
+    default:        return 'non-main';
+  }
 };
 
 /**
