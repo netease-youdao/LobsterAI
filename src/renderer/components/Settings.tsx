@@ -8,6 +8,12 @@ import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import {
+  buildTeamTemplateExport,
+  applyTeamTemplate,
+  parseTeamTemplateJson,
+  type TeamTemplatePayloadV1,
+} from '../services/teamTemplate';
 import ErrorMessage from './ErrorMessage';
 import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
@@ -577,6 +583,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
 
+  const [teamTemplateIncludeWorkdir, setTeamTemplateIncludeWorkdir] = useState(false);
+  const [teamTemplateExporting, setTeamTemplateExporting] = useState(false);
+  const [teamTemplateImporting, setTeamTemplateImporting] = useState(false);
+  const [teamTemplatePending, setTeamTemplatePending] = useState<TeamTemplatePayloadV1 | null>(null);
+  const teamTemplateImportInputRef = useRef<HTMLInputElement>(null);
+  const [teamTemplateApplyOpts, setTeamTemplateApplyOpts] = useState({
+    applyUi: true,
+    applyModel: true,
+    applyProviders: true,
+    applyCowork: true,
+    applySkills: true,
+    applyWorkingDirectory: true,
+  });
+
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
@@ -587,6 +607,135 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
+
+  const handleExportTeamTemplate = useCallback(async () => {
+    if (teamTemplateExporting) {
+      return;
+    }
+    setError(null);
+    const saveTextFile = window.electron?.dialog?.saveTextFile;
+    if (!saveTextFile) {
+      setError(i18nService.t('teamTemplateExportFailed'));
+      return;
+    }
+    setTeamTemplateExporting(true);
+    try {
+      const appConfig = configService.getConfig();
+      let skillsList: Array<{ id: string; enabled: boolean }> = [];
+      const listResult = await window.electron?.skills?.list();
+      if (listResult?.success && listResult.skills) {
+        skillsList = listResult.skills.map((s) => ({ id: s.id, enabled: s.enabled }));
+      }
+      const payload = buildTeamTemplateExport({
+        appConfig,
+        coworkConfig,
+        skills: skillsList,
+        includeWorkingDirectory: teamTemplateIncludeWorkdir,
+      });
+      let json: string;
+      try {
+        json = JSON.stringify(payload, null, 2);
+      } catch (stringifyErr) {
+        console.error('[Settings] team template JSON stringify failed:', stringifyErr);
+        setError(i18nService.t('teamTemplateExportFailed'));
+        return;
+      }
+      if (!json) {
+        setError(i18nService.t('teamTemplateExportFailed'));
+        return;
+      }
+      const date = new Date().toISOString().slice(0, 10);
+      const defaultFileName = `${APP_ID}-team-template-${date}.json`;
+      const result = await saveTextFile(json, {
+        defaultFileName,
+        title: i18nService.t('teamTemplateSaveDialogTitle'),
+      });
+      if (!result?.success) {
+        if (result && 'error' in result && result.error) {
+          console.error('[Settings] dialog saveTextFile returned error:', result.error);
+        }
+        setError(i18nService.t('teamTemplateExportFailed'));
+        return;
+      }
+      if (result.canceled) {
+        return;
+      }
+      setNoticeMessage(i18nService.t('teamTemplateExportSuccess'));
+      if (result.path && window.electron?.shell?.showItemInFolder) {
+        try {
+          await window.electron.shell.showItemInFolder(result.path);
+        } catch (revealErr) {
+          console.warn('[Settings] showItemInFolder after export failed:', revealErr);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to export team template:', err);
+      setError(i18nService.t('teamTemplateExportFailed'));
+    } finally {
+      setTeamTemplateExporting(false);
+    }
+  }, [teamTemplateExporting, teamTemplateIncludeWorkdir, coworkConfig]);
+
+  const handleTeamTemplateImportPick = useCallback(() => {
+    setError(null);
+    teamTemplateImportInputRef.current?.click();
+  }, []);
+
+  const handleTeamTemplateFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+    setError(null);
+    try {
+      const raw = await file.text();
+      const parsed = parseTeamTemplateJson(raw);
+      if (!parsed.ok) {
+        const parseKey =
+          parsed.error === 'invalidJson' ? 'teamTemplateParseErrorInvalidJson'
+            : parsed.error === 'invalidShape' ? 'teamTemplateParseErrorInvalidShape'
+              : parsed.error === 'wrongType' ? 'teamTemplateParseErrorWrongType'
+                : parsed.error === 'unsupportedVersion' ? 'teamTemplateParseErrorUnsupportedVersion'
+                  : 'teamTemplateParseErrorInvalidJson';
+        setError(i18nService.t(parseKey));
+        return;
+      }
+      setTeamTemplatePending(parsed.payload);
+      setNoticeMessage(i18nService.t('teamTemplatePendingHint'));
+    } catch (err) {
+      console.error('Failed to read team template:', err);
+      setError(i18nService.t('teamTemplateImportReadFailed'));
+    }
+  }, []);
+
+  const handleApplyTeamTemplate = useCallback(async () => {
+    if (!teamTemplatePending || teamTemplateImporting) {
+      return;
+    }
+    setError(null);
+    setTeamTemplateImporting(true);
+    try {
+      const result = await applyTeamTemplate(teamTemplatePending, teamTemplateApplyOpts);
+      if (!result.ok) {
+        const applyKey =
+          result.error === 'coworkApplyFailed' ? 'teamTemplateApplyErrorCowork'
+            : 'teamTemplateApplyErrorGeneric';
+        setError(i18nService.t(applyKey));
+        return;
+      }
+      setTeamTemplatePending(null);
+      setNoticeMessage(i18nService.t('teamTemplateApplySuccess'));
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('teamTemplateApplySuccess'),
+      }));
+    } catch (err) {
+      console.error('Failed to apply team template:', err);
+      setError(i18nService.t('teamTemplateApplyError_applyException'));
+    } finally {
+      setTeamTemplateImporting(false);
+    }
+  }, [teamTemplatePending, teamTemplateImporting, teamTemplateApplyOpts]);
   const [bootstrapIdentity, setBootstrapIdentity] = useState<string>('');
   const [bootstrapUser, setBootstrapUser] = useState<string>('');
   const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
@@ -1515,18 +1664,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   const handleDeleteModel = (modelId: string) => {
-    if (!providers[activeProvider].models) return;
-    
-    const updatedModels = providers[activeProvider].models.filter(
-      model => model.id !== modelId
+    const prov = providers[activeProvider];
+    if (!prov?.models) {
+      return;
+    }
+
+    const updatedModels = prov.models.filter(
+      (model) => model.id !== modelId,
     );
-    
-    setProviders(prev => ({
+
+    setProviders((prev) => ({
       ...prev,
       [activeProvider]: {
         ...prev[activeProvider],
-        models: updatedModels
-      }
+        models: updatedModels,
+      },
     }));
   };
 
@@ -3171,7 +3323,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     </div>
                   ))}
 
-                  {(!providers[activeProvider].models || providers[activeProvider].models.length === 0) && (
+                  {(providers[activeProvider]?.models?.length ?? 0) === 0 && (
                     <div className="dark:bg-claude-darkSurface/20 bg-claude-surface/20 p-2.5 rounded-xl border dark:border-claude-darkBorder/50 border-claude-border/50 text-center">
                       <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('noModelsAvailable')}</p>
                       <button
@@ -3287,25 +3439,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
       case 'about':
         return (
-          <div className="flex min-h-full flex-col items-center pt-6 pb-3">
-            {/* Logo & App Name */}
-            <img
-              src="logo.png"
-              alt="LobsterAI"
-              className="w-16 h-16 mb-3 cursor-pointer select-none"
-              onClick={() => {
-                const next = logoClickCount + 1;
-                setLogoClickCount(next);
-                if (next >= 10 && !testModeUnlocked) {
-                  setTestModeUnlocked(true);
-                }
-              }}
-            />
-            <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
-            <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
+          <div className="flex min-h-full w-full flex-col pt-6 pb-3">
+            <div className="flex flex-col items-center">
+              <img
+                src="logo.png"
+                alt="LobsterAI"
+                className="w-16 h-16 mb-3 cursor-pointer select-none"
+                onClick={() => {
+                  const next = logoClickCount + 1;
+                  setLogoClickCount(next);
+                  if (next >= 10 && !testModeUnlocked) {
+                    setTestModeUnlocked(true);
+                  }
+                }}
+              />
+              <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
+              <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
+            </div>
 
+            <div className="w-full mt-8 flex flex-col gap-6">
             {/* Info Card */}
-            <div className="w-full mt-8 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
+            <div className="w-full rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutVersion')}</span>
                 <div className="flex items-center gap-2">
@@ -3380,6 +3534,98 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </button>
                 </div>
               )}
+            </div>
+
+            <div className="w-full rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden text-left">
+              <div className="px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
+                <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('teamTemplateSectionTitle')}
+                </h4>
+                <p className="text-xs mt-1 dark:text-claude-darkTextSecondary text-claude-textSecondary leading-relaxed">
+                  {i18nService.t('teamTemplateSectionHint')}
+                </p>
+              </div>
+              <div className="px-4 py-3 space-y-3">
+                <label className="flex items-start gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 rounded border-claude-border dark:border-claude-darkBorder"
+                    checked={teamTemplateIncludeWorkdir}
+                    onChange={(e) => setTeamTemplateIncludeWorkdir(e.target.checked)}
+                  />
+                  <span>{i18nService.t('teamTemplateIncludeWorkdir')}</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { void handleExportTeamTemplate(); }}
+                    disabled={teamTemplateExporting}
+                    className="text-xs px-3 py-1.5 rounded-lg border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {teamTemplateExporting ? i18nService.t('teamTemplateExporting') : i18nService.t('teamTemplateExport')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTeamTemplateImportPick}
+                    disabled={teamTemplateImporting}
+                    className="text-xs px-3 py-1.5 rounded-lg border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('teamTemplateImportPick')}
+                  </button>
+                </div>
+                <input
+                  ref={teamTemplateImportInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => { void handleTeamTemplateFile(e); }}
+                />
+                {teamTemplatePending && (
+                  <div className="rounded-lg border border-claude-border dark:border-claude-darkBorder dark:bg-claude-darkSurface/40 bg-claude-surface/80 p-3 space-y-2">
+                    <p className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('teamTemplateConfirmApply')}
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {([
+                        ['applyUi', 'teamTemplateApplyOptUi'],
+                        ['applyModel', 'teamTemplateApplyOptModel'],
+                        ['applyProviders', 'teamTemplateApplyOptProviders'],
+                        ['applyCowork', 'teamTemplateApplyOptCowork'],
+                        ['applySkills', 'teamTemplateApplyOptSkills'],
+                        ['applyWorkingDirectory', 'teamTemplateApplyOptWorkdir'],
+                      ] as const).map(([key, labelKey]) => (
+                        <label key={key} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="rounded border-claude-border dark:border-claude-darkBorder"
+                            checked={teamTemplateApplyOpts[key]}
+                            onChange={(e) => setTeamTemplateApplyOpts((prev) => ({ ...prev, [key]: e.target.checked }))}
+                          />
+                          <span>{i18nService.t(labelKey)}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => { void handleApplyTeamTemplate(); }}
+                        disabled={teamTemplateImporting}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-claude-accent text-white hover:bg-claude-accentHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {teamTemplateImporting ? i18nService.t('teamTemplateApplying') : i18nService.t('teamTemplateApply')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setTeamTemplatePending(null); setNoticeMessage(null); }}
+                        className="text-xs px-3 py-1.5 rounded-lg border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                      >
+                        {i18nService.t('cancel')}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
             </div>
 
             {/* Footer */}

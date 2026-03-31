@@ -377,6 +377,10 @@ interface IElectronAPI {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;
     selectFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<{ success: boolean; path: string | null }>;
     selectFiles: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<{ success: boolean; paths: string[] }>;
+    saveTextFile: (
+      content: string,
+      options?: { defaultFileName?: string; title?: string },
+    ) => Promise<{ success: boolean; canceled?: boolean; path?: string | null; error?: string }>;
     saveInlineFile: (options: { dataBase64: string; fileName?: string; mimeType?: string; cwd?: string }) => Promise<{ success: boolean; path: string | null; error?: string }>;
     readFileAsDataUrl: (filePath: string) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
   };
