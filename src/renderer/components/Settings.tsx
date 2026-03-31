@@ -29,6 +29,7 @@ import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
+import { getDefaultShortcuts } from '../services/shortcuts';
 import {
   OpenAIIcon,
   DeepSeekIcon,
@@ -456,11 +457,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const updateCheckTimerRef = useRef<number | null>(null);
   
   // 快捷键设置
-  const [shortcuts, setShortcuts] = useState({
-    newChat: 'Ctrl+N',
-    search: 'Ctrl+F',
-    settings: 'Ctrl+,',
-  });
+  const [shortcuts, setShortcuts] = useState(getDefaultShortcuts());
 
   // State for model editing
   const [isAddingModel, setIsAddingModel] = useState(false);

@@ -1,5 +1,18 @@
 import { AppConfig, CONFIG_KEYS, defaultConfig } from '../config';
 import { localStore } from './store';
+import { getDefaultShortcuts } from './shortcuts';
+
+/**
+ * Check if shortcuts look like old default values (all using Ctrl)
+ * This helps migrate users from the old Windows-centric defaults to platform-specific defaults
+ */
+const shouldMigrateShortcuts = (shortcuts: AppConfig['shortcuts'] | undefined): boolean => {
+  if (!shortcuts) return false;
+  // If all shortcuts start with 'Ctrl+', they are likely the old defaults
+  const values = Object.values(shortcuts);
+  if (values.length === 0) return false;
+  return values.every(s => s?.startsWith('Ctrl+'));
+};
 
 const getFixedProviderApiFormat = (providerKey: string): 'anthropic' | 'openai' | 'gemini' | null => {
   if (providerKey === 'openai' || providerKey === 'stepfun' || providerKey === 'youdaozhiyun') {
@@ -174,10 +187,13 @@ class ConfigService {
             ...defaultConfig.app,
             ...storedConfig.app,
           },
-          shortcuts: {
-            ...defaultConfig.shortcuts!,
-            ...(storedConfig.shortcuts ?? {}),
-          } as AppConfig['shortcuts'],
+          // Migrate shortcuts from old Ctrl-based defaults to platform-specific defaults
+          shortcuts: shouldMigrateShortcuts(storedConfig.shortcuts)
+            ? getDefaultShortcuts()
+            : {
+                ...defaultConfig.shortcuts!,
+                ...(storedConfig.shortcuts ?? {}),
+              } as AppConfig['shortcuts'],
           providers: mergedProviders as AppConfig['providers'],
         };
       }

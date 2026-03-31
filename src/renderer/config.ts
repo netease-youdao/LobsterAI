@@ -1,3 +1,5 @@
+import { getDefaultShortcuts } from './services/shortcuts';
+
 // 配置类型定义
 export interface AppConfig {
   // API 配置
@@ -416,11 +418,7 @@ export const defaultConfig: AppConfig = {
     isDevelopment: process.env.NODE_ENV === 'development',
     testMode: process.env.NODE_ENV === 'development',
   },
-  shortcuts: {
-    newChat: 'Ctrl+N',
-    search: 'Ctrl+F',
-    settings: 'Ctrl+,',
-  }
+  shortcuts: getDefaultShortcuts()
 };
 
 // 配置存储键

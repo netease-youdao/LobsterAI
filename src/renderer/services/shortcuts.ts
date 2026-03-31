@@ -124,3 +124,83 @@ export const matchesShortcut = (event: KeyboardEvent, shortcut?: string): boolea
 
   return true;
 };
+
+/**
+ * Detect if the current platform is macOS
+ */
+const isMacPlatform = (): boolean => {
+  // Check if running in Electron renderer process
+  if (typeof window !== 'undefined' && (window as any).electron?.platform) {
+    return (window as any).electron.platform === 'darwin';
+  }
+  // Fallback to navigator.userAgent for web environment
+  return navigator.platform.toLowerCase().includes('mac') || 
+         navigator.userAgent.toLowerCase().includes('mac');
+};
+
+/**
+ * Get the default modifier key label for the current platform
+ * Returns 'Cmd' for macOS, 'Ctrl' for Windows/Linux
+ */
+export const getDefaultModifierKey = (): 'Cmd' | 'Ctrl' => {
+  return isMacPlatform() ? 'Cmd' : 'Ctrl';
+};
+
+/**
+ * Get default shortcuts for the current platform
+ * macOS: Uses Cmd (⌘) as the primary modifier
+ * Windows/Linux: Uses Ctrl as the primary modifier
+ */
+export const getDefaultShortcuts = (): { newChat: string; search: string; settings: string } => {
+  const modifier = getDefaultModifierKey();
+  return {
+    newChat: `${modifier}+N`,
+    search: `${modifier}+F`,
+    settings: `${modifier}+,`,
+  };
+};
+
+/**
+ * Convert a KeyboardEvent to a shortcut string
+ * e.g. KeyboardEvent with metaKey=true and key='n' → 'Cmd+N' (on macOS)
+ */
+export const keyboardEventToShortcut = (event: KeyboardEvent): string | null => {
+  const parts: string[] = [];
+  
+  // Add modifiers in consistent order: Cmd/Ctrl, Alt, Shift
+  if (event.metaKey) {
+    parts.push('Cmd');
+  }
+  if (event.ctrlKey) {
+    parts.push('Ctrl');
+  }
+  if (event.altKey) {
+    parts.push('Alt');
+  }
+  if (event.shiftKey) {
+    parts.push('Shift');
+  }
+  
+  // Get the main key
+  let key = event.key;
+  
+  // Ignore modifier-only combinations
+  if (key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift') {
+    return null;
+  }
+  
+  // Normalize key names
+  if (key === ' ') {
+    key = 'Space';
+  } else if (key.length === 1) {
+    // Single character keys - uppercase for letters, keep as-is for others
+    key = key.toUpperCase();
+  } else {
+    // Special keys - capitalize first letter
+    key = key.charAt(0).toUpperCase() + key.slice(1);
+  }
+  
+  parts.push(key);
+  
+  return parts.join('+');
+};
