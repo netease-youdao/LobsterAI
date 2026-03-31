@@ -104,8 +104,13 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
             const imStore = getIMGatewayManager()?.getIMStore();
             const mapping = imStore?.getSessionMapping(rawTo, platform);
             if (mapping) {
+              // Use the stripped delivery.to (without subtype prefix) as the
+              // conversationId for primeConversationReplyRoute.  rawTo still
+              // carries the "direct:"/"group:" prefix that the IM store uses
+              // as its key, but the reply-route registry expects the bare
+              // platform conversation ID (e.g. "ou_xxx", not "direct:ou_xxx").
               await getIMGatewayManager()!.primeConversationReplyRoute(
-                platform, rawTo, mapping.coworkSessionId,
+                platform, delivery.to, mapping.coworkSessionId,
               );
             }
           }
@@ -152,8 +157,13 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
             const imStore = getIMGatewayManager()?.getIMStore();
             const mapping = imStore?.getSessionMapping(rawTo, platform);
             if (mapping) {
+              // Use the stripped delivery.to (without subtype prefix) as the
+              // conversationId for primeConversationReplyRoute.  rawTo still
+              // carries the "direct:"/"group:" prefix that the IM store uses
+              // as its key, but the reply-route registry expects the bare
+              // platform conversation ID (e.g. "ou_xxx", not "direct:ou_xxx").
               await getIMGatewayManager()!.primeConversationReplyRoute(
-                platform, rawTo, mapping.coworkSessionId,
+                platform, delivery.to, mapping.coworkSessionId,
               );
             }
           }
