@@ -14,6 +14,7 @@ import {
   ExclamationTriangleIcon,
   ChevronRightIcon,
   PhotoIcon,
+  QueueListIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
@@ -27,6 +28,7 @@ import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
+import ProgressPanel from './ProgressPanel';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
@@ -667,10 +669,12 @@ const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
+  onShowProgress?: () => void;
 }> = ({
   group,
   isLastInSequence = true,
   mapDisplayText,
+  onShowProgress,
 }) => {
   const { toolUse, toolResult } = group;
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
@@ -726,6 +730,18 @@ const ToolCallGroup: React.FC<{
               <code className="text-xs dark:text-claude-darkTextSecondary/80 text-claude-textSecondary/80 font-mono truncate max-w-[400px]">
                 {toolInputSummary}
               </code>
+            )}
+            {onShowProgress && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); onShowProgress(); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onShowProgress(); } }}
+                className="opacity-0 group-hover:opacity-100 p-0.5 rounded dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 hover:dark:text-claude-darkText hover:text-claude-text transition-opacity cursor-pointer"
+                title={i18nService.t('progressPanelToggle')}
+              >
+                <QueueListIcon className="h-3.5 w-3.5" />
+              </span>
             )}
           </div>
           {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
@@ -1125,12 +1141,14 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  onShowProgress?: () => void;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  onShowProgress,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1247,6 +1265,7 @@ export const AssistantTurnBlock: React.FC<{
                     group={item.group}
                     isLastInSequence={isLastInSequence}
                     mapDisplayText={mapDisplayText}
+                    onShowProgress={onShowProgress}
                   />
                 );
               }
@@ -1329,6 +1348,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const ignoreNextBlurRef = useRef(false);
+  const [isProgressPanelOpen, setIsProgressPanelOpen] = useState(false);
+  const [progressTurnId, setProgressTurnId] = useState<string | null>(null);
 
   // Reset rename value when session changes
   useEffect(() => {
@@ -1936,6 +1957,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                onShowProgress={() => {
+                  setProgressTurnId(turn.id);
+                  setIsProgressPanelOpen(true);
+                }}
               />
             </div>
           )}
@@ -1993,9 +2018,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           )}
         </div>
 
-        {/* Right side: Folder + Menu */}
+        {/* Right side: Progress + Folder + Menu */}
         <div className="non-draggable flex items-center gap-1">
-          {/* Folder button */}
+          <button
+            type="button"
+            onClick={() => {
+              if (isProgressPanelOpen) {
+                setIsProgressPanelOpen(false);
+              } else {
+                setProgressTurnId(null);
+                setIsProgressPanelOpen(true);
+              }
+            }}
+            className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs transition-colors ${
+              isProgressPanelOpen
+                ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover dark:text-claude-darkText text-claude-text'
+                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+            }`}
+            aria-label={i18nService.t('progressPanelToggle')}
+          >
+            <QueueListIcon className="h-4 w-4" />
+            <span>{i18nService.t('progressPanelToggle')}</span>
+          </button>
+
           <button
             type="button"
             onClick={handleOpenFolder}
@@ -2114,6 +2159,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>
         </div>
       )}
+
+      {/* Main content area: messages + optional progress panel */}
+      <div className="flex flex-row flex-1 min-h-0">
+        {/* Left side: conversation */}
+        <div className="flex flex-col flex-1 min-w-0">
 
       {/* Messages */}
       <div className="relative flex-1 min-h-0">
@@ -2354,6 +2404,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             sessionId={currentSession?.id}
           />
         </div>
+      </div>
+        </div>
+
+        {isProgressPanelOpen && (
+          <ProgressPanel
+            turns={turns}
+            selectedTurnId={progressTurnId}
+            onSelectTurn={setProgressTurnId}
+            onClose={() => setIsProgressPanelOpen(false)}
+            cwd={currentSession.cwd}
+          />
+        )}
       </div>
     </div>
   );
