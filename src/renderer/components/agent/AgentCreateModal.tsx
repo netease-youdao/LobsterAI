@@ -47,10 +47,11 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div
-        className="w-full max-w-md mx-4 rounded-xl shadow-xl bg-white dark:bg-claude-darkSurface border dark:border-claude-darkBorder border-claude-border"
+        className="w-full max-w-md mx-4 rounded-xl shadow-xl bg-white dark:bg-claude-darkSurface border dark:border-claude-darkBorder border-claude-border flex flex-col"
+        style={{ maxHeight: 'calc(100vh - 48px)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
           <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
             {i18nService.t('createAgent') || 'Create Agent'}
           </h3>
@@ -58,7 +59,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
             <XMarkIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
           </button>
         </div>
-        <div className="px-5 py-4 space-y-4">
+        <div className="overflow-y-auto px-5 py-4 space-y-4">
           <div>
             <label className="block text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
               {i18nService.t('agentName') || 'Name'} *
@@ -108,7 +109,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
           </div>
           <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
         </div>
-        <div className="flex justify-end gap-2 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+        <div className="flex-shrink-0 flex justify-end gap-2 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
           <button
             type="button"
             onClick={onClose}
