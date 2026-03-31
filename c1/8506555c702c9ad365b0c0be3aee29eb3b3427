@@ -1,0 +1,36 @@
+src/renderer/components/Sidebar.tsx
+  dc2569e19c23d4e1 33,48,312-317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "c18506555c702c9ad365b0c0be3aee29eb3b3427",
+  "prompts": {
+    "c069bb47313793b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "03833e47-5c4b-4a27-99e0-2c4423d02a34",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "dc2569e19c23d4e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c97fea1-9006-41ac-83a8-7cffeee6e01d",
+        "model": "unknown"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 5,
+      "accepted_lines": 472,
+      "overriden_lines": 0
+    }
+  }
+}
