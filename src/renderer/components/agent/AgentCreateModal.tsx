@@ -27,7 +27,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
         name: name.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
-        icon: icon.trim() || undefined,
+        icon: icon.trim() || '🤖',
         skillIds,
       });
       if (agent) {

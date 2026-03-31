@@ -203,7 +203,7 @@ const AgentCard: React.FC<{
         : 'dark:border-claude-darkBorder border-claude-border'
     }`}
   >
-    <span className="text-3xl">{icon || '🤖'}</span>
+    <span className="text-3xl">{icon || '🦞'}</span>
     <div className="min-w-0 w-full">
       <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text truncate">
         {name}
@@ -227,7 +227,7 @@ const UninstalledPresetCard: React.FC<{
   onAdd: () => void;
 }> = ({ icon, name, description, isAdding, onAdd }) => (
   <div className="flex flex-col items-start gap-2 p-4 rounded-xl border-2 border-dashed dark:border-claude-darkBorder border-claude-border opacity-60 hover:opacity-80 transition-opacity min-h-[140px]">
-    <span className="text-3xl">{icon || '🤖'}</span>
+    <span className="text-3xl">{icon || '🦞'}</span>
     <div className="min-w-0 w-full flex-1">
       <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text truncate">
         {name}
