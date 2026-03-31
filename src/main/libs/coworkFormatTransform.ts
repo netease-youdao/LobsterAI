@@ -411,7 +411,7 @@ export function buildOpenAIChatCompletionsURL(baseURL: string): string {
     }
     if (normalized.endsWith('/v1beta') || normalized.endsWith('/v1')) {
       const betaBase = normalized.endsWith('/v1')
-        ? `${normalized.slice(0, -3)}v1beta`
+        ? `${normalized.slice(0, -2)}v1beta`
         : normalized;
       return `${betaBase}/openai/chat/completions`;
     }
