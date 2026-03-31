@@ -473,33 +473,37 @@ class ApiService {
 
       return new Promise((resolve, reject) => {
         let aborted = false;
+        let sseBuffer = '';
 
         // 设置流式监听器
         const removeDataListener = window.electron.api.onStreamData(requestId, (chunk) => {
-          const lines = chunk.split('\n');
+          sseBuffer += chunk;
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? '';
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') continue;
+          for (const rawLine of lines) {
+            const line = rawLine.replace(/\r$/, '');
+            if (!line.startsWith('data: ')) continue;
 
-              try {
-                const parsed = JSON.parse(data);
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
 
-                // Anthropic SSE 事件处理
-                if (parsed.type === 'content_block_delta') {
-                  const delta = parsed.delta;
-                  if (delta.type === 'text_delta') {
-                    fullContent += delta.text;
-                    onProgress?.(fullContent, fullReasoning || undefined);
-                  } else if (delta.type === 'thinking_delta') {
-                    fullReasoning += delta.thinking;
-                    onProgress?.(fullContent, fullReasoning || undefined);
-                  }
+            try {
+              const parsed = JSON.parse(data);
+
+              // Anthropic SSE 事件处理
+              if (parsed.type === 'content_block_delta') {
+                const delta = parsed.delta;
+                if (delta.type === 'text_delta') {
+                  fullContent += delta.text;
+                  onProgress?.(fullContent, fullReasoning || undefined);
+                } else if (delta.type === 'thinking_delta') {
+                  fullReasoning += delta.thinking;
+                  onProgress?.(fullContent, fullReasoning || undefined);
                 }
-              } catch (e) {
-                console.warn('Failed to parse SSE message:', e);
               }
+            } catch (e) {
+              console.warn('Failed to parse SSE message:', e);
             }
           }
         });
