@@ -13,7 +13,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [icon, setIcon] = useState('');
+  const [icon, setIcon] = useState('🤖');
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
@@ -27,7 +27,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
         name: name.trim(),
         description: description.trim(),
         systemPrompt: systemPrompt.trim(),
-        icon: icon.trim() || undefined,
+        icon: icon.trim() || '🤖',
         skillIds,
       });
       if (agent) {
@@ -36,7 +36,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
         setName('');
         setDescription('');
         setSystemPrompt('');
-        setIcon('');
+        setIcon('🤖');
         setSkillIds([]);
       }
     } finally {
