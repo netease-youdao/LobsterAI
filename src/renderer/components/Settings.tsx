@@ -2408,12 +2408,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 {i18nService.t('coworkMemoryTitle')}
               </div>
               {/* Memory toggle hidden – always enabled by default */}
-              <div className="mt-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                <span className="font-medium">{i18nService.t('coworkMemoryFilePath')}:</span>{' '}
-                <span className="break-all font-mono opacity-80">
-                  {joinWorkspacePath(coworkConfig.workingDirectory, 'MEMORY.md')}
-                </span>
-              </div>
             </div>
 
             <div className="space-y-4 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">

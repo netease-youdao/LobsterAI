@@ -39,8 +39,20 @@ export interface OpenClawMemoryStats {
 const DEFAULT_OPENCLAW_WORKSPACE = path.join(os.homedir(), '.openclaw', 'workspace');
 
 /**
- * Resolve the MEMORY.md path from the user-configured working directory.
+ * Return the fixed workspace path for the main agent.
+ * All main-agent state files (MEMORY.md, IDENTITY.md, AGENTS.md, etc.) live here,
+ * decoupled from the user-visible "working directory" (which is only used as session cwd).
+ */
+export function getMainAgentWorkspacePath(stateDir: string): string {
+  return path.join(stateDir, 'workspace-main');
+}
+
+/**
+ * Resolve the MEMORY.md path from an agent workspace directory.
  * Falls back to `~/.openclaw/workspace/MEMORY.md` when unset.
+ *
+ * NOTE: The parameter represents the agent's workspace path (e.g. from
+ * `getMainAgentWorkspacePath()`), not the user-visible working directory.
  */
 export function resolveMemoryFilePath(workingDirectory: string | undefined): string {
   const dir = (workingDirectory || '').trim();
@@ -376,7 +388,10 @@ function validateBootstrapFilename(filename: string): void {
 }
 
 /**
- * Resolve the path to a bootstrap file in the workspace directory.
+ * Resolve the path to a bootstrap file in the agent workspace directory.
+ *
+ * NOTE: The parameter represents the agent's workspace path (e.g. from
+ * `getMainAgentWorkspacePath()`), not the user-visible working directory.
  */
 export function resolveBootstrapFilePath(workingDirectory: string | undefined, filename: string): string {
   validateBootstrapFilename(filename);
@@ -423,6 +438,9 @@ export function ensureDefaultIdentity(workingDirectory: string | undefined): voi
 /**
  * Sync MEMORY.md when workspace directory changes.
  * Copies entries from old path to new path (merge-dedup, keeps old file as backup).
+ *
+ * Primarily used by the one-time migration from user working directory to
+ * the fixed `{STATE_DIR}/workspace-main/` path.
  */
 export function syncMemoryFileOnWorkspaceChange(
   oldWorkingDirectory: string | undefined,

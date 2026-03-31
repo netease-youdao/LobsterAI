@@ -8,6 +8,7 @@ import { PlatformRegistry } from '../../shared/platform';
 import { resolveRawApiConfig, resolveAllProviderApiKeys } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
+import { getMainAgentWorkspacePath } from './openclawMemoryFile';
 import type { McpToolManifestEntry } from './mcpServerManager';
 import { hasBundledOpenClawExtension } from './openclawLocalExtensions';
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
@@ -619,10 +620,9 @@ export class OpenClawConfigSync {
       const result = this.writeMinimalConfig(configPath, reason);
       // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
       // may already be set and should be available when the user configures a model.
-      const workspaceDir = (coworkConfig.workingDirectory || '').trim();
-      const resolvedWorkspaceDir = workspaceDir || path.join(app.getPath('home'), '.openclaw', 'workspace');
-      const agentsMdWarning = this.syncAgentsMd(resolvedWorkspaceDir, coworkConfig);
-      this.syncPerAgentWorkspaces(resolvedWorkspaceDir, coworkConfig);
+      const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
+      const agentsMdWarning = this.syncAgentsMd(mainWorkspacePath, coworkConfig);
+      this.syncPerAgentWorkspaces(mainWorkspacePath, coworkConfig);
       if (agentsMdWarning) result.agentsMdWarning = agentsMdWarning;
       return result;
     }
@@ -650,7 +650,8 @@ export class OpenClawConfigSync {
     });
     const sandboxMode = mapExecutionModeToSandboxMode(coworkConfig.executionMode || 'auto');
 
-    const workspaceDir = (coworkConfig.workingDirectory || '').trim();
+    const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
+    ensureDir(mainWorkspacePath);
 
     // Filter to only plugins that actually exist in the extensions directory.
     // This avoids OpenClaw warnings about missing plugins (e.g. "nim" when NIM
@@ -707,7 +708,7 @@ export class OpenClawConfigSync {
           sandbox: {
             mode: sandboxMode,
           },
-          ...(workspaceDir ? { workspace: path.resolve(workspaceDir) } : {}),
+          workspace: path.resolve(mainWorkspacePath),
         },
         ...this.buildAgentsList(),
       },
@@ -1145,11 +1146,10 @@ export class OpenClawConfigSync {
     // Sync AGENTS.md with skills routing prompt to the OpenClaw workspace directory.
     // This runs on every sync regardless of openclaw.json changes, because skills
     // may have been installed/enabled/disabled independently.
-    const resolvedWorkspaceDir = workspaceDir || path.join(app.getPath('home'), '.openclaw', 'workspace');
-    const agentsMdWarning = this.syncAgentsMd(resolvedWorkspaceDir, coworkConfig);
+    const agentsMdWarning = this.syncAgentsMd(mainWorkspacePath, coworkConfig);
 
     // Sync per-agent workspace files (SOUL.md, IDENTITY.md, AGENTS.md) for non-main agents
-    this.syncPerAgentWorkspaces(resolvedWorkspaceDir, coworkConfig);
+    this.syncPerAgentWorkspaces(mainWorkspacePath, coworkConfig);
 
     return {
       ok: true,
