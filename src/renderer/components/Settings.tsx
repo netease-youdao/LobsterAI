@@ -613,7 +613,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       return;
     }
     setError(null);
-    setNoticeMessage(null);
+    const saveTextFile = window.electron?.dialog?.saveTextFile;
+    if (!saveTextFile) {
+      setError(i18nService.t('teamTemplateExportFailed'));
+      return;
+    }
     setTeamTemplateExporting(true);
     try {
       const appConfig = configService.getConfig();
@@ -628,18 +632,42 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         skills: skillsList,
         includeWorkingDirectory: teamTemplateIncludeWorkdir,
       });
-      const json = JSON.stringify(payload, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      let json: string;
+      try {
+        json = JSON.stringify(payload, null, 2);
+      } catch (stringifyErr) {
+        console.error('[Settings] team template JSON stringify failed:', stringifyErr);
+        setError(i18nService.t('teamTemplateExportFailed'));
+        return;
+      }
+      if (!json) {
+        setError(i18nService.t('teamTemplateExportFailed'));
+        return;
+      }
       const date = new Date().toISOString().slice(0, 10);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${APP_ID}-team-template-${date}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      const defaultFileName = `${APP_ID}-team-template-${date}.json`;
+      const result = await saveTextFile(json, {
+        defaultFileName,
+        title: i18nService.t('teamTemplateSaveDialogTitle'),
+      });
+      if (!result?.success) {
+        if (result && 'error' in result && result.error) {
+          console.error('[Settings] dialog saveTextFile returned error:', result.error);
+        }
+        setError(i18nService.t('teamTemplateExportFailed'));
+        return;
+      }
+      if (result.canceled) {
+        return;
+      }
       setNoticeMessage(i18nService.t('teamTemplateExportSuccess'));
+      if (result.path && window.electron?.shell?.showItemInFolder) {
+        try {
+          await window.electron.shell.showItemInFolder(result.path);
+        } catch (revealErr) {
+          console.warn('[Settings] showItemInFolder after export failed:', revealErr);
+        }
+      }
     } catch (err) {
       console.error('Failed to export team template:', err);
       setError(i18nService.t('teamTemplateExportFailed'));
@@ -1636,18 +1664,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   const handleDeleteModel = (modelId: string) => {
-    if (!providers[activeProvider].models) return;
-    
-    const updatedModels = providers[activeProvider].models.filter(
-      model => model.id !== modelId
+    const prov = providers[activeProvider];
+    if (!prov?.models) {
+      return;
+    }
+
+    const updatedModels = prov.models.filter(
+      (model) => model.id !== modelId,
     );
-    
-    setProviders(prev => ({
+
+    setProviders((prev) => ({
       ...prev,
       [activeProvider]: {
         ...prev[activeProvider],
-        models: updatedModels
-      }
+        models: updatedModels,
+      },
     }));
   };
 
@@ -3292,7 +3323,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     </div>
                   ))}
 
-                  {(!providers[activeProvider].models || providers[activeProvider].models.length === 0) && (
+                  {(providers[activeProvider]?.models?.length ?? 0) === 0 && (
                     <div className="dark:bg-claude-darkSurface/20 bg-claude-surface/20 p-2.5 rounded-xl border dark:border-claude-darkBorder/50 border-claude-border/50 text-center">
                       <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('noModelsAvailable')}</p>
                       <button
@@ -3408,25 +3439,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
       case 'about':
         return (
-          <div className="flex min-h-full flex-col items-center pt-6 pb-3">
-            {/* Logo & App Name */}
-            <img
-              src="logo.png"
-              alt="LobsterAI"
-              className="w-16 h-16 mb-3 cursor-pointer select-none"
-              onClick={() => {
-                const next = logoClickCount + 1;
-                setLogoClickCount(next);
-                if (next >= 10 && !testModeUnlocked) {
-                  setTestModeUnlocked(true);
-                }
-              }}
-            />
-            <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
-            <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
+          <div className="flex min-h-full w-full flex-col pt-6 pb-3">
+            <div className="flex flex-col items-center">
+              <img
+                src="logo.png"
+                alt="LobsterAI"
+                className="w-16 h-16 mb-3 cursor-pointer select-none"
+                onClick={() => {
+                  const next = logoClickCount + 1;
+                  setLogoClickCount(next);
+                  if (next >= 10 && !testModeUnlocked) {
+                    setTestModeUnlocked(true);
+                  }
+                }}
+              />
+              <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
+              <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
+            </div>
 
+            <div className="w-full mt-8 flex flex-col gap-6">
             {/* Info Card */}
-            <div className="w-full mt-8 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
+            <div className="w-full rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('aboutVersion')}</span>
                 <div className="flex items-center gap-2">
@@ -3503,7 +3536,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               )}
             </div>
 
-            <div className="w-full max-w-lg mt-6 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden text-left">
+            <div className="w-full rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden text-left">
               <div className="px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
                 <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text">
                   {i18nService.t('teamTemplateSectionTitle')}
@@ -3592,6 +3625,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </div>
                 )}
               </div>
+            </div>
             </div>
 
             {/* Footer */}

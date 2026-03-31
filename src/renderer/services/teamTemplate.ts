@@ -1,5 +1,10 @@
 import type { AppConfig } from '../config';
-import type { CoworkAgentEngine, CoworkConfig, CoworkExecutionMode } from '../types/cowork';
+import type {
+  CoworkAgentEngine,
+  CoworkConfig,
+  CoworkConfigUpdate,
+  CoworkExecutionMode,
+} from '../types/cowork';
 import { configService } from './config';
 import { coworkService } from './cowork';
 import { apiService } from './api';
@@ -216,7 +221,7 @@ export async function applyTeamTemplate(
   try {
     if (options.applyCowork && payload.cowork) {
       const c = payload.cowork;
-      const update: Parameters<typeof coworkService.updateConfig>[0] = {};
+      const update: CoworkConfigUpdate = {};
       if (options.applyWorkingDirectory && c.workingDirectory !== undefined && c.workingDirectory !== '') {
         update.workingDirectory = c.workingDirectory;
       }

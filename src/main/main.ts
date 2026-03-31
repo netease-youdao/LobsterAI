@@ -1592,19 +1592,20 @@ const emitWindowState = () => {
 
 const showSystemMenu = (position?: { x?: number; y?: number }) => {
   if (!isWindows) return;
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
 
-  const isMaximized = mainWindow.isMaximized();
+  const isMaximized = win.isMaximized();
   const menu = Menu.buildFromTemplate([
-    { label: 'Restore', enabled: isMaximized, click: () => mainWindow.restore() },
+    { label: 'Restore', enabled: isMaximized, click: () => win.restore() },
     { role: 'minimize' },
-    { label: 'Maximize', enabled: !isMaximized, click: () => mainWindow.maximize() },
+    { label: 'Maximize', enabled: !isMaximized, click: () => win.maximize() },
     { type: 'separator' },
     { role: 'close' },
   ]);
 
   menu.popup({
-    window: mainWindow,
+    window: win,
     x: Math.max(0, Math.round(position?.x ?? 0)),
     y: Math.max(0, Math.round(position?.y ?? 0)),
   });
@@ -2012,7 +2013,7 @@ if (!gotTheLock) {
       if (profileBody.code !== 0 || !profileBody.data) return { success: false };
       // Fetch quota separately
       const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
-      let quota = null;
+      let quota: ReturnType<typeof normalizeQuota> | null = null;
       if (quotaResp.ok) {
         const quotaBody = await quotaResp.json() as { code: number; data: Record<string, unknown> };
         if (quotaBody.code === 0 && quotaBody.data) {
@@ -3618,6 +3619,52 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle(
+    'dialog:saveTextFile',
+    async (
+      event,
+      contentArg?: unknown,
+      meta?: { defaultFileName?: string; title?: string },
+    ): Promise<{ success: boolean; canceled?: boolean; path?: string | null; error?: string }> => {
+      try {
+        const content = typeof contentArg === 'string' ? contentArg : '';
+        if (!content) {
+          return { success: false, error: 'empty_content' };
+        }
+        const defaultName =
+          typeof meta?.defaultFileName === 'string' && meta.defaultFileName.trim()
+            ? meta.defaultFileName.trim()
+            : 'export.json';
+        const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+        const saveOptions = {
+          title: typeof meta?.title === 'string' && meta.title.trim()
+            ? meta.title.trim()
+            : 'Save file',
+          defaultPath: path.join(app.getPath('downloads'), defaultName),
+          filters: [{ name: 'JSON', extensions: ['json'] }],
+        };
+        const saveResult = ownerWindow
+          ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+          : await dialog.showSaveDialog(saveOptions);
+        if (saveResult.canceled || !saveResult.filePath) {
+          return { success: true, canceled: true };
+        }
+        let outputPath = saveResult.filePath;
+        if (!outputPath.toLowerCase().endsWith('.json')) {
+          outputPath = `${outputPath}.json`;
+        }
+        await fs.promises.writeFile(outputPath, content, 'utf8');
+        return { success: true, canceled: false, path: outputPath };
+      } catch (error) {
+        console.error('[Dialog] saveTextFile failed:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'save_failed',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
     'dialog:saveInlineFile',
     async (
       _event,
@@ -4016,7 +4063,7 @@ if (!gotTheLock) {
     if (isMac && isDev) {
       const iconPath = path.join(__dirname, '../build/icons/png/512x512.png');
       if (fs.existsSync(iconPath)) {
-        app.dock.setIcon(nativeImage.createFromPath(iconPath));
+        app.dock?.setIcon(nativeImage.createFromPath(iconPath));
       }
     }
 
@@ -4072,8 +4119,9 @@ if (!gotTheLock) {
     });
     mainWindow.webContents.on('did-finish-load', () => {
       emitWindowState();
-      if (openClawEngineManager && !mainWindow?.isDestroyed()) {
-        mainWindow.webContents.send('openclaw:engine:onProgress', openClawEngineManager.getStatus());
+      const win = mainWindow;
+      if (openClawEngineManager && win && !win.isDestroyed()) {
+        win.webContents.send('openclaw:engine:onProgress', openClawEngineManager.getStatus());
       }
     });
 

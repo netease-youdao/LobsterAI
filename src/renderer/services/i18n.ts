@@ -38,6 +38,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     teamTemplateSectionHint:
       '导出内容不含 API Key 与令牌，便于同事对齐界面语言、主题、模型列表与协作偏好。密钥请仍使用「模型」页的加密导出/导入。',
     teamTemplateIncludeWorkdir: '导出时包含任务文件夹路径（在他人的电脑上可能无效）',
+    teamTemplateSaveDialogTitle: '保存团队配置模板',
     teamTemplateExport: '导出模板',
     teamTemplateExporting: '导出中…',
     teamTemplateImportPick: '选择模板文件',
@@ -1240,6 +1241,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     teamTemplateSectionHint:
       'Exports contain no API keys or tokens so teammates can align language, theme, model lists, and cowork preferences. For secrets, use encrypted export/import on the Model tab.',
     teamTemplateIncludeWorkdir: 'Include task folder path in export (may not apply on other machines)',
+    teamTemplateSaveDialogTitle: 'Save team config template',
     teamTemplateExport: 'Export template',
     teamTemplateExporting: 'Exporting…',
     teamTemplateImportPick: 'Choose template file',
