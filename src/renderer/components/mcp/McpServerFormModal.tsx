@@ -223,16 +223,16 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto"
+        className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl max-h-[80vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between px-6 pt-6 pb-3">
           <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
             {modalTitle}
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto px-6">
           {/* Name */}
           <div className="space-y-1.5">
             <label className={labelClass}>{i18nService.t('mcpServerName')}</label>
@@ -416,23 +416,23 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           {error && (
             <div className="text-xs text-red-500">{error}</div>
           )}
+        </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 text-xs rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
-            >
-              {i18nService.t('cancel')}
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              className="px-3 py-1.5 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
-            >
-              {saveText}
-            </button>
-          </div>
+        <div className="flex items-center justify-end gap-2 px-6 pt-3 pb-6">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+          >
+            {i18nService.t('cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            className="px-3 py-1.5 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+          >
+            {saveText}
+          </button>
         </div>
       </div>
     </div>
