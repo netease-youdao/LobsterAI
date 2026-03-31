@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { agentService } from '../../services/agent';
+import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import AgentSkillSelector from './AgentSkillSelector';
@@ -32,6 +33,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
       });
       if (agent) {
         agentService.switchAgent(agent.id);
+        await coworkService.loadSessions(agent.id);
         onClose();
         setName('');
         setDescription('');
