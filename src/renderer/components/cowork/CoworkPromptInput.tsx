@@ -659,8 +659,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               className={textareaClass}
               style={{ minHeight: `${minHeight}px` }}
             />
-            <div className="flex items-center justify-between px-4 pb-2 pt-1.5">
-              <div className="flex items-center gap-2 relative">
+            <div className="flex items-end justify-between gap-2 px-4 pb-2 pt-1.5">
+              <div className="flex items-center gap-2 relative min-w-0 flex-1 flex-wrap">
                 {showFolderSelector && (
                   <>
                     <div className="relative group">
@@ -713,7 +713,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {isStreaming ? (
                   <button
                     type="button"
