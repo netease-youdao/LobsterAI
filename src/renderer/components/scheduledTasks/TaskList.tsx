@@ -35,7 +35,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
 
   return (
     <div
-      className="grid grid-cols-[1.2fr_1fr_110px_40px] items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder/50 border-claude-border/50 hover:bg-claude-surfaceHover/50 dark:hover:bg-claude-darkSurfaceHover/50 cursor-pointer transition-colors"
+      className="grid grid-cols-[1.2fr_1fr_auto_44px_40px] items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder/50 border-claude-border/50 hover:bg-claude-surfaceHover/50 dark:hover:bg-claude-darkSurfaceHover/50 cursor-pointer transition-colors"
       onClick={() => dispatch(selectTask(task.id))}
     >
       <div className="min-w-0">
@@ -53,10 +53,14 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
         {formatScheduleLabel(task.schedule)}
       </div>
 
-      <div className="flex items-center justify-between gap-2">
+      <div>
         <span className={`text-xs font-medium ${statusTone}`}>{statusLabel}</span>
+      </div>
+
+      <div className="flex justify-center">
         <button
           type="button"
+          title={i18nService.t(task.enabled ? 'scheduledTasksClickToDisable' : 'scheduledTasksClickToEnable')}
           onClick={(event) => {
             event.stopPropagation();
             void scheduledTaskService.toggleTask(task.id, !task.enabled);
@@ -164,7 +168,7 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
 
   return (
     <div>
-      <div className="grid grid-cols-[1.2fr_1fr_110px_40px] items-center gap-3 px-4 py-2 border-b dark:border-claude-darkBorder/50 border-claude-border/50">
+      <div className="grid grid-cols-[1.2fr_1fr_auto_44px_40px] items-center gap-3 px-4 py-2 border-b dark:border-claude-darkBorder/50 border-claude-border/50">
         <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
           {i18nService.t('scheduledTasksListColTitle')}
         </div>
@@ -173,6 +177,9 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
         </div>
         <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
           {i18nService.t('scheduledTasksListColStatus')}
+        </div>
+        <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary text-center">
+          {i18nService.t('scheduledTasksListColEnabled')}
         </div>
         <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary text-center">
           {i18nService.t('scheduledTasksListColMore')}
