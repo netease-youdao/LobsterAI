@@ -1,8 +1,8 @@
 import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { ClockIcon, EllipsisVerticalIcon } from '@heroicons/react/24/outline';
+import { ClockIcon, EllipsisVerticalIcon, PlayIcon, PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
-import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
+import { selectTask, setViewMode, updateTaskState } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTask } from '../../../scheduledTask/types';
@@ -16,6 +16,9 @@ interface TaskListItemProps {
 const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) => {
   const dispatch = useDispatch();
   const [showMenu, setShowMenu] = React.useState(false);
+  const [isRunning, setIsRunning] = React.useState(false);
+  const [menuPosition, setMenuPosition] = React.useState<{ top: number; left: number; showAbove?: boolean } | null>(null);
+  const menuButtonRef = React.useRef<HTMLButtonElement>(null);
   const menuRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -76,28 +79,88 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
       <div className="flex justify-center">
         <div className="relative" ref={menuRef}>
           <button
+            ref={menuButtonRef}
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              if (!showMenu && menuButtonRef.current) {
+                const rect = menuButtonRef.current.getBoundingClientRect();
+                const viewportHeight = window.innerHeight;
+                const menuEstimatedHeight = 140; // 3 items * ~46px each
+                
+                // Check if menu would overflow bottom
+                const spaceBelow = viewportHeight - rect.bottom;
+                const shouldShowAbove = spaceBelow < menuEstimatedHeight + 8;
+                
+                setMenuPosition({
+                  top: shouldShowAbove ? rect.top - 4 : rect.bottom + 4,
+                  left: rect.right,
+                  showAbove: shouldShowAbove,
+                });
+              }
               setShowMenu((value) => !value);
             }}
             className="p-1.5 rounded-md dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
           >
             <EllipsisVerticalIcon className="w-5 h-5" />
           </button>
-          {showMenu && (
-            <div className="absolute right-0 top-full mt-1 w-32 rounded-lg shadow-lg dark:bg-claude-darkSurface bg-white border dark:border-claude-darkBorder border-claude-border z-50 py-1">
+          {showMenu && menuPosition && (
+            <div 
+              className="fixed z-50 w-max rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-lg overflow-hidden"
+              style={{ 
+                top: `${menuPosition.top}px`, 
+                left: `${menuPosition.left}px`,
+                transform: menuPosition.showAbove ? 'translate(-100%, -100%)' : 'translateX(-100%)'
+              }}
+            >
               <button
                 type="button"
-                onClick={(event) => {
+                onClick={async (event) => {
                   event.stopPropagation();
                   setShowMenu(false);
-                  void scheduledTaskService.runManually(task.id);
+                  setIsRunning(true);
+                  
+                  // Optimistic update: immediately mark as running in UI
+                  dispatch(updateTaskState({
+                    taskId: task.id,
+                    taskState: {
+                      ...task.state,
+                      runningAtMs: Date.now(),
+                      lastStatus: 'running',
+                    },
+                  }));
+                  
+                  try {
+                    await scheduledTaskService.runManually(task.id);
+                    setIsRunning(false);
+                    window.dispatchEvent(
+                      new CustomEvent('app:showToast', {
+                        detail: { message: i18nService.t('scheduledTasksTriggered'), variant: 'success' },
+                      })
+                    );
+                    // Real state will be synced by pollOnce() after 800ms
+                  } catch (error) {
+                    // Rollback optimistic update on failure
+                    dispatch(updateTaskState({
+                      taskId: task.id,
+                      taskState: {
+                        ...task.state,
+                        runningAtMs: null,
+                      },
+                    }));
+                    setIsRunning(false);
+                    window.dispatchEvent(
+                      new CustomEvent('app:showToast', {
+                        detail: { message: i18nService.t('scheduledTasksRunFailed'), variant: 'info' },
+                      })
+                    );
+                  }
                 }}
-                disabled={Boolean(task.state.runningAtMs)}
-                className="w-full text-left px-3 py-1.5 text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover disabled:opacity-50"
+                disabled={Boolean(task.state.runningAtMs) || isRunning}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover disabled:opacity-50 transition-colors"
               >
-                {i18nService.t('scheduledTasksRun')}
+                <PlayIcon className="h-4 w-4 shrink-0" />
+                <span>{isRunning ? (i18nService.t('scheduledTasksRunning') || '执行中...') : i18nService.t('scheduledTasksRun')}</span>
               </button>
               <button
                 type="button"
@@ -107,9 +170,10 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
                   dispatch(selectTask(task.id));
                   dispatch(setViewMode('edit'));
                 }}
-                className="w-full text-left px-3 py-1.5 text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
               >
-                {i18nService.t('scheduledTasksEdit')}
+                <PencilSquareIcon className="h-4 w-4 shrink-0" />
+                <span>{i18nService.t('scheduledTasksEdit')}</span>
               </button>
               <button
                 type="button"
@@ -118,9 +182,10 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
                   setShowMenu(false);
                   onRequestDelete(task.id, task.name);
                 }}
-                className="w-full text-left px-3 py-1.5 text-sm text-red-500 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 transition-colors"
               >
-                {i18nService.t('scheduledTasksDelete')}
+                <TrashIcon className="h-4 w-4 shrink-0" />
+                <span>{i18nService.t('scheduledTasksDelete')}</span>
               </button>
             </div>
           )}

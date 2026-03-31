@@ -1448,6 +1448,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         settleResolve();
         this.lastTickTimestamp = Date.now();
         this.startTickWatchdog();
+        // Notify engineManager that the WebSocket is (re-)connected, so Fast Path
+        // stays accurate after a reconnect cycle.
+        this.engineManager.notifyGatewayReconnected();
       },
       onConnectError: (error: Error) => {
         console.error('[ChannelSync] GatewayClient: onConnectError —', error.message);
@@ -1484,6 +1487,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.gatewayReadyPromise.catch(() => {
           // suppress unhandled rejection noise; auto-reconnect will re-establish
         });
+
+        // Notify engineManager so Fast Path sees phase='error' instead of stale 'running'.
+        this.engineManager.notifyGatewayDisconnected();
 
         // Auto-reconnect after unexpected disconnect
         this.scheduleGatewayReconnect();

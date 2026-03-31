@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { PlayIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
-import { setViewMode } from '../../store/slices/scheduledTaskSlice';
+import { setViewMode, updateTaskState } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTask } from '../../../scheduledTask/types';
@@ -26,6 +26,7 @@ interface TaskDetailProps {
 const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const dispatch = useDispatch();
   const runs = useSelector((state: RootState) => state.scheduledTask.runs[task.id] ?? []);
+  const [isRunning, setIsRunning] = React.useState(false);
 
   useEffect(() => {
     void scheduledTaskService.loadRuns(task.id);
@@ -64,12 +65,57 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
           </button>
           <button
             type="button"
-            onClick={() => void scheduledTaskService.runManually(task.id)}
-            disabled={Boolean(task.state.runningAtMs)}
+            onClick={async () => {
+              setIsRunning(true);
+              
+              // Optimistic update: immediately mark as running in UI
+              dispatch(updateTaskState({
+                taskId: task.id,
+                taskState: {
+                  ...task.state,
+                  runningAtMs: Date.now(),
+                  lastStatus: 'running',
+                },
+              }));
+              
+              try {
+                await scheduledTaskService.runManually(task.id);
+                setIsRunning(false);
+                window.dispatchEvent(
+                  new CustomEvent('app:showToast', {
+                    detail: { message: i18nService.t('scheduledTasksTriggered'), variant: 'success' },
+                  })
+                );
+                // Real state will be synced by pollOnce() after 800ms
+              } catch (error) {
+                // Rollback optimistic update on failure
+                dispatch(updateTaskState({
+                  taskId: task.id,
+                  taskState: {
+                    ...task.state,
+                    runningAtMs: null,
+                  },
+                }));
+                setIsRunning(false);
+                window.dispatchEvent(
+                  new CustomEvent('app:showToast', {
+                    detail: { message: i18nService.t('scheduledTasksRunFailed'), variant: 'info' },
+                  })
+                );
+              }
+            }}
+            disabled={Boolean(task.state.runningAtMs) || isRunning}
             className="p-2 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
             title={i18nService.t('scheduledTasksRun')}
           >
-            <PlayIcon className="w-4 h-4" />
+            {isRunning ? (
+              <svg className="w-4 h-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+            ) : (
+              <PlayIcon className="w-4 h-4" />
+            )}
           </button>
           <button
             type="button"
