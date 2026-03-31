@@ -808,7 +808,11 @@ const ToolCallGroup: React.FC<{
                   <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider mb-1">
                     {i18nService.t('coworkToolResult')}
                   </div>
-                  <div className="max-h-64 overflow-y-auto">
+                  <div className={`max-h-64 overflow-y-auto rounded-lg px-3 py-2 border ${
+                    isToolError
+                      ? 'dark:bg-red-500/10 bg-red-50 border-red-200 dark:border-red-900/50'
+                      : 'dark:bg-claude-darkSurface/30 bg-claude-surface/30 border-transparent'
+                  }`}>
                     <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
                       isToolError
                         ? 'text-red-500'
@@ -1188,7 +1192,11 @@ export const AssistantTurnBlock: React.FC<{
               </div>
             )}
             {(hasToolResultText || showNoDetailError) && (
-              <div className="mt-2 px-3 py-2 rounded-lg dark:bg-claude-darkSurface/50 bg-claude-surface/50 max-h-64 overflow-y-auto">
+              <div className={`mt-2 px-3 py-2 rounded-lg max-h-64 overflow-y-auto border ${
+                isToolError
+                  ? 'dark:bg-red-500/10 bg-red-50 border-red-200 dark:border-red-900/50'
+                  : 'dark:bg-claude-darkSurface/50 bg-claude-surface/50 border-transparent'
+              }`}>
                 <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
                   isToolError
                     ? 'text-red-500'
@@ -2125,6 +2133,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           {renderConversationTurns()}
           <div className="h-20" />
         </div>
+
+        {/* Jump to Latest Button — shown when user scrolled up during streaming */}
+        {!shouldAutoScroll && isStreaming && (
+          <button
+            type="button"
+            onClick={() => {
+              setShouldAutoScroll(true);
+              const container = scrollContainerRef.current;
+              if (container) container.scrollTop = container.scrollHeight;
+            }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full shadow-md dark:bg-claude-darkSurface bg-white border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceMuted hover:bg-claude-surfaceMuted transition-colors"
+            aria-label={i18nService.t('jumpToLatest')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3.5 h-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+            </svg>
+            {i18nService.t('jumpToLatest')}
+          </button>
+        )}
 
         {/* Turn Navigation Rail — to the left of scrollbar */}
         {turns.length > 1 && isScrollable && (
