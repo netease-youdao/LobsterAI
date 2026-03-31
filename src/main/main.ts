@@ -78,6 +78,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { checkDockerForSandbox } from './libs/dockerSandboxCheck';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -1592,19 +1593,20 @@ const emitWindowState = () => {
 
 const showSystemMenu = (position?: { x?: number; y?: number }) => {
   if (!isWindows) return;
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
 
-  const isMaximized = mainWindow.isMaximized();
+  const isMaximized = win.isMaximized();
   const menu = Menu.buildFromTemplate([
-    { label: 'Restore', enabled: isMaximized, click: () => mainWindow.restore() },
+    { label: 'Restore', enabled: isMaximized, click: () => win.restore() },
     { role: 'minimize' },
-    { label: 'Maximize', enabled: !isMaximized, click: () => mainWindow.maximize() },
+    { label: 'Maximize', enabled: !isMaximized, click: () => win.maximize() },
     { type: 'separator' },
     { role: 'close' },
   ]);
 
   menu.popup({
-    window: mainWindow,
+    window: win,
     x: Math.max(0, Math.round(position?.x ?? 0)),
     y: Math.max(0, Math.round(position?.y ?? 0)),
   });
@@ -1864,6 +1866,19 @@ if (!gotTheLock) {
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getSystemLocale', () => app.getLocale());
 
+  ipcMain.handle('system:dockerSandboxCheck', () => {
+    try {
+      return checkDockerForSandbox();
+    } catch (error) {
+      console.error('[Main] Docker sandbox check failed:', error);
+      return {
+        ok: false,
+        code: 'error' as const,
+        errorDetail: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  });
+
   // ── Auth IPC handlers ──
 
   /**
@@ -2012,7 +2027,7 @@ if (!gotTheLock) {
       if (profileBody.code !== 0 || !profileBody.data) return { success: false };
       // Fetch quota separately
       const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
-      let quota = null;
+      let quota: ReturnType<typeof normalizeQuota> | null = null;
       if (quotaResp.ok) {
         const quotaBody = await quotaResp.json() as { code: number; data: Record<string, unknown> };
         if (quotaBody.code === 0 && quotaBody.data) {
@@ -4016,7 +4031,7 @@ if (!gotTheLock) {
     if (isMac && isDev) {
       const iconPath = path.join(__dirname, '../build/icons/png/512x512.png');
       if (fs.existsSync(iconPath)) {
-        app.dock.setIcon(nativeImage.createFromPath(iconPath));
+        app.dock?.setIcon(nativeImage.createFromPath(iconPath));
       }
     }
 
@@ -4072,7 +4087,7 @@ if (!gotTheLock) {
     });
     mainWindow.webContents.on('did-finish-load', () => {
       emitWindowState();
-      if (openClawEngineManager && !mainWindow?.isDestroyed()) {
+      if (openClawEngineManager && mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('openclaw:engine:onProgress', openClawEngineManager.getStatus());
       }
     });
