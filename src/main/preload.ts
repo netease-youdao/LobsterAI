@@ -123,6 +123,9 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('generate-session-title', userInput),
   getRecentCwds: (limit?: number) =>
     ipcRenderer.invoke('get-recent-cwds', limit),
+  system: {
+    dockerSandboxCheck: () => ipcRenderer.invoke('system:dockerSandboxCheck'),
+  },
   openclaw: {
     engine: {
       getStatus: () => ipcRenderer.invoke('openclaw:engine:getStatus'),

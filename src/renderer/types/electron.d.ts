@@ -14,6 +14,13 @@ interface ApiStreamResponse {
   error?: string;
 }
 
+interface DockerSandboxCheckResult {
+  ok: boolean;
+  code: 'ok' | 'cli_missing' | 'daemon_unavailable' | 'timeout' | 'error';
+  serverVersion?: string;
+  errorDetail?: string;
+}
+
 // Cowork types for IPC
 interface CoworkSession {
   id: string;
@@ -303,6 +310,9 @@ interface IElectronAPI {
   saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
   generateSessionTitle: (userInput: string | null) => Promise<string>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
+  system: {
+    dockerSandboxCheck: () => Promise<DockerSandboxCheckResult>;
+  };
   openclaw: {
     engine: {
       getStatus: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;

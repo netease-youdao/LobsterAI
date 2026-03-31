@@ -15,6 +15,14 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type CoworkAgentEngine = 'openclaw' | 'yd_cowork';
 
+/** Result of main-process Docker probe for OpenClaw sandbox (mirrors IPC payload). */
+export type DockerSandboxCheckResult = {
+  ok: boolean;
+  code: 'ok' | 'cli_missing' | 'daemon_unavailable' | 'timeout' | 'error';
+  serverVersion?: string;
+  errorDetail?: string;
+};
+
 // Cowork message metadata
 export interface CoworkMessageMetadata {
   toolName?: string;

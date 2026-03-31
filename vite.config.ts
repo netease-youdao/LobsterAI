@@ -81,6 +81,12 @@ export default defineConfig({
     },
     watch: {
       usePolling: false,
+      ignored: [
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/.npm-cache/**',
+        '**/vendor/**',
+      ],
     },
   },
   optimizeDeps: {

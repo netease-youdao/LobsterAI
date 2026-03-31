@@ -9,7 +9,7 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import TrashIcon from './icons/TrashIcon';
@@ -21,6 +21,7 @@ import { RootState } from '../store';
 import ThemedSelect from './ui/ThemedSelect';
 import type {
   CoworkAgentEngine,
+  DockerSandboxCheckResult,
   OpenClawEngineStatus,
   CoworkUserMemoryEntry,
   CoworkMemoryStats,
@@ -592,6 +593,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
   const [bootstrapLoaded, setBootstrapLoaded] = useState<boolean>(false);
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
+  const [dockerSandboxCheck, setDockerSandboxCheck] = useState<DockerSandboxCheckResult | null>(null);
+  const [dockerSandboxCheckPending, setDockerSandboxCheckPending] = useState(false);
 
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
@@ -1172,6 +1175,58 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
   const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
+  const refreshDockerSandboxCheck = useCallback(async () => {
+    const api = window.electron?.system?.dockerSandboxCheck;
+    if (typeof api !== 'function') {
+      setDockerSandboxCheck(null);
+      return;
+    }
+    setDockerSandboxCheckPending(true);
+    try {
+      const result = await api();
+      setDockerSandboxCheck(result);
+    } catch (dockerErr) {
+      console.error('Docker sandbox check failed:', dockerErr);
+      setDockerSandboxCheck({
+        ok: false,
+        code: 'error',
+        errorDetail: dockerErr instanceof Error ? dockerErr.message : 'Unknown error',
+      });
+    } finally {
+      setDockerSandboxCheckPending(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'coworkAgentEngine' || !isOpenClawAgentEngine) return;
+    void refreshDockerSandboxCheck();
+  }, [activeTab, isOpenClawAgentEngine, refreshDockerSandboxCheck]);
+
+  const resolveDockerSandboxDetail = useCallback((r: DockerSandboxCheckResult | null): string => {
+    if (!r) return '';
+    if (r.ok) {
+      return r.serverVersion
+        ? `${i18nService.t('coworkDockerSandboxOk')} (${r.serverVersion})`
+        : i18nService.t('coworkDockerSandboxOk');
+    }
+    switch (r.code) {
+      case 'cli_missing':
+        return i18nService.t('coworkDockerSandboxCliMissing');
+      case 'daemon_unavailable':
+        return i18nService.t('coworkDockerSandboxDaemonDown');
+      case 'timeout':
+        return i18nService.t('coworkDockerSandboxTimeout');
+      default:
+        return r.errorDetail
+          ? `${i18nService.t('coworkDockerSandboxError')} ${r.errorDetail}`
+          : i18nService.t('coworkDockerSandboxError');
+    }
+  }, []);
+
+  const openDockerDocsExternal = useCallback(() => {
+    void window.electron?.shell?.openExternal('https://docs.docker.com/get-docker/');
+  }, []);
+
   const openClawProgressPercent = useMemo(() => {
     if (typeof openClawEngineStatus?.progressPercent !== 'number' || !Number.isFinite(openClawEngineStatus.progressPercent)) {
       return null;
@@ -1515,9 +1570,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   const handleDeleteModel = (modelId: string) => {
-    if (!providers[activeProvider].models) return;
-    
-    const updatedModels = providers[activeProvider].models.filter(
+    const providerBucket = providers[activeProvider];
+    if (!providerBucket?.models) return;
+
+    const updatedModels = providerBucket.models.filter(
       model => model.id !== modelId
     );
     
@@ -2369,32 +2425,77 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               </div>
             </div>
             {isOpenClawAgentEngine && (
-              <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
-                <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('coworkOpenClawInstallHint')}
-                </div>
-                <div className={`rounded-xl border px-4 py-3 text-sm ${openClawEngineStatus?.phase === 'error'
-                  ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
-                  : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      {resolveOpenClawStatusText(openClawEngineStatus)}
-                      {openClawProgressPercent !== null && (
-                        <span className="ml-2 text-xs opacity-80">{openClawProgressPercent}%</span>
-                      )}
+              <>
+                <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('coworkDockerSandboxTitle')}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { void refreshDockerSandboxCheck(); }}
+                        disabled={dockerSandboxCheckPending}
+                        className="inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs dark:border-claude-darkBorder border-claude-border hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover disabled:opacity-50"
+                      >
+                        <ArrowPathIcon className={`h-3.5 w-3.5 ${dockerSandboxCheckPending ? 'animate-spin' : ''}`} />
+                        {i18nService.t('coworkDockerSandboxRefresh')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openDockerDocsExternal}
+                        className="text-xs text-claude-accent hover:underline"
+                      >
+                        {i18nService.t('coworkDockerSandboxDocs')}
+                      </button>
                     </div>
                   </div>
-                  {openClawProgressPercent !== null && (
-                    <div className="mt-2 h-2 rounded-full bg-black/10 overflow-hidden">
-                      <div
-                        className="h-full bg-claude-accent transition-all"
-                        style={{ width: `${openClawProgressPercent}%` }}
-                      />
+                  <div className={`rounded-lg border px-3 py-2 text-sm ${
+                    dockerSandboxCheckPending
+                      ? 'border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-300'
+                      : dockerSandboxCheck?.ok
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200'
+                        : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
+                  }`}
+                  >
+                    {dockerSandboxCheckPending
+                      ? i18nService.t('coworkDockerSandboxChecking')
+                      : resolveDockerSandboxDetail(dockerSandboxCheck)}
+                  </div>
+                  {dockerSandboxCheck && !dockerSandboxCheck.ok && !dockerSandboxCheckPending && (
+                    <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('coworkDockerSandboxHintWhenUnavailable')}
                     </div>
                   )}
                 </div>
-              </div>
+
+                <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('coworkOpenClawInstallHint')}
+                  </div>
+                  <div className={`rounded-xl border px-4 py-3 text-sm ${openClawEngineStatus?.phase === 'error'
+                    ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
+                    : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        {resolveOpenClawStatusText(openClawEngineStatus)}
+                        {openClawProgressPercent !== null && (
+                          <span className="ml-2 text-xs opacity-80">{openClawProgressPercent}%</span>
+                        )}
+                      </div>
+                    </div>
+                    {openClawProgressPercent !== null && (
+                      <div className="mt-2 h-2 rounded-full bg-black/10 overflow-hidden">
+                        <div
+                          className="h-full bg-claude-accent transition-all"
+                          style={{ width: `${openClawProgressPercent}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
             )}
           </div>
         );
@@ -3171,7 +3272,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     </div>
                   ))}
 
-                  {(!providers[activeProvider].models || providers[activeProvider].models.length === 0) && (
+                  {(!providers[activeProvider]?.models?.length) && (
                     <div className="dark:bg-claude-darkSurface/20 bg-claude-surface/20 p-2.5 rounded-xl border dark:border-claude-darkBorder/50 border-claude-border/50 text-center">
                       <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('noModelsAvailable')}</p>
                       <button
