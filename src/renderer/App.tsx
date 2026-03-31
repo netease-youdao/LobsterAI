@@ -22,6 +22,7 @@ import { scheduledTaskService } from './services/scheduledTask';
 import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
 import { defaultConfig } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
+import { buildAvailableModelsListFromAppConfig } from './services/availableModelsFromConfig';
 import { clearSelection } from './store/slices/quickActionSlice';
 import type { ApiConfig } from './services/api';
 import type { CoworkPermissionResult } from './types/cowork';
@@ -34,6 +35,7 @@ import PrivacyDialog from './components/PrivacyDialog';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsPanelKey, setSettingsPanelKey] = useState(0);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
   const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
@@ -181,6 +183,12 @@ const App: React.FC = () => {
     return () => {
       unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    const bumpSettingsKey = () => setSettingsPanelKey((k) => k + 1);
+    window.addEventListener('lobsterai:teamTemplateApplied', bumpSettingsKey);
+    return () => window.removeEventListener('lobsterai:teamTemplateApplied', bumpSettingsKey);
   }, []);
 
   // Network status monitoring
@@ -408,20 +416,7 @@ const App: React.FC = () => {
     });
 
     if (config.providers) {
-      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
-      Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
-        if (providerConfig.enabled && providerConfig.models) {
-          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-            allModels.push({
-              id: model.id,
-              name: model.name,
-              provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
-              providerKey: providerName,
-              supportsImage: model.supportsImage ?? false,
-            });
-          });
-        }
-      });
+      const allModels = buildAvailableModelsListFromAppConfig(config);
       if (allModels.length > 0) {
         dispatch(setAvailableModels(allModels));
       }
@@ -617,6 +612,7 @@ const App: React.FC = () => {
           </div>
           {showSettings && (
             <Settings
+              key={settingsPanelKey}
               onClose={handleCloseSettings}
               initialTab={settingsOptions.initialTab}
               notice={settingsOptions.notice}
@@ -697,6 +693,7 @@ const App: React.FC = () => {
       {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
       {showSettings && (
         <Settings
+          key={settingsPanelKey}
           onClose={handleCloseSettings}
           initialTab={settingsOptions.initialTab}
           notice={settingsOptions.notice}

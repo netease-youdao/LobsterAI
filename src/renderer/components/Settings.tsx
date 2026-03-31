@@ -8,6 +8,12 @@ import { i18nService, LanguageType } from '../services/i18n';
 import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import {
+  buildTeamTemplateExport,
+  applyTeamTemplate,
+  parseTeamTemplateJson,
+  type TeamTemplatePayloadV1,
+} from '../services/teamTemplate';
 import ErrorMessage from './ErrorMessage';
 import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
@@ -577,6 +583,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
 
+  const [teamTemplateIncludeWorkdir, setTeamTemplateIncludeWorkdir] = useState(false);
+  const [teamTemplateExporting, setTeamTemplateExporting] = useState(false);
+  const [teamTemplateImporting, setTeamTemplateImporting] = useState(false);
+  const [teamTemplatePending, setTeamTemplatePending] = useState<TeamTemplatePayloadV1 | null>(null);
+  const teamTemplateImportInputRef = useRef<HTMLInputElement>(null);
+  const [teamTemplateApplyOpts, setTeamTemplateApplyOpts] = useState({
+    applyUi: true,
+    applyModel: true,
+    applyProviders: true,
+    applyCowork: true,
+    applySkills: true,
+    applyWorkingDirectory: true,
+  });
+
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
@@ -587,6 +607,107 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
+
+  const handleExportTeamTemplate = useCallback(async () => {
+    if (teamTemplateExporting) {
+      return;
+    }
+    setError(null);
+    setNoticeMessage(null);
+    setTeamTemplateExporting(true);
+    try {
+      const appConfig = configService.getConfig();
+      let skillsList: Array<{ id: string; enabled: boolean }> = [];
+      const listResult = await window.electron?.skills?.list();
+      if (listResult?.success && listResult.skills) {
+        skillsList = listResult.skills.map((s) => ({ id: s.id, enabled: s.enabled }));
+      }
+      const payload = buildTeamTemplateExport({
+        appConfig,
+        coworkConfig,
+        skills: skillsList,
+        includeWorkingDirectory: teamTemplateIncludeWorkdir,
+      });
+      const json = JSON.stringify(payload, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const date = new Date().toISOString().slice(0, 10);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${APP_ID}-team-template-${date}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setNoticeMessage(i18nService.t('teamTemplateExportSuccess'));
+    } catch (err) {
+      console.error('Failed to export team template:', err);
+      setError(i18nService.t('teamTemplateExportFailed'));
+    } finally {
+      setTeamTemplateExporting(false);
+    }
+  }, [teamTemplateExporting, teamTemplateIncludeWorkdir, coworkConfig]);
+
+  const handleTeamTemplateImportPick = useCallback(() => {
+    setError(null);
+    teamTemplateImportInputRef.current?.click();
+  }, []);
+
+  const handleTeamTemplateFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+    setError(null);
+    try {
+      const raw = await file.text();
+      const parsed = parseTeamTemplateJson(raw);
+      if (!parsed.ok) {
+        const parseKey =
+          parsed.error === 'invalidJson' ? 'teamTemplateParseErrorInvalidJson'
+            : parsed.error === 'invalidShape' ? 'teamTemplateParseErrorInvalidShape'
+              : parsed.error === 'wrongType' ? 'teamTemplateParseErrorWrongType'
+                : parsed.error === 'unsupportedVersion' ? 'teamTemplateParseErrorUnsupportedVersion'
+                  : 'teamTemplateParseErrorInvalidJson';
+        setError(i18nService.t(parseKey));
+        return;
+      }
+      setTeamTemplatePending(parsed.payload);
+      setNoticeMessage(i18nService.t('teamTemplatePendingHint'));
+    } catch (err) {
+      console.error('Failed to read team template:', err);
+      setError(i18nService.t('teamTemplateImportReadFailed'));
+    }
+  }, []);
+
+  const handleApplyTeamTemplate = useCallback(async () => {
+    if (!teamTemplatePending || teamTemplateImporting) {
+      return;
+    }
+    setError(null);
+    setTeamTemplateImporting(true);
+    try {
+      const result = await applyTeamTemplate(teamTemplatePending, teamTemplateApplyOpts);
+      if (!result.ok) {
+        const applyKey =
+          result.error === 'coworkApplyFailed' ? 'teamTemplateApplyErrorCowork'
+            : 'teamTemplateApplyErrorGeneric';
+        setError(i18nService.t(applyKey));
+        return;
+      }
+      setTeamTemplatePending(null);
+      setNoticeMessage(i18nService.t('teamTemplateApplySuccess'));
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('teamTemplateApplySuccess'),
+      }));
+    } catch (err) {
+      console.error('Failed to apply team template:', err);
+      setError(i18nService.t('teamTemplateApplyError_applyException'));
+    } finally {
+      setTeamTemplateImporting(false);
+    }
+  }, [teamTemplatePending, teamTemplateImporting, teamTemplateApplyOpts]);
   const [bootstrapIdentity, setBootstrapIdentity] = useState<string>('');
   const [bootstrapUser, setBootstrapUser] = useState<string>('');
   const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
@@ -3380,6 +3501,97 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </button>
                 </div>
               )}
+            </div>
+
+            <div className="w-full max-w-lg mt-6 rounded-xl border border-claude-border dark:border-claude-darkBorder overflow-hidden text-left">
+              <div className="px-4 py-3 border-b border-claude-border dark:border-claude-darkBorder">
+                <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                  {i18nService.t('teamTemplateSectionTitle')}
+                </h4>
+                <p className="text-xs mt-1 dark:text-claude-darkTextSecondary text-claude-textSecondary leading-relaxed">
+                  {i18nService.t('teamTemplateSectionHint')}
+                </p>
+              </div>
+              <div className="px-4 py-3 space-y-3">
+                <label className="flex items-start gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 rounded border-claude-border dark:border-claude-darkBorder"
+                    checked={teamTemplateIncludeWorkdir}
+                    onChange={(e) => setTeamTemplateIncludeWorkdir(e.target.checked)}
+                  />
+                  <span>{i18nService.t('teamTemplateIncludeWorkdir')}</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { void handleExportTeamTemplate(); }}
+                    disabled={teamTemplateExporting}
+                    className="text-xs px-3 py-1.5 rounded-lg border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {teamTemplateExporting ? i18nService.t('teamTemplateExporting') : i18nService.t('teamTemplateExport')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTeamTemplateImportPick}
+                    disabled={teamTemplateImporting}
+                    className="text-xs px-3 py-1.5 rounded-lg border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('teamTemplateImportPick')}
+                  </button>
+                </div>
+                <input
+                  ref={teamTemplateImportInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => { void handleTeamTemplateFile(e); }}
+                />
+                {teamTemplatePending && (
+                  <div className="rounded-lg border border-claude-border dark:border-claude-darkBorder dark:bg-claude-darkSurface/40 bg-claude-surface/80 p-3 space-y-2">
+                    <p className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('teamTemplateConfirmApply')}
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {([
+                        ['applyUi', 'teamTemplateApplyOptUi'],
+                        ['applyModel', 'teamTemplateApplyOptModel'],
+                        ['applyProviders', 'teamTemplateApplyOptProviders'],
+                        ['applyCowork', 'teamTemplateApplyOptCowork'],
+                        ['applySkills', 'teamTemplateApplyOptSkills'],
+                        ['applyWorkingDirectory', 'teamTemplateApplyOptWorkdir'],
+                      ] as const).map(([key, labelKey]) => (
+                        <label key={key} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="rounded border-claude-border dark:border-claude-darkBorder"
+                            checked={teamTemplateApplyOpts[key]}
+                            onChange={(e) => setTeamTemplateApplyOpts((prev) => ({ ...prev, [key]: e.target.checked }))}
+                          />
+                          <span>{i18nService.t(labelKey)}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => { void handleApplyTeamTemplate(); }}
+                        disabled={teamTemplateImporting}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-claude-accent text-white hover:bg-claude-accentHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {teamTemplateImporting ? i18nService.t('teamTemplateApplying') : i18nService.t('teamTemplateApply')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setTeamTemplatePending(null); setNoticeMessage(null); }}
+                        className="text-xs px-3 py-1.5 rounded-lg border border-claude-border dark:border-claude-darkBorder dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                      >
+                        {i18nService.t('cancel')}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Footer */}
