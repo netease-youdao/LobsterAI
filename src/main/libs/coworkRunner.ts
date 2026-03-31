@@ -232,6 +232,13 @@ export class CoworkRunner extends EventEmitter {
   private activeSessions: Map<string, ActiveSession> = new Map();
   private pendingPermissions: Map<string, PendingPermission> = new Map();
   private stoppedSessions: Set<string> = new Set();
+  // Tracks in-flight session execution promises so that concurrent
+  // startSession / continueSession calls on the same sessionId are
+  // serialized.  Without this guard, rapid user clicks (or IM bursts)
+  // can cause two async runs to iterate the event stream concurrently
+  // on the same ActiveSession, corrupting streaming state and
+  // duplicating messages.
+  private sessionRunPromise: Map<string, Promise<void>> = new Map();
   private turnMemoryQueue: QueuedTurnMemoryUpdate[] = [];
   private turnMemoryQueueKeys: Set<string> = new Set();
   private lastTurnMemoryKeyBySession: Map<string, string> = new Map();
@@ -265,6 +272,23 @@ export class CoworkRunner extends EventEmitter {
 
   private isSessionStopRequested(sessionId: string, activeSession?: ActiveSession): boolean {
     return this.stoppedSessions.has(sessionId) || Boolean(activeSession?.abortController.signal.aborted);
+  }
+
+  /**
+   * If an earlier startSession / continueSession call is still running for this
+   * sessionId, abort it and wait for it to settle.  This prevents concurrent
+   * event-stream iterations on the same ActiveSession which would corrupt
+   * streaming state and duplicate messages.
+   */
+  private async awaitPreviousRun(sessionId: string): Promise<void> {
+    const existing = this.sessionRunPromise.get(sessionId);
+    if (existing) {
+      // Signal the in-flight run to stop so it drains quickly.
+      this.stopSession(sessionId);
+      // Wait for the promise to settle (ignore rejection — stopSession
+      // already handled cleanup).
+      await existing.catch(() => {});
+    }
   }
 
   private applyTurnMemoryUpdatesForSession(sessionId: string): void {
@@ -1435,6 +1459,38 @@ export class CoworkRunner extends EventEmitter {
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
     } = {}
   ): Promise<void> {
+    // Serialize per-session: if a previous run is still in-flight, stop it
+    // and wait for it to drain before starting a new one.  This prevents
+    // two concurrent event-stream iterations from corrupting the shared
+    // ActiveSession streaming state.
+    await this.awaitPreviousRun(sessionId);
+
+    const runPromise = this.doStartSession(sessionId, prompt, options);
+    this.sessionRunPromise.set(sessionId, runPromise);
+    try {
+      await runPromise;
+    } finally {
+      // Only clear if we are still the current run (a newer call may have
+      // replaced us while we were settling).
+      if (this.sessionRunPromise.get(sessionId) === runPromise) {
+        this.sessionRunPromise.delete(sessionId);
+      }
+    }
+  }
+
+  private async doStartSession(
+    sessionId: string,
+    prompt: string,
+    options: {
+      skipInitialUserMessage?: boolean;
+      skillIds?: string[];
+      systemPrompt?: string;
+      autoApprove?: boolean;
+      workspaceRoot?: string;
+      confirmationMode?: 'modal' | 'text';
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    } = {}
+  ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const session = this.store.getSession(sessionId);
     if (!session) {
@@ -1526,11 +1582,26 @@ export class CoworkRunner extends EventEmitter {
   }
 
   async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
+    // Serialize per-session: wait for any in-flight run to complete.
+    await this.awaitPreviousRun(sessionId);
+
+    const runPromise = this.doContinueSession(sessionId, prompt, options);
+    this.sessionRunPromise.set(sessionId, runPromise);
+    try {
+      await runPromise;
+    } finally {
+      if (this.sessionRunPromise.get(sessionId) === runPromise) {
+        this.sessionRunPromise.delete(sessionId);
+      }
+    }
+  }
+
+  private async doContinueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
-      // If not active, start a new run
-      await this.startSession(sessionId, prompt, {
+      // If not active, start a new run (already serialized by the caller).
+      await this.doStartSession(sessionId, prompt, {
         skillIds: options.skillIds,
         systemPrompt: options.systemPrompt,
         imageAttachments: options.imageAttachments,
