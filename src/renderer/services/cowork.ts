@@ -513,6 +513,11 @@ class CoworkService {
         store.dispatch(clearPendingPermissions());
         store.dispatch(setStreaming(false));
       }
+      if (result.openClawConfigSyncDeferred) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkOpenClawConfigSyncDeferred'),
+        }));
+      }
       return true;
     }
 

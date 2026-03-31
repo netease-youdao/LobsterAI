@@ -348,7 +348,11 @@ interface IElectronAPI {
     }) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
     respondToPermission: (options: { requestId: string; result: CoworkPermissionResult }) => Promise<{ success: boolean; error?: string }>;
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
-    setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
+    setConfig: (config: CoworkConfigUpdate) => Promise<{
+      success: boolean;
+      error?: string;
+      openClawConfigSyncDeferred?: boolean;
+    }>;
     listMemoryEntries: (input: {
       query?: string;
       limit?: number;

@@ -128,6 +128,7 @@ interface GatewayRunLogEntry {
 interface CronJobServiceDeps {
   getGatewayClient: () => GatewayClientLike | null;
   ensureGatewayReady: () => Promise<void>;
+  onRunningJobsDrained?: () => void;
 }
 
 function mapGatewayResultStatus(
@@ -391,6 +392,7 @@ function extractRunTitle(summary?: string): string | undefined {
 export class CronJobService {
   private readonly getGatewayClient: () => GatewayClientLike | null;
   private readonly ensureGatewayReady: () => Promise<void>;
+  private readonly onRunningJobsDrained?: () => void;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private lastKnownStates: Map<string, string> = new Map();
   private lastKnownRunAtMs: Map<string, number> = new Map();
@@ -406,6 +408,7 @@ export class CronJobService {
   constructor(deps: CronJobServiceDeps) {
     this.getGatewayClient = deps.getGatewayClient;
     this.ensureGatewayReady = deps.ensureGatewayReady;
+    this.onRunningJobsDrained = deps.onRunningJobsDrained;
   }
 
   /**
@@ -637,6 +640,8 @@ export class CronJobService {
       });
       const jobs = Array.isArray(result.jobs) ? result.jobs : [];
 
+      const hadRunningBeforePoll = this.runningJobIds.size > 0;
+
       // Refresh jobId → name cache for synchronous lookups (used by session naming).
       this.jobNameCache.clear();
       this.runningJobIds.clear();
@@ -644,6 +649,14 @@ export class CronJobService {
         this.jobNameCache.set(job.id, job.name);
         if (job.state.runningAtMs) {
           this.runningJobIds.add(job.id);
+        }
+      }
+
+      if (hadRunningBeforePoll && this.runningJobIds.size === 0) {
+        try {
+          this.onRunningJobsDrained?.();
+        } catch (err) {
+          console.error('[CronJobService] onRunningJobsDrained failed:', err);
         }
       }
 

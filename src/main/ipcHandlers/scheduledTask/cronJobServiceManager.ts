@@ -13,6 +13,8 @@ export interface CronJobServiceDeps {
     getGatewayClient: () => GatewayClientLike | null;
     ensureReady: () => Promise<void>;
   } | null;
+  /** Invoked when polling observes all cron jobs transitioned from running to idle. */
+  onRunningJobsDrained?: () => void;
 }
 
 let cronJobService: CronJobService | null = null;
@@ -34,6 +36,7 @@ export function getCronJobService(): CronJobService {
     cronJobService = new CronJobService({
       getGatewayClient: () => adapter.getGatewayClient(),
       ensureGatewayReady: () => adapter.ensureReady(),
+      onRunningJobsDrained: deps.onRunningJobsDrained,
     });
   }
   return cronJobService;
