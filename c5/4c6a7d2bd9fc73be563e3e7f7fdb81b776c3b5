@@ -1,0 +1,36 @@
+electron-builder.json
+  c069bb47313793b4 151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "c54c6a7d2bd9fc73be563e3e7f7fdb81b776c3b5",
+  "prompts": {
+    "555d0dc30a84bf29": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d2a42-7863-7281-ad1d-47aa0ecd6f5f",
+        "model": "gpt-5.4"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "c069bb47313793b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "03833e47-5c4b-4a27-99e0-2c4423d02a34",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
