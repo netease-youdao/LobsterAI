@@ -28,6 +28,7 @@ import type {
 import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
+import SelectionToolbarSettings from './selection-toolbar/SelectionToolbarSettings';
 import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
 import {
   OpenAIIcon,
@@ -2341,6 +2342,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 })}
               </div>
             </div>
+
+            <SelectionToolbarSettings />
           </div>
         );
 
