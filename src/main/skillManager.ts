@@ -1269,7 +1269,8 @@ export class SkillManager {
     try {
       const raw = fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8');
       const { frontmatter } = parseFrontmatter(raw);
-      const v = frontmatter.version ?? frontmatter.metadata?.version;
+      const meta = frontmatter.metadata as Record<string, unknown> | undefined;
+      const v = frontmatter.version ?? meta?.version;
       return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
     } catch {
       return '';
@@ -1922,7 +1923,8 @@ export class SkillManager {
       const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
       const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
-      const v = frontmatter.version ?? frontmatter.metadata?.version;
+      const meta = frontmatter.metadata as Record<string, unknown> | undefined;
+      const v = frontmatter.version ?? meta?.version;
       const version = typeof v === 'string' ? v : typeof v === 'number' ? String(v) : undefined;
       const updatedAt = fs.statSync(skillFile).mtimeMs;
       const id = path.basename(dir);
