@@ -954,7 +954,7 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
         <div className="pl-4 sm:pl-8 md:pl-12">
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
-              <div className="w-fit max-w-[42rem] rounded-2xl px-4 py-2.5 bg-surface text-foreground shadow-subtle">
+              <div className="chat-bubble-user w-fit max-w-[42rem] rounded-2xl px-4 py-2.5 bg-chat-user text-foreground shadow-subtle">
                 {message.content?.trim() && (
                   <MarkdownContent
                     content={message.content}
@@ -1253,7 +1253,7 @@ export const AssistantTurnBlock: React.FC<{
     <div className="px-4 py-2">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-start gap-3">
-          <div className="flex-1 min-w-0 px-4 py-3 space-y-3">
+          <div className="chat-bubble-bot flex-1 min-w-0 px-4 py-3 space-y-3 bg-chat-bot rounded-2xl">
             {visibleAssistantItems.map((item, index) => {
               if (item.type === 'assistant') {
                 if (item.message.metadata?.isThinking) {

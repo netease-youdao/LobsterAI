@@ -68,6 +68,36 @@ blockquote {
   contain-intrinsic-size: 500px;
 }
 
+/* Chat bubble tail — user message (top-right corner) */
+.chat-bubble-user {
+  position: relative;
+}
+.chat-bubble-user::after {
+  content: '';
+  position: absolute;
+  top: 10px;
+  right: -6px;
+  width: 12px;
+  height: 12px;
+  background-color: var(--lobster-chat-user);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+/* Chat bubble tail — bot message (top-left corner) */
+.chat-bubble-bot {
+  position: relative;
+}
+.chat-bubble-bot::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  left: -6px;
+  width: 12px;
+  height: 12px;
+  background-color: var(--lobster-chat-bot);
+  clip-path: polygon(100% 0, 100% 100%, 0 0);
+}
+
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.6;

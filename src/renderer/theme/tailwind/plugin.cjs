@@ -36,6 +36,12 @@ module.exports = plugin(function () {
           overlay:     'var(--lobster-surface-overlay)',
           inset:       'var(--lobster-surface-raised)',  // alias
         },
+        chat: {
+          user:              'var(--lobster-chat-user)',
+          'user-foreground': 'var(--lobster-chat-user-foreground)',
+          bot:               'var(--lobster-chat-bot)',
+          'bot-foreground':  'var(--lobster-chat-bot-foreground)',
+        },
         border: {
           DEFAULT:     'var(--lobster-border)',
           subtle:      'var(--lobster-border-subtle)',
