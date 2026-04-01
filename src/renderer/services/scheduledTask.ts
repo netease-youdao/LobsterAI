@@ -241,6 +241,15 @@ class ScheduledTaskService {
       return [];
     }
   }
+
+  async listCoworkSessions(): Promise<Array<{ id: string; title: string; createdAt: number; updatedAt: number }>> {
+    try {
+      const result = await window.electron?.cowork?.listSessions();
+      return Array.isArray(result?.sessions) ? result.sessions : [];
+    } catch {
+      return [];
+    }
+  }
 }
 
 export const scheduledTaskService = new ScheduledTaskService();
