@@ -145,8 +145,6 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:delete', sessionId),
     deleteSessions: (sessionIds: string[]) =>
       ipcRenderer.invoke('cowork:session:deleteBatch', sessionIds),
-    deleteMessage: (sessionId: string, messageId: string) =>
-      ipcRenderer.invoke('cowork:message:delete', sessionId, messageId),
     deleteMessages: (sessionId: string, messageIds: string[]) =>
       ipcRenderer.invoke('cowork:message:deleteBatch', sessionId, messageIds),
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) =>

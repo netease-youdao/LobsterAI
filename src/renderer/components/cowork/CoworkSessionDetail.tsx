@@ -2297,6 +2297,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
                 {i18nService.t('deleteMessagesConfirmMessage').replace('{count}', String(pendingDeleteMessageIds.length))}
               </p>
+              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mt-2">
+                {i18nService.t('deleteMessagesAiNotice')}
+              </p>
             </div>
             <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
               <button

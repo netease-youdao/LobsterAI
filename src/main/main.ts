@@ -2561,15 +2561,6 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:message:delete', async (_event, sessionId: string, messageId: string) => {
-    try {
-      getCoworkStore().deleteMessage(sessionId, messageId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete message' };
-    }
-  });
-
   ipcMain.handle('cowork:message:deleteBatch', async (_event, sessionId: string, messageIds: string[]) => {
     try {
       getCoworkStore().deleteMessages(sessionId, messageIds);
