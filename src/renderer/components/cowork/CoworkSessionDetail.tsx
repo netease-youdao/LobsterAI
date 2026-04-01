@@ -2069,6 +2069,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const isLastTurn = index === turns.length - 1;
       const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
       const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+      const canDeleteMessages = !isStreaming && !remoteManaged;
 
       return (
         <div key={turn.id} data-turn-index={index}>
@@ -2080,7 +2081,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 isMultiSelectMode={isMultiSelectMode}
                 isSelected={selectedMessageIds.has(turn.userMessage.id)}
                 onToggleSelect={handleToggleSelect}
-                onDelete={!isStreaming && !remoteManaged ? handleDeleteMessage : undefined}
+                onDelete={canDeleteMessages ? handleDeleteMessage : undefined}
               />
             </div>
           )}
@@ -2095,7 +2096,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 isMultiSelectMode={isMultiSelectMode}
                 selectedMessageIds={selectedMessageIds}
                 onToggleSelect={handleToggleSelect}
-                onDeleteMessage={!isStreaming && !remoteManaged ? handleDeleteMessage : undefined}
+                onDeleteMessage={canDeleteMessages ? handleDeleteMessage : undefined}
               />
             </div>
           )}
