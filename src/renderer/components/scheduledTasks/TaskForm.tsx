@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
+import {
+  parseSchedule,
+  isParseError,
+  getNextRunDates,
+  formatNextRunDate,
+} from '../../services/scheduleParser';
 import type {
   ScheduledTask,
   ScheduledTaskChannelOption,
@@ -19,7 +25,10 @@ interface TaskFormProps {
 
 interface FormState {
   name: string;
-  description: string;
+  naturalLanguage: string;
+  scheduleKind: 'cron' | 'at' | '';
+  cronExpr: string;
+  atTime: string;
   planType: PlanType;
   year: number;
   month: number;
@@ -46,29 +55,37 @@ function nowDefaults() {
   };
 }
 
-const DEFAULT_FORM_STATE: FormState = {
-  name: '',
-  description: '',
-  planType: 'daily',
-  ...nowDefaults(),
-  weekday: 1,
-  monthDay: 1,
-  payloadText: '',
-  notifyChannel: 'none',
-  notifyTo: '',
-};
-
 function isIMChannel(channel: string): boolean {
   return PlatformRegistry.isIMChannel(channel);
 }
 
 function createFormState(task?: ScheduledTask): FormState {
-  if (!task) return { ...DEFAULT_FORM_STATE, ...nowDefaults() };
+  const base: FormState = {
+    name: '',
+    naturalLanguage: '',
+    scheduleKind: '',
+    cronExpr: '',
+    atTime: '',
+    planType: 'daily',
+    ...nowDefaults(),
+    weekday: 1,
+    monthDay: 1,
+    payloadText: '',
+    notifyChannel: 'none',
+    notifyTo: '',
+  };
+
+  if (!task) return base;
 
   const planInfo = scheduleToPlanInfo(task.schedule);
+  const schedule = task.schedule;
+
   return {
+    ...base,
     name: task.name,
-    description: task.description,
+    naturalLanguage: task.description || '',
+    scheduleKind: schedule.kind === 'cron' ? 'cron' : '',
+    cronExpr: schedule.kind === 'cron' ? schedule.expr : '',
     planType: planInfo.planType,
     year: planInfo.year,
     month: planInfo.month,
@@ -84,24 +101,26 @@ function createFormState(task?: ScheduledTask): FormState {
   };
 }
 
-function buildScheduleInput(form: FormState): ScheduledTaskInput['schedule'] {
+function isAdvancedSchedule(task?: ScheduledTask): boolean {
+  if (!task) return false;
+  return task.schedule.kind === 'at' || task.schedule.kind === 'every';
+}
+
+function buildFallbackSchedule(form: FormState): ScheduledTaskInput['schedule'] {
   if (form.planType === 'once') {
     const date = new Date(form.year, form.month - 1, form.day, form.hour, form.minute, form.second);
     return { kind: 'at', at: date.toISOString() };
   }
-
   const min = String(form.minute);
   const hr = String(form.hour);
-
-  if (form.planType === 'daily') {
-    return { kind: 'cron', expr: `${min} ${hr} * * *` };
-  }
-
-  if (form.planType === 'weekly') {
-    return { kind: 'cron', expr: `${min} ${hr} * * ${form.weekday}` };
-  }
-
+  if (form.planType === 'daily') return { kind: 'cron', expr: `${min} ${hr} * * *` };
+  if (form.planType === 'weekly') return { kind: 'cron', expr: `${min} ${hr} * * ${form.weekday}` };
   return { kind: 'cron', expr: `${min} ${hr} ${form.monthDay} * *` };
+}
+
+function buildLLMSchedule(form: FormState): ScheduledTaskInput['schedule'] {
+  if (form.scheduleKind === 'at') return { kind: 'at', at: form.atTime };
+  return { kind: 'cron', expr: form.cronExpr };
 }
 
 const WEEKDAY_KEYS = [
@@ -115,7 +134,18 @@ const WEEKDAY_KEYS = [
 ] as const;
 
 const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
+  const [useLLM, setUseLLM] = useState(() => {
+    // Editing: restore mode from save time (description non-empty → LLM, empty → GUI)
+    if (mode === 'edit' && task) return !!task.description;
+    // Creating: default to LLM natural language input
+    return true;
+  });
+  // In edit mode, lock the input mode — user cannot switch after saving
+  const modeLocked = mode === 'edit';
   const [form, setForm] = useState<FormState>(() => createFormState(task));
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState('');
+  const [nextRuns, setNextRuns] = useState<Date[]>([]);
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
     const savedChannel = task?.delivery.channel;
@@ -129,12 +159,22 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const isAdvanced = form.planType === 'advanced';
+  const advanced = isAdvancedSchedule(task);
   const showConversationSelector = isIMChannel(form.notifyChannel);
 
   useEffect(() => {
     setForm(createFormState(task));
-  }, [task]);
+    setConvertError('');
+    setNextRuns([]);
+  }, [task?.id]);
+
+  useEffect(() => {
+    if (useLLM && form.scheduleKind === 'cron' && form.cronExpr) {
+      setNextRuns(getNextRunDates(form.cronExpr, 5));
+    } else {
+      setNextRuns([]);
+    }
+  }, [useLLM, form.scheduleKind, form.cronExpr]);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,6 +222,22 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     setForm((current) => ({ ...current, ...patch }));
   };
 
+  const handleConvert = async () => {
+    setConvertError('');
+    setConverting(true);
+    const outcome = await parseSchedule(form.naturalLanguage);
+    setConverting(false);
+    if (isParseError(outcome)) {
+      setConvertError(outcome.error);
+    } else if (outcome.kind === 'at') {
+      updateForm({ scheduleKind: 'at', atTime: outcome.at, cronExpr: '' });
+      setConvertError('');
+    } else {
+      updateForm({ scheduleKind: 'cron', cronExpr: outcome.cronExpr, atTime: '' });
+      setConvertError('');
+    }
+  };
+
   const validate = (): boolean => {
     const nextErrors: Record<string, string> = {};
 
@@ -192,15 +248,21 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       nextErrors.payloadText = i18nService.t('scheduledTasksFormValidationPromptRequired');
     }
 
-    if (form.planType === 'once') {
-      const runAt = new Date(form.year, form.month - 1, form.day, form.hour, form.minute, form.second);
-      if (runAt.getTime() <= Date.now()) {
-        nextErrors.schedule = i18nService.t('scheduledTasksFormValidationDatetimeFuture');
+    if (!advanced) {
+      if (useLLM && form.scheduleKind === '') {
+        nextErrors.schedule = i18nService.t('scheduleParserNotConverted');
       }
-    }
-
-    if (!isAdvanced && (form.hour < 0 || form.hour > 23 || form.minute < 0 || form.minute > 59)) {
-      nextErrors.schedule = i18nService.t('scheduledTasksFormValidationTimeRequired');
+      if (!useLLM) {
+        if (form.planType === 'once') {
+          const runAt = new Date(form.year, form.month - 1, form.day, form.hour, form.minute, form.second);
+          if (runAt.getTime() <= Date.now()) {
+            nextErrors.schedule = i18nService.t('scheduledTasksFormValidationDatetimeFuture');
+          }
+        }
+        if (form.hour < 0 || form.hour > 23 || form.minute < 0 || form.minute > 59) {
+          nextErrors.schedule = i18nService.t('scheduledTasksFormValidationTimeRequired');
+        }
+      }
     }
 
     setErrors(nextErrors);
@@ -212,13 +274,15 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
     setSubmitting(true);
     try {
-      const schedule = isAdvanced && task
+      const schedule = advanced && task
         ? task.schedule
-        : buildScheduleInput(form);
+        : useLLM
+          ? buildLLMSchedule(form)
+          : buildFallbackSchedule(form);
 
       const input: ScheduledTaskInput = {
         name: form.name.trim(),
-        description: '',
+        description: useLLM ? form.naturalLanguage.trim() : '',
         enabled: true,
         schedule,
         sessionTarget: 'isolated',
@@ -261,27 +325,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     }
   };
 
-  const renderScheduleRow = () => {
-    if (isAdvanced) {
-      return (
-        <div>
-          <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
-          <div className="rounded-lg bg-claude-surfaceHover/30 dark:bg-claude-darkSurfaceHover/30 p-3">
-            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-              {formatScheduleLabel(task!.schedule)}
-            </p>
-            <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">
-              {i18nService.t('scheduledTasksAdvancedSchedule')}
-            </p>
-          </div>
-        </div>
-      );
-    }
-
+  const renderFallbackSchedule = () => {
     const planSelect = (
       <select
         value={form.planType}
-        onChange={(event) => updateForm({ planType: event.target.value as PlanType })}
+        onChange={(e) => updateForm({ planType: e.target.value as PlanType })}
         className={`${inputClass} flex-1 min-w-0`}
       >
         <option value="once">{i18nService.t('scheduledTasksFormScheduleModeOnce')}</option>
@@ -295,95 +343,60 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       const dateValue = `${form.year}-${String(form.month).padStart(2, '0')}-${String(form.day).padStart(2, '0')}`;
       const fullTimeValue = `${timeValue}:${String(form.second).padStart(2, '0')}`;
       return (
-        <div>
-          <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
-          <div className="flex items-center gap-3">
-            {planSelect}
-            <input
-              type="date"
-              value={dateValue}
-              onChange={(e) => {
-                const [y, mo, d] = e.target.value.split('-').map(Number);
-                if (!Number.isNaN(y)) updateForm({ year: y, month: mo, day: d });
-              }}
-              className={`${inputClass} flex-1 min-w-0`}
-            />
-            <input
-              type="time"
-              step="1"
-              value={fullTimeValue}
-              onChange={(e) => {
-                const parts = e.target.value.split(':').map(Number);
-                const patch: Partial<FormState> = {};
-                if (!Number.isNaN(parts[0])) patch.hour = parts[0];
-                if (!Number.isNaN(parts[1])) patch.minute = parts[1];
-                if (parts.length > 2 && !Number.isNaN(parts[2])) patch.second = parts[2];
-                updateForm(patch);
-              }}
-              className={`${inputClass} flex-1 min-w-0`}
-            />
-          </div>
+        <div className="flex items-center gap-3">
+          {planSelect}
+          <input
+            type="date"
+            value={dateValue}
+            onChange={(e) => {
+              const [y, mo, d] = e.target.value.split('-').map(Number);
+              if (!Number.isNaN(y)) updateForm({ year: y, month: mo, day: d });
+            }}
+            className={`${inputClass} flex-1 min-w-0`}
+          />
+          <input
+            type="time"
+            step="1"
+            value={fullTimeValue}
+            onChange={(e) => {
+              const parts = e.target.value.split(':').map(Number);
+              const patch: Partial<FormState> = {};
+              if (!Number.isNaN(parts[0])) patch.hour = parts[0];
+              if (!Number.isNaN(parts[1])) patch.minute = parts[1];
+              if (parts.length > 2 && !Number.isNaN(parts[2])) patch.second = parts[2];
+              updateForm(patch);
+            }}
+            className={`${inputClass} flex-1 min-w-0`}
+          />
         </div>
       );
     }
 
     if (form.planType === 'daily') {
       return (
-        <div>
-          <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
-          <div className="flex items-center gap-3">
-            {planSelect}
-            <input
-              type="time"
-              value={timeValue}
-              onChange={(e) => handleTimeChange(e.target.value)}
-              className={`${inputClass} flex-1 min-w-0`}
-            />
-          </div>
+        <div className="flex items-center gap-3">
+          {planSelect}
+          <input
+            type="time"
+            value={timeValue}
+            onChange={(e) => handleTimeChange(e.target.value)}
+            className={`${inputClass} flex-1 min-w-0`}
+          />
         </div>
       );
     }
 
     if (form.planType === 'weekly') {
       return (
-        <div>
-          <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
-          <div className="flex items-center gap-3">
-            {planSelect}
-            <select
-              value={form.weekday}
-              onChange={(e) => updateForm({ weekday: Number(e.target.value) })}
-              className={`${inputClass} flex-1 min-w-0`}
-            >
-              {WEEKDAY_KEYS.map((key, idx) => (
-                <option key={idx} value={idx}>{i18nService.t(key)}</option>
-              ))}
-            </select>
-            <input
-              type="time"
-              value={timeValue}
-              onChange={(e) => handleTimeChange(e.target.value)}
-              className={`${inputClass} flex-1 min-w-0`}
-            />
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div>
-        <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
         <div className="flex items-center gap-3">
           {planSelect}
           <select
-            value={form.monthDay}
-            onChange={(e) => updateForm({ monthDay: Number(e.target.value) })}
+            value={form.weekday}
+            onChange={(e) => updateForm({ weekday: Number(e.target.value) })}
             className={`${inputClass} flex-1 min-w-0`}
           >
-            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-              <option key={d} value={d}>
-                {d}{i18nService.t('scheduledTasksFormMonthDaySuffix')}
-              </option>
+            {WEEKDAY_KEYS.map((key, idx) => (
+              <option key={idx} value={idx}>{i18nService.t(key)}</option>
             ))}
           </select>
           <input
@@ -393,6 +406,172 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
             className={`${inputClass} flex-1 min-w-0`}
           />
         </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-3">
+        {planSelect}
+        <select
+          value={form.monthDay}
+          onChange={(e) => updateForm({ monthDay: Number(e.target.value) })}
+          className={`${inputClass} flex-1 min-w-0`}
+        >
+          {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+            <option key={d} value={d}>
+              {d}{i18nService.t('scheduledTasksFormMonthDaySuffix')}
+            </option>
+          ))}
+        </select>
+        <input
+          type="time"
+          value={timeValue}
+          onChange={(e) => handleTimeChange(e.target.value)}
+          className={`${inputClass} flex-1 min-w-0`}
+        />
+      </div>
+    );
+  };
+
+  const renderScheduleSection = () => {
+    if (advanced) {
+      return (
+        <div>
+          <label className={labelClass}>{i18nService.t('scheduleParserLabel')}</label>
+          <div className="rounded-lg bg-claude-surfaceHover/30 dark:bg-claude-darkSurfaceHover/30 p-3">
+            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              {formatScheduleLabel(task!.schedule)}
+            </p>
+            <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">
+              {i18nService.t('scheduledTasksAdvancedSchedule')}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    const modeToggle = (
+      <div className="flex items-center gap-1 mb-2">
+        <button
+          type="button"
+          onClick={() => !modeLocked && setUseLLM(true)}
+          disabled={modeLocked}
+          className={`px-3 py-1 text-xs rounded-l-md border transition-colors ${
+            useLLM
+              ? 'bg-claude-accent text-white border-claude-accent'
+              : 'dark:bg-claude-darkSurface bg-white dark:text-claude-darkTextSecondary text-claude-textSecondary border-claude-border dark:border-claude-darkBorder'
+          } ${modeLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+        >
+          {i18nService.t('scheduledTasksScheduleModeNL')}
+        </button>
+        <button
+          type="button"
+          onClick={() => !modeLocked && setUseLLM(false)}
+          disabled={modeLocked}
+          className={`px-3 py-1 text-xs rounded-r-md border transition-colors ${
+            !useLLM
+              ? 'bg-claude-accent text-white border-claude-accent'
+              : 'dark:bg-claude-darkSurface bg-white dark:text-claude-darkTextSecondary text-claude-textSecondary border-claude-border dark:border-claude-darkBorder'
+          } ${modeLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+        >
+          {i18nService.t('scheduledTasksScheduleModeGUI')}
+        </button>
+      </div>
+    );
+
+    if (!useLLM) {
+      return (
+        <div>
+          <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
+          {modeToggle}
+          {renderFallbackSchedule()}
+          {errors.schedule && <p className={errorClass}>{errors.schedule}</p>}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        <div>
+          <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
+          {modeToggle}
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={form.naturalLanguage}
+              onChange={(e) => {
+                updateForm({ naturalLanguage: e.target.value });
+                if (convertError) setConvertError('');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !converting) {
+                  e.preventDefault();
+                  void handleConvert();
+                }
+              }}
+              placeholder={i18nService.t('scheduleParserPlaceholder')}
+              className={`${inputClass} flex-1`}
+              disabled={converting}
+            />
+            <button
+              type="button"
+              onClick={() => void handleConvert()}
+              disabled={converting || !form.naturalLanguage.trim()}
+              className="shrink-0 px-3 py-2 text-sm font-medium bg-claude-accent text-white rounded-lg hover:bg-claude-accentHover transition-colors disabled:opacity-50"
+            >
+              {converting
+                ? i18nService.t('scheduleParserConverting')
+                : i18nService.t('scheduleParserConvertButton')}
+            </button>
+          </div>
+          {convertError && <p className={errorClass}>{convertError}</p>}
+          {errors.schedule && !convertError && <p className={errorClass}>{errors.schedule}</p>}
+        </div>
+
+        {form.scheduleKind === 'cron' && form.cronExpr && (
+          <div className="rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surfaceHover/30 px-3 py-2 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary shrink-0">
+                {i18nService.t('scheduleParserCronLabel')}
+              </span>
+              <code className="text-sm font-mono dark:text-claude-darkText text-claude-text select-all">
+                {form.cronExpr}
+              </code>
+            </div>
+
+            {nextRuns.length > 0 && (
+              <div>
+                <p className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                  {i18nService.t('scheduleParserNextRunsLabel')}
+                </p>
+                <ol className="space-y-0.5">
+                  {nextRuns.map((date, idx) => (
+                    <li
+                      key={idx}
+                      className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary flex items-center gap-2"
+                    >
+                      <span className="w-4 text-right shrink-0 opacity-50">{idx + 1}.</span>
+                      {formatNextRunDate(date)}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </div>
+        )}
+
+        {form.scheduleKind === 'at' && form.atTime && (
+          <div className="rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surfaceHover/30 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary shrink-0">
+                {i18nService.t('scheduleParserRunAt')}
+              </span>
+              <span className="text-sm dark:text-claude-darkText text-claude-text">
+                {formatNextRunDate(new Date(form.atTime))}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -475,8 +654,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         {errors.payloadText && <p className={errorClass}>{errors.payloadText}</p>}
       </div>
 
-      {renderScheduleRow()}
-      {errors.schedule && <p className={errorClass}>{errors.schedule}</p>}
+      {renderScheduleSection()}
 
       {renderNotifyRow()}
 
