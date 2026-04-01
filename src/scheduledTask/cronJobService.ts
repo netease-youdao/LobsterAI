@@ -660,7 +660,7 @@ export class CronJobService {
 
         const lastRunAtMs = job.state.lastRunAtMs ?? 0;
         const previousRunAtMs = this.lastKnownRunAtMs.get(job.id) ?? 0;
-        if (lastRunAtMs > previousRunAtMs && previousRunAtMs > 0) {
+        if (this.firstPollDone && lastRunAtMs > previousRunAtMs) {
           try {
             const runs = await this.listRuns(job.id, 1, 0);
             if (runs[0]) {
