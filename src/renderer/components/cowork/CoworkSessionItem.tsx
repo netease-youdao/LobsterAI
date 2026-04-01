@@ -314,7 +314,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                 onToggleSelection();
               }}
               onClick={(e) => e.stopPropagation()}
-              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-claude-accent cursor-pointer"
+              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-primary cursor-pointer"
             />
           </div>
         )}
@@ -323,7 +323,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
             {/* Status indicator */}
             {showStatusIndicator && (
               <span
-                className={`block w-2 h-2 rounded-full bg-claude-accent flex-shrink-0 ${
+                className={`block w-2 h-2 rounded-full bg-primary flex-shrink-0 ${
                   showRunningIndicator ? 'shadow-[0_0_6px_rgba(59,130,246,0.5)] animate-pulse' : ''
                 }`}
                 title={showRunningIndicator ? i18nService.t(statusLabels[session.status]) : undefined}
@@ -344,15 +344,15 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                   }
                 }}
                 onBlur={handleRenameBlur}
-                className="flex-1 min-w-0 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-2 py-1 text-sm font-medium dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent"
+                className="flex-1 min-w-0 rounded-lg border border-border bg-background px-2 py-1 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               />
             ) : (
-              <h3 className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
+              <h3 className="text-sm font-medium text-foreground truncate">
                 {session.title}
               </h3>
             )}
           </div>
-          <div className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <div className="flex items-center gap-2 text-xs text-secondary">
             <span className="whitespace-nowrap" title={relativeTime.full}>
               {relativeTime.compact}
             </span>
@@ -377,7 +377,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
         <button
           ref={actionButtonRef}
           onClick={openMenu}
-          className="p-1.5 rounded-lg bg-claude-surfaceMuted dark:bg-claude-darkSurfaceMuted dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurface hover:bg-claude-surface transition-colors"
+          className="p-1.5 rounded-lg bg-surface-raised text-secondary hover:bg-surface hover:bg-surface transition-colors"
           aria-label={actionLabel}
         >
           {session.pinned ? (
@@ -395,7 +395,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
       {menuPosition && (
         <div
           ref={menuRef}
-          className="fixed z-50 min-w-[180px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-lg overflow-hidden"
+          className="fixed z-50 min-w-[180px] rounded-xl border border-border bg-surface shadow-lg overflow-hidden"
           style={{ top: menuPosition.y, left: menuPosition.x }}
           role="menu"
         >
@@ -407,7 +407,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
               className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
                 item.tone === 'danger'
                   ? 'text-red-500 hover:bg-red-500/10'
-                  : 'dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                  : 'text-foreground hover:bg-surface-raised'
               }`}
             >
               {item.key === 'batch' && <ListChecksIcon className="h-4 w-4" />}
@@ -432,7 +432,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
           onClick={handleCancelDelete}
         >
           <div
-            className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-xl overflow-hidden"
+            className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
@@ -440,23 +440,23 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
               <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
                 <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
               </div>
-              <h2 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+              <h2 className="text-base font-semibold text-foreground">
                 {i18nService.t('deleteTaskConfirmTitle')}
               </h2>
             </div>
 
             {/* Content */}
             <div className="px-5 pb-4">
-              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <p className="text-sm text-secondary">
                 {i18nService.t('deleteTaskConfirmMessage')}
               </p>
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-border">
               <button
                 onClick={handleCancelDelete}
-                className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('cancel')}
               </button>

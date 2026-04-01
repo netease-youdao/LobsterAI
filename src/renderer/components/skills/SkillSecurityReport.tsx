@@ -95,29 +95,29 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
       onClick={() => onAction('cancel')}
     >
       <div
-        className="w-full max-w-xl mx-4 rounded-2xl dark:bg-claude-darkBg bg-white shadow-xl border dark:border-claude-darkBorder border-claude-border overflow-hidden"
+        className="w-full max-w-xl mx-4 rounded-2xl bg-surface shadow-xl border border-border overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2.5">
             <ShieldCheckIcon className="h-5 w-5 text-green-600 dark:text-green-400" />
-            <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+            <h3 className="text-base font-semibold text-foreground">
               {i18nService.t('securityScanTitle')}
             </h3>
           </div>
           <button
             type="button"
             onClick={() => onAction('cancel')}
-            className="p-1 rounded-lg hover:bg-claude-hover dark:hover:bg-claude-darkHover transition-colors"
+            className="p-1 rounded-lg hover:bg-surface-raised transition-colors"
           >
-            <XMarkIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+            <XMarkIcon className="h-4 w-4 text-secondary" />
           </button>
         </div>
 
         {/* Summary - outside scroll area */}
         <div className="px-5 pt-4 pb-3">
-          <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <p className="text-sm text-secondary">
             {i18nService.t('securityIssuesFound').replace('{name}', report.skillName)}
           </p>
         </div>
@@ -131,24 +131,24 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
               const dimLabel = DIMENSION_LABELS[dimension];
 
               return (
-                <div key={dimension} className="rounded-xl dark:bg-claude-darkBgSecondary bg-claude-bgSecondary overflow-hidden">
+                <div key={dimension} className="rounded-xlSecondary bg-backgroundSecondary overflow-hidden">
                   <button
                     type="button"
                     onClick={() => toggleDimension(dimension)}
-                    className="w-full flex items-center justify-between px-3.5 py-2.5 hover:bg-claude-hover dark:hover:bg-claude-darkHover transition-colors"
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 hover:bg-surface-raised transition-colors"
                   >
                     <div className="flex items-center gap-2">
                       {isExpanded ? (
-                        <ChevronDownIcon className="h-3.5 w-3.5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                        <ChevronDownIcon className="h-3.5 w-3.5 text-secondary" />
                       ) : (
-                        <ChevronRightIcon className="h-3.5 w-3.5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                        <ChevronRightIcon className="h-3.5 w-3.5 text-secondary" />
                       )}
                       <span className={`w-2 h-2 rounded-full ${SEVERITY_DOTS[maxSeverity] || SEVERITY_DOTS.warning}`} />
-                      <span className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      <span className="text-sm font-medium text-foreground">
                         {dimLabel ? i18nService.t(dimLabel) : dimension}
                       </span>
                     </div>
-                    <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    <span className="text-xs text-secondary">
                       {findings.length}
                     </span>
                   </button>
@@ -160,14 +160,14 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
                           <div className="flex items-start gap-1.5">
                             <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${SEVERITY_DOTS[finding.severity] || SEVERITY_DOTS.warning}`} />
                             <div>
-                              <p className="dark:text-claude-darkText text-claude-text">
+                              <p className="text-foreground">
                                 {i18nService.t(finding.description) || finding.description}
                               </p>
-                              <p className="dark:text-claude-darkTextSecondary text-claude-textSecondary mt-0.5">
+                              <p className="text-secondary mt-0.5">
                                 {finding.file}{finding.line ? `:${finding.line}` : ''}
                               </p>
                               {finding.matchedPattern && (
-                                <p className="mt-1 px-2 py-1 rounded bg-black/5 dark:bg-white/5 font-mono text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary break-all overflow-x-auto max-h-16">
+                                <p className="mt-1 px-2 py-1 rounded bg-black/5 dark:bg-white/5 font-mono text-[10px] text-secondary break-all overflow-x-auto max-h-16">
                                   {finding.matchedPattern}
                                 </p>
                               )}
@@ -184,12 +184,12 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
         </div>
 
         {/* Actions */}
-        <div className="flex items-center justify-between px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
           <button
             type="button"
             onClick={() => onAction('cancel')}
             disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium rounded-xl dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors border dark:border-claude-darkBorder border-claude-border active:scale-[0.98] disabled:opacity-50"
+            className="px-4 py-2 text-sm font-medium rounded-xl text-foreground hover:bg-surface-raised transition-colors border border-border active:scale-[0.98] disabled:opacity-50"
           >
             {i18nService.t('cancel')}
           </button>
@@ -198,7 +198,7 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
               type="button"
               onClick={() => onAction('installDisabled')}
               disabled={isLoading}
-              className="px-4 py-2 text-sm font-medium rounded-xl bg-claude-accent hover:bg-claude-accentHover text-white transition-colors active:scale-[0.98] disabled:opacity-50"
+              className="px-4 py-2 text-sm font-medium rounded-xl bg-primary hover:bg-primary-hover text-white transition-colors active:scale-[0.98] disabled:opacity-50"
             >
               {i18nService.t('securityInstallDisabled')}
             </button>

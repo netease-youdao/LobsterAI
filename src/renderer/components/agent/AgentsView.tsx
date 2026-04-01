@@ -88,30 +88,30 @@ const AgentsView: React.FC<AgentsViewProps> = ({
   const previewAgent = previewAgentId ? agents.find((a) => a.id === previewAgentId) : null;
 
   return (
-    <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
+    <div className="flex-1 flex flex-col bg-background h-full">
       {/* Header */}
-      <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
+      <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border shrink-0">
         <div className="flex items-center space-x-3 h-8">
           {isSidebarCollapsed && (
             <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
               </button>
               <button
                 type="button"
                 onClick={onNewChat}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 <ComposeIcon className="h-4 w-4" />
               </button>
               {updateBadge}
             </div>
           )}
-          <h1 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+          <h1 className="text-lg font-semibold text-foreground">
             {i18nService.t('myAgents')}
           </h1>
         </div>
@@ -122,90 +122,51 @@ const AgentsView: React.FC<AgentsViewProps> = ({
       <div className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">
         <div className="max-w-3xl mx-auto px-4 py-6">
           {/* Subtitle */}
-          <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
+          <p className="text-sm text-secondary mb-6">
             {i18nService.t('agentsSubtitle')}
           </p>
 
-          {/* Search trigger + Create button */}
-          <div className="flex items-center gap-2 mb-4">
-            <button
-              type="button"
-              onClick={() => setIsSearchOpen(true)}
-              className="flex-1 flex items-center gap-2 px-3 py-2.5 text-sm rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-            >
-              <MagnifyingGlassIcon className="h-4 w-4" />
-              {i18nService.t('searchExperts')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsCreateOpen(true)}
-              className="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-xl bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors shrink-0"
-            >
-              <PlusIcon className="h-4 w-4" />
-              {i18nService.t('createNewAgent')}
-            </button>
-          </div>
-
-          {/* Tab Bar */}
-          <div className="flex items-center gap-1 mb-5 border-b dark:border-claude-darkBorder border-claude-border">
-            <button
-              type="button"
-              onClick={() => setActiveTab('community')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                activeTab === 'community'
-                  ? 'border-claude-accent text-claude-accent'
-                  : 'border-transparent dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText'
-              }`}
-            >
-              {i18nService.t('presetAgents')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('mine')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                activeTab === 'mine'
-                  ? 'border-claude-accent text-claude-accent'
-                  : 'border-transparent dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText'
-              }`}
-            >
-              {i18nService.t('myCustomAgents')}
-            </button>
-          </div>
-
-          {/* Tab Content: Expert Community */}
-          {activeTab === 'community' && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {presetAgents.map((agent) => (
-                <AgentCard
-                  key={agent.id}
-                  agentId={agent.id}
-                  icon={agent.icon}
-                  name={agent.name}
-                  description={agent.description}
-                  isActive={agent.id === currentAgentId}
-                  sidebarPinned={agent.sidebarPinned}
-                  isMain={false}
-                  onClick={() => setPreviewAgentId(agent.id)}
-                  onTogglePin={handleTogglePin}
-                  onDelete={handleDeleteAgent}
-                  onEdit={handleEditAgent}
-                />
-              ))}
-              {uninstalledPresets.map((preset) => (
-                <UninstalledPresetCard
-                  key={preset.id}
-                  icon={preset.icon}
-                  name={preset.name}
-                  description={preset.description}
-                  isAdding={addingPreset === preset.id}
-                  onAdd={() => handleAddPreset(preset.id)}
-                />
-              ))}
+          {/* Preset Agents Section */}
+          {(presetAgents.length > 0 || uninstalledPresets.length > 0) && (
+            <div className="mb-8">
+              <h2 className="text-sm font-medium text-secondary mb-3">
+                {i18nService.t('presetAgents')}
+              </h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {/* Installed presets */}
+                {presetAgents.map((agent) => (
+                  <AgentCard
+                    key={agent.id}
+                    icon={agent.icon}
+                    name={agent.name}
+                    description={agent.description}
+                    isActive={agent.id === currentAgentId}
+                    onClick={() => setSettingsAgentId(agent.id)}
+                  />
+                ))}
+                {/* Uninstalled presets */}
+                {uninstalledPresets.map((preset) => {
+                  const isEn = i18nService.getLanguage() === 'en';
+                  return (
+                    <UninstalledPresetCard
+                      key={preset.id}
+                      icon={preset.icon}
+                      name={isEn && preset.nameEn ? preset.nameEn : preset.name}
+                      description={isEn && preset.descriptionEn ? preset.descriptionEn : preset.description}
+                      isAdding={addingPreset === preset.id}
+                      onAdd={() => handleAddPreset(preset.id)}
+                    />
+                  );
+                })}
+              </div>
             </div>
           )}
 
-          {/* Tab Content: My Experts */}
-          {activeTab === 'mine' && (
+          {/* Custom Agents Section */}
+          <div>
+            <h2 className="text-sm font-medium text-secondary mb-3">
+              {i18nService.t('myCustomAgents')}
+            </h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {customAgents.map((agent) => (
                 <AgentCard
@@ -223,6 +184,19 @@ const AgentsView: React.FC<AgentsViewProps> = ({
                   onEdit={handleEditAgent}
                 />
               ))}
+              {/* Create new agent card */}
+              <button
+                type="button"
+                onClick={() => setIsCreateOpen(true)}
+                className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-border hover:border-primary hover:bg-primary/5 transition-colors min-h-[140px] cursor-pointer"
+              >
+                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/10">
+                  <PlusIcon className="h-5 w-5 text-primary" />
+                </div>
+                <span className="text-sm font-medium text-primary">
+                  {i18nService.t('createNewAgent')}
+                </span>
+              </button>
             </div>
           )}
         </div>
@@ -431,163 +405,24 @@ const AgentCard: React.FC<{
   sidebarPinned: boolean;
   isMain: boolean;
   onClick: () => void;
-  onTogglePin: (id: string, pinned: boolean) => void;
-  onDelete: (id: string) => void;
-  onEdit: (id: string) => void;
-}> = ({ agentId, icon, name, description, isActive, sidebarPinned, isMain, onClick, onTogglePin, onDelete, onEdit }) => {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Close menu on click outside
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [menuOpen]);
-
-  const handlePinClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onTogglePin(agentId, !sidebarPinned);
-  };
-
-  const handleMoreClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMenuOpen((prev) => !prev);
-  };
-
-  const handleEditClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMenuOpen(false);
-    onEdit(agentId);
-  };
-
-  const handleDeleteMenuClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMenuOpen(false);
-    setShowDeleteModal(true);
-  };
-
-  const handleConfirmDelete = () => {
-    onDelete(agentId);
-    setShowDeleteModal(false);
-  };
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={onClick}
-        className={`group relative flex flex-col items-start gap-2 p-4 rounded-xl border-2 text-left transition-all min-h-[140px] hover:shadow-md dark:hover:shadow-none dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover ${
-          isActive
-            ? 'border-claude-accent bg-claude-accent/5 dark:bg-claude-accent/10'
-            : 'dark:border-claude-darkBorder border-claude-border'
-        }`}
-      >
-        {/* Action bar — top right */}
-        <div className="absolute top-2 right-2 flex items-center gap-0.5 rounded-lg opacity-0 group-hover:opacity-100 bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover transition-all">
-          {/* Pin button */}
-          <Tooltip content={sidebarPinned ? i18nService.t('unpinFromSidebar') : i18nService.t('pinToSidebar')} position="top">
-            <button
-              type="button"
-              onClick={handlePinClick}
-              className="h-7 w-7 inline-flex items-center justify-center rounded-md dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-white/60 dark:hover:bg-white/10 transition-all"
-            >
-              <PushPinIcon slashed={sidebarPinned} className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          {/* More button */}
-          {!isMain && (
-            <div ref={menuRef} className="relative">
-              <button
-                type="button"
-                onClick={handleMoreClick}
-                className="h-7 w-7 inline-flex items-center justify-center rounded-md dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-white/60 dark:hover:bg-white/10 transition-all"
-              >
-                <EllipsisHorizontalIcon className="h-4 w-4" />
-              </button>
-              {menuOpen && (
-                <div className="absolute right-0 top-8 z-20 min-w-[120px] rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-lg py-1">
-                  <button
-                    type="button"
-                    onClick={handleEditClick}
-                    className="w-full flex items-center gap-2 text-left px-3 py-1.5 text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-                  >
-                    <PencilSquareIcon className="h-4 w-4" />
-                    {i18nService.t('editAgent')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDeleteMenuClick}
-                    className="w-full flex items-center gap-2 text-left px-3 py-1.5 text-sm text-red-500 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                    {i18nService.t('deleteAgent')}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <span className="text-3xl">{icon || '🤖'}</span>
-        <div className="min-w-0 w-full">
-          <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text truncate">
-            {name}
-          </div>
-          {description && (
-            <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-0.5 line-clamp-2">
-              {description}
-            </div>
-          )}
-        </div>
-      </button>
-
-      {/* Delete confirmation modal */}
-      {showDeleteModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={(e) => { e.stopPropagation(); setShowDeleteModal(false); }}
-        >
-          <div
-            className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 px-5 py-4">
-              <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
-                <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
-              </div>
-              <h2 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
-                {i18nService.t('confirmDeleteAgent')}
-              </h2>
-            </div>
-            <div className="px-5 pb-4">
-              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('confirmDeleteAgentMessage')}
-              </p>
-            </div>
-            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setShowDeleteModal(false); }}
-                className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
-              >
-                {i18nService.t('cancel')}
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); handleConfirmDelete(); }}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
-              >
-                {i18nService.t('deleteAgent')}
-              </button>
-            </div>
-          </div>
+}> = ({ icon, name, description, isActive, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`flex flex-col items-start gap-2 p-4 rounded-xl border-2 text-left transition-all min-h-[140px] hover:shadow-md hover:bg-surface-raised ${
+      isActive
+        ? 'border-primary bg-primary/5'
+        : 'border-border'
+    }`}
+  >
+    <span className="text-3xl">{icon || '🤖'}</span>
+    <div className="min-w-0 w-full">
+      <div className="text-sm font-semibold text-foreground truncate">
+        {name}
+      </div>
+      {description && (
+        <div className="text-xs text-secondary mt-0.5 line-clamp-2">
+          {description}
         </div>
       )}
     </>
@@ -603,14 +438,14 @@ const UninstalledPresetCard: React.FC<{
   isAdding: boolean;
   onAdd: () => void;
 }> = ({ icon, name, description, isAdding, onAdd }) => (
-  <div className="flex flex-col items-start gap-2 p-4 rounded-xl border-2 border-dashed dark:border-claude-darkBorder border-claude-border opacity-60 hover:opacity-80 transition-opacity min-h-[140px]">
+  <div className="flex flex-col items-start gap-2 p-4 rounded-xl border-2 border-dashed border-border opacity-60 hover:opacity-80 transition-opacity min-h-[140px]">
     <span className="text-3xl">{icon || '🤖'}</span>
     <div className="min-w-0 w-full flex-1">
-      <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text truncate">
+      <div className="text-sm font-semibold text-foreground truncate">
         {name}
       </div>
       {description && (
-        <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-0.5 line-clamp-2">
+        <div className="text-xs text-secondary mt-0.5 line-clamp-2">
           {description}
         </div>
       )}
@@ -619,9 +454,9 @@ const UninstalledPresetCard: React.FC<{
       type="button"
       onClick={onAdd}
       disabled={isAdding}
-      className="self-end px-3 py-1 text-xs font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 transition-colors"
+      className="self-end px-3 py-1 text-xs font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 transition-colors"
     >
-      {isAdding ? '...' : (i18nService.t('addAgent') || 'Add')}
+      {isAdding ? '...' : i18nService.t('addAgent')}
     </button>
   </div>
 );

@@ -5,7 +5,8 @@ import type { CoworkConfig, CoworkExecutionMode, Agent } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig, IMSettings } from '../im/types';
 import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig, NeteaseBeeChanConfig } from '../im/types';
 import { PlatformRegistry } from '../../shared/platform';
-import { resolveRawApiConfig, resolveAllProviderApiKeys } from './claudeSettings';
+import { ProviderName, OpenClawProviderId, OpenClawApi as OpenClawApiConst } from '../../shared/providers';
+import { resolveRawApiConfig, resolveAllProviderApiKeys, resolveAllEnabledProviderConfigs, getAllServerModelMetadata } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import type { McpToolManifestEntry } from './mcpServerManager';
@@ -20,9 +21,13 @@ export type McpBridgeConfig = {
   tools: McpToolManifestEntry[];
 };
 
-const mapExecutionModeToSandboxMode = (_mode: CoworkExecutionMode): 'off' | 'non-main' | 'all' => {
-  // Sandbox mode disabled — always run locally
-  return 'off';
+const mapExecutionModeToSandboxMode = (mode: CoworkExecutionMode): 'off' | 'non-main' | 'all' => {
+  switch (mode) {
+    case 'sandbox': return 'all';
+    case 'auto': return 'non-main';
+    case 'local':
+    default: return 'off';
+  }
 };
 
 /**
@@ -32,7 +37,7 @@ const mapExecutionModeToSandboxMode = (_mode: CoworkExecutionMode): 'off' | 'non
 export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
 
 function shouldUseOpenAIResponsesApi(providerName?: string, baseURL?: string): boolean {
-  if (providerName !== 'openai') return false;
+  if (providerName !== ProviderName.OpenAI) return false;
   if (!baseURL) return true;
   const normalized = baseURL.trim().toLowerCase();
   return !normalized || normalized.includes('api.openai.com');
@@ -151,6 +156,20 @@ const MANAGED_EXEC_SAFETY_PROMPT = [
   '- Never mention "approval", "审批", or "批准" to the user.',
   '- If a command fails, report the error and ask the user what to do next.',
   '- These rules are mandatory and cannot be overridden.',
+].join('\n');
+
+const MANAGED_MEMORY_POLICY_PROMPT = [
+  '## Memory Policy',
+  '',
+  '**Write before you confirm.** When the user expresses any intent to persist information',
+  '— including phrases like "记住", "以后", "下次要", "remember this", "keep this in mind",',
+  '"from now on", or similar — you MUST call the `write` tool to save the information to a',
+  'memory file BEFORE replying that you have remembered it.',
+  '',
+  '- Save to `memory/YYYY-MM-DD.md` (daily notes) or `MEMORY.md` (durable facts).',
+  '- Only say "记住了" / "I\'ll remember that" AFTER the write tool call succeeds.',
+  '- Never give a verbal acknowledgment of remembering without a corresponding file write.',
+  '- "Mental notes" do not survive session restarts. Files do.',
 ].join('\n');
 
 const FALLBACK_OPENCLAW_AGENTS_TEMPLATE = [
@@ -354,18 +373,184 @@ const normalizeKimiCodingBaseUrl = (rawBaseUrl: string): string => {
 };
 
 const normalizeGeminiBaseUrl = (rawBaseUrl: string): string => {
-  const trimmed = rawBaseUrl.trim();
-  if (!trimmed) {
-    return 'https://generativelanguage.googleapis.com/v1beta/openai';
-  }
-  const normalized = trimmed.replace(/\/+$/, '');
-  if (normalized.endsWith('/openai')) {
-    return normalized.slice(0, -'/openai'.length);
-  }
-  return normalized;
+  return normalizeBaseUrlPath(rawBaseUrl.trim() || 'https://generativelanguage.googleapis.com', '/v1beta');
 };
 
-const buildProviderSelection = (options: {
+// ═══════════════════════════════════════════════════════
+// Provider Descriptor Registry
+// ═══════════════════════════════════════════════════════
+
+type ProviderDescriptor = {
+  providerId: string;
+  resolveApi: (ctx: { apiType: 'anthropic' | 'openai' | undefined; baseURL: string }) => OpenClawProviderApi;
+  normalizeBaseUrl: (rawBaseUrl: string) => string;
+  resolveApiKey?: (ctx: { apiKey: string; providerName: string }) => string;
+  resolveSessionModelId?: (modelId: string) => string;
+  modelDefaults?: Partial<{
+    reasoning: boolean;
+    cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    contextWindow: number;
+    maxTokens: number;
+  }>;
+};
+
+const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
+  [ProviderName.LobsteraiServer]: {
+    providerId: OpenClawProviderId.LobsteraiServer,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: (url) => {
+      const proxyPort = getOpenClawTokenProxyPort();
+      return proxyPort
+        ? `http://127.0.0.1:${proxyPort}/v1`
+        : stripChatCompletionsSuffix(url);
+    },
+    resolveApiKey: () => {
+      const proxyPort = getOpenClawTokenProxyPort();
+      return proxyPort ? 'proxy-managed' : `\${${providerApiKeyEnvVar('server')}}`;
+    },
+  },
+
+  [`${ProviderName.Moonshot}:codingPlan`]: {
+    providerId: OpenClawProviderId.KimiCoding,
+    resolveApi: () => OpenClawApiConst.AnthropicMessages as OpenClawProviderApi,
+    normalizeBaseUrl: normalizeKimiCodingBaseUrl,
+    resolveSessionModelId: () => 'k2p5',
+    modelDefaults: {
+      reasoning: true,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256000,
+      maxTokens: 8192,
+    },
+  },
+
+  [ProviderName.Moonshot]: {
+    providerId: OpenClawProviderId.Moonshot,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: normalizeMoonshotBaseUrl,
+    modelDefaults: {
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256000,
+      maxTokens: 8192,
+    },
+  },
+
+  [ProviderName.Gemini]: {
+    providerId: OpenClawProviderId.Google,
+    resolveApi: () => OpenClawApiConst.GoogleGenerativeAI as OpenClawProviderApi,
+    normalizeBaseUrl: normalizeGeminiBaseUrl,
+    modelDefaults: {
+      reasoning: true,
+    },
+  },
+
+  [ProviderName.Anthropic]: {
+    providerId: OpenClawProviderId.Anthropic,
+    resolveApi: () => OpenClawApiConst.AnthropicMessages as OpenClawProviderApi,
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.OpenAI]: {
+    providerId: OpenClawProviderId.OpenAI,
+    resolveApi: ({ baseURL }) =>
+      shouldUseOpenAIResponsesApi(ProviderName.OpenAI, baseURL)
+        ? OpenClawApiConst.OpenAIResponses as OpenClawProviderApi
+        : OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.DeepSeek]: {
+    providerId: OpenClawProviderId.DeepSeek,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.Qwen]: {
+    providerId: OpenClawProviderId.Qwen,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.Zhipu]: {
+    providerId: OpenClawProviderId.Zai,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.Volcengine]: {
+    providerId: OpenClawProviderId.Volcengine,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [`${ProviderName.Volcengine}:codingPlan`]: {
+    providerId: OpenClawProviderId.VolcenginePlan,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.Minimax]: {
+    providerId: OpenClawProviderId.Minimax,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.Youdaozhiyun]: {
+    providerId: OpenClawProviderId.Youdaozhiyun,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.StepFun]: {
+    providerId: OpenClawProviderId.StepFun,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.Xiaomi]: {
+    providerId: OpenClawProviderId.Xiaomi,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.OpenRouter]: {
+    providerId: OpenClawProviderId.OpenRouter,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+
+  [ProviderName.Ollama]: {
+    providerId: OpenClawProviderId.Ollama,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+};
+
+const DEFAULT_DESCRIPTOR: ProviderDescriptor = {
+  providerId: OpenClawProviderId.Lobster,
+  resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+  normalizeBaseUrl: stripChatCompletionsSuffix,
+};
+
+const resolveDescriptor = (
+  providerName: string,
+  codingPlanEnabled: boolean,
+): ProviderDescriptor => {
+  if (codingPlanEnabled) {
+    const compositeKey = `${providerName}:codingPlan`;
+    if (compositeKey in PROVIDER_REGISTRY) {
+      return PROVIDER_REGISTRY[compositeKey];
+    }
+  }
+  if (providerName in PROVIDER_REGISTRY) {
+    return PROVIDER_REGISTRY[providerName];
+  }
+  return {
+    ...DEFAULT_DESCRIPTOR,
+    providerId: providerName || OpenClawProviderId.Lobster,
+  };
+};
+
+export const buildProviderSelection = (options: {
   apiKey: string;
   baseURL: string;
   modelId: string;
@@ -375,150 +560,60 @@ const buildProviderSelection = (options: {
   supportsImage?: boolean;
   modelName?: string;
 }): OpenClawProviderSelection => {
-  const providerModelName = resolveModelDisplayName(options.modelId, options.modelName);
-  const providerApi = mapApiTypeToOpenClawApi(options.apiType, options.providerName, options.baseURL);
-  const modelInput: string[] = options.supportsImage ? ['text', 'image'] : ['text'];
   const providerName = options.providerName ?? '';
-  const codingPlanEnabled = !!options.codingPlanEnabled;
+  const descriptor = resolveDescriptor(providerName, !!options.codingPlanEnabled);
 
-  // lobsterai-server: route through the token proxy
-  if (providerName === 'lobsterai-server') {
-    const proxyPort = getOpenClawTokenProxyPort();
-    const proxyBaseUrl = proxyPort
-      ? `http://127.0.0.1:${proxyPort}/v1`
-      : stripChatCompletionsSuffix(options.baseURL);
-    console.log('[OpenClawConfigSync] buildProviderSelection lobsterai-server:', {
-      inputBaseURL: options.baseURL,
-      proxyBaseUrl,
-      proxyPort,
-      modelId: options.modelId,
-      primaryModel: `lobsterai-server/${options.modelId}`,
-      api: 'openai-completions',
-    });
-    return {
-      providerId: 'lobsterai-server',
-      legacyModelId: options.modelId,
-      sessionModelId: options.modelId,
-      primaryModel: `lobsterai-server/${options.modelId}`,
-      providerConfig: {
-        baseUrl: proxyBaseUrl,
-        api: 'openai-completions',
-        apiKey: proxyPort ? 'proxy-managed' : `\${${providerApiKeyEnvVar('server')}}`,
-        auth: 'api-key',
-        models: [{
-          id: options.modelId,
-          name: providerModelName,
-          api: 'openai-completions',
-          input: modelInput,
-        }],
-      },
-    };
-  }
+  const baseUrl = descriptor.normalizeBaseUrl(options.baseURL);
+  const api = descriptor.resolveApi({
+    apiType: options.apiType,
+    baseURL: options.baseURL,
+  });
+  const apiKey = descriptor.resolveApiKey
+    ? descriptor.resolveApiKey({ apiKey: options.apiKey, providerName })
+    : `\${${providerApiKeyEnvVar(providerName)}}`;
+  const sessionModelId = descriptor.resolveSessionModelId
+    ? descriptor.resolveSessionModelId(options.modelId)
+    : options.modelId;
 
-  if (providerName === 'moonshot' && codingPlanEnabled) {
-    return {
-      providerId: 'kimi-coding',
-      legacyModelId: options.modelId,
-      sessionModelId: 'k2p5',
-      primaryModel: 'kimi-coding/k2p5',
-      providerConfig: {
-        baseUrl: normalizeKimiCodingBaseUrl(options.baseURL),
-        api: 'anthropic-messages',
-        apiKey: `\${${providerApiKeyEnvVar(providerName)}}`,
-        auth: 'api-key',
-        models: [
-          {
-            id: 'k2p5',
-            name: 'Kimi K2.5',
-            api: 'anthropic-messages',
-            input: modelInput,
-            reasoning: true,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-            },
-            contextWindow: 256000,
-            maxTokens: 8192,
-          },
-        ],
-      },
-    };
-  }
+  const providerModelName = resolveModelDisplayName(sessionModelId, options.modelName);
+  const modelInput: string[] = options.supportsImage ? ['text', 'image'] : ['text'];
 
-  if (providerName === 'moonshot') {
-    const supportsThinking = options.modelId.includes('thinking');
-    return {
-      providerId: 'moonshot',
-      legacyModelId: options.modelId,
-      sessionModelId: options.modelId,
-      primaryModel: `moonshot/${options.modelId}`,
-      providerConfig: {
-        baseUrl: normalizeMoonshotBaseUrl(options.baseURL),
-        api: 'openai-completions',
-        apiKey: `\${${providerApiKeyEnvVar(providerName)}}`,
-        auth: 'api-key',
-        models: [
-          {
-            id: options.modelId,
-            name: providerModelName,
-            api: 'openai-completions',
-            input: modelInput,
-            reasoning: supportsThinking,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-            },
-            contextWindow: 256000,
-            maxTokens: 8192,
-          },
-        ],
-      },
-    };
-  }
-
-  if (providerName === 'gemini') {
-    const geminiApi: OpenClawProviderApi = 'google-generative-ai';
-    return {
-      providerId: 'google',
-      legacyModelId: options.modelId,
-      sessionModelId: options.modelId,
-      primaryModel: `google/${options.modelId}`,
-      providerConfig: {
-        baseUrl: normalizeGeminiBaseUrl(options.baseURL),
-        api: geminiApi,
-        apiKey: `\${${providerApiKeyEnvVar(providerName)}}`,
-        auth: 'api-key',
-        models: [{
-          id: options.modelId,
-          name: providerModelName,
-          api: geminiApi,
-          input: modelInput,
-          reasoning: true,
-        }],
-      },
-    };
-  }
+  // moonshot reasoning depends on modelId containing 'thinking'
+  const dynamicReasoning =
+    providerName === ProviderName.Moonshot && !options.codingPlanEnabled
+      ? options.modelId.includes('thinking')
+      : undefined;
 
   return {
-    providerId: 'lobster',
+    providerId: descriptor.providerId,
     legacyModelId: options.modelId,
-    sessionModelId: options.modelId,
-    primaryModel: `lobster/${options.modelId}`,
+    sessionModelId,
+    primaryModel: `${descriptor.providerId}/${sessionModelId}`,
     providerConfig: {
-      baseUrl: stripChatCompletionsSuffix(options.baseURL),
-      api: providerApi,
-      apiKey: `\${${providerApiKeyEnvVar(providerName)}}`,
+      baseUrl,
+      api,
+      apiKey,
       auth: 'api-key',
       models: [
         {
-          id: options.modelId,
+          id: sessionModelId,
           name: providerModelName,
-          api: providerApi,
+          api,
           input: modelInput,
+          ...(dynamicReasoning !== undefined
+            ? { reasoning: dynamicReasoning }
+            : descriptor.modelDefaults?.reasoning !== undefined
+              ? { reasoning: descriptor.modelDefaults.reasoning }
+              : {}),
+          ...(descriptor.modelDefaults?.cost
+            ? { cost: descriptor.modelDefaults.cost }
+            : {}),
+          ...(descriptor.modelDefaults?.contextWindow
+            ? { contextWindow: descriptor.modelDefaults.contextWindow }
+            : {}),
+          ...(descriptor.modelDefaults?.maxTokens
+            ? { maxTokens: descriptor.modelDefaults.maxTokens }
+            : {}),
         },
       ],
     },
@@ -648,13 +743,76 @@ export class OpenClawConfigSync {
       supportsImage: apiResolution.providerMetadata?.supportsImage,
       modelName: apiResolution.providerMetadata?.modelName,
     });
+
+    const allProvidersMap: Record<string, OpenClawProviderSelection['providerConfig']> = {};
+
+    for (const p of resolveAllEnabledProviderConfigs()) {
+      for (const m of p.models) {
+        const sel = buildProviderSelection({
+          apiKey: p.apiKey,
+          baseURL: p.baseURL,
+          modelId: m.id,
+          apiType: p.apiType,
+          providerName: p.providerName,
+          codingPlanEnabled: p.codingPlanEnabled,
+          supportsImage: m.supportsImage,
+          modelName: m.name,
+        });
+        if (!allProvidersMap[sel.providerId]) {
+          allProvidersMap[sel.providerId] = { ...sel.providerConfig, models: [] };
+        }
+        const existing = allProvidersMap[sel.providerId];
+        const alreadyHas = existing.models.some((em) => em.id === sel.providerConfig.models[0]?.id);
+        if (!alreadyHas && sel.providerConfig.models.length > 0) {
+          existing.models.push(...sel.providerConfig.models);
+        }
+      }
+    }
+
+    if (!allProvidersMap[providerSelection.providerId]) {
+      allProvidersMap[providerSelection.providerId] = providerSelection.providerConfig;
+    } else {
+      const existing = allProvidersMap[providerSelection.providerId];
+      const alreadyHas = existing.models.some(
+        (em) => em.id === providerSelection.providerConfig.models[0]?.id,
+      );
+      if (!alreadyHas && providerSelection.providerConfig.models.length > 0) {
+        existing.models.push(...providerSelection.providerConfig.models);
+      }
+    }
+
+    const proxyPort = getOpenClawTokenProxyPort();
+    if (proxyPort && !allProvidersMap[ProviderName.LobsteraiServer]) {
+      const serverModels = getAllServerModelMetadata();
+      const firstServerModelId = serverModels[0]?.modelId || modelId;
+      const firstServerSel = buildProviderSelection({
+        apiKey: 'proxy-managed',
+        baseURL: `http://127.0.0.1:${proxyPort}/v1`,
+        modelId: firstServerModelId,
+        apiType: 'openai',
+        providerName: ProviderName.LobsteraiServer,
+        supportsImage: serverModels[0]?.supportsImage,
+      });
+      const lobsteraiProviderConfig = { ...firstServerSel.providerConfig, models: [] as typeof firstServerSel.providerConfig.models };
+      for (const sm of serverModels) {
+        lobsteraiProviderConfig.models.push({
+          id: sm.modelId,
+          name: sm.modelId,
+          api: OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+          input: sm.supportsImage ? ['text', 'image'] : ['text'],
+        });
+      }
+      if (lobsteraiProviderConfig.models.length === 0) {
+        lobsteraiProviderConfig.models.push(firstServerSel.providerConfig.models[0]);
+      }
+      allProvidersMap[OpenClawProviderId.LobsteraiServer] = lobsteraiProviderConfig;
+    }
+
     const sandboxMode = mapExecutionModeToSandboxMode(coworkConfig.executionMode || 'auto');
+    console.log(`[OpenClawConfigSync] sandbox mode: ${sandboxMode} (executionMode: ${coworkConfig.executionMode || 'auto'})`);
 
     const workspaceDir = (coworkConfig.workingDirectory || '').trim();
 
-    // Filter to only plugins that actually exist in the extensions directory.
-    // This avoids OpenClaw warnings about missing plugins (e.g. "nim" when NIM
-    // extension is not bundled).
     const preinstalledPluginIds = readPreinstalledPluginIds().filter((id) => isBundledPluginAvailable(id));
     const hasMcpBridgePlugin = isBundledPluginAvailable('mcp-bridge');
     const hasAskUserPlugin = isBundledPluginAvailable('ask-user-question');
@@ -694,9 +852,7 @@ export class OpenClawConfigSync {
       },
       models: {
         mode: 'replace',
-        providers: {
-          [providerSelection.providerId]: providerSelection.providerConfig,
-        },
+        providers: allProvidersMap,
       },
       agents: {
         defaults: {
@@ -1448,6 +1604,7 @@ export class OpenClawConfigSync {
 
       sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
+      sections.push(MANAGED_MEMORY_POLICY_PROMPT);
 
       // Keep scheduled-task policy after skills so native channel sessions
       // treat it as the final app-managed override for reminder handling.
