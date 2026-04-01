@@ -68,6 +68,8 @@ export class SqliteStore {
   }
 
   private initializeTables(basePath: string) {
+    this.db.run('PRAGMA foreign_keys = ON;');
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
@@ -298,6 +300,11 @@ export class SqliteStore {
 
     this.migrateLegacyMemoryFileToUserMemories();
     this.migrateFromElectronStore(basePath);
+
+    // Clean up orphaned rows left by prior runs where foreign keys were not enforced.
+    this.db.run(`DELETE FROM cowork_messages WHERE session_id NOT IN (SELECT id FROM cowork_sessions)`);
+    this.db.run(`DELETE FROM user_memory_sources WHERE memory_id NOT IN (SELECT id FROM user_memories)`);
+
     this.save();
   }
 
