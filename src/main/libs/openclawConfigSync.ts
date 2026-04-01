@@ -1,7 +1,7 @@
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import type { CoworkConfig, CoworkExecutionMode, Agent } from '../coworkStore';
+import type { CoworkConfig, CoworkExecutionMode, Agent, CoworkAgentRecord } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig, IMSettings } from '../im/types';
 import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig, NeteaseBeeChanConfig } from '../im/types';
 import { PlatformRegistry } from '../../shared/platform';
@@ -665,7 +665,6 @@ type OpenClawConfigSyncDeps = {
   getIMSettings?: () => IMSettings | null;
   getMcpBridgeConfig?: () => McpBridgeConfig | null;
   getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
-  getAgents?: () => Agent[];
 };
 
 export class OpenClawConfigSync {
@@ -686,7 +685,6 @@ export class OpenClawConfigSync {
   private readonly getIMSettings?: () => IMSettings | null;
   private readonly getMcpBridgeConfig?: () => McpBridgeConfig | null;
   private readonly getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
-  private readonly getAgents?: () => Agent[];
 
   constructor(deps: OpenClawConfigSyncDeps) {
     this.engineManager = deps.engineManager;
@@ -706,7 +704,6 @@ export class OpenClawConfigSync {
     this.getIMSettings = deps.getIMSettings;
     this.getMcpBridgeConfig = deps.getMcpBridgeConfig;
     this.getSkillsList = deps.getSkillsList;
-    this.getAgents = deps.getAgents;
   }
 
   sync(reason: string): OpenClawConfigSyncResult {
@@ -1807,7 +1804,7 @@ export class OpenClawConfigSync {
    * OpenClaw picks it up natively.
    */
   private buildAgentsList(): { list?: Array<Record<string, unknown>> } {
-    const agents = this.getAgents?.() ?? [];
+    const agents = this.getAgents ? (this.getAgents().agents ?? []) : [];
 
     const list: Array<Record<string, unknown>> = [
       {
@@ -1817,21 +1814,17 @@ export class OpenClawConfigSync {
     ];
 
     for (const agent of agents) {
-      if (agent.id === 'main' || !agent.enabled) continue;
+      if (agent.id === 'main' || agent.invocable === false) continue;
 
       list.push({
         id: agent.id,
         // Omit `workspace` — OpenClaw defaults to {STATE_DIR}/workspace-{agentId}/
         // which keeps agent workspaces decoupled from the user's working directory.
-        ...(agent.name || agent.icon ? {
+        ...(agent.name ? {
           identity: {
-            ...(agent.name ? { name: agent.name } : {}),
-            ...(agent.icon ? { emoji: agent.icon } : {}),
+            name: agent.name,
           },
         } : {}),
-        // Per-agent skill whitelist: only when skillIds is non-empty.
-        // OpenClaw's resolveAgentSkillsFilter() uses this to filter available skills.
-        ...(agent.skillIds && agent.skillIds.length > 0 ? { skills: agent.skillIds } : {}),
       });
     }
 
@@ -1850,7 +1843,7 @@ export class OpenClawConfigSync {
     const platformBindings = imSettings?.platformAgentBindings;
     if (!platformBindings || Object.keys(platformBindings).length === 0) return {};
 
-    const agents = this.getAgents?.() ?? [];
+    const agents = this.getAgents ? (this.getAgents().agents ?? []) : [];
 
     // Map openclaw channel name → platform key used in platformAgentBindings
     const channelMap: Array<{ getter: () => { enabled: boolean } | null; channel: string; platform: string }> = [
@@ -1872,7 +1865,7 @@ export class OpenClawConfigSync {
       if (!agentId || agentId === 'main') continue;
 
       // Verify the target agent actually exists and is enabled
-      const targetAgent = agents.find((a) => a.id === agentId && a.enabled);
+      const targetAgent = agents.find((a) => a.id === agentId && a.invocable !== false);
       if (!targetAgent) continue;
 
       try {
@@ -1894,13 +1887,13 @@ export class OpenClawConfigSync {
    * get their own workspace directories under the openclaw state directory.
    */
   private syncPerAgentWorkspaces(_mainWorkspaceDir: string, coworkConfig: CoworkConfig): void {
-    const agents = this.getAgents?.() ?? [];
+    const agents = this.getAgents ? (this.getAgents().agents ?? []) : [];
     // Use the openclaw state directory as base, matching OpenClaw's own fallback
     // logic: {STATE_DIR}/workspace-{agentId}/
     const stateDir = this.engineManager.getStateDir();
 
     for (const agent of agents) {
-      if (agent.id === 'main' || !agent.enabled) continue;
+      if (agent.id === 'main' || agent.invocable === false) continue;
 
       const agentWorkspace = path.join(stateDir, `workspace-${agent.id}`);
       try {

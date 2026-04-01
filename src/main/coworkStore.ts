@@ -385,7 +385,6 @@ export interface CoworkSession {
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
-  agentId?: string;
 }
 
 export interface CoworkSessionSummary {
@@ -608,7 +607,6 @@ export class CoworkStore {
       messages: [],
       createdAt: now,
       updatedAt: now,
-      agentId,
     };
   }
 
@@ -661,7 +659,6 @@ export class CoworkStore {
       messages,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      agentId: row.agent_id ?? undefined,
     };
   }
 
@@ -766,7 +763,6 @@ export class CoworkStore {
       agentId: row.agent_id || 'main',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      agentId: row.agent_id ?? undefined,
     }));
   }
 
