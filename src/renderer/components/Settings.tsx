@@ -148,38 +148,21 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   custom: { label: 'Custom', icon: <CustomProviderIcon /> },
 };
 
-const providerApiKeyUrl: Partial<Record<ProviderType, string>> = {
-  openai: 'https://platform.openai.com/api-keys',
-  gemini: 'https://aistudio.google.com/apikey',
-  anthropic: 'https://console.anthropic.com/settings/keys',
-  deepseek: 'https://platform.deepseek.com/api_keys',
-  moonshot: 'https://platform.moonshot.cn/console/api-keys',
-  zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
-  minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
-  volcengine: 'https://console.volcengine.com/ark',
-  qwen: 'https://dashscope.console.aliyun.com/apiKey',
-  youdaozhiyun: 'https://ai.youdao.com/console',
-  stepfun: 'https://platform.stepfun.com/interface-key',
-  xiaomi: 'https://dev.mi.com/platform',
-  openrouter: 'https://openrouter.ai/keys',
-  ollama: 'https://ollama.com',
-};
-
-const providerWebsiteUrl: Partial<Record<ProviderType, string>> = {
-  openai: 'https://platform.openai.com',
-  gemini: 'https://aistudio.google.com',
-  anthropic: 'https://console.anthropic.com',
-  deepseek: 'https://platform.deepseek.com',
-  moonshot: 'https://platform.moonshot.cn',
-  zhipu: 'https://open.bigmodel.cn',
-  minimax: 'https://platform.minimaxi.com',
-  volcengine: 'https://console.volcengine.com/ark',
-  qwen: 'https://dashscope.console.aliyun.com',
-  youdaozhiyun: 'https://ai.youdao.com',
-  stepfun: 'https://platform.stepfun.com',
-  xiaomi: 'https://dev.mi.com/platform',
-  openrouter: 'https://openrouter.ai',
-  ollama: 'https://ollama.com',
+const providerLinks: Partial<Record<ProviderType, { website: string; apiKey?: string }>> = {
+  openai:       { website: 'https://platform.openai.com',              apiKey: 'https://platform.openai.com/api-keys' },
+  gemini:       { website: 'https://aistudio.google.com',              apiKey: 'https://aistudio.google.com/apikey' },
+  anthropic:    { website: 'https://console.anthropic.com',            apiKey: 'https://console.anthropic.com/settings/keys' },
+  deepseek:     { website: 'https://platform.deepseek.com',            apiKey: 'https://platform.deepseek.com/api_keys' },
+  moonshot:     { website: 'https://platform.moonshot.cn',             apiKey: 'https://platform.moonshot.cn/console/api-keys' },
+  zhipu:        { website: 'https://open.bigmodel.cn',                 apiKey: 'https://open.bigmodel.cn/usercenter/apikeys' },
+  minimax:      { website: 'https://platform.minimaxi.com',            apiKey: 'https://platform.minimaxi.com/user-center/basic-information/interface-key' },
+  volcengine:   { website: 'https://console.volcengine.com/ark',       apiKey: 'https://console.volcengine.com/ark' },
+  qwen:         { website: 'https://dashscope.console.aliyun.com',     apiKey: 'https://dashscope.console.aliyun.com/apiKey' },
+  youdaozhiyun: { website: 'https://ai.youdao.com',                    apiKey: 'https://ai.youdao.com/console' },
+  stepfun:      { website: 'https://platform.stepfun.com',             apiKey: 'https://platform.stepfun.com/interface-key' },
+  xiaomi:       { website: 'https://dev.mi.com/platform',              apiKey: 'https://dev.mi.com/platform' },
+  openrouter:   { website: 'https://openrouter.ai',                    apiKey: 'https://openrouter.ai/keys' },
+  ollama:       { website: 'https://ollama.com' }, // local runtime, no API key needed
 };
 
 const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropic: string; openai: string }>> = {
@@ -2627,12 +2610,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   <h3 className="text-base font-medium dark:text-claude-darkText text-claude-text">
                     {(providerMeta[activeProvider]?.label ?? activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1))} {i18nService.t('providerSettings')}
                   </h3>
-                  {providerWebsiteUrl[activeProvider] && (
+                  {providerLinks[activeProvider]?.website && (
                     <button
                       type="button"
-                      onClick={() => void window.electron.shell.openExternal(providerWebsiteUrl[activeProvider]!)}
+                      onClick={() => void window.electron.shell.openExternal(providerLinks[activeProvider]!.website)}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('visitOfficialSite')}
+                      aria-label={i18nService.t('visitOfficialSite')}
                     >
                       <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                     </button>
@@ -2682,13 +2666,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                         <label htmlFor="minimax-apiKey" className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
                           {i18nService.t('apiKey')}
                         </label>
-                        {providerApiKeyUrl.minimax && (
+                        {providerLinks.minimax?.apiKey && (
                           <button
                             type="button"
-                            onClick={() => void window.electron.shell.openExternal(providerApiKeyUrl.minimax!)}
+                            onClick={() => void window.electron.shell.openExternal(providerLinks.minimax!.apiKey!)}
                             className="text-[11px] text-claude-accent hover:underline transition-colors"
                           >
-                            {i18nService.t('getApiKey')} &rarr;
+                            {i18nService.t('getApiKey')} →
                           </button>
                         )}
                       </div>
@@ -2881,13 +2865,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
                       {i18nService.t('apiKey')}
                     </label>
-                    {providerApiKeyUrl[activeProvider] && (
+                    {providerLinks[activeProvider]?.apiKey && (
                       <button
                         type="button"
-                        onClick={() => void window.electron.shell.openExternal(providerApiKeyUrl[activeProvider]!)}
+                        onClick={() => void window.electron.shell.openExternal(providerLinks[activeProvider]!.apiKey!)}
                         className="text-[11px] text-claude-accent hover:underline transition-colors"
                       >
-                        {i18nService.t('getApiKey')} &rarr;
+                        {i18nService.t('getApiKey')} →
                       </button>
                     )}
                   </div>
