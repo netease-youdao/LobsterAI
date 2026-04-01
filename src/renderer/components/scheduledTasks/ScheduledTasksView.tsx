@@ -9,7 +9,7 @@ import TaskForm from './TaskForm';
 import TaskDetail from './TaskDetail';
 import AllRunsHistory from './AllRunsHistory';
 import DeleteConfirmModal from './DeleteConfirmModal';
-import { ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
@@ -37,6 +37,10 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
+  const [isFormDirty, setIsFormDirty] = useState(false);
+  const [showUnsavedBackModal, setShowUnsavedBackModal] = useState(false);
+
+  const isFormView = viewMode === 'create' || viewMode === 'edit';
 
   const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
     setDeleteTaskInfo({ id: taskId, name: taskName });
@@ -65,7 +69,20 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const handleBackToList = () => {
     dispatch(selectTask(null));
     dispatch(setViewMode('list'));
+    setIsFormDirty(false);
   };
+
+  const handleBackRequest = () => {
+    if (isFormView && isFormDirty) {
+      setShowUnsavedBackModal(true);
+    } else {
+      handleBackToList();
+    }
+  };
+
+  const handleFormDirtyChange = useCallback((dirty: boolean) => {
+    setIsFormDirty(dirty);
+  }, []);
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
@@ -104,7 +121,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           )}
           {viewMode !== 'list' && (
             <button
-              onClick={handleBackToList}
+              onClick={handleBackRequest}
               className="non-draggable p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
               aria-label={i18nService.t('back')}
             >
@@ -175,6 +192,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                 mode="create"
                 onCancel={handleBackToList}
                 onSaved={handleBackToList}
+                onDirtyChange={handleFormDirtyChange}
               />
             )}
             {viewMode === 'edit' && selectedTask && (
@@ -183,6 +201,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                 task={selectedTask}
                 onCancel={() => dispatch(setViewMode('detail'))}
                 onSaved={() => dispatch(setViewMode('detail'))}
+                onDirtyChange={handleFormDirtyChange}
               />
             )}
             {viewMode === 'detail' && selectedTask && (
@@ -199,6 +218,50 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           onConfirm={handleConfirmDelete}
           onCancel={handleCancelDelete}
         />
+      )}
+
+      {showUnsavedBackModal && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center"
+          onClick={() => setShowUnsavedBackModal(false)}
+        >
+          <div className="absolute inset-0 bg-black/40 dark:bg-black/60" />
+          <div
+            className="relative w-80 rounded-xl shadow-2xl bg-surface border border-border p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center">
+              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mb-3">
+                <ExclamationTriangleIcon className="w-5 h-5 text-amber-500" />
+              </div>
+              <h3 className="text-sm font-semibold text-foreground mb-2">
+                {i18nService.t('scheduledTasksUnsavedTitle')}
+              </h3>
+              <p className="text-sm text-secondary mb-5">
+                {i18nService.t('scheduledTasksUnsavedMessage')}
+              </p>
+              <div className="flex items-center gap-3 w-full">
+                <button
+                  type="button"
+                  onClick={() => setShowUnsavedBackModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+                >
+                  {i18nService.t('scheduledTasksUnsavedStay')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUnsavedBackModal(false);
+                    handleBackToList();
+                  }}
+                  className="flex-1 px-4 py-2 text-sm rounded-lg text-foreground border border-border hover:bg-surface-raised transition-colors"
+                >
+                  {i18nService.t('scheduledTasksUnsavedLeave')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
