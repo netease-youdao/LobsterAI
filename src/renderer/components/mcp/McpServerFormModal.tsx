@@ -31,6 +31,24 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const [url, setUrl] = useState('');
   const [headerRows, setHeaderRows] = useState<{ key: string; value: string }[]>([]);
   const [error, setError] = useState('');
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  const hasUserInput = (): boolean => {
+    if (isEdit && server) {
+      if (name !== server.name) return true;
+      if (description !== server.description) return true;
+      if (command !== (server.command || '')) return true;
+      if (argsText !== (server.args || []).join('\n')) return true;
+      if (url !== (server.url || '')) return true;
+      return false;
+    }
+    if (isRegistry && registryEntry) {
+      return envRows.some(r => r.value.trim() !== '');
+    }
+    return !!(name.trim() || description.trim() || command.trim() || argsText.trim() || url.trim()
+      || envRows.some(r => r.key.trim() || r.value.trim())
+      || headerRows.some(r => r.key.trim() || r.value.trim()));
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -94,6 +112,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setHeaderRows([]);
     }
     setError('');
+    setShowDiscardConfirm(false);
   }, [isOpen, server, registryEntry]);
 
   const handleSave = () => {
@@ -192,11 +211,19 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        if (showDiscardConfirm) {
+          setShowDiscardConfirm(false);
+        } else if (hasUserInput()) {
+          setShowDiscardConfirm(true);
+        } else {
+          onClose();
+        }
+      }
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, showDiscardConfirm, name, description, command, argsText, url, envRows, headerRows, server, registryEntry]);
 
   if (!isOpen) return null;
 
@@ -220,7 +247,6 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onClose}
     >
       <div
         className="w-full max-w-lg mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto"
@@ -435,6 +461,35 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           </div>
         </div>
       </div>
+
+      {showDiscardConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-xs mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-5">
+            <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
+              {i18nService.t('mcpDiscardTitle')}
+            </div>
+            <p className="mt-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              {i18nService.t('mcpDiscardMessage')}
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDiscardConfirm(false)}
+                className="px-3 py-1.5 text-xs rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+              >
+                {i18nService.t('mcpDiscardCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowDiscardConfirm(false); onClose(); }}
+                className="px-3 py-1.5 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 dark:bg-red-500 dark:hover:bg-red-400 transition-colors"
+              >
+                {i18nService.t('mcpDiscardConfirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
