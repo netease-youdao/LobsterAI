@@ -1,9 +1,18 @@
 import { test, expect } from 'vitest';
 import {
+  CUSTOM_PROVIDER_KEYS,
+  CUSTOM_PROVIDER_MAX_COUNT,
   isCustomProvider,
   getCustomProviderDefaultName,
   getProviderDisplayName,
 } from './config';
+
+test('CUSTOM_PROVIDER_KEYS exposes 20 sparse custom provider slots', () => {
+  expect(CUSTOM_PROVIDER_MAX_COUNT).toBe(20);
+  expect(CUSTOM_PROVIDER_KEYS).toHaveLength(20);
+  expect(CUSTOM_PROVIDER_KEYS[0]).toBe('custom_0');
+  expect(CUSTOM_PROVIDER_KEYS[19]).toBe('custom_19');
+});
 
 test('isCustomProvider: custom_0 is custom', () => {
   expect(isCustomProvider('custom_0')).toBe(true);
@@ -43,6 +52,10 @@ test('getCustomProviderDefaultName: custom_1 -> Custom1', () => {
 
 test('getCustomProviderDefaultName: custom_42 -> Custom42', () => {
   expect(getCustomProviderDefaultName('custom_42')).toBe('Custom42');
+});
+
+test('getCustomProviderDefaultName: custom_19 -> Custom19', () => {
+  expect(getCustomProviderDefaultName('custom_19')).toBe('Custom19');
 });
 
 test('getProviderDisplayName: built-in provider capitalizes first letter', () => {
