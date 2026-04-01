@@ -26,9 +26,10 @@ export interface CoworkViewProps {
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
   updateBadge?: React.ReactNode;
+  initialText?: React.MutableRefObject<string | null>;
 }
 
-const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSkills, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
+const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSkills, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge, initialText }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const [isInitialized, setIsInitialized] = useState(false);
@@ -132,6 +133,15 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         console.error('Failed to check cowork API config:', error);
       }
       setIsInitialized(true);
+      // Consume pending initial text (e.g. from "Create Skill" navigation)
+      if (initialText?.current) {
+        const text = initialText.current;
+        initialText.current = null;
+        requestAnimationFrame(() => {
+          promptInputRef.current?.setValue(text);
+          promptInputRef.current?.focus();
+        });
+      }
     };
     init();
 
