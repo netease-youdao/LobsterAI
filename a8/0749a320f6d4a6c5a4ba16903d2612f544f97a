@@ -1,0 +1,23 @@
+src/renderer/components/Settings.tsx
+  574e2fb30401b60a 151-165,2613,2616,2619,2669,2672,2675,2868,2871,2874
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.23",
+  "base_commit_sha": "a80749a320f6d4a6c5a4ba16903d2612f544f97a",
+  "prompts": {
+    "574e2fb30401b60a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5cc98ee9-e64c-4d3b-b169-026be6ebb071",
+        "model": "<synthetic>"
+      },
+      "human_author": "wulei <wulei05@corp.netease.com>",
+      "messages": [],
+      "total_additions": 24,
+      "total_deletions": 40,
+      "accepted_lines": 24,
+      "overriden_lines": 0
+    }
+  }
+}
