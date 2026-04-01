@@ -1358,7 +1358,6 @@ export class CoworkStore {
       SET is_active = 0
       WHERE memory_id = ?
     `, [id]);
-    this.saveDb();
     return (this.db.getRowsModified?.() || 0) > 0;
   }
 
@@ -1468,81 +1467,89 @@ export class CoworkStore {
     });
     result.totalChanges = extracted.length;
 
-    for (const change of extracted) {
-      if (change.action === 'add') {
-        if (!options.implicitEnabled && !change.isExplicit) {
-          result.skipped += 1;
-          continue;
-        }
-        const judge = await judgeMemoryCandidate({
-          text: change.text,
-          isExplicit: change.isExplicit,
-          guardLevel: options.guardLevel,
-          llmEnabled: options.memoryLlmJudgeEnabled,
-        });
-        if (judge.source === 'llm') {
-          result.llmReviewed += 1;
-        }
-        if (!judge.accepted) {
-          result.judgeRejected += 1;
-          result.skipped += 1;
-          continue;
-        }
-
-        const write = this.createOrReviveUserMemory({
-          text: change.text,
-          confidence: change.confidence,
-          isExplicit: change.isExplicit,
-          source: {
-            role: 'user',
-            sessionId: options.sessionId,
-            messageId: options.userMessageId,
-          },
-        });
-
-        if (!change.isExplicit && options.assistantMessageId) {
-          this.addMemorySource(write.memory.id, {
-            role: 'assistant',
-            sessionId: options.sessionId,
-            messageId: options.assistantMessageId,
+    this.db.run('BEGIN TRANSACTION;');
+    try {
+      for (const change of extracted) {
+        if (change.action === 'add') {
+          if (!options.implicitEnabled && !change.isExplicit) {
+            result.skipped += 1;
+            continue;
+          }
+          const judge = await judgeMemoryCandidate({
+            text: change.text,
+            isExplicit: change.isExplicit,
+            guardLevel: options.guardLevel,
+            llmEnabled: options.memoryLlmJudgeEnabled,
           });
+          if (judge.source === 'llm') {
+            result.llmReviewed += 1;
+          }
+          if (!judge.accepted) {
+            result.judgeRejected += 1;
+            result.skipped += 1;
+            continue;
+          }
+
+          const write = this.createOrReviveUserMemory({
+            text: change.text,
+            confidence: change.confidence,
+            isExplicit: change.isExplicit,
+            source: {
+              role: 'user',
+              sessionId: options.sessionId,
+              messageId: options.userMessageId,
+            },
+          });
+
+          if (!change.isExplicit && options.assistantMessageId) {
+            this.addMemorySource(write.memory.id, {
+              role: 'assistant',
+              sessionId: options.sessionId,
+              messageId: options.assistantMessageId,
+            });
+          }
+
+          if (write.created) result.created += 1;
+          else if (write.updated) result.updated += 1;
+          else result.skipped += 1;
+          continue;
         }
 
-        if (write.created) result.created += 1;
-        else if (write.updated) result.updated += 1;
+        const key = normalizeMemoryMatchKey(change.text);
+        if (!key) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const candidates = this.listUserMemories({ status: 'all', includeDeleted: false, limit: 100 });
+        let target: CoworkUserMemory | null = null;
+        let bestScore = 0;
+        for (const entry of candidates) {
+          const currentKey = normalizeMemoryMatchKey(entry.text);
+          if (!currentKey) continue;
+          const score = scoreDeleteMatch(currentKey, key);
+          if (score <= bestScore) continue;
+          bestScore = score;
+          target = entry;
+        }
+
+        if (!target) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const deleted = this.deleteUserMemory(target.id);
+        if (deleted) result.deleted += 1;
         else result.skipped += 1;
-        continue;
       }
 
-      const key = normalizeMemoryMatchKey(change.text);
-      if (!key) {
-        result.skipped += 1;
-        continue;
-      }
-
-      const candidates = this.listUserMemories({ status: 'all', includeDeleted: false, limit: 100 });
-      let target: CoworkUserMemory | null = null;
-      let bestScore = 0;
-      for (const entry of candidates) {
-        const currentKey = normalizeMemoryMatchKey(entry.text);
-        if (!currentKey) continue;
-        const score = scoreDeleteMatch(currentKey, key);
-        if (score <= bestScore) continue;
-        bestScore = score;
-        target = entry;
-      }
-
-      if (!target) {
-        result.skipped += 1;
-        continue;
-      }
-
-      const deleted = this.deleteUserMemory(target.id);
-      if (deleted) result.deleted += 1;
-      else result.skipped += 1;
+      this.markOrphanImplicitMemoriesStale();
+      this.db.run('COMMIT;');
+    } catch (error) {
+      this.db.run('ROLLBACK;');
+      throw error;
     }
 
-    this.markOrphanImplicitMemoriesStale();
     this.saveDb();
     return result;
   }
