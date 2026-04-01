@@ -5,7 +5,6 @@ import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline'
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
-import Tooltip from '../ui/Tooltip';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
 import { i18nService } from '../../services/i18n';
@@ -664,38 +663,25 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               <div className="flex items-center gap-2 relative">
                 {showFolderSelector && (
                   <>
-                    <Tooltip
-                      content={truncatePath(workingDirectory, 120)}
-                      disabled={showFolderMenu || !workingDirectory}
-                      maxWidth="min(400px, 90vw)"
-                    >
-                      <div className="flex items-center">
-                        <button
-                          ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
-                          type="button"
-                          onClick={() => setShowFolderMenu(!showFolderMenu)}
-                          className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
-                        >
-                          <FolderIcon className="h-4 w-4 flex-shrink-0" />
-                          <span className="max-w-[150px] truncate text-xs">
-                            {truncatePath(workingDirectory)}
-                          </span>
-                          {workingDirectory && (
-                            <span
-                              role="button"
-                              tabIndex={-1}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleFolderSelect('');
-                              }}
-                              className="flex-shrink-0 ml-0.5 p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-                            >
-                              <XMarkIcon className="h-3 w-3" />
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    </Tooltip>
+                    <div className="relative group">
+                      <button
+                        ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
+                        type="button"
+                        onClick={() => setShowFolderMenu(!showFolderMenu)}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                      >
+                        <FolderIcon className="h-4 w-4" />
+                        <span className="max-w-[150px] truncate text-xs">
+                          {truncatePath(workingDirectory)}
+                        </span>
+                      </button>
+                      {/* Tooltip - hidden when folder menu is open */}
+                      {!showFolderMenu && (
+                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl bg-background text-foreground border-border border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-50 max-w-[400px] break-all whitespace-nowrap">
+                          {truncatePath(workingDirectory, 120)}
+                        </div>
+                      )}
+                    </div>
                     <FolderSelectorPopover
                       isOpen={showFolderMenu}
                       onClose={() => setShowFolderMenu(false)}
