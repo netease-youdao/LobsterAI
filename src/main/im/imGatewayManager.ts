@@ -348,10 +348,11 @@ export class IMGatewayManager extends EventEmitter {
     const previousConfig = this.imStore.getConfig();
     this.imStore.setConfig(config);
 
-    // Update chat handler if settings changed
-    if (config.settings) {
-      this.updateChatHandler();
-    }
+    // Always rebuild chat handler after any config change so it reads the
+    // latest imSettings (systemPrompt, skillsEnabled, platformAgentBindings).
+    // Previously only triggered when config.settings was present, which meant
+    // platform-specific saves (e.g. { dingtalk: ... }) never refreshed the handler.
+    this.updateChatHandler();
 
 
     // NIM now runs via OpenClaw; config sync is handled by IPC handler
