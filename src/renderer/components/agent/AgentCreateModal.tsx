@@ -42,15 +42,6 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
   const [boundPlatforms, setBoundPlatforms] = useState<Set<IMPlatform>>(new Set());
 
-  useEffect(() => {
-    if (!isOpen) return;
-    imService.loadConfig().then((cfg) => {
-      if (cfg) setImConfig(cfg);
-    });
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
   const resetForm = () => {
     setName('');
     setDescription('');
@@ -61,6 +52,26 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
     setActiveTab('basic');
     setBoundPlatforms(new Set());
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    resetForm();
+    imService.loadConfig().then((cfg) => {
+      if (cfg) setImConfig(cfg);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
 
   const handleCreate = async () => {
     if (!name.trim()) return;
