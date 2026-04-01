@@ -326,6 +326,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       .filter(p => p?.trim())
       .join('\n\n') || undefined;
 
+    // Set streaming state immediately so the UI shows the stop button (#743)
+    dispatch(setStreaming(true));
+
     await coworkService.continueSession({
       sessionId: currentSession.id,
       prompt,
