@@ -226,6 +226,7 @@ export interface AppConfig {
     newChat: string;
     search: string;
     settings: string;
+    sendMessage: string;
     [key: string]: string | undefined;
   };
 }
@@ -287,6 +288,7 @@ export const defaultConfig: AppConfig = {
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
+    sendMessage: 'Enter',
   }
 };
 
