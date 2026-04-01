@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('electron', {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),
     requestCalendar: () => ipcRenderer.invoke('permissions:requestCalendar'),
   },
+  enterprise: {
+    getConfig: () => ipcRenderer.invoke('enterprise:getConfig'),
+  },
   api: {
     // 普通 API 请求（非流式）
     fetch: (options: {

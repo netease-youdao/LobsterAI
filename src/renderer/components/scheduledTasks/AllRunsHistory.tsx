@@ -36,8 +36,8 @@ const AllRunsHistory: React.FC = () => {
   if (allRuns.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 px-6">
-        <ClockIcon className="h-12 w-12 dark:text-claude-darkTextSecondary/40 text-claude-textSecondary/40 mb-4" />
-        <p className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        <ClockIcon className="h-12 w-12 text-secondary/40 mb-4" />
+        <p className="text-sm font-medium text-secondary">
           {i18nService.t('scheduledTasksHistoryEmpty')}
         </p>
       </div>
@@ -47,14 +47,14 @@ const AllRunsHistory: React.FC = () => {
   return (
     <div>
       {/* Column Headers */}
-      <div className="grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-2 border-b dark:border-claude-darkBorder/50 border-claude-border/50">
-        <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+      <div className="grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-2 border-b border-border-subtle">
+        <div className="text-xs font-medium text-secondary">
           {i18nService.t('scheduledTasksHistoryColTitle')}
         </div>
-        <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        <div className="text-xs font-medium text-secondary">
           {i18nService.t('scheduledTasksHistoryColTime')}
         </div>
-        <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        <div className="text-xs font-medium text-secondary">
           {i18nService.t('scheduledTasksHistoryColStatus')}
         </div>
       </div>
@@ -66,15 +66,15 @@ const AllRunsHistory: React.FC = () => {
         return (
           <div
             key={run.id}
-            className={`grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder/50 border-claude-border/50 transition-colors ${
+            className={`grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-3 border-b border-border-subtle transition-colors ${
               hasSession
-                ? 'hover:bg-claude-surfaceHover/50 dark:hover:bg-claude-darkSurfaceHover/50 cursor-pointer'
+                ? 'hover:bg-surface-raised/50 cursor-pointer'
                 : ''
             }`}
             onClick={() => handleViewSession(run)}
           >
             {/* Task title */}
-            <div className="text-sm dark:text-claude-darkText text-claude-text truncate">
+            <div className="text-sm text-foreground truncate">
               {run.taskName}
               {run.status === 'running' && (
                 <svg className="inline-block w-3 h-3 ml-1.5 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
@@ -85,7 +85,7 @@ const AllRunsHistory: React.FC = () => {
             </div>
 
             {/* Run time + duration */}
-            <div className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">
+            <div className="text-sm text-secondary truncate">
               {formatDateTime(new Date(run.startedAt))}
               {run.durationMs !== null && (
                 <span className="ml-1.5 text-xs opacity-70">({formatDuration(run.durationMs)})</span>
@@ -105,7 +105,7 @@ const AllRunsHistory: React.FC = () => {
         <button
           type="button"
           onClick={handleLoadMore}
-          className="w-full py-3 text-sm text-claude-accent hover:text-claude-accentHover transition-colors"
+          className="w-full py-3 text-sm text-primary hover:text-primary-hover transition-colors"
         >
           {i18nService.t('scheduledTasksLoadMore')}
         </button>

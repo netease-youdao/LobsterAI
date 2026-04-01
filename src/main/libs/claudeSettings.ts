@@ -9,17 +9,7 @@ import {
   getCoworkOpenAICompatProxyStatus,
 } from './coworkOpenAICompatProxy';
 import { normalizeProviderApiFormat, type AnthropicApiFormat } from './coworkFormatTransform';
-
-const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
-// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
-const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
-// Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
-const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
-// Moonshot/Kimi Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const MOONSHOT_CODING_PLAN_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1';
-const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
+import { ProviderName, resolveCodingPlanBaseUrl } from '../../shared/providers';
 
 type ProviderModel = {
   id: string;
@@ -88,6 +78,13 @@ export function clearServerModelMetadata(): void {
   serverModelMetadataCache.clear();
 }
 
+export function getAllServerModelMetadata(): Array<{ modelId: string; supportsImage?: boolean }> {
+  return Array.from(serverModelMetadataCache.entries()).map(([modelId, meta]) => ({
+    modelId,
+    supportsImage: meta.supportsImage,
+  }));
+}
+
 const getStore = (): SqliteStore | null => {
   if (!storeGetter) {
     return null;
@@ -126,17 +123,17 @@ type MatchedProvider = {
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
-  if (providerName === 'openai' || providerName === 'gemini' || providerName === 'stepfun' || providerName === 'youdaozhiyun') {
+  if (providerName === ProviderName.OpenAI || providerName === ProviderName.Gemini || providerName === ProviderName.StepFun || providerName === ProviderName.Youdaozhiyun) {
     return 'openai';
   }
-  if (providerName === 'anthropic') {
+  if (providerName === ProviderName.Anthropic) {
     return 'anthropic';
   }
   return normalizeProviderApiFormat(apiFormat);
 }
 
 function providerRequiresApiKey(providerName: string): boolean {
-  return providerName !== 'ollama';
+  return providerName !== ProviderName.Ollama;
 }
 
 function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
@@ -149,7 +146,7 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
   const cachedMeta = serverModelMetadataCache.get(effectiveModelId);
   console.log('[ClaudeSettings] lobsterai-server fallback activated:', { baseURL, modelId: effectiveModelId, supportsImage: cachedMeta?.supportsImage });
   return {
-    providerName: 'lobsterai-server',
+    providerName: ProviderName.LobsteraiServer,
     providerConfig: { enabled: true, apiKey: tokens.accessToken, baseUrl: baseURL, apiFormat: 'openai', models: [{ id: effectiveModelId, supportsImage: cachedMeta?.supportsImage }] },
     modelId: effectiveModelId,
     apiFormat: 'openai',
@@ -199,7 +196,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
 
   // Handle lobsterai-server provider: dynamically construct from auth tokens
-  if (preferredProviderName === 'lobsterai-server') {
+  if (preferredProviderName === ProviderName.LobsteraiServer) {
     const serverMatch = tryLobsteraiServerFallback(modelId);
     if (serverMatch) {
       return { matched: serverMatch };
@@ -241,43 +238,10 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   let apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
   let baseURL = providerConfig.baseUrl?.trim();
 
-  // Handle Zhipu GLM Coding Plan endpoint switch
-  if (providerName === 'zhipu' && providerConfig.codingPlanEnabled) {
-    baseURL = ZHIPU_CODING_PLAN_BASE_URL;
-    apiFormat = 'openai';
-  }
-
-  // Handle Qwen Coding Plan endpoint switch
-  // Coding Plan supports both OpenAI and Anthropic compatible formats
-  if (providerName === 'qwen' && providerConfig.codingPlanEnabled) {
-    if (apiFormat === 'anthropic') {
-      baseURL = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
-    } else {
-      baseURL = QWEN_CODING_PLAN_OPENAI_BASE_URL;
-      apiFormat = 'openai';
-    }
-  }
-
-  // Handle Volcengine Coding Plan endpoint switch
-  // Coding Plan supports both OpenAI and Anthropic compatible formats
-  if (providerName === 'volcengine' && providerConfig.codingPlanEnabled) {
-    if (apiFormat === 'anthropic') {
-      baseURL = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
-    } else {
-      baseURL = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
-      apiFormat = 'openai';
-    }
-  }
-
-  // Handle Moonshot/Kimi Coding Plan endpoint switch
-  // Coding Plan supports both OpenAI and Anthropic compatible formats
-  if (providerName === 'moonshot' && providerConfig.codingPlanEnabled) {
-    if (apiFormat === 'anthropic') {
-      baseURL = MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL;
-    } else {
-      baseURL = MOONSHOT_CODING_PLAN_OPENAI_BASE_URL;
-      apiFormat = 'openai';
-    }
+  if (providerConfig.codingPlanEnabled) {
+    const resolved = resolveCodingPlanBaseUrl(providerName, true, apiFormat, baseURL ?? '');
+    baseURL = resolved.baseUrl;
+    apiFormat = resolved.effectiveFormat;
   }
 
   if (!baseURL) {
@@ -416,6 +380,10 @@ export function resolveRawApiConfig(): ApiConfigResolution {
     return { config: null, error };
   }
   const apiKey = matched.providerConfig.apiKey?.trim() || '';
+  console.log('[ClaudeSettings] resolved raw API config:', JSON.stringify({
+    ...matched,
+    providerConfig: { ...matched.providerConfig, apiKey: apiKey ? '***' : '' },
+  }));
   // OpenClaw's gateway requires a non-empty apiKey for every provider — even
   // local servers (Ollama, vLLM, etc.) that don't enforce auth.  When the user
   // leaves the key blank we supply a placeholder so the gateway doesn't reject
@@ -463,6 +431,59 @@ export function resolveAllProviderApiKeys(): Record<string, string> {
     if (!apiKey && providerRequiresApiKey(providerName)) continue;
     const envName = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
     result[envName] = apiKey || 'sk-lobsterai-local';
+  }
+
+  return result;
+}
+
+export type ProviderRawConfig = {
+  providerName: string;
+  baseURL: string;
+  apiKey: string;
+  apiType: 'anthropic' | 'openai';
+  codingPlanEnabled: boolean;
+  models: Array<{ id: string; name?: string; supportsImage?: boolean }>;
+};
+
+export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
+  const sqliteStore = getStore();
+  if (!sqliteStore) return [];
+  const appConfig = sqliteStore.get<AppConfig>('app_config');
+  if (!appConfig?.providers) return [];
+
+  const result: ProviderRawConfig[] = [];
+
+  for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
+    if (!providerConfig?.enabled) continue;
+    if (providerName === ProviderName.LobsteraiServer) continue;
+
+    const apiKey = providerConfig.apiKey?.trim() || '';
+    if (!apiKey && providerRequiresApiKey(providerName)) continue;
+
+    const baseURL = providerConfig.baseUrl?.trim() || '';
+
+    let effectiveBaseURL = baseURL;
+    let effectiveApiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
+
+    if (providerConfig.codingPlanEnabled) {
+      const resolved = resolveCodingPlanBaseUrl(providerName, true, effectiveApiFormat, effectiveBaseURL);
+      effectiveBaseURL = resolved.baseUrl;
+      effectiveApiFormat = resolved.effectiveFormat;
+    }
+
+    if (!effectiveBaseURL) continue;
+
+    const models = (providerConfig.models ?? []).filter((m) => m.id?.trim());
+    if (models.length === 0) continue;
+
+    result.push({
+      providerName,
+      baseURL: effectiveBaseURL,
+      apiKey: apiKey || 'sk-lobsterai-local',
+      apiType: effectiveApiFormat === 'anthropic' ? 'anthropic' : 'openai',
+      codingPlanEnabled: !!providerConfig.codingPlanEnabled,
+      models,
+    });
   }
 
   return result;

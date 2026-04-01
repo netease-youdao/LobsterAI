@@ -30,7 +30,7 @@ const PathTooltip: React.FC<PathTooltipProps> = ({ path, anchorRect, visible }) 
   return (
     <div
       style={style}
-      className="px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border border break-all pointer-events-none"
+      className="px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl bg-background text-foreground border-border border break-all pointer-events-none"
     >
       {path}
     </div>
@@ -236,14 +236,14 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
       {/* Main popover */}
       <div
         ref={popoverRef}
-        className="absolute bottom-full left-0 mb-2 w-56 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-lg z-50"
+        className="absolute bottom-full left-0 mb-2 w-56 rounded-lg border border-border bg-surface shadow-lg z-50"
       >
         {/* Add Folder option */}
         <button
           onClick={handleAddFolder}
-          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors rounded-t-lg"
+          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-foreground hover:bg-surface-raised transition-colors rounded-t-lg"
         >
-          <FolderPlusIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <FolderPlusIcon className="h-4 w-4 text-secondary" />
           <span>{i18nService.t('addFolder')}</span>
         </button>
 
@@ -255,13 +255,13 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
           onMouseLeave={handleSubmenuMouseLeave}
         >
           <button
-            className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors rounded-b-lg"
+            className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-sm text-foreground hover:bg-surface-raised transition-colors rounded-b-lg"
           >
             <div className="flex items-center gap-3">
-              <ClockIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+              <ClockIcon className="h-4 w-4 text-secondary" />
               <span>{i18nService.t('recentFolders')}</span>
             </div>
-            <ChevronRightIcon className="h-3 w-3 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+            <ChevronRightIcon className="h-3 w-3 text-secondary" />
           </button>
         </div>
       </div>
@@ -270,17 +270,17 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
       {showRecentSubmenu && (
         <div
           ref={submenuRef}
-          className="fixed w-64 max-h-80 overflow-y-auto rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-lg z-[60]"
+          className="fixed w-64 max-h-80 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg z-[60]"
           style={{ top: submenuPosition.top, left: submenuPosition.left }}
           onMouseEnter={handleSubmenuMouseEnter}
           onMouseLeave={handleSubmenuMouseLeave}
         >
           {isLoading ? (
-            <div className="px-3 py-2.5 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <div className="px-3 py-2.5 text-sm text-secondary">
               {i18nService.t('loading')}
             </div>
           ) : recentFolders.length === 0 ? (
-            <div className="px-3 py-2.5 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <div className="px-3 py-2.5 text-sm text-secondary">
               {i18nService.t('noRecentFolders')}
             </div>
           ) : (
@@ -290,9 +290,9 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
                 onClick={() => handleSelectRecentFolder(folder)}
                 onMouseEnter={(e) => handleFolderMouseEnter(folder, e)}
                 onMouseLeave={handleFolderMouseLeave}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors text-left first:rounded-t-lg last:rounded-b-lg"
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-surface-raised transition-colors text-left first:rounded-t-lg last:rounded-b-lg"
               >
-                <FolderIcon className="h-4 w-4 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <FolderIcon className="h-4 w-4 flex-shrink-0 text-secondary" />
                 <span className="truncate">{truncatePath(folder)}</span>
               </button>
             ))

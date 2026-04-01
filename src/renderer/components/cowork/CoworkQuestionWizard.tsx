@@ -240,17 +240,17 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
-      <div className="modal-content w-full max-w-2xl mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden">
+      <div className="modal-content w-full max-w-2xl mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
-        <div className="flex items-center gap-3 px-6 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
           <div className="flex-1">
-            <h2 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+            <h2 className="text-lg font-semibold text-foreground">
               {i18nService.t('coworkQuestionWizardTitle')}
             </h2>
           </div>
           <button
             onClick={handleDeny}
-            className="p-2 rounded-lg dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary transition-colors"
+            className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
             aria-label="Close"
           >
             <XMarkIcon className="h-5 w-5" />
@@ -258,9 +258,9 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
         </div>
 
         {/* Progress bar */}
-        <div className="h-1 bg-claude-surfaceMuted dark:bg-claude-darkSurfaceMuted">
+        <div className="h-1 bg-surface-raised">
           <div
-            className="h-full bg-claude-accent transition-all duration-300"
+            className="h-full bg-primary transition-all duration-300"
             style={{ width: `${((currentStep + 1) / totalSteps) * 100}%` }}
           />
         </div>
@@ -272,12 +272,12 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
             <div className="flex items-start justify-between gap-4 mb-4">
               <div className="flex-1">
                 {currentQuestion.header && (
-                  <span className="inline-block text-[11px] uppercase tracking-wide px-2 py-1 rounded-full bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary mb-3">
+                  <span className="inline-block text-[11px] uppercase tracking-wide px-2 py-1 rounded-full bg-surface-raised text-secondary mb-3">
                     {currentQuestion.header}
                   </span>
                 )}
                 {/* Question text */}
-                <h3 className="text-base font-medium dark:text-claude-darkText text-claude-text">
+                <h3 className="text-base font-medium text-foreground">
                   {currentQuestion.question}
                 </h3>
               </div>
@@ -288,7 +288,7 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
                 {!isFirstStep && (
                   <button
                     onClick={handlePrevious}
-                    className="p-1.5 rounded-lg dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                    className="p-1.5 rounded-lg text-foreground hover:bg-surface-raised transition-colors"
                     title={i18nService.t('coworkQuestionWizardPrevious')}
                   >
                     <ChevronLeftIcon className="h-5 w-5" />
@@ -308,10 +308,10 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
                         onClick={() => setCurrentStep(index)}
                         className={`relative flex items-center justify-center w-7 h-7 rounded-full text-xs font-medium transition-all ${
                           isActive
-                            ? 'bg-claude-accent text-white shadow-md'
+                            ? 'bg-primary text-white shadow-md'
                             : isAnswered
                             ? 'bg-green-500/20 dark:bg-green-600/20 text-green-700 dark:text-green-400 border border-green-500 dark:border-green-600 hover:scale-105'
-                            : 'bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover text-claude-textSecondary dark:text-claude-darkTextSecondary hover:bg-claude-accent/20 dark:hover:bg-claude-accent/20 hover:scale-105'
+                            : 'bg-surface-raised text-secondary hover:bg-primary/20 dark:hover:bg-primary/20 hover:scale-105'
                         }`}
                         title={question.question}
                       >
@@ -331,7 +331,7 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
                 {!isLastStep && (
                   <button
                     onClick={handleNext}
-                    className="p-1.5 rounded-lg dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                    className="p-1.5 rounded-lg text-foreground hover:bg-surface-raised transition-colors"
                     title={i18nService.t('coworkQuestionWizardNext')}
                   >
                     <ChevronRightIcon className="h-5 w-5" />
@@ -351,16 +351,16 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
                     onClick={() => handleSelectOption(currentQuestion, option.label)}
                     className={`w-full text-left rounded-lg border px-4 py-3 transition-all ${
                       isSelected
-                        ? 'border-claude-accent bg-claude-accent/10 text-claude-text dark:text-claude-darkText shadow-sm'
-                        : 'border-claude-border dark:border-claude-darkBorder dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover hover:border-claude-accent/50'
+                        ? 'border-primary bg-primary/10 text-foreground shadow-sm'
+                        : 'border-border text-secondary hover:bg-surface-raised hover:border-primary/50'
                     }`}
                   >
                     <div className="flex items-start gap-3">
                       {currentQuestion.multiSelect ? (
                         <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border-2 transition-colors ${
                           isSelected
-                            ? 'bg-claude-accent border-claude-accent'
-                            : 'border-claude-border dark:border-claude-darkBorder'
+                            ? 'bg-primary border-primary'
+                            : 'border-border'
                         }`}>
                           {isSelected && (
                             <svg className="w-full h-full text-white" viewBox="0 0 16 16" fill="none">
@@ -371,11 +371,11 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
                       ) : (
                         <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-full border-2 transition-colors ${
                           isSelected
-                            ? 'border-claude-accent'
-                            : 'border-claude-border dark:border-claude-darkBorder'
+                            ? 'border-primary'
+                            : 'border-border'
                         }`}>
                           {isSelected && (
-                            <div className="w-full h-full rounded-full bg-claude-accent scale-50" />
+                            <div className="w-full h-full rounded-full bg-primary scale-50" />
                           )}
                         </div>
                       )}
@@ -398,12 +398,12 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
                 value={otherInputs[currentStep] || ''}
                 onChange={(e) => handleOtherInputChange(e.target.value)}
                 placeholder={i18nService.t('coworkQuestionWizardOther')}
-                className="flex-1 px-3 py-2 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text placeholder:text-claude-textSecondary dark:placeholder:text-claude-darkTextSecondary focus:outline-none focus:ring-2 focus:ring-claude-accent/50 text-sm"
+                className="flex-1 px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-secondary dark:placeholder:text-foregroundSecondary focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
               />
               <button
                 type="button"
                 onClick={handleSkip}
-                className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors whitespace-nowrap"
+                className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors whitespace-nowrap"
               >
                 {i18nService.t('coworkQuestionWizardSkip')}
               </button>
@@ -412,14 +412,14 @@ const CoworkQuestionWizard: React.FC<CoworkQuestionWizardProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end px-6 py-4 border-t dark:border-claude-darkBorder border-claude-border bg-claude-surfaceMuted dark:bg-claude-darkSurfaceMuted">
+        <div className="flex items-center justify-end px-6 py-4 border-t border-border bg-surface-raised">
           <button
             onClick={handleSubmit}
             disabled={!allAnswered}
             className={`px-5 py-2 text-sm font-medium rounded-lg text-white transition-colors ${
               allAnswered
-                ? 'bg-claude-accent hover:bg-claude-accentHover'
-                : 'bg-claude-accent/50 cursor-not-allowed'
+                ? 'bg-primary hover:bg-primary-hover'
+                : 'bg-primary/50 cursor-not-allowed'
             }`}
             title={!allAnswered ? i18nService.t('coworkQuestionWizardAnswerRequired') : undefined}
           >

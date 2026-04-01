@@ -35,20 +35,20 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const statusTone = getStatusTone(task.state.lastStatus);
   const promptText = task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message;
 
-  const sectionClass = 'rounded-lg border dark:border-claude-darkBorder border-claude-border p-4';
-  const sectionTitleClass = 'text-sm font-semibold dark:text-claude-darkText text-claude-text mb-3';
-  const labelClass = 'text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary';
-  const valueClass = 'text-sm dark:text-claude-darkText text-claude-text';
+  const sectionClass = 'rounded-lg border border-border p-4';
+  const sectionTitleClass = 'text-sm font-semibold text-foreground mb-3';
+  const labelClass = 'text-xs text-secondary';
+  const valueClass = 'text-sm text-foreground';
 
   return (
     <div className="p-4 space-y-4 max-w-3xl mx-auto">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+          <h2 className="text-lg font-semibold text-foreground">
             {task.name}
           </h2>
           {task.description && (
-            <p className="mt-1 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary whitespace-pre-wrap">
+            <p className="mt-1 text-sm text-secondary whitespace-pre-wrap">
               {task.description}
             </p>
           )}
@@ -57,7 +57,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
           <button
             type="button"
             onClick={() => dispatch(setViewMode('edit'))}
-            className="p-2 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            className="p-2 rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             title={i18nService.t('scheduledTasksEdit')}
           >
             <PencilIcon className="w-4 h-4" />
@@ -66,7 +66,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             type="button"
             onClick={() => void scheduledTaskService.runManually(task.id)}
             disabled={Boolean(task.state.runningAtMs)}
-            className="p-2 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+            className="p-2 rounded-lg text-secondary hover:bg-surface-raised transition-colors disabled:opacity-50"
             title={i18nService.t('scheduledTasksRun')}
           >
             <PlayIcon className="w-4 h-4" />
@@ -84,7 +84,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
 
       <div className={sectionClass}>
         <h3 className={sectionTitleClass}>{i18nService.t('scheduledTasksPrompt')}</h3>
-        <div className="text-sm dark:text-claude-darkText text-claude-text whitespace-pre-wrap bg-claude-surfaceHover/30 dark:bg-claude-darkSurfaceHover/30 rounded-md p-3">
+        <div className="text-sm text-foreground whitespace-pre-wrap bg-surface-raised/30 rounded-md p-3">
           {promptText}
         </div>
       </div>
@@ -117,7 +117,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             <div className={`${valueClass} ${statusTone}`}>
               {statusLabel}
               {task.state.lastRunAtMs && (
-                <span className="ml-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span className="ml-1 text-xs text-secondary">
                   ({formatDateTime(new Date(task.state.lastRunAtMs))})
                 </span>
               )}

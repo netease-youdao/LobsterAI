@@ -68,6 +68,7 @@ import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints'
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
+import { resolveEnterpriseConfigPath, syncEnterpriseConfig, mergeEnterpriseOpenclawConfig } from './libs/enterpriseConfigSync';
 import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
@@ -947,6 +948,12 @@ const syncOpenClawConfig = async (
     };
   }
 
+  // After every successful config sync, merge enterprise openclaw.json
+  // fields into the generated runtime config. Enterprise values win.
+  try {
+    mergeEnterpriseOpenclawConfig(getOpenClawEngineManager().getConfigPath());
+  } catch { /* non-critical */ }
+
   // Update secret env vars so the gateway process receives the latest
   // plaintext credentials via environment variables (openclaw.json only
   // contains ${VAR} placeholders, never plaintext secrets).
@@ -1710,6 +1717,14 @@ if (!gotTheLock) {
 
   ipcMain.handle('store:remove', (_event, key) => {
     getStore().delete(key);
+  });
+
+  ipcMain.handle('enterprise:getConfig', async () => {
+    try {
+      return getStore().get('enterprise_config') ?? null;
+    } catch {
+      return null;
+    }
   });
 
   // Network status change handler
@@ -3742,6 +3757,11 @@ if (!gotTheLock) {
 
   // App update download & install
   ipcMain.handle('appUpdate:download', async (event, url: string) => {
+    // Block downloads in enterprise mode
+    const enterprise = getStore().get<{ disableUpdate?: boolean }>('enterprise_config');
+    if (enterprise?.disableUpdate) {
+      return { success: false, error: 'Updates are managed by enterprise' };
+    }
     try {
       const filePath = await downloadUpdate(url, (progress) => {
         if (!event.sender.isDestroyed()) {
@@ -4395,6 +4415,70 @@ if (!gotTheLock) {
       console.log('[Main] OpenClaw token proxy started');
     } catch (err) {
       console.warn('[Main] OpenClaw token proxy failed to start (non-fatal):', err);
+    }
+
+    // Enterprise config sync — must run before openclawConfigSync
+    // so enterprise data is in SQLite when the config is generated.
+    const enterpriseConfigPath = resolveEnterpriseConfigPath();
+    if (enterpriseConfigPath) {
+      try {
+        const imStoreInstance = getIMGatewayManager().getIMStore();
+        const mcpStoreInstance = getMcpStore();
+        syncEnterpriseConfig(
+          enterpriseConfigPath,
+          store,
+          imStoreInstance,
+          (server) => {
+            const existing = mcpStoreInstance.listServers().find(s => s.name === server.name);
+            if (existing) {
+              mcpStoreInstance.updateServer(existing.id, {
+                name: server.name,
+                description: server.description,
+                transportType: server.transportType as 'stdio' | 'sse' | 'http',
+                command: server.command,
+                args: server.args,
+                env: server.env,
+              });
+            } else {
+              mcpStoreInstance.createServer({
+                name: server.name,
+                description: server.description,
+                transportType: server.transportType as 'stdio' | 'sse' | 'http',
+                command: server.command,
+                args: server.args,
+                env: server.env,
+              });
+            }
+          },
+          () => {
+            // Clear all MCP servers (for overwrite mode)
+            for (const s of mcpStoreInstance.listServers()) {
+              mcpStoreInstance.deleteServer(s.id);
+            }
+          },
+          (config) => {
+            const cs = getCoworkStore();
+            cs.setConfig(config);
+          },
+          () => {
+            const cs = getCoworkStore();
+            return cs.getConfig().workingDirectory;
+          },
+        );
+      } catch (error) {
+        console.error('[Enterprise] config sync failed:', error);
+      }
+    } else {
+      // No enterprise config package found — clear any previously stored config
+      // so the app exits enterprise mode after the package is removed.
+      const hadEnterprise = store.get('enterprise_config');
+      if (hadEnterprise) {
+        store.delete('enterprise_config');
+        // Reset executionMode to default so sandbox mode reverts to "off".
+        const cs = getCoworkStore();
+        cs.setConfig({ executionMode: 'local' });
+        console.log('[Enterprise] config package removed, cleared enterprise mode and reset executionMode');
+      }
     }
 
     bindCoworkRuntimeForwarder();

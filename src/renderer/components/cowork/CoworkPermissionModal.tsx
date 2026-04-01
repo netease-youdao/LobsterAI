@@ -342,19 +342,19 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
-      <div className="modal-content w-full max-w-lg mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden">
+      <div className="modal-content w-full max-w-lg mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
-        <div className="flex items-center gap-3 px-6 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
           <div className={`p-2 rounded-full ${isQuestionTool && !isConfirmMode ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-yellow-100 dark:bg-yellow-900/30'}`}>
             <ExclamationTriangleIcon className={`h-6 w-6 ${isQuestionTool && !isConfirmMode ? 'text-blue-600 dark:text-blue-500' : 'text-yellow-600 dark:text-yellow-500'}`} />
           </div>
           <div className="flex-1">
-            <h2 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+            <h2 className="text-lg font-semibold text-foreground">
               {isQuestionTool && !isConfirmMode
                 ? i18nService.t('coworkSelectionRequired')
                 : i18nService.t('coworkPermissionRequired')}
             </h2>
-            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <p className="text-sm text-secondary">
               {isQuestionTool && !isConfirmMode
                 ? i18nService.t('coworkSelectionDescription')
                 : i18nService.t('coworkPermissionDescription')}
@@ -362,7 +362,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           </div>
           <button
             onClick={handleDeny}
-            className="p-2 rounded-lg dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary transition-colors"
+            className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
             aria-label="Close"
           >
             <XMarkIcon className="h-5 w-5" />
@@ -373,17 +373,17 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
         <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
           {isConfirmMode ? (
             /* Simple confirm dialog — show question text + allow/deny buttons */
-            <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg">
-              <p className="text-sm dark:text-claude-darkText text-claude-text whitespace-pre-wrap">
+            <div className="px-3 py-2 rounded-lg bg-background">
+              <p className="text-sm text-foreground whitespace-pre-wrap">
                 {questions[0].question}
               </p>
               {requestedCommand && (
                 <div className="mt-3">
-                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
+                  <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
                     {i18nService.t('coworkToolInput')}
                   </label>
-                  <div className="px-3 py-2 rounded-lg dark:bg-claude-darkSurface bg-claude-surface max-h-40 overflow-y-auto">
-                    <pre className="text-xs dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words font-mono">
+                  <div className="px-3 py-2 rounded-lg bg-surface max-h-40 overflow-y-auto">
+                    <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
                       {requestedCommand}
                     </pre>
                   </div>
@@ -397,12 +397,12 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                 return (
                   <div
                     key={question.question}
-                    className="rounded-xl border dark:border-claude-darkBorder border-claude-border p-4 space-y-3"
+                    className="rounded-xl border border-border p-4 space-y-3"
                   >
                     {/* 问题 */}
-                    <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                    <div className="text-sm font-medium text-foreground">
                       {question.header && (
-                        <span className="inline-block text-[11px] uppercase tracking-wide px-2 py-0.5 mr-1.5 rounded-full bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary align-middle">
+                        <span className="inline-block text-[11px] uppercase tracking-wide px-2 py-0.5 mr-1.5 rounded-full bg-surface-raised text-secondary align-middle">
                           {question.header}
                         </span>
                       )}
@@ -411,11 +411,11 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                     {/* 命令详情 */}
                     {requestedCommand && (
                       <div>
-                        <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
+                        <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
                           {i18nService.t('coworkToolInput')}
                         </label>
-                        <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg max-h-40 overflow-y-auto">
-                          <pre className="text-xs dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words font-mono">
+                        <div className="px-3 py-2 rounded-lg bg-background max-h-40 overflow-y-auto">
+                          <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
                             {requestedCommand}
                           </pre>
                         </div>
@@ -432,8 +432,8 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                             onClick={() => handleSelectOption(question, option.label)}
                             className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${
                               isSelected
-                                ? 'border-claude-accent bg-claude-accent/10 text-claude-text dark:text-claude-darkText'
-                                : 'border-claude-border dark:border-claude-darkBorder dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                                ? 'border-primary bg-primary/10 text-foreground'
+                                : 'border-border text-secondary hover:bg-surface-raised'
                             }`}
                           >
                             <div className="text-sm font-medium">{option.label}</div>
@@ -452,11 +452,11 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
             <>
               {/* Tool name */}
               <div>
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
+                <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
                   {i18nService.t('coworkToolName')}
                 </label>
-                <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg">
-                  <code className="text-sm dark:text-claude-darkText text-claude-text">
+                <div className="px-3 py-2 rounded-lg bg-background">
+                  <code className="text-sm text-foreground">
                     {permission.toolName}
                   </code>
                 </div>
@@ -464,11 +464,11 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
               {/* Tool input */}
               <div>
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
+                <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
                   {i18nService.t('coworkToolInput')}
                 </label>
-                <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg">
-                  <pre className="text-xs dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words font-mono">
+                <div className="px-3 py-2 rounded-lg bg-background">
+                  <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
                     {formatToolInput(permission.toolInput)}
                   </pre>
                 </div>
@@ -506,17 +506,17 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
           <button
             onClick={isConfirmMode && confirmModeButtons ? () => handleConfirmModeSelect(confirmModeButtons.secondary.label) : handleDeny}
-            className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+            className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
           >
             {isConfirmMode && confirmModeButtons ? confirmModeButtons.secondary.label : denyButtonLabel}
           </button>
           <button
             onClick={handleApprove}
             disabled={!isComplete}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-claude-accent hover:bg-claude-accentHover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary-hover text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isConfirmMode && confirmModeButtons ? confirmModeButtons.primary.label : approveButtonLabel}
           </button>
