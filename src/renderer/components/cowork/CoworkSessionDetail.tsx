@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useSelector } from 'react-redux';
-import { RootState } from '../../store';
+import { selectCoworkSessionDetailState } from '../../store/slices/coworkSlice';
 import { i18nService } from '../../services/i18n';
 import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
@@ -1288,10 +1288,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   updateBadge,
 }) => {
   const isMac = window.electron.platform === 'darwin';
-  const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
-  const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
-  const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
-  const skills = useSelector((state: RootState) => state.skill.skills);
+  const { currentSession, isStreaming, remoteManaged, skills } = useSelector(selectCoworkSessionDetailState);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);

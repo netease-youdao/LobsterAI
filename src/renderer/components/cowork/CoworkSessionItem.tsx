@@ -474,4 +474,4 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   );
 };
 
-export default CoworkSessionItem;
+export default React.memo(CoworkSessionItem);

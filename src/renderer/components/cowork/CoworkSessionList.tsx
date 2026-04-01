@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import type { CoworkSessionSummary } from '../../types/cowork';
@@ -52,6 +52,13 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
     return [...pinnedSessions, ...unpinnedSessions];
   }, [sessions]);
 
+  const handleSelect = useCallback((id: string) => onSelectSession(id), [onSelectSession]);
+  const handleDelete = useCallback((id: string) => onDeleteSession(id), [onDeleteSession]);
+  const handleTogglePin = useCallback((id: string, pinned: boolean) => onTogglePin(id, pinned), [onTogglePin]);
+  const handleRename = useCallback((id: string, title: string) => onRenameSession(id, title), [onRenameSession]);
+  const handleToggleSelection = useCallback((id: string) => onToggleSelection(id), [onToggleSelection]);
+  const handleEnterBatchMode = useCallback((id: string) => onEnterBatchMode(id), [onEnterBatchMode]);
+
   if (sessions.length === 0) {
     return (
       <div className="text-center py-8">
@@ -73,16 +80,16 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           isBatchMode={isBatchMode}
           isSelected={selectedIds.has(session.id)}
           showBatchOption={showBatchOption}
-          onSelect={() => onSelectSession(session.id)}
-          onDelete={() => onDeleteSession(session.id)}
-          onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
-          onRename={(title) => onRenameSession(session.id, title)}
-          onToggleSelection={() => onToggleSelection(session.id)}
-          onEnterBatchMode={() => onEnterBatchMode(session.id)}
+          onSelect={() => handleSelect(session.id)}
+          onDelete={() => handleDelete(session.id)}
+          onTogglePin={(pinned) => handleTogglePin(session.id, pinned)}
+          onRename={(title) => handleRename(session.id, title)}
+          onToggleSelection={() => handleToggleSelection(session.id)}
+          onEnterBatchMode={() => handleEnterBatchMode(session.id)}
         />
       ))}
     </div>
   );
 };
 
-export default CoworkSessionList;
+export default React.memo(CoworkSessionList);
