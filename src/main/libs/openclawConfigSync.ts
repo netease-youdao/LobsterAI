@@ -511,7 +511,7 @@ const buildProviderSelection = (options: {
     providerConfig: {
       baseUrl: stripChatCompletionsSuffix(options.baseURL),
       api: providerApi,
-      apiKey: `\${${providerApiKeyEnvVar(providerName)}}`,
+      apiKey: providerApiKeyEnvVar(providerName),
       auth: 'api-key',
       models: [
         {
@@ -1172,6 +1172,14 @@ export class OpenClawConfigSync {
     const allApiKeys = resolveAllProviderApiKeys();
     for (const [envSuffix, apiKey] of Object.entries(allApiKeys)) {
       env[`LOBSTER_APIKEY_${envSuffix}`] = apiKey;
+    }
+    // LOBSTER_API_KEY: pi-ai/index.mjs getEnvApiKey('lobster') looks for this env var.
+    // The gateway does NOT pass apiKey in opts when calling session.prompt(), so
+    // streamSimple falls back to getEnvApiKey('lobster') → process.env['LOBSTER_API_KEY'].
+    // Inject it as an alias of the first (active) provider's key.
+    const firstApiKey = Object.values(allApiKeys)[0];
+    if (firstApiKey) {
+      env['LOBSTER_API_KEY'] = firstApiKey;
     }
     // Legacy fallback: keep LOBSTER_PROVIDER_API_KEY set to a stable value so stale
     // openclaw.json files with the old placeholder don't crash the gateway.

@@ -761,17 +761,14 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   private resolveOpenClawEntry(runtimeRoot: string): string | null {
-    // Bundle fast-path via CJS launcher is only needed on Windows where
-    // utilityProcess.fork() cannot load ESM directly. On macOS/Linux,
-    // ensureBareEntryFiles already skips extraction when bundle exists,
-    // but this method falls through to gateway.asar/openclaw.mjs which
-    // ESM loads directly without a CJS wrapper.
-    if (process.platform === 'win32') {
-      const bundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
-      if (fs.existsSync(bundlePath)) {
-        console.log('[OpenClaw] resolveOpenClawEntry: using bundle fast path');
+    // Bundle inlines deps like chalk, avoiding CJS/ESM breakage on Node 24+.
+    const bundlePath = path.join(runtimeRoot, 'gateway-bundle.mjs');
+    if (fs.existsSync(bundlePath)) {
+      console.log('[OpenClaw] resolveOpenClawEntry: using bundle fast path');
+      if (process.platform === 'win32') {
         return this.ensureGatewayLauncherCjsForBundle(runtimeRoot);
       }
+      return bundlePath;
     }
 
     const esmEntry = findPath([

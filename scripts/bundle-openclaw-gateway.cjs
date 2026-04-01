@@ -79,6 +79,30 @@ const EXTERNAL_PACKAGES = [
   'jiti',
 ];
 
+// IM / channel platform SDKs that are not installed in the runtime but imported
+// by OpenClaw channel modules. Keep them external (so esbuild doesn't error on
+// missing named exports) but register a Node.js module resolution hook at
+// startup that returns an empty stub for any of these packages.
+const STUB_PACKAGES = [
+  '@buape/carbon', '@buape/carbon/gateway', '@buape/carbon/voice',
+  '@whiskeysockets/baileys',
+  '@slack/web-api', '@slack/bolt',
+  '@discordjs/voice',
+  '@grammyjs/runner', '@grammyjs/transformer-throttler',
+  'grammy',
+  'discord-api-types/v10', 'discord-api-types/payloads/v10',
+];
+
+const STUB_EXTERNAL_PACKAGES = [
+  '@buape/carbon', '@buape/carbon/*',
+  '@whiskeysockets/baileys',
+  '@slack/web-api', '@slack/bolt',
+  '@discordjs/voice',
+  '@grammyjs/runner', '@grammyjs/transformer-throttler',
+  'grammy',
+  'discord-api-types', 'discord-api-types/*',
+];
+
 let esbuild;
 try {
   esbuild = require('esbuild');
@@ -96,10 +120,7 @@ esbuild
     platform: 'node',
     format: 'esm',
     outfile: bundleOutPath,
-    external: EXTERNAL_PACKAGES,
-    // Inject createRequire so that esbuild's __require shim works in ESM context.
-    // Without this, CJS modules (e.g. @smithy/*) that call require("buffer")
-    // fail with "Dynamic require of X is not supported" when loaded via import().
+    external: [...EXTERNAL_PACKAGES, ...STUB_EXTERNAL_PACKAGES],
     banner: {
       js: `import { createRequire as __bundleCreateRequire } from 'node:module';\n` +
           `import { fileURLToPath as __bundleFileURLToPath } from 'node:url';\n` +
@@ -117,6 +138,146 @@ esbuild
       `[bundle-openclaw-gateway] Done in ${elapsed}ms (${sizeKB} KB)` +
         (result.warnings.length ? `, ${result.warnings.length} warnings` : ''),
     );
+
+    // Patch chalk v4 CJS → expose Chalk constructor for v5-style usage.
+    // OpenClaw code uses `new Chalk({ level })` (chalk v5 API) but the bundled
+    // chalk is v4 CJS which only exports an instance, not the class.
+    let bundleSrc = fs.readFileSync(bundleOutPath, 'utf8');
+    const chalkCtorMatch = bundleSrc.match(/var chalk5 = (\w+)\(\);/);
+    const chalkPatchTarget = 'module.exports = chalk5;';
+    if (chalkCtorMatch && bundleSrc.includes(chalkPatchTarget)) {
+      const ctorName = chalkCtorMatch[1];
+      bundleSrc = bundleSrc.replace(
+        chalkPatchTarget,
+        `module.exports = chalk5;\n    module.exports.Chalk = ${ctorName};`,
+      );
+      fs.writeFileSync(bundleOutPath, bundleSrc);
+      console.log(`[bundle-openclaw-gateway] Patched chalk v4 to expose Chalk constructor (${ctorName})`);
+    }
+    const allExternalPkgs = [...EXTERNAL_PACKAGES, ...STUB_EXTERNAL_PACKAGES];
+
+    // Build a set of all external specifiers (expanding globs like '@img/*')
+    const externalExact = new Set();
+    const externalPrefixes = [];
+    for (const ext of allExternalPkgs) {
+      if (ext.endsWith('/*')) {
+        externalPrefixes.push(ext.slice(0, -2));
+      } else {
+        externalExact.add(ext);
+      }
+    }
+    const isExternal = (spec) => {
+      if (externalExact.has(spec)) return true;
+      return externalPrefixes.some(p => spec === p || spec.startsWith(p + '/'));
+    };
+
+    // Extract all import specifiers and their named exports from the bundle
+    const specExports = new Map();
+    const importRe = /import\s+\{([^}]+)\}\s+from\s+["']([^"']+)["']/g;
+    let m;
+    while ((m = importRe.exec(bundleSrc)) !== null) {
+      const specifier = m[2];
+      if (!isExternal(specifier)) continue;
+      if (!specExports.has(specifier)) specExports.set(specifier, new Set());
+      const names = m[1].split(',').map(n => {
+        const trimmed = n.trim();
+        const asMatch = trimmed.match(/^(\S+)\s+as\s+/);
+        return asMatch ? asMatch[1] : trimmed;
+      }).filter(Boolean);
+      for (const name of names) specExports.get(specifier).add(name);
+    }
+    const defaultRe = /import\s+(\w+)\s+from\s+["']([^"']+)["']/g;
+    while ((m = defaultRe.exec(bundleSrc)) !== null) {
+      if (!isExternal(m[2])) continue;
+      if (!specExports.has(m[2])) specExports.set(m[2], new Set());
+    }
+    // Collect namespace imports: import * as Foo from "pkg" → track Foo → "pkg" mapping.
+    const namespaceMap = new Map(); // localName → specifier
+    const starRe = /import\s+\*\s+as\s+(\w+)\s+from\s+["']([^"']+)["']/g;
+    while ((m = starRe.exec(bundleSrc)) !== null) {
+      if (!isExternal(m[2])) continue;
+      if (!specExports.has(m[2])) specExports.set(m[2], new Set());
+      namespaceMap.set(m[1], m[2]);
+    }
+
+    // Scan for property accesses on namespace imports (e.g. PiCodingAgent.Foo).
+    // ESM Module Namespace Objects only expose explicit named exports, so these
+    // properties must be included in the stub's export list.
+    for (const [localName, specifier] of namespaceMap) {
+      const propRe = new RegExp(`${localName}\\.(\\w+)`, 'g');
+      let pm;
+      while ((pm = propRe.exec(bundleSrc)) !== null) {
+        specExports.get(specifier).add(pm[1]);
+      }
+    }
+
+    // Group by root package name
+    const nodeModulesDir = path.join(runtimeDir, 'node_modules');
+    const pkgGroups = new Map();
+    for (const [specifier, exports] of specExports) {
+      const parts = specifier.split('/');
+      const rootName = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+      const subPath = specifier.startsWith('@') ? parts.slice(2).join('/') : parts.slice(1).join('/');
+      if (!pkgGroups.has(rootName)) pkgGroups.set(rootName, { subPaths: new Set(), allExports: new Set() });
+      const group = pkgGroups.get(rootName);
+      if (subPath) group.subPaths.add(subPath);
+      for (const e of exports) group.allExports.add(e);
+    }
+
+    let stubCount = 0;
+    for (const [rootName, { subPaths, allExports }] of pkgGroups) {
+      const pkgDir = path.join(nodeModulesDir, ...rootName.split('/'));
+      // Skip packages that are already properly installed
+      const existingPkg = path.join(pkgDir, 'package.json');
+      if (fs.existsSync(existingPkg)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(existingPkg, 'utf8'));
+          if (pkg.version && pkg.version !== '0.0.0-stub') continue;
+        } catch {}
+      }
+
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      const exportsMapJson = { '.': './index.mjs' };
+      for (const sub of subPaths) exportsMapJson['./' + sub] = './index.mjs';
+      exportsMapJson['./*'] = './index.mjs';
+
+      fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({
+        name: rootName,
+        version: '0.0.0-stub',
+        type: 'module',
+        main: 'index.mjs',
+        exports: exportsMapJson,
+      }, null, 2) + '\n');
+
+       const namedExports = [...allExports];
+      const lines = [
+        // Proxy stub that safely handles primitive coercion, iteration, and property access.
+        // Without Symbol.toPrimitive, string concatenation like `"prefix" + proxy` throws
+        // "Cannot convert object to primitive value".
+        'const P = new Proxy(function(){}, {' +
+        '  get: (_, k) => {' +
+        '    if (k === Symbol.toPrimitive) return () => "";' +
+        '    if (k === Symbol.iterator) return function*(){};' +
+        '    if (k === "toString" || k === "valueOf") return () => "";' +
+        '    if (k === "then") return undefined;' +  // prevent treating P as thenable
+        '    return P;' +
+        '  },' +
+        '  apply: () => P,' +
+        '  construct: () => P' +
+        '});',
+      ];
+      if (namedExports.length > 0) {
+        lines.push(`export { ${namedExports.map(n => `P as ${n}`).join(', ')} };`);
+      }
+      lines.push('export default P;');
+      lines.push('');
+      fs.writeFileSync(path.join(pkgDir, 'index.mjs'), lines.join('\n'));
+      stubCount++;
+    }
+    if (stubCount > 0) {
+      console.log(`[bundle-openclaw-gateway] Created ${stubCount} stub package(s) for missing external deps`);
+    }
   })
   .catch((err) => {
     console.error('[bundle-openclaw-gateway] esbuild failed:', err.message || err);
