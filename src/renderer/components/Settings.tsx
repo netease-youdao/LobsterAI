@@ -162,7 +162,7 @@ const providerLinks: Partial<Record<ProviderType, { website: string; apiKey?: st
   stepfun:      { website: 'https://platform.stepfun.com',             apiKey: 'https://platform.stepfun.com/interface-key' },
   xiaomi:       { website: 'https://dev.mi.com/platform',              apiKey: 'https://dev.mi.com/platform' },
   openrouter:   { website: 'https://openrouter.ai',                    apiKey: 'https://openrouter.ai/keys' },
-  ollama:       { website: 'https://ollama.com' }, // local runtime, no API key needed
+  ollama:       { website: 'https://ollama.com' },
 };
 
 const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropic: string; openai: string }>> = {
