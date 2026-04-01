@@ -2080,7 +2080,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 isMultiSelectMode={isMultiSelectMode}
                 isSelected={selectedMessageIds.has(turn.userMessage.id)}
                 onToggleSelect={handleToggleSelect}
-                onDelete={!isStreaming ? handleDeleteMessage : undefined}
+                onDelete={!isStreaming && !remoteManaged ? handleDeleteMessage : undefined}
               />
             </div>
           )}
@@ -2095,7 +2095,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 isMultiSelectMode={isMultiSelectMode}
                 selectedMessageIds={selectedMessageIds}
                 onToggleSelect={handleToggleSelect}
-                onDeleteMessage={!isStreaming ? handleDeleteMessage : undefined}
+                onDeleteMessage={!isStreaming && !remoteManaged ? handleDeleteMessage : undefined}
               />
             </div>
           )}
