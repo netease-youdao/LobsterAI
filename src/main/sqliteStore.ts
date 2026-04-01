@@ -285,6 +285,18 @@ export class SqliteStore {
       console.warn('Failed to ensure main agent:', error);
     }
 
+    // Migration: Add sidebar_pinned column to agents
+    try {
+      const agentCols = this.db.exec("PRAGMA table_info(agents);");
+      const agentColNames = agentCols[0]?.values.map((row) => row[1]) || [];
+      if (!agentColNames.includes('sidebar_pinned')) {
+        this.db.run('ALTER TABLE agents ADD COLUMN sidebar_pinned INTEGER NOT NULL DEFAULT 0;');
+        this.save();
+      }
+    } catch {
+      // Column already exists or migration not needed.
+    }
+
     try {
       this.db.run(`UPDATE cowork_sessions SET execution_mode = 'local' WHERE execution_mode = 'container';`);
       this.db.run(`

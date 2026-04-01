@@ -13,6 +13,7 @@ export interface Agent {
   isDefault: boolean;
   source: AgentSource;
   presetId: string;
+  sidebarPinned: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -52,4 +53,5 @@ export interface UpdateAgentRequest {
   icon?: string;
   skillIds?: string[];
   enabled?: boolean;
+  sidebarPinned?: boolean;
 }

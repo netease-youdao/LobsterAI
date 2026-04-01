@@ -119,6 +119,7 @@
     "@reduxjs/toolkit": "^2.2.1",
     "@types/uuid": "^10.0.0",
     "@wecom/wecom-aibot-sdk": "^0.1.0",
+    "axios": "1.7.2",
     "bufferutil": "^4.1.0",
     "cheerio": "^1.2.0",
     "cron-parser": "^5.5.0",
@@ -154,6 +155,7 @@
     }
   },
   "devDependencies": {
+    "7zip-bin": "^5.2.0",
     "@tailwindcss/typography": "^0.5.16",
     "@types/dompurify": "^3.0.5",
     "@types/extract-zip": "^2.0.1",
@@ -167,7 +169,6 @@
     "@typescript-eslint/eslint-plugin": "^8.56.0",
     "@typescript-eslint/parser": "^8.56.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "7zip-bin": "^5.2.0",
     "autoprefixer": "^10.4.17",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",

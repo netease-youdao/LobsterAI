@@ -26,6 +26,7 @@ class AgentService {
           isDefault: a.isDefault,
           source: a.source,
           skillIds: a.skillIds ?? [],
+          sidebarPinned: a.sidebarPinned ?? false,
         }))));
       }
     } catch (error) {
@@ -56,6 +57,7 @@ class AgentService {
           isDefault: agent.isDefault,
           source: agent.source,
           skillIds: agent.skillIds ?? [],
+          sidebarPinned: agent.sidebarPinned ?? false,
         }));
         return agent;
       }
@@ -75,6 +77,7 @@ class AgentService {
     icon?: string;
     skillIds?: string[];
     enabled?: boolean;
+    sidebarPinned?: boolean;
   }): Promise<Agent | null> {
     try {
       const agent = await window.electron?.agents?.update(id, updates);
@@ -87,6 +90,7 @@ class AgentService {
             icon: agent.icon,
             enabled: agent.enabled,
             skillIds: agent.skillIds ?? [],
+            sidebarPinned: agent.sidebarPinned ?? false,
           },
         }));
         return agent;
@@ -138,6 +142,7 @@ class AgentService {
           isDefault: agent.isDefault,
           source: agent.source,
           skillIds: agent.skillIds ?? [],
+          sidebarPinned: agent.sidebarPinned ?? false,
         }));
         return agent;
       }

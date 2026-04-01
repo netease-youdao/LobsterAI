@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../store';
 import { agentService } from '../services/agent';
@@ -14,8 +14,8 @@ import ClockIcon from './icons/ClockIcon';
 import PuzzleIcon from './icons/PuzzleIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import TrashIcon from './icons/TrashIcon';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
-import UserGroupIcon from './icons/UserGroupIcon';
+import { ExclamationTriangleIcon, UserGroupIcon, EllipsisHorizontalIcon } from '@heroicons/react/24/outline';
+import PushPinIcon from './icons/PushPinIcon';
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -377,12 +377,32 @@ const SidebarAgentList: React.FC<{
 }> = ({ onShowCowork }) => {
   const agents = useSelector((state: RootState) => state.agent.agents);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     agentService.loadAgents();
   }, []);
 
-  const enabledAgents = agents.filter((a) => a.enabled);
+  // Close menu on click outside
+  useEffect(() => {
+    if (!menuOpenId) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpenId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpenId]);
+
+  // Show agents pinned to sidebar + main agent
+  const pinnedAgents = agents.filter((a) => a.id === 'main' || a.sidebarPinned);
+
+  // Hide section if only main agent
+  if (pinnedAgents.length <= 1) {
+    return null;
+  }
 
   const handleSwitch = (agentId: string) => {
     if (agentId === currentAgentId) return;
@@ -391,13 +411,19 @@ const SidebarAgentList: React.FC<{
     onShowCowork();
   };
 
+  const handleUnpin = async (e: React.MouseEvent, agentId: string) => {
+    e.stopPropagation();
+    setMenuOpenId(null);
+    await agentService.updateAgent(agentId, { sidebarPinned: false });
+  };
+
   return (
     <div className="px-3 pb-2">
       <div className="space-y-0.5">
-        {enabledAgents.map((agent) => (
+        {pinnedAgents.map((agent) => (
           <div
             key={agent.id}
-            className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer transition-colors ${
+            className={`group relative flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer transition-colors ${
               currentAgentId === agent.id
                 ? 'bg-primary/10 text-primary'
                 : 'text-secondary hover:bg-surface-raised'
@@ -406,6 +432,33 @@ const SidebarAgentList: React.FC<{
           >
             <span className="text-base leading-none">{agent.icon || (agent.id === 'main' ? '🦞' : '🤖')}</span>
             <span className="truncate flex-1 text-xs font-medium">{agent.name}</span>
+            {/* More button for non-main agents */}
+            {agent.id !== 'main' && (
+              <div ref={menuOpenId === agent.id ? menuRef : undefined} className="relative">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpenId(menuOpenId === agent.id ? null : agent.id);
+                  }}
+                  className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-all"
+                >
+                  <EllipsisHorizontalIcon className="h-3.5 w-3.5" />
+                </button>
+                {menuOpenId === agent.id && (
+                  <div className="absolute right-0 top-6 z-20 min-w-[120px] rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-lg py-1">
+                    <button
+                      type="button"
+                      onClick={(e) => handleUnpin(e, agent.id)}
+                      className="w-full flex items-center gap-2 text-left px-3 py-1.5 text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                    >
+                      <PushPinIcon slashed className="h-3.5 w-3.5" />
+                      {i18nService.t('unpinFromSidebar')}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
