@@ -221,7 +221,7 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   );
 };
 
-const LoginButton: React.FC = () => {
+const LoginButton: React.FC<{ iconOnly?: boolean }> = ({ iconOnly }) => {
   const { isLoggedIn, isLoading, user } = useSelector((state: RootState) => state.auth);
   const [showMenu, setShowMenu] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -254,6 +254,30 @@ const LoginButton: React.FC = () => {
 
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
 
+  const userIcon = isLoggedIn && user?.avatarUrl
+    ? <img src={user.avatarUrl} alt="" className="h-4 w-4 rounded-full" />
+    : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><circle cx="12" cy="8" r="5" /><path d="M20 21a8 8 0 0 0-16 0" /></svg>;
+
+  const tooltipText = isLoggedIn
+    ? (user?.nickname || `****${phoneSuffix}`)
+    : i18nService.t('login');
+
+  if (iconOnly) {
+    return (
+      <div ref={containerRef} className="relative">
+        <button
+          type="button"
+          onClick={handleClick}
+          className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:text-foreground hover:bg-surface-raised transition-colors cursor-pointer"
+          title={tooltipText}
+        >
+          {userIcon}
+        </button>
+        {showMenu && <UserMenu onClose={() => setShowMenu(false)} />}
+      </div>
+    );
+  }
+
   return (
     <div ref={containerRef} className="relative">
       <button
@@ -261,20 +285,11 @@ const LoginButton: React.FC = () => {
         onClick={handleClick}
         className="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors cursor-pointer"
       >
+        {userIcon}
         {isLoggedIn ? (
-          <>
-            {user?.avatarUrl ? (
-              <img src={user.avatarUrl} alt="" className="h-4 w-4 rounded-full" />
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><circle cx="12" cy="8" r="5" /><path d="M20 21a8 8 0 0 0-16 0" /></svg>
-            )}
-            <span className="truncate max-w-[80px]">{user?.nickname || `****${phoneSuffix}`}</span>
-          </>
+          <span className="truncate max-w-[80px]">{user?.nickname || `****${phoneSuffix}`}</span>
         ) : (
-          <>
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><circle cx="12" cy="8" r="5" /><path d="M20 21a8 8 0 0 0-16 0" /></svg>
-            {i18nService.t('login')}
-          </>
+          i18nService.t('login')
         )}
       </button>
       {showMenu && <UserMenu onClose={() => setShowMenu(false)} />}

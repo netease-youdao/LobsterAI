@@ -691,7 +691,7 @@ const App: React.FC = () => {
           updateBadge={!isSidebarCollapsed ? updateBadge : null}
           hideLogin={enterpriseConfig?.ui?.login === 'hide'}
         />
-        <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
+        <div className="flex-1 min-w-0 py-1.5 pr-1.5">
           <div className="relative h-full min-h-0 rounded-xl bg-background overflow-hidden">
             <EngineStartupOverlay />
             {mainView === 'skills' ? (

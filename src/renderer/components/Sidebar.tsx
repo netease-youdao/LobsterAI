@@ -72,7 +72,6 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   useEffect(() => {
     if (!isCollapsed) return;
-    setIsSearchOpen(false);
     setIsBatchMode(false);
     setSelectedIds(new Set());
     setShowBatchDeleteConfirm(false);
@@ -139,11 +138,113 @@ const Sidebar: React.FC<SidebarProps> = ({
     handleExitBatchMode();
   }, [selectedIds, handleExitBatchMode]);
 
+  const collapsedIconBtnClass = (view?: string) =>
+    `h-8 w-8 inline-flex items-center justify-center rounded-lg transition-colors ${
+      view && activeView === view
+        ? 'bg-primary/10 text-primary hover:bg-primary/20'
+        : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+    }`;
+
+  if (isCollapsed) {
+    return (
+      <aside
+        className="shrink-0 bg-surface-raised flex flex-col items-center w-12 sidebar-transition pt-3 pb-3"
+      >
+        {/* Expand toggle */}
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors mb-3"
+          title={i18nService.t('expand')}
+          aria-label={i18nService.t('expand')}
+        >
+          <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
+        </button>
+        {/* Navigation icons */}
+        <div className="space-y-1 flex flex-col items-center">
+          <button
+            type="button"
+            onClick={onNewChat}
+            className={collapsedIconBtnClass('cowork')}
+            title={i18nService.t('newChat')}
+          >
+            <ComposeIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onShowCowork();
+              setIsSearchOpen(true);
+            }}
+            className={collapsedIconBtnClass()}
+            title={i18nService.t('search')}
+          >
+            <SearchIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onShowScheduledTasks}
+            className={collapsedIconBtnClass('scheduledTasks')}
+            title={i18nService.t('scheduledTasks')}
+          >
+            <ClockIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onShowSkills}
+            className={collapsedIconBtnClass('skills')}
+            title={i18nService.t('skills')}
+          >
+            <PuzzleIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onShowMcp}
+            className={collapsedIconBtnClass('mcp')}
+            title={i18nService.t('mcpServers')}
+          >
+            <ConnectorIcon className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onShowAgents}
+            className={collapsedIconBtnClass('agents')}
+            title={i18nService.t('myAgents')}
+          >
+            <UserGroupIcon className="h-4 w-4" />
+          </button>
+        </div>
+        {/* Spacer */}
+        <div className="flex-1" />
+        {/* User icon at bottom */}
+        {!hideLogin && <LoginButton iconOnly />}
+        {/* Settings icon at bottom */}
+        <button
+          type="button"
+          onClick={() => onShowSettings()}
+          className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
+          title={i18nService.t('settings')}
+          aria-label={i18nService.t('settings')}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M14 17H5" /><path d="M19 7h-9" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" /></svg>
+        </button>
+        <CoworkSearchModal
+          isOpen={isSearchOpen}
+          onClose={() => setIsSearchOpen(false)}
+          sessions={filteredSessions}
+          currentSessionId={currentSessionId}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={handleDeleteSession}
+          onTogglePin={handleTogglePin}
+          onRenameSession={handleRenameSession}
+        />
+      </aside>
+    );
+  }
+
   return (
     <aside
-      className={`shrink-0 bg-surface-raised flex flex-col sidebar-transition overflow-hidden ${
-        isCollapsed ? 'w-0' : 'w-60'
-      }`}
+      className="shrink-0 bg-surface-raised flex flex-col sidebar-transition overflow-hidden w-60"
     >
       <div className="pt-3 pb-3">
         <div className="draggable sidebar-header-drag h-8 flex items-center justify-between px-3">
@@ -154,9 +255,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={onToggleCollapse}
             className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+            aria-label={i18nService.t('collapse')}
           >
-            <SidebarToggleIcon className="h-4 w-4" isCollapsed={isCollapsed} />
+            <SidebarToggleIcon className="h-4 w-4" isCollapsed={false} />
           </button>
         </div>
         <div className="mt-3 space-y-1 px-3">

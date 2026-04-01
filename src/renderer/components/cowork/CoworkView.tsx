@@ -463,25 +463,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const homeHeader = (
     <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border shrink-0">
       <div className="non-draggable h-8 flex items-center">
-        {isSidebarCollapsed && (
-          <div className={`flex items-center gap-1 mr-2 ${isMac ? 'pl-[68px]' : ''}`}>
-            <button
-              type="button"
-              onClick={onToggleSidebar}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            >
-              <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
-            </button>
-            <button
-              type="button"
-              onClick={onNewChat}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            >
-              <ComposeIcon className="h-4 w-4" />
-            </button>
-            {updateBadge}
-          </div>
-        )}
         <ModelSelector />
       </div>
       <div className="non-draggable flex items-center">
