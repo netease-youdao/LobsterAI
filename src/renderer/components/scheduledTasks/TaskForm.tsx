@@ -13,11 +13,12 @@ import { PlatformRegistry } from '@shared/platform';
 interface TaskFormProps {
   mode: 'create' | 'edit';
   task?: ScheduledTask;
+  initialValues?: Partial<FormState>;
   onCancel: () => void;
   onSaved: () => void;
 }
 
-interface FormState {
+export interface FormState {
   name: string;
   description: string;
   planType: PlanType;
@@ -62,8 +63,8 @@ function isIMChannel(channel: string): boolean {
   return PlatformRegistry.isIMChannel(channel);
 }
 
-function createFormState(task?: ScheduledTask): FormState {
-  if (!task) return { ...DEFAULT_FORM_STATE, ...nowDefaults() };
+function createFormState(task?: ScheduledTask, initialValues?: Partial<FormState>): FormState {
+  if (!task) return { ...DEFAULT_FORM_STATE, ...nowDefaults(), ...initialValues };
 
   const planInfo = scheduleToPlanInfo(task.schedule);
   return {
@@ -114,8 +115,8 @@ const WEEKDAY_KEYS = [
   'scheduledTasksFormWeekSat',
 ] as const;
 
-const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
-  const [form, setForm] = useState<FormState>(() => createFormState(task));
+const TaskForm: React.FC<TaskFormProps> = ({ mode, task, initialValues, onCancel, onSaved }) => {
+  const [form, setForm] = useState<FormState>(() => createFormState(task, mode === 'create' ? initialValues : undefined));
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
     const savedChannel = task?.delivery.channel;
@@ -133,8 +134,8 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const showConversationSelector = isIMChannel(form.notifyChannel);
 
   useEffect(() => {
-    setForm(createFormState(task));
-  }, [task]);
+    setForm(createFormState(task, mode === 'create' ? initialValues : undefined));
+  }, [task, initialValues, mode]);
 
   useEffect(() => {
     let cancelled = false;

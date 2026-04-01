@@ -5,10 +5,12 @@ import { setViewMode, selectTask } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import TaskList from './TaskList';
-import TaskForm from './TaskForm';
+import TaskForm, { type FormState } from './TaskForm';
 import TaskDetail from './TaskDetail';
 import AllRunsHistory from './AllRunsHistory';
 import DeleteConfirmModal from './DeleteConfirmModal';
+import TaskTemplateGallery from './TaskTemplateGallery';
+import type { TaskTemplate } from './taskTemplates';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -21,7 +23,7 @@ interface ScheduledTasksViewProps {
   updateBadge?: React.ReactNode;
 }
 
-type TabType = 'tasks' | 'history';
+type TabType = 'tasks' | 'history' | 'templates';
 
 const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   isSidebarCollapsed,
@@ -36,6 +38,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
+  const [templateInitialValues, setTemplateInitialValues] = useState<Partial<FormState> | undefined>(undefined);
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
 
   const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
@@ -69,11 +72,26 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
-    if (tab === 'tasks') {
+    if (tab === 'tasks' || tab === 'templates') {
       dispatch(selectTask(null));
       dispatch(setViewMode('list'));
     }
   };
+
+  const handleSelectTemplate = useCallback((template: TaskTemplate) => {
+    setTemplateInitialValues({
+      name: template.name,
+      payloadText: template.prompt,
+      planType: template.schedule.planType,
+      hour: template.schedule.hour,
+      minute: template.schedule.minute,
+      ...(template.schedule.planType === 'weekly' && template.schedule.weekday !== undefined
+        ? { weekday: template.schedule.weekday }
+        : {}),
+    });
+    setActiveTab('tasks');
+    dispatch(setViewMode('create'));
+  }, [dispatch]);
 
   // Show tabs only in list view (not in create/edit/detail sub-views)
   const showTabs = viewMode === 'list' && !selectedTaskId;
@@ -150,6 +168,20 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                 <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
               )}
             </button>
+            <button
+              type="button"
+              onClick={() => handleTabChange('templates')}
+              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
+                activeTab === 'templates'
+                  ? 'text-foreground'
+                  : 'text-secondary hover:hover:text-foreground'
+              }`}
+            >
+              {i18nService.t('scheduledTasksTabTemplates')}
+              {activeTab === 'templates' && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
+              )}
+            </button>
           </div>
           {activeTab === 'tasks' && (
             <button
@@ -167,14 +199,31 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
       <div className="flex-1 overflow-y-auto">
         {showTabs && activeTab === 'history' ? (
           <AllRunsHistory />
+        ) : showTabs && activeTab === 'templates' ? (
+          <TaskTemplateGallery onSelectTemplate={handleSelectTemplate} />
         ) : (
           <>
             {viewMode === 'list' && <TaskList onRequestDelete={handleRequestDelete} />}
             {viewMode === 'create' && (
               <TaskForm
                 mode="create"
-                onCancel={handleBackToList}
-                onSaved={handleBackToList}
+                initialValues={templateInitialValues}
+                onCancel={() => {
+                  const fromTemplate = templateInitialValues !== undefined;
+                  setTemplateInitialValues(undefined);
+                  if (fromTemplate) {
+                    setActiveTab('templates');
+                    dispatch(selectTask(null));
+                    dispatch(setViewMode('list'));
+                  } else {
+                    handleBackToList();
+                  }
+                }}
+                onSaved={() => {
+                  setTemplateInitialValues(undefined);
+                  setActiveTab('tasks');
+                  handleBackToList();
+                }}
               />
             )}
             {viewMode === 'edit' && selectedTask && (
