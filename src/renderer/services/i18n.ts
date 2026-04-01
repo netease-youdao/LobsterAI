@@ -551,6 +551,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionStartFailed: '会话启动失败：{error}',
     coworkErrorSessionContinueFailed: '发送消息失败：{error}',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
+    coworkOpenClawConfigSyncDeferred:
+      '设置已保存。OpenClaw 配置将在当前会话或定时任务结束后自动同步到网关（必要时重启）。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
 
     // Skills
@@ -1739,6 +1741,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionStartFailed: 'Failed to start session: {error}',
     coworkErrorSessionContinueFailed: 'Failed to send message: {error}',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
+    coworkOpenClawConfigSyncDeferred:
+      'Settings saved. OpenClaw config will sync to the gateway after active sessions or scheduled tasks finish (a restart may occur).',
     coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
 
     // Skills

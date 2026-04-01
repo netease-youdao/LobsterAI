@@ -543,6 +543,7 @@ const waitWithTimeout = async (promise: Promise<void>, timeoutMs: number): Promi
 export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntime {
   private readonly store: CoworkStore;
   private readonly engineManager: OpenClawEngineManager;
+  private onGatewayWorkloadsMaybeIdle: (() => void) | null = null;
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly sessionIdBySessionKey = new Map<string, string>();
   private readonly sessionIdByRunId = new Map<string, string>();
@@ -625,6 +626,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   setChannelSessionSync(sync: OpenClawChannelSessionSync): void {
     this.channelSessionSync = sync;
+  }
+
+  setOnGatewayWorkloadsMaybeIdle(cb: (() => void) | null): void {
+    this.onGatewayWorkloadsMaybeIdle = cb;
   }
 
   /**
@@ -3594,6 +3599,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private cleanupSessionTurn(sessionId: string): void {
+    const hadActiveTurn = this.activeTurns.has(sessionId);
     const turn = this.activeTurns.get(sessionId);
     if (turn) {
       // Clear client-side timeout watchdog
@@ -3616,6 +3622,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       });
     }
     this.activeTurns.delete(sessionId);
+    if (hadActiveTurn && this.activeTurns.size === 0) {
+      try {
+        this.onGatewayWorkloadsMaybeIdle?.();
+      } catch (err) {
+        console.error('[OpenClawRuntime] onGatewayWorkloadsMaybeIdle failed:', err);
+      }
+    }
     setCoworkProxySessionId(null);
     // NOTE: Do NOT clear lastSystemPromptBySession here — it must persist
     // across turns so that the system prompt is only injected on the first

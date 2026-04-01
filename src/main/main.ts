@@ -865,10 +865,12 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
 
 // Deferred gateway restart: when a config change requires a gateway restart
 // but active cowork sessions or cron jobs exist, we defer the restart until
-// all workloads complete.  A polling interval checks periodically; a hard
-// timeout ensures the restart eventually happens even if a session hangs.
+// all workloads complete. OpenClawRuntimeAdapter and CronJobService call
+// tryFlushDeferredOpenClawConfigSync when workloads may have drained; a polling
+// interval remains as a fallback; a hard timeout forces sync if something hangs.
 let deferredRestartTimer: ReturnType<typeof setInterval> | null = null;
 let deferredRestartTimeout: ReturnType<typeof setTimeout> | null = null;
+let deferredRestartLatestReason = '';
 const DEFERRED_RESTART_POLL_MS = 3_000;
 const DEFERRED_RESTART_MAX_WAIT_MS = 5 * 60_000; // 5 minutes hard cap
 
@@ -894,29 +896,37 @@ const executeDeferredGatewayRestart = async (reason: string) => {
 };
 
 const scheduleDeferredGatewayRestart = (reason: string) => {
-  // If already scheduled, the latest config is already on disk — just let
-  // the existing timer handle the restart.
+  deferredRestartLatestReason = reason;
+  // Coalesce: SQLite already holds the latest cowork/IM settings; the deferred
+  // sync will regenerate openclaw.json from DB when workloads drain.
   if (deferredRestartTimer) {
-    console.log(`[OpenClaw] scheduleDeferredGatewayRestart: already scheduled, skipping (reason: ${reason})`);
+    console.debug(`[OpenClaw] scheduleDeferredGatewayRestart: already scheduled, coalescing (reason: ${reason})`);
     return;
   }
 
   deferredRestartTimer = setInterval(() => {
     if (!hasActiveGatewayWorkloads()) {
-      void executeDeferredGatewayRestart(reason);
+      void executeDeferredGatewayRestart(deferredRestartLatestReason || reason);
     }
   }, DEFERRED_RESTART_POLL_MS);
 
   // Hard timeout: restart anyway after max wait to avoid config drift.
   deferredRestartTimeout = setTimeout(() => {
     console.warn(`[OpenClaw] scheduleDeferredGatewayRestart: max wait exceeded, forcing restart (reason: ${reason})`);
-    void executeDeferredGatewayRestart(reason);
+    void executeDeferredGatewayRestart(deferredRestartLatestReason || reason);
   }, DEFERRED_RESTART_MAX_WAIT_MS);
+};
+
+/** When deferred sync is pending, run it as soon as no gateway workloads remain. */
+const tryFlushDeferredOpenClawConfigSync = (): void => {
+  if (!deferredRestartTimer && !deferredRestartTimeout) return;
+  if (hasActiveGatewayWorkloads()) return;
+  void executeDeferredGatewayRestart(deferredRestartLatestReason || 'workloads-idle');
 };
 
 const syncOpenClawConfig = async (
   options: { reason: string; restartGatewayIfRunning?: boolean } = { reason: 'unknown' },
-): Promise<{ success: boolean; changed: boolean; status?: OpenClawEngineStatus; error?: string }> => {
+): Promise<{ success: boolean; changed: boolean; status?: OpenClawEngineStatus; error?: string; deferred?: boolean }> => {
   // When the gateway is running and there are active workloads (cowork
   // sessions OR running cron jobs), defer the entire sync — including the
   // config file write — to avoid triggering OpenClaw's built-in file-watcher
@@ -931,6 +941,7 @@ const syncOpenClawConfig = async (
         success: true,
         changed: false,
         status,
+        deferred: true,
       };
     }
   }
@@ -1109,6 +1120,7 @@ const getCoworkEngineRouter = () => {
     }
     if (!openClawRuntimeAdapter) {
       openClawRuntimeAdapter = new OpenClawRuntimeAdapter(getCoworkStore(), getOpenClawEngineManager());
+      openClawRuntimeAdapter.setOnGatewayWorkloadsMaybeIdle(() => tryFlushDeferredOpenClawConfigSync());
       // Wire up channel session sync for IM conversations via OpenClaw
       try {
         const imManager = getIMGatewayManager();
@@ -3167,6 +3179,7 @@ if (!gotTheLock) {
       const switchedToOpenClaw = normalizedAgentEngine === 'openclaw'
         && previousConfig.agentEngine !== 'openclaw';
 
+      let openClawConfigSyncDeferred = false;
       const shouldSyncOpenClawConfig = normalizedExecutionMode !== undefined
         || normalizedAgentEngine !== undefined
         || (normalizedConfig.workingDirectory !== undefined && normalizedConfig.workingDirectory !== previousWorkingDir);
@@ -3183,6 +3196,9 @@ if (!gotTheLock) {
             engineStatus: syncResult.status || getOpenClawEngineManager().getStatus(),
           };
         }
+        if (syncResult.deferred) {
+          openClawConfigSyncDeferred = true;
+        }
       }
 
       if (switchedToOpenClaw) {
@@ -3190,7 +3206,10 @@ if (!gotTheLock) {
           console.error('[OpenClaw] Failed to auto-start gateway after engine switch:', error);
         });
       }
-      return { success: true };
+      return {
+        success: true,
+        ...(openClawConfigSyncDeferred ? { openClawConfigSyncDeferred: true as const } : {}),
+      };
     } catch (error) {
       return {
         success: false,
@@ -3203,6 +3222,7 @@ if (!gotTheLock) {
 
   initCronJobServiceManager({
     getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter,
+    onRunningJobsDrained: () => tryFlushDeferredOpenClawConfigSync(),
   });
   initScheduledTaskHelpers({
     getIMGatewayManager: () => getIMGatewayManager() as any,
