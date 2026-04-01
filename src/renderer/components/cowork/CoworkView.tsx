@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
-import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
+import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus, setPendingActiveMcpIds, updateSessionActiveMcpIds } from '../../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
 import { setActions, selectAction, clearSelection } from '../../store/slices/quickActionSlice';
 import { coworkService } from '../../services/cowork';
@@ -46,6 +46,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     currentSession,
     isStreaming,
     config,
+    pendingActiveMcpIds,
   } = useSelector((state: RootState) => state.cowork);
   const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
 
@@ -272,6 +273,18 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
       // Generate title in the background and update when ready
       if (startedSession) {
+        if (pendingActiveMcpIds !== null) {
+          window.electron.cowork.setSessionActiveMcpIds({
+            sessionId: startedSession.id,
+            mcpIds: pendingActiveMcpIds,
+          }).then(() => {
+            dispatch(updateSessionActiveMcpIds({ sessionId: startedSession.id, mcpIds: pendingActiveMcpIds }));
+          }).catch((err: unknown) => {
+            console.error('[CoworkView] flush pendingActiveMcpIds failed:', err);
+          });
+          dispatch(setPendingActiveMcpIds(null));
+        }
+
         coworkService.generateSessionTitle(prompt).then(generatedTitle => {
           const betterTitle = generatedTitle?.trim();
           if (betterTitle && betterTitle !== fallbackTitle) {

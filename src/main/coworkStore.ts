@@ -381,6 +381,8 @@ export interface CoworkSession {
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
+  /** Per-session MCP server filter. null = all globally-enabled servers are used. */
+  activeMcpIds: string[] | null;
   agentId: string;
   messages: CoworkMessage[];
   createdAt: number;
@@ -587,6 +589,7 @@ export class CoworkStore {
       systemPrompt,
       executionMode,
       activeSkillIds,
+      activeMcpIds: null,
       agentId,
       messages: [],
       createdAt: now,
@@ -605,13 +608,14 @@ export class CoworkStore {
       system_prompt: string;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
+      active_mcp_ids?: string | null;
       agent_id?: string | null;
       created_at: number;
       updated_at: number;
     }
 
     const row = this.getOne<SessionRow>(`
-      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, created_at, updated_at
+      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, active_mcp_ids, agent_id, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `, [id]);
@@ -629,6 +633,15 @@ export class CoworkStore {
       }
     }
 
+    let activeMcpIds: string[] | null = null;
+    if (row.active_mcp_ids) {
+      try {
+        activeMcpIds = JSON.parse(row.active_mcp_ids);
+      } catch {
+        activeMcpIds = null;
+      }
+    }
+
     return {
       id: row.id,
       title: row.title,
@@ -639,6 +652,7 @@ export class CoworkStore {
       systemPrompt: row.system_prompt,
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       activeSkillIds,
+      activeMcpIds,
       agentId: row.agent_id || 'main',
       messages,
       createdAt: row.created_at,
@@ -709,6 +723,12 @@ export class CoworkStore {
 
   setSessionPinned(id: string, pinned: boolean): void {
     this.db.run('UPDATE cowork_sessions SET pinned = ? WHERE id = ?', [pinned ? 1 : 0, id]);
+    this.saveDb();
+  }
+
+  setSessionActiveMcpIds(id: string, mcpIds: string[] | null): void {
+    const value = mcpIds === null ? null : JSON.stringify(mcpIds);
+    this.db.run('UPDATE cowork_sessions SET active_mcp_ids = ? WHERE id = ?', [value, id]);
     this.saveDb();
   }
 

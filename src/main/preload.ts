@@ -183,6 +183,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:deleteBatch', sessionIds),
     setSessionPinned: (options: { sessionId: string; pinned: boolean }) =>
       ipcRenderer.invoke('cowork:session:pin', options),
+    setSessionActiveMcpIds: (options: { sessionId: string; mcpIds: string[] | null }) =>
+      ipcRenderer.invoke('cowork:session:setActiveMcpIds', options),
     renameSession: (options: { sessionId: string; title: string }) =>
       ipcRenderer.invoke('cowork:session:rename', options),
     getSession: (sessionId: string) =>

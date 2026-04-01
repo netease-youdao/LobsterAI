@@ -236,7 +236,7 @@ export class CoworkRunner extends EventEmitter {
   private turnMemoryQueueKeys: Set<string> = new Set();
   private lastTurnMemoryKeyBySession: Map<string, string> = new Map();
   private drainingTurnMemoryQueue = false;
-  private mcpServerProvider?: () => Array<{
+  private mcpServerProvider?: (sessionId: string) => Array<{
     name: string;
     transportType: string;
     command?: string;
@@ -251,7 +251,7 @@ export class CoworkRunner extends EventEmitter {
     this.store = store;
   }
 
-  setMcpServerProvider(provider: () => Array<{
+  setMcpServerProvider(provider: (sessionId: string) => Array<{
     name: string;
     transportType: string;
     command?: string;
@@ -2110,7 +2110,7 @@ export class CoworkRunner extends EventEmitter {
       // Inject user-configured MCP servers (local mode only)
       if (this.mcpServerProvider) {
         try {
-          const enabledMcpServers = this.mcpServerProvider();
+          const enabledMcpServers = this.mcpServerProvider(sessionId);
           coworkLog('INFO', 'runClaudeCodeLocal', `MCP: ${enabledMcpServers.length} user-configured servers found`);
           for (const server of enabledMcpServers) {
             const serverKey = server.name;
