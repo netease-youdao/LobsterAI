@@ -510,6 +510,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
+    focusInput: 'Ctrl+L',
   });
 
   // State for model editing
@@ -3444,6 +3445,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-foreground">{i18nService.t('openSettings')}</span>
                   <ShortcutRecorder value={shortcuts.settings} onChange={(v) => handleShortcutChange('settings', v)} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm dark:text-claude-darkText text-claude-text">{i18nService.t('focusInput')}</span>
+                  <input
+                    type="text"
+                    value={shortcuts.focusInput}
+                    onChange={(e) => handleShortcutChange('focusInput', e.target.value)}
+                    data-shortcut-input="true"
+                    className="w-32 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-1.5 text-sm"
+                  />
                 </div>
               </div>
             </div>

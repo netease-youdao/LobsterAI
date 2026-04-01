@@ -444,7 +444,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat || isShortcutInputActive()) return;
+      // Disable global shortcuts when Settings panel is open
+      if (event.repeat || showSettings || isShortcutInputActive()) return;
 
       const { shortcuts } = configService.getConfig();
       const activeShortcuts = {
@@ -467,12 +468,20 @@ const App: React.FC = () => {
       if (matchesShortcut(event, activeShortcuts.settings)) {
         event.preventDefault();
         handleShowSettings();
+        return;
+      }
+
+      if (matchesShortcut(event, activeShortcuts.focusInput)) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent('cowork:focus-input', {
+          detail: { clear: false },
+        }));
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [handleShowSettings, handleNewChat]);
+  }, [handleShowSettings, handleNewChat, showSettings]);
 
   useEffect(() => {
     return () => {
