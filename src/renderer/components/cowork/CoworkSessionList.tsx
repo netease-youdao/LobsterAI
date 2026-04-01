@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
+import { markSessionUnreadManually } from '../../store/slices/coworkSlice';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionItem from './CoworkSessionItem';
 import { i18nService } from '../../services/i18n';
@@ -34,6 +35,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
 }) => {
   const unreadSessionIds = useSelector((state: RootState) => state.cowork.unreadSessionIds);
   const unreadSessionIdSet = useMemo(() => new Set(unreadSessionIds), [unreadSessionIds]);
+  const dispatch = useDispatch();
 
   const sortedSessions = useMemo(() => {
     const sortByRecentActivity = (a: CoworkSessionSummary, b: CoworkSessionSummary) => {
@@ -77,6 +79,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           onDelete={() => onDeleteSession(session.id)}
           onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
           onRename={(title) => onRenameSession(session.id, title)}
+          onMarkUnread={() => dispatch(markSessionUnreadManually(session.id))}
           onToggleSelection={() => onToggleSelection(session.id)}
           onEnterBatchMode={() => onEnterBatchMode(session.id)}
         />

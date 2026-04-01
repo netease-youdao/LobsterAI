@@ -18,6 +18,7 @@ interface CoworkSessionItemProps {
   onDelete: () => void;
   onTogglePin: (pinned: boolean) => void;
   onRename: (title: string) => void;
+  onMarkUnread: () => void;
   onToggleSelection: () => void;
   onEnterBatchMode: () => void;
 }
@@ -97,6 +98,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   onDelete,
   onTogglePin,
   onRename,
+  onMarkUnread,
   onToggleSelection,
   onEnterBatchMode,
 }) => {
@@ -211,6 +213,12 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     onEnterBatchMode();
   };
 
+  const handleMarkUnreadClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onMarkUnread();
+    closeMenu();
+  };
+
   useEffect(() => {
     if (!menuPosition) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -263,9 +271,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
   const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
   const batchLabel = i18nService.t('batchOperations');
+  const markUnreadLabel = i18nService.t('markSessionUnread');
   const menuItems = useMemo(() => {
     const items = [
       { key: 'rename', label: renameLabel, onClick: handleRenameClick, tone: 'neutral' as const },
+      { key: 'markUnread', label: markUnreadLabel, onClick: handleMarkUnreadClick, tone: 'neutral' as const },
       { key: 'pin', label: pinButtonLabel, onClick: handleTogglePin, tone: 'neutral' as const },
       { key: 'delete', label: deleteLabel, onClick: handleDeleteClick, tone: 'danger' as const },
     ];
@@ -278,8 +288,10 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     deleteLabel,
     handleBatchClick,
     handleDeleteClick,
+    handleMarkUnreadClick,
     handleRenameClick,
     handleTogglePin,
+    markUnreadLabel,
     pinButtonLabel,
     renameLabel,
     showBatchOption,
@@ -412,6 +424,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
             >
               {item.key === 'batch' && <ListChecksIcon className="h-4 w-4" />}
               {item.key === 'rename' && <PencilSquareIcon className="h-4 w-4" />}
+              {item.key === 'markUnread' && (
+                <span className="w-4 h-4 flex items-center justify-center">
+                  <span className="w-2 h-2 rounded-full bg-claude-accent block" />
+                </span>
+              )}
               {item.key === 'pin' && (
                 <PushPinIcon
                   slashed={session.pinned}
