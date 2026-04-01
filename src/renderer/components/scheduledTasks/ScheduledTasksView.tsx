@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
 import { setViewMode, selectTask } from '../../store/slices/scheduledTaskSlice';
@@ -9,6 +9,7 @@ import TaskForm from './TaskForm';
 import TaskDetail from './TaskDetail';
 import AllRunsHistory from './AllRunsHistory';
 import DeleteConfirmModal from './DeleteConfirmModal';
+import UnsavedChangesModal from './UnsavedChangesModal';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -37,6 +38,22 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+  const formDirtyRef = useRef(false);
+  const pendingNavigationRef = useRef<(() => void) | null>(null);
+
+  const handleFormDirtyChange = useCallback((dirty: boolean) => {
+    formDirtyRef.current = dirty;
+  }, []);
+
+  const guardedNavigate = useCallback((navigate: () => void) => {
+    if (formDirtyRef.current) {
+      pendingNavigationRef.current = navigate;
+      setShowUnsavedModal(true);
+    } else {
+      navigate();
+    }
+  }, []);
 
   const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
     setDeleteTaskInfo({ id: taskId, name: taskName });
@@ -62,10 +79,33 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     scheduledTaskService.loadTasks();
   }, []);
 
-  const handleBackToList = () => {
-    dispatch(selectTask(null));
-    dispatch(setViewMode('list'));
-  };
+  const handleBackToList = useCallback(() => {
+    if (viewMode === 'create' || viewMode === 'edit') {
+      guardedNavigate(() => {
+        dispatch(selectTask(null));
+        dispatch(setViewMode('list'));
+      });
+    } else {
+      dispatch(selectTask(null));
+      dispatch(setViewMode('list'));
+    }
+  }, [viewMode, dispatch, guardedNavigate]);
+
+  const handleEditCancel = useCallback(() => {
+    guardedNavigate(() => dispatch(setViewMode('detail')));
+  }, [dispatch, guardedNavigate]);
+
+  const handleCancelUnsaved = useCallback(() => {
+    setShowUnsavedModal(false);
+    pendingNavigationRef.current = null;
+  }, []);
+
+  const handleConfirmDiscard = useCallback(() => {
+    setShowUnsavedModal(false);
+    formDirtyRef.current = false;
+    pendingNavigationRef.current?.();
+    pendingNavigationRef.current = null;
+  }, []);
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
@@ -172,17 +212,21 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
             {viewMode === 'list' && <TaskList onRequestDelete={handleRequestDelete} />}
             {viewMode === 'create' && (
               <TaskForm
+                key="create"
                 mode="create"
                 onCancel={handleBackToList}
                 onSaved={handleBackToList}
+                onDirtyChange={handleFormDirtyChange}
               />
             )}
             {viewMode === 'edit' && selectedTask && (
               <TaskForm
+                key={selectedTask.id}
                 mode="edit"
                 task={selectedTask}
-                onCancel={() => dispatch(setViewMode('detail'))}
+                onCancel={handleEditCancel}
                 onSaved={() => dispatch(setViewMode('detail'))}
+                onDirtyChange={handleFormDirtyChange}
               />
             )}
             {viewMode === 'detail' && selectedTask && (
@@ -198,6 +242,14 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           taskName={deleteTaskInfo.name}
           onConfirm={handleConfirmDelete}
           onCancel={handleCancelDelete}
+        />
+      )}
+
+      {/* Unsaved changes confirmation modal */}
+      {showUnsavedModal && (
+        <UnsavedChangesModal
+          onConfirm={handleConfirmDiscard}
+          onCancel={handleCancelUnsaved}
         />
       )}
     </div>
