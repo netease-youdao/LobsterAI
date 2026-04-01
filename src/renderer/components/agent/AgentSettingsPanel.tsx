@@ -31,6 +31,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [icon, setIcon] = useState('');
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
 
@@ -70,6 +71,15 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       }
     });
   }, [agentId]);
+
+  useEffect(() => {
+    if (!agentId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [agentId, onClose]);
 
   if (!agentId) return null;
 
@@ -113,9 +123,15 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   };
 
   const handleDelete = async () => {
-    const success = await agentService.deleteAgent(agentId);
-    if (success) {
-      onClose();
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const success = await agentService.deleteAgent(agentId);
+      if (success) {
+        onClose();
+      }
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -324,9 +340,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 <button
                   type="button"
                   onClick={handleDelete}
-                  className="px-2 py-1 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600"
+                  disabled={deleting}
+                  className="px-2 py-1 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {i18nService.t('delete') || 'Delete'}
+                  {deleting ? (i18nService.t('deleting') || 'Deleting...') : (i18nService.t('delete') || 'Delete')}
                 </button>
                 <button
                   type="button"
