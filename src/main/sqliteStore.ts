@@ -29,11 +29,20 @@ function loadWasmBinary(): ArrayBuffer {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
+// How long (ms) to wait after the last write before flushing to disk.
+// Coalesces rapid bursts of mutations into a single export+writeFileSync.
+const SAVE_DEBOUNCE_MS = 200;
+
 export class SqliteStore {
   private db: Database;
   private dbPath: string;
   private emitter = new EventEmitter();
   private static sqlPromise: Promise<SqlJsStatic> | null = null;
+
+  /** Timer handle for the debounced flush. */
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Whether there are in-memory mutations not yet written to disk. */
+  private dirtyFlag = false;
 
   private constructor(db: Database, dbPath: string) {
     this.db = db;
@@ -301,10 +310,33 @@ export class SqliteStore {
     this.save();
   }
 
+  /**
+   * Schedule a disk flush after SAVE_DEBOUNCE_MS.  Multiple calls within
+   * the debounce window collapse into one export+writeFileSync, eliminating
+   * write amplification on burst operations (e.g. streaming messages).
+   */
   save() {
+    this.dirtyFlag = true;
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+    }
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.flushNow();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /** Write to disk immediately and cancel any pending debounce timer. */
+  flushNow() {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.dirtyFlag) return;
     const data = this.db.export();
     const buffer = Buffer.from(data);
     fs.writeFileSync(this.dbPath, buffer);
+    this.dirtyFlag = false;
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
@@ -357,6 +389,11 @@ export class SqliteStore {
   // Expose save method for external use (e.g., CoworkStore)
   getSaveFunction(): () => void {
     return () => this.save();
+  }
+
+  // Expose flushNow for process-exit / critical-path callers
+  getFlushNowFunction(): () => void {
+    return () => this.flushNow();
   }
 
   private tryReadLegacyMemoryText(): string {
