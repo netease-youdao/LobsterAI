@@ -22,6 +22,11 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const isEdit = !!server;
   const isRegistry = !!registryEntry && !isEdit;
 
+  const [inputMode, setInputMode] = useState<'form' | 'json'>('form');
+  const [jsonText, setJsonText] = useState('');
+  const [jsonError, setJsonError] = useState('');
+  const [jsonSuccess, setJsonSuccess] = useState('');
+
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [transportType, setTransportType] = useState<'stdio' | 'sse' | 'http'>('stdio');
@@ -32,8 +37,29 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   const [headerRows, setHeaderRows] = useState<{ key: string; value: string }[]>([]);
   const [error, setError] = useState('');
 
+  // Serialize current form state to JSON string
+  const serializeToJson = (srv: McpServerConfig) => {
+    const obj: Record<string, unknown> = {
+      name: srv.name,
+      description: srv.description,
+      transportType: srv.transportType,
+    };
+    if (srv.transportType === 'stdio') {
+      if (srv.command) obj.command = srv.command;
+      if (srv.args && srv.args.length > 0) obj.args = srv.args;
+      if (srv.env && Object.keys(srv.env).length > 0) obj.env = srv.env;
+    } else {
+      if (srv.url) obj.url = srv.url;
+      if (srv.headers && Object.keys(srv.headers).length > 0) obj.headers = srv.headers;
+    }
+    return JSON.stringify(obj, null, 2);
+  };
+
   useEffect(() => {
     if (!isOpen) return;
+    setInputMode('form');
+    setJsonError('');
+    setJsonSuccess('');
     if (server) {
       // Edit mode
       setName(server.name);
@@ -52,6 +78,8 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           ? Object.entries(server.headers).map(([key, value]) => ({ key, value }))
           : []
       );
+      // Pre-fill JSON textarea with current config
+      setJsonText(serializeToJson(server));
     } else if (registryEntry) {
       // Registry install mode — pre-fill from template
       setName(registryEntry.name);
@@ -95,6 +123,69 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     }
     setError('');
   }, [isOpen, server, registryEntry]);
+
+  const handleJsonImport = () => {
+    setJsonError('');
+    setJsonSuccess('');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonText.trim());
+    } catch {
+      setJsonError(i18nService.t('mcpJsonParseError'));
+      return;
+    }
+
+    // JSON format matches McpServerFormData exactly:
+    // {
+    //   "name": "my-server",
+    //   "description": "...",          (optional)
+    //   "transportType": "stdio",      (optional, defaults to stdio)
+    //   "command": "npx",              (stdio)
+    //   "args": ["-y", "some-pkg"],    (optional, stdio)
+    //   "env": { "KEY": "value" },     (optional, stdio)
+    //   "url": "http://...",           (sse / http)
+    //   "headers": { "Authorization": "Bearer ..." }  (optional, sse/http)
+    // }
+    const obj = parsed as Record<string, unknown>;
+    if (!obj || typeof obj !== 'object') {
+      setJsonError(i18nService.t('mcpJsonParseError'));
+      return;
+    }
+    if (!obj.name && !obj.command && !obj.url) {
+      setJsonError(i18nService.t('mcpJsonNoServer'));
+      return;
+    }
+
+    // Fill form fields
+    if (typeof obj.name === 'string' && obj.name) setName(obj.name);
+    if (typeof obj.description === 'string') setDescription(obj.description);
+
+    const transport = (obj.transportType as string) === 'sse' ? 'sse'
+      : (obj.transportType as string) === 'http' ? 'http'
+      : obj.url ? 'sse'
+      : 'stdio';
+    setTransportType(transport);
+
+    if (transport === 'stdio') {
+      setCommand(typeof obj.command === 'string' ? obj.command : '');
+      setArgsText(Array.isArray(obj.args) ? (obj.args as string[]).join('\n') : '');
+      setEnvRows(
+        obj.env && typeof obj.env === 'object'
+          ? Object.entries(obj.env as Record<string, string>).map(([key, value]) => ({ key, value }))
+          : []
+      );
+    } else {
+      setUrl(typeof obj.url === 'string' ? obj.url : '');
+      setHeaderRows(
+        obj.headers && typeof obj.headers === 'object'
+          ? Object.entries(obj.headers as Record<string, string>).map(([key, value]) => ({ key, value }))
+          : []
+      );
+    }
+
+    setJsonSuccess(i18nService.t('mcpJsonImportSuccess'));
+    setInputMode('form');
+  };
 
   const handleSave = () => {
     const trimmedName = name.trim();
@@ -232,6 +323,72 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
           </div>
         </div>
 
+        {/* Mode tabs — shown for custom create and edit mode, not for registry installs */}
+        {!isRegistry && (
+          <div className="flex gap-1 mb-4 p-1 rounded-lg bg-surface-inset">
+            <button
+              type="button"
+              onClick={() => { setInputMode('form'); setJsonError(''); setJsonSuccess(''); }}
+              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                inputMode === 'form'
+                  ? 'bg-surface text-foreground shadow-sm'
+                  : 'text-secondary hover:text-foreground'
+              }`}
+            >
+              {i18nService.t('mcpFormMode')}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setInputMode('json'); setError(''); }}
+              className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                inputMode === 'json'
+                  ? 'bg-surface text-foreground shadow-sm'
+                  : 'text-secondary hover:text-foreground'
+              }`}
+            >
+              {i18nService.t('mcpJsonMode')}
+            </button>
+          </div>
+        )}
+
+        {/* JSON import panel */}
+        {inputMode === 'json' && (
+          <div className="space-y-3">
+            <textarea
+              value={jsonText}
+              onChange={(e) => { setJsonText(e.target.value); setJsonError(''); setJsonSuccess(''); }}
+              placeholder={i18nService.t('mcpJsonPlaceholder')}
+              rows={10}
+              autoFocus
+              className={`${inputClass} resize-none font-mono text-xs`}
+            />
+            {jsonError && (
+              <div className="text-xs text-red-500">{jsonError}</div>
+            )}
+            {jsonSuccess && (
+              <div className="text-xs text-green-600 dark:text-green-400">{jsonSuccess}</div>
+            )}
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleJsonImport}
+                disabled={!jsonText.trim()}
+                className="px-3 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {i18nService.t('mcpJsonImport')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {inputMode === 'form' && (
         <div className="space-y-4">
           {/* Name */}
           <div className="space-y-1.5">
@@ -434,6 +591,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
