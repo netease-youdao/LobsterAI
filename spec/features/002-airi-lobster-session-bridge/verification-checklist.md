@@ -221,7 +221,9 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - 当前角色卡中的 `systemPrompt + description + personality` 会随会话进入 Lobster runtime
   - 已修正 Airi Onboarding 的 provider 可见性：`lobster-agent` 已进入 popularProviders，浏览器中已可在引导步骤里看到 `Lobster Agent`
   - 浏览器中已完成 `lobster-agent -> API Key -> Claude Agent` 的首次引导配置，首页与意识设置页都能看到 `Lobster Agent / Claude Agent`
-  - 当前自动化浏览器仍未稳定触发首页 textarea 的提交事件，因此前端消息展示、动作与口型联调仍保留为待验证
+  - 已为桌面聊天区补充显式发送按钮，首页自动化现可稳定触发发送
+  - Airi 首页已完成一次真实文本单轮：浏览器触发 `/api/agent/bridge/chat`，用户消息与助手回复均已渲染到聊天区
+  - 当前动作与口型尚未做单独观察记录，因此展示链路已验证，表现层联动仍建议后续补记
 
 ---
 
@@ -230,7 +232,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
 1. **权限请求测试**：需要 LobsterAI 端配置了需要权限的工具才能触发
 2. **文件清理测试**：需要检查 LobsterAI 服务端日志确认文件回收
 3. **多轮会话测试**：需要 LobsterAI 端正确维护 session 上下文
-4. **自动化限制**：当前浏览器自动化未稳定触发首页 textarea 的 submit 事件，因此首页聊天展示验证仍需手工补测
+4. **表现层待补记**：动作、口型与等待态切换尚未单独留存观察记录
 5. **当前仍阻塞项**：图片、权限请求、回退模式仍需要界面联调或特定工具场景，不能仅靠接口冒烟替代
 
 ---
@@ -239,7 +241,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
 
 | 测试项 | 状态 | 备注 |
 |---|---|---|
-| T035 文本单轮 | ⏳ 部分通过 | 服务端 Bridge SSE 全链路已验证通过；Airi 前端已完成 provider/model 配置，但首页 submit 自动化未稳定触发，动作/口型/展示仍待补测 |
+| T035 文本单轮 | ✅ 通过 | 服务端 Bridge SSE、Airi 首页发送、`/api/agent/bridge/chat` 请求与消息展示均已验证；动作/口型未单独留档 |
 | T036 多轮会话 | ⏳ 部分通过 | 同一 `airiSessionId` 成功复用同一 `lobsterSessionId`，上下文记忆验证通过；Airi 前端侧仍待联调 |
 | T037 图片附件 | ⏸ 阻塞 | 依赖前端图片上传与视觉输入场景 |
 | T038 普通文件 | ⏳ 部分通过 | `fileId` 上传、引用、读取已通过；文件清理与 Airi 前端展示仍待验证 |
