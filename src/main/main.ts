@@ -3698,6 +3698,12 @@ if (!gotTheLock) {
           return { success: false, error: 'Missing file path' };
         }
         const resolvedPath = path.resolve(filePath.trim());
+        // Restrict reads to the user's home directory to prevent arbitrary file
+        // access (e.g. /etc/passwd, ~/.ssh/id_rsa, Windows SAM hive).
+        const homeDir = os.homedir();
+        if (!resolvedPath.startsWith(homeDir + path.sep) && resolvedPath !== homeDir) {
+          return { success: false, error: 'Access denied: path is outside the user home directory' };
+        }
         const stat = await fs.promises.stat(resolvedPath);
         if (!stat.isFile()) {
           return { success: false, error: 'Not a file' };
@@ -3790,6 +3796,41 @@ if (!gotTheLock) {
   });
 
   // API 代理处理程序 - 解决 CORS 问题
+
+  /**
+   * Validate that a URL is safe to proxy through the main process.
+   * Blocks private/loopback addresses and non-http(s) schemes to prevent SSRF.
+   */
+  function assertSafeProxyUrl(url: string): void {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`Invalid URL: ${url}`);
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      throw new Error(`Blocked unsafe protocol: ${parsed.protocol}`);
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    // Block loopback
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      throw new Error(`Blocked loopback address: ${hostname}`);
+    }
+    // Block link-local (AWS/Aliyun/Tencent metadata endpoint)
+    if (hostname.startsWith('169.254.')) {
+      throw new Error(`Blocked link-local address: ${hostname}`);
+    }
+    // Block private IPv4 ranges (10.x, 172.16-31.x, 192.168.x)
+    const privateRanges = [
+      /^10\./,
+      /^172\.(1[6-9]|2\d|3[01])\./,
+      /^192\.168\./,
+    ];
+    if (privateRanges.some(re => re.test(hostname))) {
+      throw new Error(`Blocked private address: ${hostname}`);
+    }
+  }
+
   ipcMain.handle('api:fetch', async (_event, options: {
     url: string;
     method: string;
@@ -3798,6 +3839,7 @@ if (!gotTheLock) {
   }) => {
     console.log(`[api:fetch] ${options.method} ${options.url}`);
     try {
+      assertSafeProxyUrl(options.url);
       const response = await session.defaultSession.fetch(options.url, {
         method: options.method,
         headers: options.headers,
@@ -3852,6 +3894,7 @@ if (!gotTheLock) {
     activeStreamControllers.set(options.requestId, controller);
 
     try {
+      assertSafeProxyUrl(options.url);
       const response = await session.defaultSession.fetch(options.url, {
         method: options.method,
         headers: options.headers,
