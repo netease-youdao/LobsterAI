@@ -2716,6 +2716,19 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:search', async (_event, query: string) => {
+    try {
+      const results = getCoworkStore().conversationSearch({ query, maxResults: 10 });
+      return { success: true, results };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to search sessions',
+        results: [],
+      };
+    }
+  });
+
   // ========== Agent IPC Handlers ==========
 
   ipcMain.handle('agents:list', async () => {
