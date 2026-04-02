@@ -157,6 +157,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     loginNotAvailable: '登录功能暂未开放',
     collapse: '收起',
     expand: '展开',
+    sidebarResizeHint: '拖拽调整侧边栏宽度',
     featureInDevelopment: '正在开发中',
 
     // 认证相关
@@ -1346,6 +1347,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     loginNotAvailable: 'Login is not available yet',
     collapse: 'Collapse',
     expand: 'Expand',
+    sidebarResizeHint: 'Drag to resize sidebar',
     featureInDevelopment: 'In development',
 
     // Auth
