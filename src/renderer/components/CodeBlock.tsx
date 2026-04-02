@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { languages } from '@codemirror/language-data';
 import {
   LanguageDescription,
@@ -39,14 +40,32 @@ import CodeMirror from '@uiw/react-codemirror';
 import {
   ClipboardDocumentIcon,
   CheckIcon,
-  ArrowsPointingInIcon,
-  ArrowsPointingOutIcon,
   MagnifyingGlassIcon,
   ChevronUpIcon,
   ChevronDownIcon,
   ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
+
+/** Word-wrap toggle icon: mimics a "wrap text" glyph */
+const WrapTextIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <path d="M3 12h13a3 3 0 0 1 0 6h-3" />
+    <polyline points="11 15 8 18 11 21" />
+    <line x1="3" y1="18" x2="5" y2="18" />
+  </svg>
+);
 import { i18nService } from '../services/i18n';
+import Tooltip from './ui/Tooltip';
 
 // ---------------------------------------------------------------------------
 // Language alias map
@@ -637,6 +656,130 @@ const CODE_BLOCK_CHAR_LIMIT = 20000;
 // Sub-components
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fullscreen modal
+// ---------------------------------------------------------------------------
+
+interface CodeFullscreenModalProps {
+  code: string;
+  lang: string | null;
+  isDark: boolean;
+  onClose: () => void;
+}
+
+const CodeFullscreenModal: React.FC<CodeFullscreenModalProps> = ({ code, lang, isDark, onClose }) => {
+  const [wrap, setWrap] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+  const viewRef = useRef<EditorView | null>(null);
+  const copyTimeoutRef = useRef<number | null>(null);
+  const langSupport = useLanguageSupport(lang);
+
+  // Close on Escape
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  // Prevent body scroll while open
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, []);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setIsCopied(true);
+      if (copyTimeoutRef.current != null) window.clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 1500);
+    } catch (err) {
+      console.error('Failed to copy in fullscreen modal:', err);
+    }
+  }, [code]);
+
+  const handleToggleSearch = useCallback(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (searchPanelOpen(view.state)) {
+      closeSearchPanel(view);
+    } else {
+      openSearchPanel(view);
+      view.focus();
+    }
+  }, []);
+
+  const handleViewReady = useCallback((view: EditorView | null) => {
+    viewRef.current = view;
+  }, []);
+
+  const t = (key: string) => i18nService.t(key as any);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[200] flex flex-col"
+      style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      {/* Modal container */}
+      <div
+        className="flex flex-col m-8 rounded-xl overflow-hidden border border-border shadow-2xl"
+        style={{ flex: 1, minHeight: 0, backgroundColor: isDark ? '#282c34' : '#f0f2f5' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Modal header */}
+        <div className="bg-surface-raised px-4 py-2 flex items-center justify-between border-b border-border flex-shrink-0">
+          <span className="font-mono text-xs text-secondary opacity-70">{lang ?? 'code'}</span>
+          <div className="flex items-center gap-0.5">
+            <Tooltip content={searchOpen ? t('codeBlockSearchClose') : t('codeBlockSearch')} position="bottom">
+              <HeaderButton onClick={handleToggleSearch} title="" active={searchOpen}>
+                <MagnifyingGlassIcon className="h-4 w-4" />
+              </HeaderButton>
+            </Tooltip>
+            <Tooltip content={wrap ? t('codeBlockWordWrapOff') : t('codeBlockWordWrap')} position="bottom">
+              <HeaderButton onClick={() => setWrap(v => !v)} title="" active={wrap}>
+                <WrapTextIcon className="h-4 w-4" />
+              </HeaderButton>
+            </Tooltip>
+            <Tooltip content={t('copyToClipboard')} position="bottom">
+              <HeaderButton onClick={handleCopy} title="">
+                {isCopied
+                  ? <CheckIcon className="h-4 w-4 text-green-500" />
+                  : <ClipboardDocumentIcon className="h-4 w-4" />}
+              </HeaderButton>
+            </Tooltip>
+            {/* Divider */}
+            <span className="w-px h-4 bg-border mx-1" />
+            {/* Close */}
+            <Tooltip content={t('codeBlockFullscreenExit')} position="bottom">
+              <HeaderButton onClick={onClose} title="">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </HeaderButton>
+            </Tooltip>
+          </div>
+        </div>
+        {/* Modal body — scrollable editor */}
+        <div className="flex-1 overflow-auto">
+          <CodeMirrorEditor
+            doc={code}
+            isDark={isDark}
+            wrap={wrap}
+            langSupport={langSupport}
+            onViewReady={handleViewReady}
+            onSearchOpenChange={setSearchOpen}
+          />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
 /** Thin icon button used in the code block header */
 const HeaderButton: React.FC<{
   onClick: () => void;
@@ -969,6 +1112,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
   const [wrap, setWrap] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const isDark = useIsDark();
@@ -1098,60 +1242,84 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ node, className, children, ...pro
 
   return (
     <div className="my-3 rounded-xl overflow-hidden border border-border relative shadow-subtle">
+      {/* Fullscreen modal */}
+      {fullscreen && (
+        <CodeFullscreenModal
+          code={trimmedCodeText}
+          lang={rawLang}
+          isDark={isDark}
+          onClose={() => setFullscreen(false)}
+        />
+      )}
       {/* Header */}
       <div className="bg-surface-raised px-4 py-1.5 text-xs text-secondary font-medium flex items-center justify-between">
         <span className="font-mono opacity-70">{displayLang}</span>
         <div className="flex items-center gap-0.5">
           {/* Collapse / expand the entire code body */}
-          <HeaderButton
-            onClick={handleToggleCollapse}
-            title={collapsed ? 'Expand code' : 'Collapse code'}
-            active={collapsed}
-          >
-            {collapsed ? (
-              <ChevronDownIcon className="h-4 w-4" />
-            ) : (
-              <ChevronUpIcon className="h-4 w-4" />
-            )}
-          </HeaderButton>
+          <Tooltip content={collapsed ? i18nService.t('codeBlockExpand') : i18nService.t('codeBlockCollapse')} position="bottom">
+            <HeaderButton
+              onClick={handleToggleCollapse}
+              title=""
+              active={collapsed}
+            >
+              {collapsed ? (
+                <ChevronDownIcon className="h-4 w-4" />
+              ) : (
+                <ChevronUpIcon className="h-4 w-4" />
+              )}
+            </HeaderButton>
+          </Tooltip>
           {/* Search toggle - only for regular code blocks (not diff) */}
           {!isDiffBlock && (
-            <HeaderButton
-              onClick={handleToggleSearch}
-              title={searchOpen ? 'Close search' : 'Search in code (Cmd+F)'}
-              active={searchOpen}
-            >
-              <MagnifyingGlassIcon className="h-4 w-4" />
-            </HeaderButton>
+            <Tooltip content={searchOpen ? i18nService.t('codeBlockSearchClose') : i18nService.t('codeBlockSearch')} position="bottom">
+              <HeaderButton
+                onClick={handleToggleSearch}
+                title=""
+                active={searchOpen}
+              >
+                <MagnifyingGlassIcon className="h-4 w-4" />
+              </HeaderButton>
+            </Tooltip>
           )}
           {/* Word wrap toggle */}
-          <HeaderButton
-            onClick={() => setWrap((v) => !v)}
-            title={wrap ? 'Disable word wrap' : 'Enable word wrap'}
-            active={wrap}
-          >
-            {wrap ? (
-              <ArrowsPointingInIcon className="h-4 w-4" />
-            ) : (
-              <ArrowsPointingOutIcon className="h-4 w-4" />
-            )}
-          </HeaderButton>
+          <Tooltip content={wrap ? i18nService.t('codeBlockWordWrapOff') : i18nService.t('codeBlockWordWrap')} position="bottom">
+            <HeaderButton
+              onClick={() => setWrap((v) => !v)}
+              title=""
+              active={wrap}
+            >
+              <WrapTextIcon className="h-4 w-4" />
+            </HeaderButton>
+          </Tooltip>
+          {/* Fullscreen expand */}
+          <Tooltip content={i18nService.t('codeBlockFullscreen')} position="bottom">
+            <HeaderButton onClick={() => setFullscreen(true)} title="">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" />
+                <line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            </HeaderButton>
+          </Tooltip>
           {/* Copy */}
-          <HeaderButton onClick={handleCopy} title={i18nService.t('copyToClipboard')}>
-            {isCopied ? (
-              <CheckIcon className="h-4 w-4 text-green-500" />
-            ) : (
-              <ClipboardDocumentIcon className="h-4 w-4" />
-            )}
-          </HeaderButton>
+          <Tooltip content={i18nService.t('copyToClipboard')} position="bottom">
+            <HeaderButton onClick={handleCopy} title="">
+              {isCopied ? (
+                <CheckIcon className="h-4 w-4 text-green-500" />
+              ) : (
+                <ClipboardDocumentIcon className="h-4 w-4" />
+              )}
+            </HeaderButton>
+          </Tooltip>
           {/* Save to file */}
-          <HeaderButton onClick={handleSave} title={i18nService.t('saveToFile')}>
-            {isSaved ? (
-              <CheckIcon className="h-4 w-4 text-green-500" />
-            ) : (
-              <ArrowDownTrayIcon className="h-4 w-4" />
-            )}
-          </HeaderButton>
+          <Tooltip content={i18nService.t('saveToFile')} position="bottom">
+            <HeaderButton onClick={handleSave} title="">
+              {isSaved ? (
+                <CheckIcon className="h-4 w-4 text-green-500" />
+              ) : (
+                <ArrowDownTrayIcon className="h-4 w-4" />
+              )}
+            </HeaderButton>
+          </Tooltip>
         </div>
       </div>
 
