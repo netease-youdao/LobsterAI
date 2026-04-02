@@ -263,7 +263,6 @@ const IMSettings: React.FC = () => {
     };
   }, []);
 
-  // Extract NIM channel schema and hints from the full OpenClaw config schema
   const nimSchemaData = useMemo(() => {
     if (!openclawSchema) return null;
     const { schema, uiHints } = openclawSchema;
@@ -288,32 +287,76 @@ const IMSettings: React.FC = () => {
     return { schema: channelSchema, hints };
   }, [openclawSchema]);
 
-  // Handle DingTalk OpenClaw config change
-  const dtOpenClawConfig = config.dingtalk;
-  const handleDingTalkOpenClawChange = (update: Partial<DingTalkOpenClawConfig>) => {
-    dispatch(setDingTalkConfig(update));
-  };
-  const handleSaveDingTalkOpenClawConfig = async (override?: Partial<DingTalkOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...dtOpenClawConfig, ...override }
-      : dtOpenClawConfig;
-    await imService.persistConfig({ dingtalk: configToSave });
-  };
-  const [dingtalkAllowedUserIdInput, setDingtalkAllowedUserIdInput] = useState('');
+  const platformDispatchMap: Record<string, (update: Record<string, unknown>) => void> = useMemo(() => ({
+    dingtalk: (u) => dispatch(setDingTalkConfig(u as Partial<DingTalkOpenClawConfig>)),
+    feishu: (u) => dispatch(setFeishuConfig(u as Partial<FeishuOpenClawConfig>)),
+    telegram: (u) => dispatch(setTelegramOpenClawConfig(u as Partial<TelegramOpenClawConfig>)),
+    qq: (u) => dispatch(setQQConfig(u as Partial<QQOpenClawConfig>)),
+    discord: (u) => dispatch(setDiscordConfig(u as Partial<DiscordOpenClawConfig>)),
+    wecom: (u) => dispatch(setWecomConfig(u as Partial<WecomOpenClawConfig>)),
+    popo: (u) => dispatch(setPopoConfig(u as Partial<PopoOpenClawConfig>)),
+  }), [dispatch]);
 
-  // Handle Feishu OpenClaw config change
-  const fsOpenClawConfig = config.feishu;
-  const handleFeishuOpenClawChange = (update: Partial<FeishuOpenClawConfig>) => {
-    dispatch(setFeishuConfig(update));
-  };
-  const handleSaveFeishuOpenClawConfig = async (override?: Partial<FeishuOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...fsOpenClawConfig, ...override }
-      : fsOpenClawConfig;
-    await imService.persistConfig({ feishu: configToSave });
-  };
+  function makePlatformHandlers<K extends keyof IMGatewayConfig>(platform: K) {
+    const currentConfig = config[platform];
+    const handleChange = (update: Partial<IMGatewayConfig[K]>) => {
+      platformDispatchMap[platform]?.(update as Record<string, unknown>);
+    };
+    const handleSave = async (override?: Partial<IMGatewayConfig[K]>) => {
+      if (!configLoaded) return;
+      const configToSave = override
+        ? { ...currentConfig, ...override }
+        : currentConfig;
+      await imService.persistConfig({ [platform]: configToSave } as Partial<IMGatewayConfig>);
+    };
+    return { config: currentConfig, handleChange, handleSave };
+  }
+
+  const {
+    config: dtOpenClawConfig,
+    handleChange: handleDingTalkOpenClawChange,
+    handleSave: handleSaveDingTalkOpenClawConfig,
+  } = makePlatformHandlers('dingtalk');
+
+  const {
+    config: fsOpenClawConfig,
+    handleChange: handleFeishuOpenClawChange,
+    handleSave: handleSaveFeishuOpenClawConfig,
+  } = makePlatformHandlers('feishu');
+
+  const {
+    config: tgOpenClawConfig,
+    handleChange: handleTelegramOpenClawChange,
+    handleSave: handleSaveTelegramOpenClawConfig,
+  } = makePlatformHandlers('telegram');
+
+  const {
+    config: qqOpenClawConfig,
+    handleChange: handleQQOpenClawChange,
+    handleSave: handleSaveQQOpenClawConfig,
+  } = makePlatformHandlers('qq');
+
+  const {
+    config: dcOpenClawConfig,
+    handleChange: handleDiscordOpenClawChange,
+    handleSave: handleSaveDiscordOpenClawConfig,
+  } = makePlatformHandlers('discord');
+
+  const {
+    config: wecomOpenClawConfig,
+    handleChange: handleWecomOpenClawChange,
+    handleSave: handleSaveWecomOpenClawConfig,
+  } = makePlatformHandlers('wecom');
+
+  const weixinOpenClawConfig = config.weixin;
+
+  const {
+    config: popoConfig,
+    handleChange: handlePopoChange,
+    handleSave: handleSavePopoConfig,
+  } = makePlatformHandlers('popo');
+
+  const [dingtalkAllowedUserIdInput, setDingtalkAllowedUserIdInput] = useState('');
 
   // State for Feishu allow-from inputs
   const [feishuAllowedUserIdInput, setFeishuAllowedUserIdInput] = useState('');
@@ -341,44 +384,6 @@ const IMSettings: React.FC = () => {
       setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'error', message: result.error || i18nService.t('imPairingCodeInvalid') } }));
     }
   };
-  // Handle Telegram OpenClaw config change
-  const tgOpenClawConfig = config.telegram;
-  const handleTelegramOpenClawChange = (update: Partial<TelegramOpenClawConfig>) => {
-    dispatch(setTelegramOpenClawConfig(update));
-  };
-  const handleSaveTelegramOpenClawConfig = async (override?: Partial<TelegramOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...tgOpenClawConfig, ...override }
-      : tgOpenClawConfig;
-    await imService.persistConfig({ telegram: configToSave });
-  };
-
-  // Handle QQ OpenClaw config change
-  const qqOpenClawConfig = config.qq;
-  const handleQQOpenClawChange = (update: Partial<QQOpenClawConfig>) => {
-    dispatch(setQQConfig(update));
-  };
-  const handleSaveQQOpenClawConfig = async (override?: Partial<QQOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...qqOpenClawConfig, ...override }
-      : qqOpenClawConfig;
-    await imService.persistConfig({ qq: configToSave });
-  };
-
-  // Handle Discord OpenClaw config change
-  const dcOpenClawConfig = config.discord;
-  const handleDiscordOpenClawChange = (update: Partial<DiscordOpenClawConfig>) => {
-    dispatch(setDiscordConfig(update));
-  };
-  const handleSaveDiscordOpenClawConfig = async (override?: Partial<DiscordOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...dcOpenClawConfig, ...override }
-      : dcOpenClawConfig;
-    await imService.persistConfig({ discord: configToSave });
-  };
 
   // State for Discord allow-from inputs
   const [discordAllowedUserIdInput, setDiscordAllowedUserIdInput] = useState('');
@@ -392,35 +397,6 @@ const IMSettings: React.FC = () => {
   // Handle NetEase Bee config change
   const handleNeteaseBeeChanChange = (field: 'clientId' | 'secret', value: string) => {
     dispatch(setNeteaseBeeChanConfig({ [field]: value }));
-  };
-
-  // Handle WeCom OpenClaw config change
-  const wecomOpenClawConfig = config.wecom;
-  const handleWecomOpenClawChange = (update: Partial<WecomOpenClawConfig>) => {
-    dispatch(setWecomConfig(update));
-  };
-  const handleSaveWecomOpenClawConfig = async (override?: Partial<WecomOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...wecomOpenClawConfig, ...override }
-      : wecomOpenClawConfig;
-    await imService.persistConfig({ wecom: configToSave });
-  };
-
-  // Handle Weixin OpenClaw config
-  const weixinOpenClawConfig = config.weixin;
-
-  // Handle POPO OpenClaw config change
-  const popoConfig = config.popo;
-  const handlePopoChange = (update: Partial<PopoOpenClawConfig>) => {
-    dispatch(setPopoConfig(update));
-  };
-  const handleSavePopoConfig = async (override?: Partial<PopoOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...popoConfig, ...override }
-      : popoConfig;
-    await imService.persistConfig({ popo: configToSave });
   };
 
   const handleWecomQuickSetup = async () => {
