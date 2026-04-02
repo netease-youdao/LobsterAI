@@ -1,7 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
-import { setViewMode, selectTask } from '../../store/slices/scheduledTaskSlice';
+import {
+  setViewMode,
+  selectTask,
+  enterSelectionMode,
+  exitSelectionMode,
+  selectAllTasks,
+  deselectAllTasks,
+} from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import TaskList from './TaskList';
@@ -9,10 +16,13 @@ import TaskForm from './TaskForm';
 import TaskDetail from './TaskDetail';
 import AllRunsHistory from './AllRunsHistory';
 import DeleteConfirmModal from './DeleteConfirmModal';
+import SplitButton, { ArrowUpTrayIcon, ArrowDownTrayIcon } from './SplitButton';
+import ImportPreviewModal from './ImportPreviewModal';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
+import type { ExportedTask } from '../../../scheduledTask/types';
 
 interface ScheduledTasksViewProps {
   isSidebarCollapsed?: boolean;
@@ -35,8 +45,71 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const selectedTaskId = useSelector((state: RootState) => state.scheduledTask.selectedTaskId);
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null;
+  const selectionMode = useSelector((state: RootState) => state.scheduledTask.selectionMode);
+  const selectedTaskIds = useSelector((state: RootState) => state.scheduledTask.selectedTaskIds);
+  const allTaskIds = tasks.map((t) => t.id);
+  const allSelected = allTaskIds.length > 0 && selectedTaskIds.length === allTaskIds.length;
+
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
+  const [importPreview, setImportPreview] = useState<{ tasks: ExportedTask[]; filename: string } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleExport = async () => {
+    if (selectedTaskIds.length === 0) return;
+    try {
+      const result = await scheduledTaskService.exportTasks(selectedTaskIds);
+      if (result === 'success') {
+        dispatch(exitSelectionMode());
+        showToast(
+          i18nService.t('scheduledTasksExportSuccess').replace('{n}', String(selectedTaskIds.length))
+        );
+      }
+    } catch (err) {
+      showToast(i18nService.t('scheduledTasksImportError'));
+    }
+  };
+
+  const handleImportOpen = async () => {
+    try {
+      const parsed = await scheduledTaskService.importParse();
+      if (parsed) {
+        setImportPreview(parsed);
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : i18nService.t('scheduledTasksImportError'));
+    }
+  };
+
+  const handleImportConfirm = async (selectedTasks: ExportedTask[]) => {
+    setImporting(true);
+    try {
+      const result = await scheduledTaskService.importExecute(selectedTasks);
+      setImportPreview(null);
+      await scheduledTaskService.loadTasks();
+      if (result.failCount === 0) {
+        showToast(
+          i18nService.t('scheduledTasksImportSuccess').replace('{n}', String(result.successCount))
+        );
+      } else {
+        showToast(
+          i18nService.t('scheduledTasksImportPartial')
+            .replace('{success}', String(result.successCount))
+            .replace('{fail}', String(result.failCount))
+        );
+      }
+    } catch (err) {
+      showToast(i18nService.t('scheduledTasksImportError'));
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
     setDeleteTaskInfo({ id: taskId, name: taskName });
@@ -118,8 +191,8 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
         <WindowTitleBar inline />
       </div>
 
-      {/* Tabs + New Task button */}
-      {showTabs && (
+      {/* Tabs + toolbar (normal mode) */}
+      {showTabs && !selectionMode && (
         <div className="flex items-center justify-between border-b border-border px-4 shrink-0">
           <div className="flex">
             <button
@@ -152,14 +225,65 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
             </button>
           </div>
           {activeTab === 'tasks' && (
+            <div className="flex items-center gap-2">
+              <SplitButton
+                label={i18nService.t('scheduledTasksImportExport')}
+                items={[
+                  {
+                    label: i18nService.t('scheduledTasksExport'),
+                    icon: <ArrowUpTrayIcon />,
+                    onClick: () => dispatch(enterSelectionMode()),
+                  },
+                  {
+                    label: i18nService.t('scheduledTasksImportTasks'),
+                    icon: <ArrowDownTrayIcon />,
+                    onClick: handleImportOpen,
+                  },
+                ]}
+              />
+              <button
+                type="button"
+                onClick={() => dispatch(setViewMode('create'))}
+                className="px-3 py-1 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
+              >
+                {i18nService.t('scheduledTasksNewTask')}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Selection action bar */}
+      {showTabs && selectionMode && (
+        <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0 bg-surface-raised/30">
+          <div className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={() => allSelected ? dispatch(deselectAllTasks()) : dispatch(selectAllTasks())}
+              className="w-4 h-4 rounded accent-primary cursor-pointer"
+            />
+            <span className="text-sm text-secondary">
+              {i18nService.t('scheduledTasksNSelected').replace('{n}', String(selectedTaskIds.length))}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => dispatch(setViewMode('create'))}
-              className="px-3 py-1 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
+              onClick={() => void handleExport()}
+              disabled={selectedTaskIds.length === 0}
+              className="px-3 py-1 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {i18nService.t('scheduledTasksNewTask')}
+              {i18nService.t('scheduledTasksExport')}
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => dispatch(exitSelectionMode())}
+              className="px-3 py-1 text-sm text-secondary hover:text-foreground transition-colors"
+            >
+              {i18nService.t('scheduledTasksCancel')}
+            </button>
+          </div>
         </div>
       )}
 
@@ -199,6 +323,24 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           onConfirm={handleConfirmDelete}
           onCancel={handleCancelDelete}
         />
+      )}
+
+      {/* Import preview modal */}
+      {importPreview && (
+        <ImportPreviewModal
+          tasks={importPreview.tasks}
+          filename={importPreview.filename}
+          onConfirm={(selected) => void handleImportConfirm(selected)}
+          onCancel={() => setImportPreview(null)}
+          importing={importing}
+        />
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-foreground text-background text-sm shadow-lg pointer-events-none z-50 max-w-xs text-center">
+          {toast}
+        </div>
       )}
     </div>
   );

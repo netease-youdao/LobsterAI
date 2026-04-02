@@ -8,6 +8,13 @@ import {
 import { PlatformRegistry } from '../../../shared/platform';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
 import { listScheduledTaskChannels } from './helpers';
+import {
+  exportTasks as doExportTasks,
+  parseImportFile as doParseImportFile,
+  executeImport as doExecuteImport,
+  initTaskExportImport,
+} from '../../../scheduledTask/taskExportImport';
+import type { ExportedTask } from '../../../scheduledTask/types';
 
 export interface ScheduledTaskHandlerDeps {
   getCronJobService: () => CronJobService;
@@ -37,6 +44,9 @@ export interface ScheduledTaskHandlerDeps {
 
 export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): void {
   const { getCronJobService, getIMGatewayManager, getOpenClawRuntimeAdapter } = deps;
+
+  // Initialize the export/import service with the CronJobService accessor.
+  initTaskExportImport(getCronJobService);
 
   ipcMain.handle(ScheduledTaskIpc.List, async () => {
     try {
@@ -279,6 +289,33 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       return { success: true, conversations };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to list conversations' };
+    }
+  });
+
+  ipcMain.handle(ScheduledTaskIpc.ExportTasks, async (_event, taskIds: string[]) => {
+    try {
+      const result = await doExportTasks(taskIds);
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to export tasks' };
+    }
+  });
+
+  ipcMain.handle(ScheduledTaskIpc.ImportParse, async () => {
+    try {
+      const result = await doParseImportFile();
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to parse import file' };
+    }
+  });
+
+  ipcMain.handle(ScheduledTaskIpc.ImportExecute, async (_event, tasks: ExportedTask[]) => {
+    try {
+      const result = await doExecuteImport(tasks);
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to execute import' };
     }
   });
 }

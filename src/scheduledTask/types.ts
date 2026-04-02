@@ -126,3 +126,29 @@ export interface ScheduledTaskConversationOption {
 }
 
 export type ScheduledTaskViewMode = 'list' | 'create' | 'edit' | 'detail';
+
+// ─── Export / Import Types ──────────────────────────────────────────────────
+
+export interface ExportedTask {
+  name: string;
+  description: string;
+  enabled: boolean;
+  schedule: Schedule;
+  sessionTarget: SessionTarget;
+  wakeMode: WakeMode;
+  payload: ScheduledTaskPayload;
+  delivery?: ScheduledTaskDelivery;
+}
+
+export interface ExportManifest {
+  version: number;
+  exportedAt: string;
+  appVersion: string;
+  tasks: ExportedTask[];
+}
+
+export interface ImportResult {
+  successCount: number;
+  failCount: number;
+  errors: string[];
+}
