@@ -1,0 +1,25 @@
+src/main/main.ts
+  b6197bbac57bebb4 900,1304-1305,3337-3338
+src/main/skillManager.ts
+  b6197bbac57bebb4 1925-1945,1949,1957
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.4",
+  "base_commit_sha": "a676acc5a1b1a2fa5fc76362aad3c5ff9d4ff0ab",
+  "prompts": {
+    "b6197bbac57bebb4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5f3e1eee-56e0-4550-b25e-0b47c0719d73",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 15,
+      "accepted_lines": 28,
+      "overriden_lines": 0
+    }
+  }
+}
