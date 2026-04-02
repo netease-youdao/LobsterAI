@@ -11,8 +11,16 @@
 !macroend
 
 !macro customInit
-  ; Best-effort: terminate a running app instance before install/uninstall
+  ; Best-effort: terminate a running app instance before install
   ; to avoid NSIS "app cannot be closed" errors during upgrades.
+  nsExec::ExecToLog 'taskkill /IM "${APP_EXECUTABLE_FILENAME}" /F /T'
+  Pop $0
+  Sleep 800
+!macroend
+
+!macro customUnInit
+  ; Best-effort: terminate a running app instance before uninstall
+  ; so the uninstaller can fully remove the application.
   nsExec::ExecToLog 'taskkill /IM "${APP_EXECUTABLE_FILENAME}" /F /T'
   Pop $0
   Sleep 800
