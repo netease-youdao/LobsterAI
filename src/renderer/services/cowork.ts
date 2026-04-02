@@ -400,6 +400,20 @@ class CoworkService {
     return false;
   }
 
+  async forkSession(sessionId: string, afterMessageId?: string): Promise<CoworkSession | null> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.forkSession) return null;
+
+    const result = await cowork.forkSession({ sessionId, afterMessageId });
+    if (result.success && result.session) {
+      store.dispatch(addSession(result.session));
+      return result.session;
+    }
+
+    console.error('Failed to fork session:', result.error);
+    return null;
+  }
+
   async exportSessionResultImage(options: {
     rect: { x: number; y: number; width: number; height: number };
     defaultFileName?: string;

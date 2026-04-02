@@ -2679,6 +2679,22 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:fork', async (_event, options: { sessionId: string; afterMessageId?: string }) => {
+    try {
+      const coworkStoreInstance = getCoworkStore();
+      const forkedSession = coworkStoreInstance.forkSession(options.sessionId, options.afterMessageId);
+      if (!forkedSession) {
+        return { success: false, error: 'Source session not found' };
+      }
+      return { success: true, session: forkedSession };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to fork session',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:get', async (_event, sessionId: string) => {
     try {
       const session = getCoworkStore().getSession(sessionId);
