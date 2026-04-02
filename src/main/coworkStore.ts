@@ -1029,86 +1029,77 @@ export class CoworkStore {
 
   setConfig(config: CoworkConfigUpdate): void {
     const now = Date.now();
+    const updates: Array<{ key: string; value: string }> = [];
 
     if (config.workingDirectory !== undefined) {
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('workingDirectory', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [config.workingDirectory, now]);
+      updates.push({ key: 'workingDirectory', value: config.workingDirectory });
     }
 
     if (config.executionMode !== undefined) {
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('executionMode', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [config.executionMode, now]);
+      updates.push({ key: 'executionMode', value: config.executionMode });
     }
 
     if (config.agentEngine !== undefined) {
-      const normalizedAgentEngine = normalizeCoworkAgentEngineValue(config.agentEngine);
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('agentEngine', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [normalizedAgentEngine, now]);
+      updates.push({
+        key: 'agentEngine',
+        value: normalizeCoworkAgentEngineValue(config.agentEngine),
+      });
     }
 
     if (config.memoryEnabled !== undefined) {
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('memoryEnabled', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [config.memoryEnabled ? '1' : '0', now]);
+      updates.push({ key: 'memoryEnabled', value: config.memoryEnabled ? '1' : '0' });
     }
 
     if (config.memoryImplicitUpdateEnabled !== undefined) {
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('memoryImplicitUpdateEnabled', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [config.memoryImplicitUpdateEnabled ? '1' : '0', now]);
+      updates.push({
+        key: 'memoryImplicitUpdateEnabled',
+        value: config.memoryImplicitUpdateEnabled ? '1' : '0',
+      });
     }
 
     if (config.memoryLlmJudgeEnabled !== undefined) {
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('memoryLlmJudgeEnabled', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [config.memoryLlmJudgeEnabled ? '1' : '0', now]);
+      updates.push({
+        key: 'memoryLlmJudgeEnabled',
+        value: config.memoryLlmJudgeEnabled ? '1' : '0',
+      });
     }
 
     if (config.memoryGuardLevel !== undefined) {
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('memoryGuardLevel', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [normalizeMemoryGuardLevel(config.memoryGuardLevel), now]);
+      updates.push({
+        key: 'memoryGuardLevel',
+        value: normalizeMemoryGuardLevel(config.memoryGuardLevel),
+      });
     }
 
     if (config.memoryUserMemoriesMaxItems !== undefined) {
-      this.db.run(`
-        INSERT INTO cowork_config (key, value, updated_at)
-        VALUES ('memoryUserMemoriesMaxItems', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          updated_at = excluded.updated_at
-      `, [String(clampMemoryUserMemoriesMaxItems(config.memoryUserMemoriesMaxItems)), now]);
+      updates.push({
+        key: 'memoryUserMemoriesMaxItems',
+        value: String(clampMemoryUserMemoriesMaxItems(config.memoryUserMemoriesMaxItems)),
+      });
+    }
+
+    if (updates.length > 0) {
+      const placeholders = updates.map(() => '(?, ?, ?)').join(', ');
+      const values = updates.flatMap(({ key, value }) => [key, value, now]);
+
+      this.db.run('BEGIN');
+      try {
+        this.db.run(`
+          INSERT INTO cowork_config (key, value, updated_at)
+          VALUES ${placeholders}
+          ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        `, values);
+        this.db.run('COMMIT');
+      } catch (error) {
+        try {
+          this.db.run('ROLLBACK');
+        } catch {
+          // Best-effort rollback; preserve the original error.
+        }
+        throw error;
+      }
     }
 
     this.saveDb();
