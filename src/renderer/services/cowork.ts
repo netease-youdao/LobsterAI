@@ -130,6 +130,12 @@ class CoworkService {
     });
     this.streamListenerCleanups.push(permissionCleanup);
 
+    // Permission dismiss listener (timeout or server-side resolution)
+    const permissionDismissCleanup = cowork.onStreamPermissionDismiss(({ requestId }) => {
+      store.dispatch(dequeuePendingPermission({ requestId }));
+    });
+    this.streamListenerCleanups.push(permissionDismissCleanup);
+
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
@@ -193,9 +199,9 @@ class CoworkService {
     this.openClawEngineListenerAttached = false;
   }
 
-  async loadSessions(): Promise<void> {
+  async loadSessions(agentId?: string): Promise<void> {
     const requestId = ++this.latestLoadSessionsRequestId;
-    const result = await window.electron?.cowork?.listSessions();
+    const result = await window.electron?.cowork?.listSessions(agentId);
     if (result?.success && result.sessions) {
       // High-frequency IM traffic can trigger overlapping list refreshes.
       // Ignore stale responses so an older snapshot does not hide newer sessions.

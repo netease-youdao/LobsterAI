@@ -10,7 +10,7 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
 import type { CoworkStore, CoworkMessage } from '../coworkStore';
 import type { IMStore } from './imStore';
-import type { IMMessage, IMPlatform, IMMediaAttachment, IMSessionMapping } from './types';
+import type { IMMessage, Platform, IMMediaAttachment, IMSessionMapping } from './types';
 import { buildIMMediaInstruction } from './imMediaInstruction';
 import { analyzeIMReply, DEFAULT_IM_EMPTY_REPLY } from './imReplyGuard';
 import {
@@ -19,7 +19,8 @@ import {
   type IMScheduledTaskRequestDetector,
   type ParsedIMScheduledTaskRequest,
 } from './imScheduledTaskHandler';
-import { buildScheduledTaskEnginePrompt } from '../libs/scheduledTaskEnginePrompt';
+import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
+import { t } from '../i18n';
 
 interface MessageAccumulator {
   messages: CoworkMessage[];
@@ -28,7 +29,7 @@ interface MessageAccumulator {
   timeoutId?: NodeJS.Timeout;
   backgroundDelivery?: {
     conversationId: string;
-    platform: IMPlatform;
+    platform: Platform;
   };
 }
 
@@ -37,7 +38,7 @@ interface PendingIMPermission {
   sessionId: string;
   request: PermissionRequest;
   conversationId: string;
-  platform: IMPlatform;
+  platform: Platform;
   createdAt: number;
   timeoutId?: NodeJS.Timeout;
 }
@@ -59,7 +60,7 @@ export interface IMCoworkHandlerOptions {
     message: IMMessage;
     request: ParsedIMScheduledTaskRequest;
   }) => Promise<IMScheduledTaskCreationResult>;
-  sendAsyncReply?: (platform: IMPlatform, conversationId: string, text: string) => Promise<boolean>;
+  sendAsyncReply?: (platform: Platform, conversationId: string, text: string) => Promise<boolean>;
 }
 
 export class IMCoworkHandler extends EventEmitter {
@@ -73,14 +74,14 @@ export class IMCoworkHandler extends EventEmitter {
     message: IMMessage;
     request: ParsedIMScheduledTaskRequest;
   }) => Promise<IMScheduledTaskCreationResult>;
-  private sendAsyncReply?: (platform: IMPlatform, conversationId: string, text: string) => Promise<boolean>;
+  private sendAsyncReply?: (platform: Platform, conversationId: string, text: string) => Promise<boolean>;
 
   // Track active sessions' message accumulation
   private messageAccumulators: Map<string, MessageAccumulator> = new Map();
 
   // Track which sessions are created by IM (to filter events)
   private imSessionIds: Set<string> = new Set();
-  private sessionConversationMap: Map<string, { conversationId: string; platform: IMPlatform }> = new Map();
+  private sessionConversationMap: Map<string, { conversationId: string; platform: Platform }> = new Map();
   private pendingPermissionByConversation: Map<string, PendingIMPermission> = new Map();
   private readonly onMessage = this.handleMessage.bind(this);
   private readonly onMessageUpdate = this.handleMessageUpdate.bind(this);
@@ -262,7 +263,7 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private async getOrCreateCoworkSession(
     imConversationId: string,
-    platform: IMPlatform,
+    platform: Platform,
     forceNewSession: boolean = false,
     senderId?: string,
     message?: IMMessage
@@ -304,7 +305,7 @@ export class IMCoworkHandler extends EventEmitter {
 
   private async createCoworkSessionForConversation(
     imConversationId: string,
-    platform: IMPlatform,
+    platform: Platform,
     senderId?: string,
     message?: IMMessage
   ): Promise<string> {
@@ -322,11 +323,17 @@ export class IMCoworkHandler extends EventEmitter {
       throw new Error(`IM 工作目录不存在或无效: ${resolvedWorkspaceRoot}`);
     }
 
+    // Resolve the agent bound to this platform
+    const imSettings = this.imStore.getIMSettings();
+    const agentId = imSettings.platformAgentBindings?.[platform] || 'main';
+
     const session = this.coworkStore.createSession(
       title,
       resolvedWorkspaceRoot,
       systemPrompt,
-      config.executionMode || 'auto'
+      config.executionMode || 'local',
+      [],
+      agentId
     );
 
     // Save mapping
@@ -347,23 +354,23 @@ export class IMCoworkHandler extends EventEmitter {
    * Other platforms use the original "IM-{platform}-{timestamp}" style.
    */
   private buildSessionTitle(
-    platform: IMPlatform,
+    platform: Platform,
     _imConversationId: string,
     senderId?: string,
     message?: IMMessage
   ): string {
     if (platform === 'nim') {
+      const nimLabel = t('channelPrefixNim');
       if (message?.chatSubType === 'qchat') {
         const channelLabel = message.groupName || _imConversationId;
-        return `云信-圈组-${channelLabel}`;
+        return `${nimLabel}-${t('nimQChat')}-${channelLabel}`;
       }
       if (message?.chatType === 'group') {
         const groupLabel = message.groupName || senderId || _imConversationId;
-        return `云信-群聊-${groupLabel}`;
+        return `${nimLabel}-${t('nimGroup')}-${groupLabel}`;
       }
-      // P2P direct message
       const peerLabel = message?.senderName || senderId || _imConversationId;
-      return `云信-P2P-${peerLabel}`;
+      return `${nimLabel}-P2P-${peerLabel}`;
     }
     return `IM-${platform}-${Date.now()}`;
   }
@@ -535,9 +542,12 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handleMessage(sessionId: string, message: CoworkMessage): void {
     // Only process messages from IM sessions
-    if (!this.ensureTrackedSession(sessionId)) return;
+    const tracked = this.ensureTrackedSession(sessionId);
+    console.log('[IMCoworkHandler:handleMessage] sessionId:', sessionId, 'tracked:', tracked, 'messageType:', message.type);
+    if (!tracked) return;
 
     const accumulator = this.messageAccumulators.get(sessionId) ?? this.ensureBackgroundAccumulator(sessionId);
+    console.log('[IMCoworkHandler:handleMessage] accumulator exists:', !!accumulator, 'backgroundDelivery:', !!(accumulator as any)?.backgroundDelivery);
     if (accumulator) {
       accumulator.messages.push(message);
     }
@@ -560,7 +570,7 @@ export class IMCoworkHandler extends EventEmitter {
     }
   }
 
-  private createConversationKey(conversationId: string, platform: IMPlatform): string {
+  private createConversationKey(conversationId: string, platform: Platform): string {
     return `${platform}:${conversationId}`;
   }
 
@@ -813,7 +823,9 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handleComplete(sessionId: string): void {
     // Only process complete events from IM sessions
-    if (!this.ensureTrackedSession(sessionId)) return;
+    const tracked = this.ensureTrackedSession(sessionId);
+    console.log('[IMCoworkHandler:handleComplete] sessionId:', sessionId, 'tracked:', tracked, 'hasAccumulator:', this.messageAccumulators.has(sessionId));
+    if (!tracked) return;
 
     this.clearPendingPermissionsBySessionId(sessionId);
     const accumulator = this.messageAccumulators.get(sessionId);
@@ -821,28 +833,38 @@ export class IMCoworkHandler extends EventEmitter {
       return;
     }
 
+    // Use reconciled messages from the store (authoritative after reconcileWithHistory)
+    // instead of accumulator messages which may be stale streaming snapshots.
+    // Fall back to accumulator messages if the store has none (e.g. timeout path).
+    const session = this.coworkStore.getSession(sessionId);
+    const storeMessages = session?.messages ?? [];
+    const messages = storeMessages.length > 0 ? storeMessages : accumulator.messages;
+
     // For cron-triggered background deliveries (scheduled task executions),
     // skip the reminder guard — the assistant text IS the scheduled reminder
     // itself, not a promise to create one.
     const replyText = accumulator.backgroundDelivery
-      ? this.formatReplyRaw(accumulator.messages)
-      : this.formatReply(sessionId, accumulator.messages);
+      ? this.formatReplyRaw(messages)
+      : this.formatReply(sessionId, messages);
 
     console.log(`[IMCoworkHandler] 会话完成:`, JSON.stringify({
       sessionId,
-      messageCount: accumulator.messages.length,
+      messageCount: messages.length,
       replyLength: replyText.length,
       reply: replyText,
       backgroundDelivery: accumulator.backgroundDelivery ?? null,
+      usedStoreMessages: storeMessages.length > 0,
     }, null, 2));
 
     this.cleanupAccumulator(sessionId);
 
     if (accumulator.backgroundDelivery) {
       if (!this.sendAsyncReply || !replyText || replyText === '处理完成，但没有生成回复。') {
+        console.warn('[IMCoworkHandler] cannot send async IM reminder reply', replyText);
         return;
       }
-      if (!isReminderSystemTurn(accumulator.messages)) {
+      if (!isReminderSystemTurn(messages)) {
+        console.log('[IMCoworkHandler] not a reminder system turn, skipping async reply');
         return;
       }
       void this.sendAsyncReply(
@@ -932,7 +954,11 @@ export class IMCoworkHandler extends EventEmitter {
    * Appends media metadata to content so AI can access the files
    */
   private formatMessageWithMedia(message: IMMessage): string {
-    let content = message.content;
+    // POPO's moltbot-popo plugin converts newlines to HTML break tags (<br />),
+    // causing raw <br /> to appear in the AI conversation instead of actual line breaks.
+    let content = message.platform === 'popo'
+      ? message.content.replace(/<br\s*\/?>/gi, '\n')
+      : message.content;
 
     if (message.attachments && message.attachments.length > 0) {
       const mediaInfo = message.attachments.map((att: IMMediaAttachment) => {

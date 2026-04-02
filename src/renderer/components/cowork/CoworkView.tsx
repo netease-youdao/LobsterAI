@@ -53,6 +53,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const skills = useSelector((state: RootState) => state.skill.skills);
   const quickActions = useSelector((state: RootState) => state.quickAction.actions);
   const selectedActionId = useSelector((state: RootState) => state.quickAction.selectedActionId);
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
 
   const buildApiConfigNotice = (error?: string) => {
     const baseNotice = i18nService.t('coworkModelSettingsRequired');
@@ -204,6 +205,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         systemPrompt: '',
         executionMode: config.executionMode || 'local',
         activeSkillIds: sessionSkillIds,
+        agentId: currentAgentId,
         messages: [
           {
             id: `msg-${now}`,
@@ -229,10 +231,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       dispatch(clearActiveSkills());
       dispatch(clearSelection());
 
-      // Combine skill prompt with system prompt
-      // If no manual skill selected, use auto-routing prompt
+      // Combine skill prompt with system prompt.
+      // OpenClaw loads skills natively via skills.load.extraDirs, so skip the
+      // auto-routing prompt to avoid injecting Claude SDK tool-calling instructions
+      // that confuse non-Claude models (e.g. kimi-k2.5 falls back to text-based
+      // tool calls, producing empty tool names and err=true failures).
       let effectiveSkillPrompt = skillPrompt;
-      if (!skillPrompt) {
+      if (!skillPrompt && !isOpenClawEngine) {
         effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
       }
       const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
@@ -246,6 +251,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         cwd: config.workingDirectory || undefined,
         systemPrompt: combinedSystemPrompt,
         activeSkillIds: sessionSkillIds,
+        agentId: currentAgentId,
         imageAttachments,
       });
 
@@ -310,10 +316,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       dispatch(clearActiveSkills());
     }
 
-    // Combine skill prompt with system prompt for continuation
-    // If no manual skill selected, use auto-routing prompt
+    // Combine skill prompt with system prompt for continuation.
+    // Skip auto-routing prompt for OpenClaw — skills are loaded natively.
     let effectiveSkillPrompt = skillPrompt;
-    if (!skillPrompt) {
+    if (!skillPrompt && !isOpenClawEngine) {
       effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
     }
     const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
@@ -404,12 +410,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   if (!isInitialized) {
     return (
-      <div className="flex-1 h-full flex flex-col dark:bg-claude-darkBg bg-claude-bg">
-        <div className="draggable flex h-12 items-center justify-end px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
+      <div className="flex-1 h-full flex flex-col bg-background">
+        <div className="draggable flex h-12 items-center justify-end px-4 border-b border-border shrink-0">
           <WindowTitleBar inline />
         </div>
         <div className="flex-1 flex items-center justify-center">
-          <div className="dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <div className="text-secondary">
             {i18nService.t('loading')}
           </div>
         </div>
@@ -424,21 +430,21 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     : true;
 
   const homeHeader = (
-    <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
+    <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border shrink-0">
       <div className="non-draggable h-8 flex items-center">
         {isSidebarCollapsed && (
           <div className={`flex items-center gap-1 mr-2 ${isMac ? 'pl-[68px]' : ''}`}>
             <button
               type="button"
               onClick={onToggleSidebar}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             >
               <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
             </button>
             <button
               type="button"
               onClick={onNewChat}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             >
               <ComposeIcon className="h-4 w-4" />
             </button>
@@ -506,7 +512,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   // Home view - no current session
   return (
-    <div className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
+    <div className="flex-1 flex flex-col bg-background h-full">
       {/* Engine status banner for error states */}
       {engineStatusBanner}
 
@@ -519,10 +525,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           {/* Welcome Section */}
           <div className="text-center space-y-5">
             <img src="logo.png" alt="logo" className="w-16 h-16 mx-auto" />
-            <h2 className="text-3xl font-bold tracking-tight dark:text-claude-darkText text-claude-text">
+            <h2 className="text-3xl font-bold tracking-tight text-foreground">
               {i18nService.t('coworkWelcome')}
             </h2>
-            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary max-w-md mx-auto">
+            <p className="text-sm text-secondary max-w-md mx-auto">
               {i18nService.t('coworkDescription')}
             </p>
           </div>

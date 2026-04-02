@@ -77,16 +77,16 @@ const CreditItemRow: React.FC<{ item: CreditItem; isEn: boolean }> = ({ item, is
             {label}
           </span>
         ) : (
-          <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <span className="text-xs text-secondary">
             {label}
           </span>
         )}
-        <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+        <span className="text-xs font-medium text-foreground">
           {formatCredits(item.creditsRemaining)}{i18nService.t('authCreditsUnit')}
         </span>
       </div>
       {expiresText && (
-        <span className="text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary pl-0.5">
+        <span className="text-[10px] text-secondary pl-0.5">
           {expiresText}
         </span>
       )}
@@ -126,31 +126,31 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const hasCredits = creditItems.length > 0;
 
   return (
-    <div className="absolute bottom-full left-[-0.5rem] mb-1 w-[14.5rem] dark:bg-claude-darkSurface bg-claude-surface rounded-xl shadow-popover border dark:border-claude-darkBorder border-claude-border overflow-hidden z-50 popover-enter">
+    <div className="absolute bottom-full left-[-0.5rem] mb-1 w-[14.5rem] bg-surface rounded-xl shadow-popover border border-border overflow-hidden z-50 popover-enter">
       {/* Account info */}
-      <div className="px-4 py-3 border-b dark:border-claude-darkBorder border-claude-border">
-        <div className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
+      <div className="px-4 py-3 border-b border-border">
+        <div className="text-sm font-medium text-foreground truncate">
           {user?.nickname || phoneSuffix}
         </div>
         {phoneSuffix && (
-          <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-0.5">
+          <div className="text-xs text-secondary mt-0.5">
             ****{phoneSuffix}
           </div>
         )}
       </div>
 
       {/* Credits section - collapsible */}
-      <div className="border-b dark:border-claude-darkBorder border-claude-border">
+      <div className="border-b border-border">
         <button
           type="button"
           onClick={() => setCreditsExpanded(!creditsExpanded)}
-          className="w-full px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+          className="w-full px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-surface-raised transition-colors"
         >
-          <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <span className="text-xs text-secondary">
             {i18nService.t('authCreditsRemaining')}
           </span>
           <div className="flex items-center gap-1.5">
-            <span className="text-xs font-medium dark:text-claude-darkText text-claude-text">
+            <span className="text-xs font-medium text-foreground">
               {formatCredits(totalCredits)}{i18nService.t('authCreditsUnit')}
             </span>
             <svg
@@ -163,7 +163,7 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className={`dark:text-claude-darkTextSecondary text-claude-textSecondary transition-transform duration-200 ${creditsExpanded ? 'rotate-180' : ''}`}
+              className={`text-secondary transition-transform duration-200 ${creditsExpanded ? 'rotate-180' : ''}`}
             >
               <polyline points="6 9 12 15 18 9" />
             </svg>
@@ -174,20 +174,20 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         {creditsExpanded && (
           <div className="px-4 pb-3">
             {hasCredits ? (
-              <div className="divide-y dark:divide-claude-darkBorder divide-claude-border">
+              <div className="divide-y divide-border">
                 {creditItems.map((item, idx) => (
                   <CreditItemRow key={idx} item={item} isEn={isEn} />
                 ))}
               </div>
             ) : (
-              <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary py-1">
+              <div className="text-xs text-secondary py-1">
                 {i18nService.t('authZeroCredits')}
               </div>
             )}
             <button
               type="button"
               onClick={handleLearnMore}
-              className="mt-2 text-xs text-claude-accent hover:underline cursor-pointer"
+              className="mt-2 text-xs text-primary hover:underline cursor-pointer"
             >
               {i18nService.t('authLearnMore')}
             </button>
@@ -200,14 +200,14 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         <button
           type="button"
           onClick={handleSubscribe}
-          className="w-full px-4 py-2 text-left text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors cursor-pointer"
+          className="w-full px-4 py-2 text-left text-sm text-foreground hover:bg-surface-raised transition-colors cursor-pointer"
         >
           {i18nService.t('authValueAddedServices')}
         </button>
         <button
           type="button"
           onClick={handleLogout}
-          className="w-full px-4 py-2 text-left text-sm text-red-500 dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors cursor-pointer flex items-center gap-2"
+          className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-surface-raised transition-colors cursor-pointer flex items-center gap-2"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -259,7 +259,7 @@ const LoginButton: React.FC = () => {
       <button
         type="button"
         onClick={handleClick}
-        className="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors cursor-pointer"
+        className="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors cursor-pointer"
       >
         {isLoggedIn ? (
           <>

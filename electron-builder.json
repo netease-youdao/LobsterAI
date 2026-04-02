@@ -148,7 +148,7 @@
       "nsis"
     ],
     "icon": "build/icons/win/icon.ico",
-    "requestedExecutionLevel": "requireAdministrator",
+    "requestedExecutionLevel": "asInvoker",
     "extraResources": [
       {
         "from": "build-tar/win-resources.tar",

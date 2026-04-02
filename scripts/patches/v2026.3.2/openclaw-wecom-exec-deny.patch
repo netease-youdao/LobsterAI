@@ -1,0 +1,12 @@
+diff --git a/src/agents/pi-tools.ts b/src/agents/pi-tools.ts
+index 7d6fdf1c14..b622c1adf8 100644
+--- a/src/agents/pi-tools.ts
++++ b/src/agents/pi-tools.ts
+@@ -64,6 +64,7 @@ function isOpenAIProvider(provider?: string) {
+ 
+ const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
+   voice: ["tts"],
++  wecom: ["exec", "process"],
+ };
+ 
+ function normalizeMessageProvider(messageProvider?: string): string | undefined {

@@ -9,6 +9,18 @@ export function resolveLocalizedText(text: string | LocalizedText): string {
   return text[lang] || text.en || '';
 }
 
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(s => parseInt(s, 10) || 0);
+  const pb = b.split('.').map(s => parseInt(s, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
 type EmailConnectivityCheck = {
   code: 'imap_connection' | 'smtp_connection';
   level: 'pass' | 'fail';
@@ -111,6 +123,26 @@ class SkillService {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to confirm install';
       console.error('Failed to confirm install:', error);
+      return { success: false, error: message };
+    }
+  }
+
+  async upgradeSkill(skillId: string, downloadUrl: string): Promise<{
+    success: boolean;
+    skills?: Skill[];
+    error?: string;
+    auditReport?: any;
+    pendingInstallId?: string;
+  }> {
+    try {
+      const result = await window.electron.skills.upgrade(skillId, downloadUrl);
+      if (result.success && result.skills) {
+        this.skills = result.skills;
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to upgrade skill';
+      console.error('Failed to upgrade skill:', error);
       return { success: false, error: message };
     }
   }

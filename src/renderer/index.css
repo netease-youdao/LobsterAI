@@ -1,3 +1,7 @@
+/* Theme system: CSS variable definitions for all 12 themes */
+@import './theme/css/themes.css';
+@import './theme/css/base.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -15,12 +19,12 @@
 }
 
 .dark .katex {
-  color: #E4E5E9;
+  color: var(--lobster-text-primary);
 }
 
 /* Improve code block styles */
 pre {
-  @apply dark:bg-claude-darkSurface bg-claude-surfaceHover;
+  background-color: var(--lobster-surface-raised);
   border-radius: 0.75rem !important;
   padding: 1em !important;
   margin: 1em 0 !important;
@@ -39,18 +43,20 @@ table {
 }
 
 th, td {
-  @apply dark:border-claude-darkBorder border-claude-border;
+  border-color: var(--lobster-border);
   padding: 0.5em;
 }
 
 th {
-  @apply dark:bg-claude-darkSurface/50 bg-claude-surfaceHover/50;
+  background-color: var(--lobster-surface-raised);
+  opacity: 0.8;
   font-weight: bold;
 }
 
 /* Style for blockquotes */
 blockquote {
-  @apply dark:border-claude-accent border-claude-accent dark:text-claude-darkTextSecondary text-claude-textSecondary;
+  border-left-color: var(--lobster-primary);
+  color: var(--lobster-text-secondary);
   border-left-width: 3px;
   padding-left: 1em;
   font-style: italic;
@@ -73,33 +79,11 @@ blockquote {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Cold modern dark mode */
-.dark {
-  color-scheme: dark;
-  color: #E4E5E9;
-  background-color: #0F1117;
-}
-
-/* Cold modern light mode */
-.light {
-  color-scheme: light;
-  color: #1A1D23;
-  background-color: #F8F9FB;
-}
-
-/* Ensure all containers inherit theme */
-.dark #root,
-.dark .App,
-.dark main {
-  background-color: #0F1117;
-  color: #E4E5E9;
-}
-
-.light #root,
-.light .App,
-.light main {
-  background-color: #F8F9FB;
-  color: #1A1D23;
+/* Theme colors are driven by CSS variables from themes.css.
+ * color-scheme is set by the [data-theme] selectors. */
+body, #root, .App, main {
+  background-color: var(--lobster-background);
+  color: var(--lobster-foreground);
 }
 
 body {
@@ -122,23 +106,18 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply dark:bg-claude-darkBorder bg-claude-border;
+  background-color: var(--lobster-scroll-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply dark:bg-claude-darkTextSecondary bg-claude-textSecondary;
+  background-color: var(--lobster-scroll-thumb-hover);
 }
 
 /* Style for select options to match theme */
-.dark option {
-  background-color: #1A1D27;
-  color: #E4E5E9;
-}
-
-.light option {
-  background-color: #FFFFFF;
-  color: #1A1D23;
+option {
+  background-color: var(--lobster-surface);
+  color: var(--lobster-foreground);
 }
 
 /* Ensure select elements have proper styling in Firefox */
@@ -172,16 +151,23 @@ select::-ms-expand {
 
 /* Focus ring */
 .focus-ring {
-  @apply focus:outline-none focus:ring-2 focus:ring-claude-accent focus:ring-offset-2 dark:focus:ring-offset-claude-darkBg focus:ring-offset-claude-bg;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2;
+  --tw-ring-offset-color: var(--lobster-background);
 }
 
 /* Button styles */
 .btn-primary {
-  @apply bg-claude-accent hover:bg-claude-accentHover text-white font-medium py-2 px-4 rounded-lg transition-colors;
+  @apply bg-primary hover:bg-primary-hover text-white font-medium py-2 px-4 rounded-lg transition-colors;
 }
 
 .btn-secondary {
-  @apply dark:bg-claude-darkSurface bg-claude-surface dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkText text-claude-text border dark:border-claude-darkBorder border-claude-border font-medium py-2 px-4 rounded-lg transition-colors;
+  background-color: var(--lobster-surface);
+  color: var(--lobster-text-primary);
+  border: 1px solid var(--lobster-border);
+  @apply font-medium py-2 px-4 rounded-lg transition-colors;
+}
+.btn-secondary:hover {
+  background-color: var(--lobster-surface-raised);
 }
 
 /* Sidebar width transition - instant toggle, no animation */
@@ -191,7 +177,7 @@ select::-ms-expand {
 
 /* Subtle separator line */
 .separator {
-  @apply dark:border-claude-darkBorderLight border-claude-borderLight;
+  border-color: var(--lobster-border-subtle);
   border-top-width: 1px;
 }
 
@@ -213,7 +199,8 @@ select::-ms-expand {
 
 /* Skeleton loading */
 .skeleton {
-  @apply dark:bg-claude-darkSurface bg-claude-surfaceHover rounded;
+  background-color: var(--lobster-surface-raised);
+  @apply rounded;
   position: relative;
   overflow: hidden;
 }
@@ -245,11 +232,9 @@ select::-ms-expand {
   background: linear-gradient(90deg, rgba(59,130,246,0.3) 0%, rgba(59,130,246,0.8) 50%, rgba(59,130,246,0.3) 100%);
   animation: streaming-slide 1.5s ease-in-out infinite;
 }
-.dark .streaming-bar {
-  background: rgba(59,130,246,0.15);
-}
-.dark .streaming-bar::before {
-  box-shadow: 0 0 6px rgba(59,130,246,0.4);
+/* Streaming bar glow uses primary color */
+.streaming-bar::before {
+  box-shadow: 0 0 6px var(--lobster-primary-muted);
 }
 @keyframes streaming-slide {
   0% { left: -40%; }

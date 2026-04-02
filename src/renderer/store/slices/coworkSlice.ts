@@ -8,11 +8,20 @@ import type {
   CoworkSessionStatus,
 } from '../../types/cowork';
 
+export interface DraftAttachment {
+  path: string;
+  name: string;
+  isImage?: boolean;
+  dataUrl?: string;
+}
+
 interface CoworkState {
   sessions: CoworkSessionSummary[];
   currentSessionId: string | null;
   currentSession: CoworkSession | null;
   draftPrompts: Record<string, string>;
+  /** Keyed by draftKey (sessionId or '__home__'), stores pending attachments */
+  draftAttachments: Record<string, DraftAttachment[]>;
   unreadSessionIds: string[];
   isCoworkActive: boolean;
   isStreaming: boolean;
@@ -26,6 +35,7 @@ const initialState: CoworkState = {
   currentSessionId: null,
   currentSession: null,
   draftPrompts: {},
+  draftAttachments: {},
   unreadSessionIds: [],
   isCoworkActive: false,
   isStreaming: false,
@@ -315,6 +325,19 @@ const coworkSlice = createSlice({
       state.isStreaming = false;
       state.remoteManaged = false;
     },
+
+    setDraftAttachments(state, action: PayloadAction<{ draftKey: string; attachments: DraftAttachment[] }>) {
+      const { draftKey, attachments } = action.payload;
+      if (attachments.length === 0) {
+        delete state.draftAttachments[draftKey];
+      } else {
+        state.draftAttachments[draftKey] = attachments;
+      }
+    },
+
+    clearDraftAttachments(state, action: PayloadAction<string>) {
+      delete state.draftAttachments[action.payload];
+    },
   },
 });
 
@@ -324,6 +347,8 @@ export const {
   setCurrentSessionId,
   setCurrentSession,
   setDraftPrompt,
+  setDraftAttachments,
+  clearDraftAttachments,
   addSession,
   updateSessionStatus,
   deleteSession,
