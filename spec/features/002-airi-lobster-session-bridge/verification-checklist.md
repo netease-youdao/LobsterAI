@@ -203,6 +203,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - `pnpm -F @proj-airi/stage-ui typecheck`：通过
   - `pnpm -F @proj-airi/stage-pages typecheck`：通过
   - `pnpm -F @proj-airi/stage-layouts typecheck`：通过
+  - `pnpm -F @proj-airi/stage-tamagotchi typecheck`：通过
 - LobsterAI 静态验证
   - `npm test -- src/main/libs/agentBridgeSessionStore.test.ts`：通过
   - `npx tsc --noEmit --project electron-tsconfig.json`：通过
@@ -223,6 +224,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - 浏览器中已完成 `lobster-agent -> API Key -> Claude Agent` 的首次引导配置，首页与意识设置页都能看到 `Lobster Agent / Claude Agent`
   - 已为桌面聊天区补充显式发送按钮，首页自动化现可稳定触发发送
   - Airi 首页已完成一次真实文本单轮：浏览器触发 `/api/agent/bridge/chat`，用户消息与助手回复均已渲染到聊天区
+  - Airi 前端可见品牌文案已统一替换为 `Xclaw`，并显式保留 `lobster-agent`、deep link、导出类型等协议标识不变
   - 当前动作与口型尚未做单独观察记录，因此展示链路已验证，表现层联动仍建议后续补记
 
 ---
