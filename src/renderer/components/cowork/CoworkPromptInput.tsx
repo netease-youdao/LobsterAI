@@ -51,6 +51,30 @@ const getSkillDirectoryFromPath = (skillPath: string): string => {
   return normalized.replace(/\/SKILL\.md$/i, '') || normalized;
 };
 
+export const mergeAttachments = (
+  existing: DraftAttachment[],
+  incoming: DraftAttachment[]
+): DraftAttachment[] => {
+  const seenPaths = new Set<string>();
+  const result: DraftAttachment[] = [];
+
+  for (const attachment of existing) {
+    if (!seenPaths.has(attachment.path)) {
+      seenPaths.add(attachment.path);
+      result.push(attachment);
+    }
+  }
+
+  for (const attachment of incoming) {
+    if (!seenPaths.has(attachment.path)) {
+      seenPaths.add(attachment.path);
+      result.push(attachment);
+    }
+  }
+
+  return result;
+};
+
 const buildInlinedSkillPrompt = (skill: Skill): string => {
   const skillDirectory = getSkillDirectoryFromPath(skill.skillPath);
   return [
@@ -329,34 +353,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
   const modelSupportsImage = !!selectedModel?.supportsImage;
 
-  const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
-    if (!filePath) return;
-    const current = attachments;
-    if (current.some((attachment) => attachment.path === filePath)) return;
-    dispatch(setDraftAttachments({
-      draftKey,
-      attachments: [...current, {
-        path: filePath,
-        name: getFileNameFromPath(filePath),
-        isImage: imageInfo?.isImage,
-        dataUrl: imageInfo?.dataUrl,
-      }],
-    }));
-  }, [attachments, dispatch, draftKey]);
 
-  const addImageAttachmentFromDataUrl = useCallback((name: string, dataUrl: string) => {
-    // Use the dataUrl as the unique key (no file path for inline images)
-    const pseudoPath = `inline:${name}:${Date.now()}`;
-    dispatch(setDraftAttachments({
-      draftKey,
-      attachments: [...attachments, {
-        path: pseudoPath,
-        name,
-        isImage: true,
-        dataUrl,
-      }],
-    }));
-  }, [attachments, dispatch, draftKey]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -426,7 +423,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const files = Array.from(fileList ?? []);
     if (files.length === 0) return;
 
+    const newAttachments: DraftAttachment[] = [];
     let hasImageWithoutVision = false;
+
     for (const file of files) {
       const nativePath = getNativeFilePath(file);
 
@@ -442,24 +441,41 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             try {
               const result = await window.electron.dialog.readFileAsDataUrl(nativePath);
               if (result.success && result.dataUrl) {
-                addAttachment(nativePath, { isImage: true, dataUrl: result.dataUrl });
+                newAttachments.push({
+                  path: nativePath,
+                  name: getFileNameFromPath(nativePath),
+                  isImage: true,
+                  dataUrl: result.dataUrl,
+                });
                 continue;
               }
             } catch (error) {
               console.error('Failed to read image as data URL:', error);
             }
             // Fallback: add as regular file attachment
-            addAttachment(nativePath);
+            newAttachments.push({
+              path: nativePath,
+              name: getFileNameFromPath(nativePath),
+            });
           } else {
             // No native path (clipboard/drag from browser) - read via FileReader
             try {
               const dataUrl = await fileToDataUrl(file);
-              addImageAttachmentFromDataUrl(file.name, dataUrl);
+              const pseudoPath = `inline:${file.name}:${Date.now()}`;
+              newAttachments.push({
+                path: pseudoPath,
+                name: file.name,
+                isImage: true,
+                dataUrl,
+              });
             } catch (error) {
               console.error('Failed to read image from clipboard:', error);
               const stagedPath = await saveInlineFile(file);
               if (stagedPath) {
-                addAttachment(stagedPath);
+                newAttachments.push({
+                  path: stagedPath,
+                  name: getFileNameFromPath(stagedPath),
+                });
               }
             }
           }
@@ -471,19 +487,34 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
       // Non-image file or model doesn't support images: use original flow
       if (nativePath) {
-        addAttachment(nativePath);
+        newAttachments.push({
+          path: nativePath,
+          name: getFileNameFromPath(nativePath),
+        });
         continue;
       }
 
       const stagedPath = await saveInlineFile(file);
       if (stagedPath) {
-        addAttachment(stagedPath);
+        newAttachments.push({
+          path: stagedPath,
+          name: getFileNameFromPath(stagedPath),
+        });
       }
     }
+
+    // Single batch dispatch
+    if (newAttachments.length > 0) {
+      dispatch(setDraftAttachments({
+        draftKey,
+        attachments: mergeAttachments(attachments, newAttachments),
+      }));
+    }
+
     if (hasImageWithoutVision) {
       setImageVisionHint(true);
     }
-  }, [addAttachment, addImageAttachmentFromDataUrl, disabled, fileToDataUrl, getNativeFilePath, isStreaming, modelSupportsImage, saveInlineFile]);
+  }, [attachments, disabled, fileToDataUrl, getNativeFilePath, isStreaming, modelSupportsImage, saveInlineFile, dispatch, draftKey]);
 
   const handleAddFile = useCallback(async () => {
     if (isAddingFile || disabled || isStreaming) return;
@@ -493,36 +524,54 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         title: i18nService.t('coworkAddFile'),
       });
       if (!result.success || result.paths.length === 0) return;
+
+      const newAttachments: DraftAttachment[] = [];
       let hasImageWithoutVision = false;
+
       for (const filePath of result.paths) {
         if (isImagePath(filePath)) {
           if (modelSupportsImage) {
             try {
               const readResult = await window.electron.dialog.readFileAsDataUrl(filePath);
               if (readResult.success && readResult.dataUrl) {
-                addAttachment(filePath, { isImage: true, dataUrl: readResult.dataUrl });
+                newAttachments.push({
+                  path: filePath,
+                  name: getFileNameFromPath(filePath),
+                  isImage: true,
+                  dataUrl: readResult.dataUrl,
+                });
                 continue;
               }
             } catch (error) {
               console.error('Failed to read image as data URL:', error);
-
             }
           } else {
             hasImageWithoutVision = true;
           }
         }
-        addAttachment(filePath);
+        newAttachments.push({
+          path: filePath,
+          name: getFileNameFromPath(filePath),
+        });
       }
+
+      // Single batch dispatch
+      if (newAttachments.length > 0) {
+        dispatch(setDraftAttachments({
+          draftKey,
+          attachments: mergeAttachments(attachments, newAttachments),
+        }));
+      }
+
       if (hasImageWithoutVision) {
         setImageVisionHint(true);
-
       }
     } catch (error) {
       console.error('Failed to select file:', error);
     } finally {
       setIsAddingFile(false);
     }
-  }, [addAttachment, isAddingFile, disabled, isStreaming, modelSupportsImage]);
+  }, [isAddingFile, disabled, isStreaming, modelSupportsImage, attachments, dispatch, draftKey]);
 
   const handleRemoveAttachment = useCallback((path: string) => {
     dispatch(setDraftAttachments({
