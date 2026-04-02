@@ -12,6 +12,8 @@ import 'katex/contrib/mhchem';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 // @ts-ignore
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+// @ts-ignore
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../services/i18n';
 
@@ -20,7 +22,6 @@ const CODE_BLOCK_CHAR_LIMIT = 20000;
 const SYNTAX_HIGHLIGHTER_STYLE = {
   margin: 0,
   borderRadius: 0,
-  background: '#282c34',
 };
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file']);
 
@@ -175,6 +176,24 @@ const openExternalViaAnchorFallback = (url: string): void => {
   document.body.removeChild(anchor);
 };
 
+function useIsDark() {
+  const [isDark, setIsDark] = useState(() =>
+    document.documentElement.classList.contains('dark')
+  );
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setIsDark(document.documentElement.classList.contains('dark'));
+    });
+    observer.observe(document.documentElement, { attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+  return isDark;
+}
+
+const dispatchAppToast = (message: string): void => {
+  window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+};
+
 const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
   const normalizedClassName = Array.isArray(className)
     ? className.join(' ')
@@ -193,6 +212,12 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     && trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
   const [isCopied, setIsCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
+  const isDark = useIsDark();
+  const highlighterStyle = isDark ? oneDark : {
+    ...oneLight,
+    'pre[class*="language-"]': { ...(oneLight as Record<string, React.CSSProperties>)['pre[class*="language-"]'], background: '#f0f2f5' },
+    'code[class*="language-"]': { ...(oneLight as Record<string, React.CSSProperties>)['code[class*="language-"]'], background: '#f0f2f5' },
+  };
 
   useEffect(() => () => {
     if (copyTimeoutRef.current != null) {
@@ -218,21 +243,21 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     if (!match) {
       return (
         <div className="my-2 relative group">
-          <div className="overflow-x-auto rounded-lg bg-[#282c34] text-[13px] leading-6">
+          <div className="overflow-x-auto rounded-lg dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
             <button
               type="button"
               onClick={handleCopy}
-              className="absolute top-2 right-2 z-10 p-1.5 rounded-md bg-gray-700/80 text-gray-300 hover:bg-gray-600 transition-colors opacity-0 group-hover:opacity-100"
+              className="absolute top-2 right-2 z-10 p-2 rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors opacity-0 group-hover:opacity-100 transform-gpu"
               title={i18nService.t('copyToClipboard')}
               aria-label={i18nService.t('copyToClipboard')}
             >
               {isCopied ? (
-                <CheckIcon className="h-4 w-4 text-green-500" />
+                <CheckIcon className="h-5 w-5 text-green-500" />
               ) : (
-                <ClipboardDocumentIcon className="h-4 w-4" />
+                <ClipboardDocumentIcon className="h-5 w-5" />
               )}
             </button>
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
               {trimmedCodeText}
             </code>
           </div>
@@ -242,35 +267,35 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
 
     // Code block with language - show header with language name
     return (
-      <div className="my-3 rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border relative shadow-subtle">
-        <div className="dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted px-4 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary font-medium flex items-center justify-between">
+      <div className="my-3 rounded-xl overflow-hidden border border-border relative shadow-subtle">
+        <div className="bg-surface-raised px-4 py-2 text-xs text-secondary font-medium flex items-center justify-between">
           <span>{match[1]}</span>
           <button
             type="button"
             onClick={handleCopy}
-            className="p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+            className="p-2 rounded-md hover:bg-surface-raised transition-colors transform-gpu"
             title={i18nService.t('copyToClipboard')}
             aria-label={i18nService.t('copyToClipboard')}
           >
             {isCopied ? (
-              <CheckIcon className="h-4 w-4 text-green-500" />
+              <CheckIcon className="h-5 w-5 text-green-500" />
             ) : (
-              <ClipboardDocumentIcon className="h-4 w-4" />
+              <ClipboardDocumentIcon className="h-5 w-5" />
             )}
           </button>
         </div>
         {shouldHighlight ? (
           <SyntaxHighlighter
-            style={oneDark}
+            style={highlighterStyle}
             language={match[1]}
             PreTag="div"
-            customStyle={SYNTAX_HIGHLIGHTER_STYLE}
+            customStyle={{ ...SYNTAX_HIGHLIGHTER_STYLE, background: isDark ? '#282c34' : '#f0f2f5' }}
           >
             {trimmedCodeText}
           </SyntaxHighlighter>
         ) : (
-          <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+          <div className="m-0 overflow-x-auto dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
+            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
               {trimmedCodeText}
             </code>
           </div>
@@ -280,7 +305,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
   }
 
   const inlineClassName = [
-    'inline bg-transparent px-0.5 text-[0.92em] font-mono font-medium dark:text-claude-darkText text-claude-text',
+    'inline bg-transparent px-0.5 text-[0.92em] font-mono font-medium text-foreground',
     normalizedClassName,
   ].filter(Boolean).join(' ');
 
@@ -397,83 +422,84 @@ const findFallbackPathFromContext = (
 };
 
 const createMarkdownComponents = (
-  resolveLocalFilePath?: (href: string, text: string) => string | null
+  resolveLocalFilePath?: (href: string, text: string) => string | null,
+  showRevealInFolderAction = false,
 ) => ({
   p: ({ node, className, children, ...props }: any) => (
-    <p className="my-1 first:mt-0 last:mb-0 leading-6 dark:text-claude-darkText text-claude-text" {...props}>
+    <p className="my-1 first:mt-0 last:mb-0 leading-6 text-foreground" {...props}>
       {children}
     </p>
   ),
   strong: ({ node, className, children, ...props }: any) => (
-    <strong className="font-semibold dark:text-claude-darkText text-claude-text" {...props}>
+    <strong className="font-semibold text-foreground" {...props}>
       {children}
     </strong>
   ),
   h1: ({ node, className, children, ...props }: any) => (
-    <h1 className="text-2xl font-semibold mt-6 mb-3 dark:text-claude-darkText text-claude-text" {...props}>
+    <h1 className="text-2xl font-semibold mt-6 mb-3 text-foreground" {...props}>
       {children}
     </h1>
   ),
   h2: ({ node, className, children, ...props }: any) => (
-    <h2 className="text-xl font-semibold mt-5 mb-2 dark:text-claude-darkText text-claude-text" {...props}>
+    <h2 className="text-xl font-semibold mt-5 mb-2 text-foreground" {...props}>
       {children}
     </h2>
   ),
   h3: ({ node, className, children, ...props }: any) => (
-    <h3 className="text-lg font-semibold mt-4 mb-2 dark:text-claude-darkText text-claude-text" {...props}>
+    <h3 className="text-lg font-semibold mt-4 mb-2 text-foreground" {...props}>
       {children}
     </h3>
   ),
   ul: ({ node, className, children, ...props }: any) => (
-    <ul className="list-disc pl-5 my-1.5 dark:text-claude-darkText text-claude-text" {...props}>
+    <ul className="list-disc pl-5 my-1.5 text-foreground" {...props}>
       {children}
     </ul>
   ),
   ol: ({ node, className, children, ...props }: any) => (
-    <ol className="list-decimal pl-6 my-1.5 dark:text-claude-darkText text-claude-text" {...props}>
+    <ol className="list-decimal pl-6 my-1.5 text-foreground" {...props}>
       {children}
     </ol>
   ),
   li: ({ node, className, children, ...props }: any) => (
-    <li className="my-0.5 leading-6 dark:text-claude-darkText text-claude-text" {...props}>
+    <li className="my-0.5 leading-6 text-foreground" {...props}>
       {children}
     </li>
   ),
   blockquote: ({ node, className, children, ...props }: any) => (
-    <blockquote className="border-l-4 border-claude-accent pl-4 py-1 my-2 dark:bg-claude-darkSurface/30 bg-claude-surfaceHover/30 rounded-r-lg dark:text-claude-darkText text-claude-text" {...props}>
+    <blockquote className="border-l-4 border-primary pl-4 py-1 my-2 bg-surface-raised/30 rounded-r-lg text-foreground" {...props}>
       {children}
     </blockquote>
   ),
   code: CodeBlock,
   table: ({ node, className, children, ...props }: any) => (
-    <div className="my-4 overflow-x-auto rounded-xl border dark:border-claude-darkBorder border-claude-border">
+    <div className="my-4 overflow-x-auto rounded-xl border border-border">
       <table className="border-collapse w-full" {...props}>
         {children}
       </table>
     </div>
   ),
   thead: ({ node, className, children, ...props }: any) => (
-    <thead className="dark:bg-claude-darkSurface bg-claude-surfaceHover" {...props}>
+    <thead className="bg-surface-raised" {...props}>
       {children}
     </thead>
   ),
   tbody: ({ node, className, children, ...props }: any) => (
-    <tbody className="divide-y dark:divide-claude-darkBorder divide-claude-border" {...props}>
+    <tbody className="divide-y divide-border" {...props}>
       {children}
     </tbody>
   ),
   tr: ({ node, className, children, ...props }: any) => (
-    <tr className="divide-x dark:divide-claude-darkBorder divide-claude-border" {...props}>
+    <tr className="divide-x divide-border" {...props}>
       {children}
     </tr>
   ),
   th: ({ node, className, children, ...props }: any) => (
-    <th className="px-4 py-2 text-left font-semibold dark:text-claude-darkText text-claude-text" {...props}>
+    <th className="px-4 py-2 text-left font-semibold text-foreground" {...props}>
       {children}
     </th>
   ),
   td: ({ node, className, children, ...props }: any) => (
-    <td className="px-4 py-2 dark:text-claude-darkText text-claude-text" {...props}>
+    <td className="px-4 py-2 text-foreground" {...props}>
       {children}
     </td>
   ),
@@ -484,7 +510,7 @@ const createMarkdownComponents = (
     return <img className="max-w-full h-auto rounded-xl my-4" src={resolvedSrc} alt={alt} {...props} />;
   },
   hr: ({ node, ...props }: any) => (
-    <hr className="my-5 dark:border-claude-darkBorder border-claude-border" {...props} />
+    <hr className="my-5 border-border" {...props} />
   ),
   a: ({ node, href, className, children, ...props }: any) => {
     if (typeof href === 'string' && href.startsWith('#artifact-')) {
@@ -504,6 +530,8 @@ const createMarkdownComponents = (
         ?? stripFileProtocol(stripHashAndQuery(hrefValue));
       const decodedPath = safeDecodeURIComponent(rawPath);
       const filePath = decodedPath || rawPath;
+      const isDirectoryLink = looksLikeDirectory(filePath);
+      const shouldShowRevealInFolderAction = showRevealInFolderAction && !isDirectoryLink;
 
       const handleClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
         e.preventDefault();
@@ -532,21 +560,70 @@ const createMarkdownComponents = (
         }
       };
 
+      const handleRevealInFolder = async (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const anchor = e.currentTarget.parentElement?.querySelector('a');
+        const linkedAnchor = anchor instanceof HTMLAnchorElement ? anchor : null;
+
+        const tryReveal = async (targetPath: string): Promise<boolean> => {
+          const result = await window.electron.shell.showItemInFolder(targetPath);
+          if (result?.success) {
+            return true;
+          }
+          console.error('Failed to show item in folder:', targetPath, result?.error);
+          return false;
+        };
+
+        try {
+          if (await tryReveal(filePath)) {
+            return;
+          }
+
+          const fallbackPath = findFallbackPathFromContext(
+            linkedAnchor,
+            linkText,
+            resolveLocalFilePath
+          );
+          if (fallbackPath && fallbackPath !== filePath && await tryReveal(fallbackPath)) {
+            return;
+          }
+
+          dispatchAppToast(i18nService.t('showInFolderFailed'));
+        } catch (error) {
+          console.error('Failed to show item in folder:', filePath, error);
+          dispatchAppToast(i18nService.t('showInFolderFailed'));
+        }
+      };
+
       return (
-        <a
-          href={toFileHref(filePath)}
-          onClick={handleClick}
-          className="text-claude-accent hover:text-claude-accentHover underline decoration-claude-accent/50 hover:decoration-claude-accent transition-colors cursor-pointer inline-flex items-center gap-1"
-          title={filePath}
-          {...props}
-        >
-          {children}
-          {looksLikeDirectory(filePath) ? (
-            <FolderIcon className="h-3.5 w-3.5 inline" />
-          ) : (
-            <DocumentIcon className="h-3.5 w-3.5 inline" />
+        <span className="group inline-flex max-w-full items-center gap-1 align-baseline">
+          <a
+            href={toFileHref(filePath)}
+            onClick={handleClick}
+            className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors cursor-pointer inline-flex items-center gap-1"
+            title={filePath}
+            {...props}
+          >
+            {children}
+            {isDirectoryLink ? (
+              <FolderIcon className="h-3.5 w-3.5 inline" />
+            ) : (
+              <DocumentIcon className="h-3.5 w-3.5 inline" />
+            )}
+          </a>
+          {shouldShowRevealInFolderAction && (
+            <button
+              type="button"
+              onClick={handleRevealInFolder}
+              className="inline-flex items-center justify-center rounded-md p-0.5 text-secondary hover:text-primary hover:bg-surface-hover opacity-0 pointer-events-none transition-all group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+              title={i18nService.t('showInFolder')}
+              aria-label={i18nService.t('showInFolder')}
+            >
+              <FolderIcon className="h-3.5 w-3.5" />
+            </button>
           )}
-        </a>
+        </span>
       );
     }
 
@@ -570,7 +647,7 @@ const createMarkdownComponents = (
           target="_blank"
           rel="noopener noreferrer"
           onClick={handleExternalClick}
-          className="text-claude-accent hover:text-claude-accentHover underline decoration-claude-accent/50 hover:decoration-claude-accent transition-colors"
+          className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors"
           {...props}
         >
           {children}
@@ -583,7 +660,7 @@ const createMarkdownComponents = (
         href={hrefValue}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-claude-accent hover:text-claude-accentHover underline decoration-claude-accent/50 hover:decoration-claude-accent transition-colors"
+        className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors"
         {...props}
       >
         {children}
@@ -596,14 +673,19 @@ interface MarkdownContentProps {
   content: string;
   className?: string;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
+  showRevealInFolderAction?: boolean;
 }
 
 const MarkdownContent: React.FC<MarkdownContentProps> = ({
   content,
   className = '',
   resolveLocalFilePath,
+  showRevealInFolderAction = false,
 }) => {
-  const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath]);
+  const components = useMemo(
+    () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction),
+    [resolveLocalFilePath, showRevealInFolderAction]
+  );
   const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
   return (
     <div className={`markdown-content text-[15px] leading-6 ${className}`}>

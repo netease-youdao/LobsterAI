@@ -110,12 +110,12 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
       const boolValue = Boolean(fieldValue);
       return (
         <div key={path} className="flex items-center justify-between py-1">
-          <label className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <label className="text-xs font-medium text-secondary">
             {hint.label}
           </label>
           <div
             className={`w-10 h-5 rounded-full flex items-center transition-colors cursor-pointer ${
-              boolValue ? 'bg-green-500' : 'dark:bg-claude-darkBorder bg-claude-border'
+              boolValue ? 'bg-green-500' : 'bg-border'
             }`}
             onClick={() => handleChange(!boolValue)}
           >
@@ -133,14 +133,14 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
     if (type === 'string' && enumValues) {
       return (
         <div key={path} className="space-y-1.5">
-          <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <label className="block text-xs font-medium text-secondary">
             {hint.label}
           </label>
           <select
             value={String(fieldValue || '')}
             onChange={(e) => handleChange(e.target.value)}
             onBlur={onBlur}
-            className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+            className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
           >
             {enumValues.map((v) => (
               <option key={v} value={v}>
@@ -158,7 +158,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
       const strValue = String(fieldValue || '');
       return (
         <div key={path} className="space-y-1.5">
-          <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <label className="block text-xs font-medium text-secondary">
             {hint.label}
           </label>
           <div className="relative">
@@ -167,7 +167,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               value={strValue}
               onChange={(e) => handleChange(e.target.value)}
               onBlur={onBlur}
-              className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+              className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
               placeholder="••••••••••••"
             />
             <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -175,7 +175,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
                 <button
                   type="button"
                   onClick={() => handleChange('')}
-                  className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                  className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                   title="Clear"
                 >
                   <XCircleIconSolid className="h-4 w-4" />
@@ -184,7 +184,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               <button
                 type="button"
                 onClick={() => onToggleSecret?.(path)}
-                className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
               >
                 {shown ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
               </button>
@@ -199,7 +199,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
       const strValue = String(fieldValue || '');
       return (
         <div key={path} className="space-y-1.5">
-          <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <label className="block text-xs font-medium text-secondary">
             {hint.label}
           </label>
           <div className="relative">
@@ -208,14 +208,14 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               value={strValue}
               onChange={(e) => handleChange(e.target.value)}
               onBlur={onBlur}
-              className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+              className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
             />
             {strValue && (
               <div className="absolute right-2 inset-y-0 flex items-center">
                 <button
                   type="button"
                   onClick={() => handleChange('')}
-                  className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                  className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                   title="Clear"
                 >
                   <XCircleIconSolid className="h-4 w-4" />
@@ -232,7 +232,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
       const arrValue = Array.isArray(fieldValue) ? fieldValue.map(String).join('\n') : '';
       return (
         <div key={path} className="space-y-1.5">
-          <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <label className="block text-xs font-medium text-secondary">
             {hint.label}
           </label>
           <textarea
@@ -242,7 +242,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               handleChange(lines);
             }}
             onBlur={onBlur}
-            className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors min-h-[60px] resize-y"
+            className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors min-h-[60px] resize-y"
           />
         </div>
       );
@@ -253,7 +253,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
       const numValue = typeof fieldValue === 'number' ? fieldValue : '';
       return (
         <div key={path} className="space-y-1.5">
-          <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <label className="block text-xs font-medium text-secondary">
             {hint.label}
           </label>
           <input
@@ -261,7 +261,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
             value={numValue}
             onChange={(e) => handleChange(e.target.value ? Number(e.target.value) : undefined)}
             onBlur={onBlur}
-            className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+            className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
           />
         </div>
       );
@@ -280,11 +280,11 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
 
     return (
       <details key={groupKey} className="group">
-        <summary className="flex items-center gap-1.5 cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary select-none py-1">
+        <summary className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-secondary select-none py-1">
           <ChevronRightIcon className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
           {groupHint.label}
         </summary>
-        <div className="space-y-3 mt-2 ml-1 pl-3 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+        <div className="space-y-3 mt-2 ml-1 pl-3 border-l-2 border-border/30/30">
           {childFields.map((field) => renderField(field, hints[field]))}
         </div>
       </details>

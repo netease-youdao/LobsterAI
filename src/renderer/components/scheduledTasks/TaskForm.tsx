@@ -249,8 +249,8 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     }
   };
 
-  const inputClass = 'w-full rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent/50';
-  const labelClass = 'block text-sm font-medium dark:text-claude-darkText text-claude-text mb-1';
+  const inputClass = 'w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50';
+  const labelClass = 'block text-sm font-medium text-foreground mb-1';
   const errorClass = 'text-xs text-red-500 mt-1';
 
   const timeValue = `${String(form.hour).padStart(2, '0')}:${String(form.minute).padStart(2, '0')}`;
@@ -266,11 +266,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       return (
         <div>
           <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
-          <div className="rounded-lg bg-claude-surfaceHover/30 dark:bg-claude-darkSurfaceHover/30 p-3">
-            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <div className="rounded-lg bg-surface-raised/30 p-3">
+            <p className="text-sm text-secondary">
               {formatScheduleLabel(task!.schedule)}
             </p>
-            <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">
+            <p className="text-xs text-secondary mt-1">
               {i18nService.t('scheduledTasksAdvancedSchedule')}
             </p>
           </div>
@@ -446,7 +446,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
   return (
     <div className="p-4 space-y-4 max-w-3xl mx-auto">
-      <h2 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+      <h2 className="text-lg font-semibold text-foreground">
         {mode === 'create' ? i18nService.t('scheduledTasksFormCreate') : i18nService.t('scheduledTasksFormUpdate')}
       </h2>
 
@@ -484,7 +484,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+          className="px-4 py-2 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
         >
           {i18nService.t('cancel')}
         </button>
@@ -492,7 +492,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
           type="button"
           onClick={() => void handleSubmit()}
           disabled={submitting}
-          className="px-4 py-2 text-sm font-medium bg-claude-accent text-white rounded-lg hover:bg-claude-accentHover transition-colors disabled:opacity-50"
+          className="px-4 py-2 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
         >
           {submitting
             ? i18nService.t('saving')

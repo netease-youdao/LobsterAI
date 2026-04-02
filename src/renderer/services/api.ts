@@ -1,18 +1,7 @@
 import { store } from '../store';
 import { configService } from './config';
 import { ChatMessagePayload, ChatUserMessageInput, ImageAttachment } from '../types/chat';
-
-const ZHIPU_CODING_PLAN_OPENAI_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
-const ZHIPU_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://open.bigmodel.cn/api/anthropic';
-// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
-const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
-// Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
-const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
-// Moonshot Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const MOONSHOT_CODING_PLAN_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1';
-const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
+import { resolveCodingPlanBaseUrl } from '../../shared/providers';
 
 export interface ApiConfig {
   apiKey: string;
@@ -260,7 +249,10 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
+      && (
+        ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'ollama'].includes(normalizedHint)
+        || normalizedHint.startsWith('custom_')
+      )
     ) {
       return normalizedHint;
     }
@@ -300,49 +292,11 @@ class ApiService {
       if (providerConfig.enabled && (providerConfig.apiKey || !this.providerRequiresApiKey(provider))) {
         let baseUrl = providerConfig.baseUrl;
         let apiFormat = this.normalizeApiFormat(providerConfig.apiFormat);
-        
-        // Handle Zhipu GLM Coding Plan endpoint switch
-        // Coding Plan supports both OpenAI and Anthropic compatible formats
-        if (provider === 'zhipu' && providerConfig.codingPlanEnabled) {
-          if (apiFormat === 'anthropic') {
-            baseUrl = ZHIPU_CODING_PLAN_ANTHROPIC_BASE_URL;
-          } else {
-            baseUrl = ZHIPU_CODING_PLAN_OPENAI_BASE_URL;
-            apiFormat = 'openai';
-          }
-        }
 
-        // Handle Qwen Coding Plan endpoint switch
-        // Coding Plan supports both OpenAI and Anthropic compatible formats
-        if (provider === 'qwen' && providerConfig.codingPlanEnabled) {
-          if (apiFormat === 'anthropic') {
-            baseUrl = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
-          } else {
-            baseUrl = QWEN_CODING_PLAN_OPENAI_BASE_URL;
-            apiFormat = 'openai';
-          }
-        }
-
-        // Handle Volcengine Coding Plan endpoint switch
-        // Coding Plan supports both OpenAI and Anthropic compatible formats
-        if (provider === 'volcengine' && providerConfig.codingPlanEnabled) {
-          if (apiFormat === 'anthropic') {
-            baseUrl = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
-          } else {
-            baseUrl = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
-            apiFormat = 'openai';
-          }
-        }
-
-        // Handle Moonshot Coding Plan endpoint switch
-        // Coding Plan supports both OpenAI and Anthropic compatible formats
-        if (provider === 'moonshot' && providerConfig.codingPlanEnabled) {
-          if (apiFormat === 'anthropic') {
-            baseUrl = MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL;
-          } else {
-            baseUrl = MOONSHOT_CODING_PLAN_OPENAI_BASE_URL;
-            apiFormat = 'openai';
-          }
+        if (providerConfig.codingPlanEnabled && (apiFormat === 'anthropic' || apiFormat === 'openai')) {
+          const resolved = resolveCodingPlanBaseUrl(provider, true, apiFormat, baseUrl);
+          baseUrl = resolved.baseUrl;
+          apiFormat = resolved.effectiveFormat;
         }
         
         return {

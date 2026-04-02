@@ -1,4 +1,4 @@
-import { AppConfig, CONFIG_KEYS, defaultConfig } from '../config';
+import { AppConfig, CONFIG_KEYS, defaultConfig, isCustomProvider } from '../config';
 import { localStore } from './store';
 
 const getFixedProviderApiFormat = (providerKey: string): 'anthropic' | 'openai' | 'gemini' | null => {
@@ -71,6 +71,30 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
       },
     ])
   ) as AppConfig['providers'];
+};
+
+/**
+ * Migrate legacy single `custom` provider to `custom_0`.
+ */
+const migrateCustomProviders = (config: AppConfig): AppConfig => {
+  const providers = config.providers;
+  if (!providers) return config;
+
+  // Migrate legacy `custom` key (without underscore) to `custom_0`
+  if ('custom' in providers && !isCustomProvider('custom')) {
+    const legacyCustom = providers['custom'];
+    if (legacyCustom) {
+      const updatedProviders = { ...providers };
+      updatedProviders['custom_0'] = { ...legacyCustom };
+      delete updatedProviders['custom'];
+      return {
+        ...config,
+        providers: updatedProviders as AppConfig['providers'],
+      };
+    }
+  }
+
+  return config;
 };
 
 // Model IDs that have been removed from specific providers.
@@ -162,7 +186,7 @@ class ConfigService {
           );
         }
 
-        this.config = {
+        this.config = migrateCustomProviders({
           ...defaultConfig,
           ...storedConfig,
           api: {
@@ -179,7 +203,7 @@ class ConfigService {
             ...(storedConfig.shortcuts ?? {}),
           } as AppConfig['shortcuts'],
           providers: mergedProviders as AppConfig['providers'],
-        };
+        });
       }
     } catch (error) {
       console.error('Failed to load config:', error);

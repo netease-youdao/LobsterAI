@@ -53,22 +53,22 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
       onClick={handleBackdropClick}
     >
       <div
-        className="modal-content w-full max-w-md mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden"
+        className="modal-content w-full max-w-md mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Info state - shows changelog and Update/Cancel buttons */}
         {modalState === 'info' && (
           <>
             <div className="px-5 pt-5 pb-4">
-              <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+              <h3 className="text-base font-semibold text-foreground">
                 {i18nService.t('updateAvailableTitle')}
               </h3>
-              <p className="mt-1.5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <p className="mt-1.5 text-xs text-secondary">
                 v{latestVersion}{date ? ` · ${date}` : ''}
               </p>
 
               {currentLog.title && (
-                <p className="mt-3 text-sm font-medium dark:text-claude-darkText text-claude-text">
+                <p className="mt-3 text-sm font-medium text-foreground">
                   {currentLog.title}
                 </p>
               )}
@@ -76,8 +76,8 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               {currentLog.content.length > 0 && (
                 <ul className="mt-2 space-y-1.5 max-h-48 overflow-y-auto">
                   {currentLog.content.map((item, index) => (
-                    <li key={index} className="flex items-start gap-2 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                      <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-claude-accent/60" />
+                    <li key={index} className="flex items-start gap-2 text-sm text-secondary">
+                      <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary/60" />
                       <span>{item}</span>
                     </li>
                   ))}
@@ -89,14 +89,14 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               <button
                 type="button"
                 onClick={onCancel}
-                className="px-3 py-1.5 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('updateAvailableCancel')}
               </button>
               <button
                 type="button"
                 onClick={onConfirm}
-                className="px-3 py-1.5 text-sm rounded-lg bg-claude-accent text-white hover:bg-claude-accentHover transition-colors"
+                className="px-3 py-1.5 text-sm rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
               >
                 {i18nService.t('updateAvailableConfirm')}
               </button>
@@ -107,28 +107,28 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         {/* Downloading state - progress bar with cancel */}
         {modalState === 'downloading' && (
           <div className="px-5 py-5">
-            <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+            <h3 className="text-base font-semibold text-foreground">
               {i18nService.t('updateDownloading')}
             </h3>
-            <p className="mt-1.5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <p className="mt-1.5 text-xs text-secondary">
               v{latestVersion}
             </p>
 
             <div className="mt-4">
               {/* Progress bar */}
-              <div className="h-2 rounded-full bg-claude-accent/20 overflow-hidden">
+              <div className="h-2 rounded-full bg-primary/20 overflow-hidden">
                 {downloadProgress?.percent != null ? (
                   <div
-                    className="h-full bg-claude-accent rounded-full transition-all duration-300"
+                    className="h-full bg-primary rounded-full transition-all duration-300"
                     style={{ width: `${Math.round(downloadProgress.percent * 100)}%` }}
                   />
                 ) : (
-                  <div className="h-full bg-claude-accent/60 rounded-full animate-pulse" style={{ width: '100%' }} />
+                  <div className="h-full bg-primary/60 rounded-full animate-pulse" style={{ width: '100%' }} />
                 )}
               </div>
 
               {/* Progress info */}
-              <div className="mt-2 flex items-center justify-between text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <div className="mt-2 flex items-center justify-between text-xs text-secondary">
                 <span>
                   {downloadProgress
                     ? downloadProgress.total != null
@@ -151,7 +151,7 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               <button
                 type="button"
                 onClick={onCancelDownload}
-                className="px-3 py-1.5 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('updateDownloadCancel')}
               </button>
@@ -164,7 +164,7 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           <div className="px-5 py-5">
             <div className="flex flex-col items-center py-4">
               <svg
-                className="animate-spin h-8 w-8 text-claude-accent"
+                className="animate-spin h-8 w-8 text-primary"
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
                 viewBox="0 0 24 24"
@@ -172,10 +172,10 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
               </svg>
-              <h3 className="mt-4 text-base font-semibold dark:text-claude-darkText text-claude-text">
+              <h3 className="mt-4 text-base font-semibold text-foreground">
                 {i18nService.t('updateInstalling')}
               </h3>
-              <p className="mt-1.5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary text-center">
+              <p className="mt-1.5 text-xs text-secondary text-center">
                 {i18nService.t('updateInstallingHint')}
               </p>
             </div>
@@ -191,7 +191,7 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
                 : i18nService.t('updateDownloadFailed')}
             </h3>
             {errorMessage && (
-              <p className="mt-2 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary break-words">
+              <p className="mt-2 text-sm text-secondary break-words">
                 {errorMessage}
               </p>
             )}
@@ -200,14 +200,14 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               <button
                 type="button"
                 onClick={onCancel}
-                className="px-3 py-1.5 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                className="px-3 py-1.5 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('updateAvailableCancel')}
               </button>
               <button
                 type="button"
                 onClick={onRetry}
-                className="px-3 py-1.5 text-sm rounded-lg bg-claude-accent text-white hover:bg-claude-accentHover transition-colors"
+                className="px-3 py-1.5 text-sm rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
               >
                 {i18nService.t('updateRetry')}
               </button>

@@ -487,6 +487,9 @@ interface IElectronAPI {
     getProfileSummary: () => Promise<{ success: boolean; data?: ProfileSummaryData }>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;
+  }
+  enterprise: {
+    getConfig: () => Promise<{ ui?: Record<string, 'hide' | 'disable' | 'readonly'>; disableUpdate?: boolean; version: string; name: string } | null>;
   };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;

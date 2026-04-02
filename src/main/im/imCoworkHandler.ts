@@ -331,7 +331,7 @@ export class IMCoworkHandler extends EventEmitter {
       title,
       resolvedWorkspaceRoot,
       systemPrompt,
-      config.executionMode || 'auto',
+      config.executionMode || 'local',
       [],
       agentId
     );

@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { defaultConfig } from '../../config';
+import { defaultConfig, getProviderDisplayName } from '../../config';
 
 export interface Model {
   id: string;
@@ -39,7 +39,7 @@ function buildInitialModels(): Model[] {
           models.push({
             id: model.id,
             name: model.name,
-            provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+            provider: getProviderDisplayName(providerName, config),
             providerKey: providerName,
             supportsImage: model.supportsImage ?? false,
           });

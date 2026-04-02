@@ -48,7 +48,7 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
     <div className="relative" ref={dropdownRef}>
       <div className="flex items-center space-x-3">
         {label && (
-          <label htmlFor={id} className="text-sm font-medium dark:text-claude-darkText text-claude-text whitespace-nowrap">
+          <label htmlFor={id} className="text-sm font-medium text-foreground whitespace-nowrap">
             {label}
           </label>
         )}
@@ -57,7 +57,7 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
             id={id}
             type="button"
             onClick={() => setIsOpen(!isOpen)}
-            className={`flex items-center justify-between w-full rounded-lg dark:bg-claude-darkSurface bg-claude-surface dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/40 dark:text-claude-darkText text-claude-text px-4 py-2.5 text-sm ${className}`}
+            className={`flex items-center justify-between w-full rounded-lg bg-surface border-border border focus:border-primary focus:ring-1 focus:ring-primary/40 text-foreground px-4 py-2.5 text-sm ${className}`}
             aria-haspopup="listbox"
             aria-expanded={isOpen}
           >
@@ -68,21 +68,21 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
           {isOpen && (
             <div className="absolute z-10 w-full mt-1 overflow-auto rounded-md popover-enter shadow-popover max-h-60 focus:outline-none">
               <ul
-                className="py-1 overflow-auto text-sm dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border rounded-lg"
+                className="py-1 overflow-auto text-sm bg-surface border border-border rounded-lg"
                 role="listbox"
                 aria-labelledby={id}
               >
                 {options.map((option) => (
                   <li
                     key={option.value}
-                    className={`cursor-pointer select-none relative py-1.5 pl-3 pr-9 dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover ${
-                      option.value === value ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover' : ''
+                    className={`cursor-pointer select-none relative py-1.5 pl-3 pr-9 hover:bg-surface-raised ${
+                      option.value === value ? 'bg-surface-raised' : ''
                     }`}
                     role="option"
                     aria-selected={option.value === value}
                     onClick={() => handleOptionClick(option.value)}
                   >
-                    <span className={`block truncate dark:text-claude-darkText text-claude-text ${
+                    <span className={`block truncate text-foreground ${
                       option.value === value ? 'font-medium' : 'font-normal'
                     }`}>
                       {option.label}

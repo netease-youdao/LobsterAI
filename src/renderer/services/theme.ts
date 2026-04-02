@@ -1,30 +1,25 @@
 import { configService } from './config';
+import { ThemeManager, allThemes } from '../theme';
+import type { ThemeDefinition } from '../theme';
 
 type ThemeType = 'light' | 'dark' | 'system';
-
-// Cold modern color palette
-const COLORS = {
-  light: {
-    bg: '#F8F9FB',
-    text: '#1A1D23',
-  },
-  dark: {
-    bg: '#0F1117',
-    text: '#E4E5E9',
-  },
-};
 
 class ThemeService {
   private mediaQuery: MediaQueryList | null = null;
   private currentTheme: ThemeType = 'system';
-  private appliedTheme: 'light' | 'dark' | null = null;
   private initialized = false;
   private mediaQueryListener: ((event: MediaQueryListEvent) => void) | null = null;
+  private manager: ThemeManager;
 
   constructor() {
     if (typeof window !== 'undefined') {
       this.mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     }
+    this.manager = new ThemeManager(allThemes, {
+      storageKey: 'lobster-theme-id',
+      defaultTheme: 'classic-light',
+      followSystem: false,
+    });
   }
 
   // 初始化主题
@@ -36,115 +31,97 @@ class ThemeService {
 
     try {
       const config = configService.getConfig();
+      // config.theme is 'light' | 'dark' | 'system' — map to a theme ID
       this.setTheme(config.theme);
 
       // 监听系统主题变化
       if (this.mediaQuery) {
         this.mediaQueryListener = (e) => {
           if (this.currentTheme === 'system') {
-            this.applyTheme(e.matches ? 'dark' : 'light');
+            this.applyByAppearance(e.matches ? 'dark' : 'light');
           }
         };
         this.mediaQuery.addEventListener('change', this.mediaQueryListener);
       }
     } catch (error) {
       console.error('Failed to initialize theme:', error);
-      // 默认使用系统主题
       this.setTheme('system');
     }
   }
 
-  // 设置主题
-  setTheme(theme: ThemeType): void {
-    const effectiveTheme = theme === 'system'
-      ? (this.mediaQuery?.matches ? 'dark' : 'light')
-      : theme;
-
-    if (this.currentTheme === theme && this.appliedTheme === effectiveTheme) {
-      return;
+  // 设置主题 — accepts legacy 'light'|'dark'|'system' OR a theme ID
+  setTheme(theme: ThemeType | string): void {
+    console.debug(`[ThemeService] setTheme: ${theme}`);
+    if (theme === 'light' || theme === 'dark' || theme === 'system') {
+      this.currentTheme = theme;
+      if (theme === 'system') {
+        const effective = this.mediaQuery?.matches ? 'dark' : 'light';
+        this.applyByAppearance(effective);
+      } else {
+        this.applyByAppearance(theme);
+      }
+    } else {
+      // Direct theme ID
+      this.currentTheme = 'light'; // fallback for getTheme()
+      const def = allThemes.find(t => t.meta.id === theme);
+      if (def) {
+        this.currentTheme = def.meta.appearance as ThemeType;
+      }
+      void this.manager.setTheme(theme);
     }
-
-    console.log(`Setting theme to: ${theme}`);
-    this.currentTheme = theme;
-
-    if (theme === 'system') {
-      // 如果是系统主题，则根据系统设置应用
-      console.log(`System theme detected, using: ${effectiveTheme}`);
-    }
-
-    // 直接应用指定主题
-    this.applyTheme(effectiveTheme);
   }
 
-  // 获取当前主题
+  // 设置主题 by ID (for the new 12-theme picker)
+  setThemeById(id: string): void {
+    void this.manager.setTheme(id);
+    const def = allThemes.find(t => t.meta.id === id);
+    if (def) {
+      this.currentTheme = def.meta.appearance as ThemeType;
+    }
+  }
+
+  // 还原主题（用于取消操作）：直接 apply 指定 ID 并还原 mode，跳过 applyByAppearance 的 localStorage 读取
+  restoreTheme(id: string, mode: ThemeType): void {
+    void this.manager.setTheme(id);
+    this.currentTheme = mode;
+  }
+
+  // 获取当前主题 (legacy API)
   getTheme(): ThemeType {
     return this.currentTheme;
   }
 
-  // 获取当前有效主题（实际应用的明/暗主题）
-  getEffectiveTheme(): 'light' | 'dark' {
-    if (this.currentTheme === 'system') {
-      return this.mediaQuery?.matches ? 'dark' : 'light';
-    }
-    return this.currentTheme;
+  // 获取当前主题 ID
+  getThemeId(): string {
+    return this.manager.getThemeId();
   }
 
-  // 应用主题到DOM
-  private applyTheme(theme: 'light' | 'dark'): void {
-    // 避免重复应用相同主题
-    if (this.appliedTheme === theme) {
-      return;
-    }
+  // 获取所有主题
+  getAllThemes(): ThemeDefinition[] {
+    return this.manager.getAllThemes();
+  }
 
-    console.log(`Applying theme: ${theme}`);
-    this.appliedTheme = theme;
-    const root = document.documentElement;
-    const colors = COLORS[theme];
+  // 获取当前有效主题（实际应用的明/暗主题）
+  getEffectiveTheme(): 'light' | 'dark' {
+    const theme = this.manager.getTheme();
+    return theme?.meta.appearance ?? 'light';
+  }
 
-    if (theme === 'dark') {
-      // Apply dark theme to HTML element (for Tailwind)
-      root.classList.add('dark');
-      root.classList.remove('light');
-
-      // Make sure theme is consistent across entire DOM
-      document.body.classList.add('dark');
-      document.body.classList.remove('light');
-
-      // Set background and text colors
-      root.style.backgroundColor = colors.bg;
-      document.body.style.backgroundColor = colors.bg;
-      document.body.style.color = colors.text;
-    } else {
-      // Apply light theme to HTML element (for Tailwind)
-      root.classList.remove('dark');
-      root.classList.add('light');
-
-      // Make sure theme is consistent across entire DOM
-      document.body.classList.remove('dark');
-      document.body.classList.add('light');
-
-      // Set background and text colors
-      root.style.backgroundColor = colors.bg;
-      document.body.style.backgroundColor = colors.bg;
-      document.body.style.color = colors.text;
-    }
-
-    // Update CSS variables for color transition animations
-    root.style.setProperty('--theme-transition', 'background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease');
-    document.body.style.transition = 'var(--theme-transition)';
-
-    // Ensure #root element also gets the theme
-    const rootElement = document.getElementById('root');
-    if (rootElement) {
-      if (theme === 'dark') {
-        rootElement.classList.add('dark');
-        rootElement.classList.remove('light');
-        rootElement.style.backgroundColor = colors.bg;
-      } else {
-        rootElement.classList.remove('dark');
-        rootElement.classList.add('light');
-        rootElement.style.backgroundColor = colors.bg;
+  // 根据 appearance 选择第一个匹配的主题，或恢复已保存的主题
+  private applyByAppearance(appearance: 'light' | 'dark'): void {
+    // Check if there's a saved theme ID with the right appearance
+    const savedId = localStorage.getItem('lobster-theme-id');
+    if (savedId) {
+      const saved = allThemes.find(t => t.meta.id === savedId);
+      if (saved && saved.meta.appearance === appearance) {
+        void this.manager.setTheme(savedId);
+        return;
       }
+    }
+    // Fallback: pick first theme matching the appearance
+    const match = allThemes.find(t => t.meta.appearance === appearance);
+    if (match) {
+      void this.manager.setTheme(match.meta.id);
     }
   }
 }
