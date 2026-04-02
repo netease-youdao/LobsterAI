@@ -39,6 +39,7 @@ const App: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<'info' | 'success'>('info');
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
@@ -274,8 +275,9 @@ const App: React.FC = () => {
     }, 0);
   }, [dispatch, mainView, currentSessionId]);
 
-  const showToast = useCallback((message: string) => {
+  const showToast = useCallback((message: string, variant: 'info' | 'success' = 'info') => {
     setToastMessage(message);
+    setToastVariant(variant);
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current);
     }
@@ -485,8 +487,10 @@ const App: React.FC = () => {
   // Listen for toast events from child components
   useEffect(() => {
     const handler = (e: Event) => {
-      const message = (e as CustomEvent<string>).detail;
-      if (message) showToast(message);
+      const detail = (e as CustomEvent).detail;
+      const variant: 'info' | 'success' = typeof detail === 'object' && detail?.variant === 'success' ? 'success' : 'info';
+      const text: string = typeof detail === 'string' ? detail : (detail?.message ?? '');
+      if (text) showToast(text, variant);
     };
     window.addEventListener('app:showToast', handler);
     return () => window.removeEventListener('app:showToast', handler);
@@ -643,7 +647,11 @@ const App: React.FC = () => {
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
       {toastMessage && (
-        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
+        <Toast
+          message={toastMessage}
+          variant={toastVariant}
+          onClose={toastVariant === 'info' ? () => setToastMessage(null) : undefined}
+        />
       )}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar

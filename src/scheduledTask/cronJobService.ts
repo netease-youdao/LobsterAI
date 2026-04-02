@@ -540,6 +540,9 @@ export class CronJobService {
   async runJob(id: string): Promise<void> {
     const client = await this.client();
     await client.request('cron.run', { id });
+    // Trigger an immediate poll so the UI reflects the new running state
+    // without waiting up to POLL_INTERVAL_MS (15s) for the next scheduled tick.
+    setTimeout(() => { void this.pollOnce(); }, 800);
   }
 
   async listRuns(jobId: string, limit = 20, offset = 0): Promise<ScheduledTaskRun[]> {
@@ -623,7 +626,7 @@ export class CronJobService {
     this.firstPollDone = false;
   }
 
-  private async pollOnce(): Promise<void> {
+  async pollOnce(): Promise<void> {
     if (!this.polling) return;
 
     try {
