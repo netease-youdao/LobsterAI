@@ -204,6 +204,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - `pnpm -F @proj-airi/stage-pages typecheck`：通过
   - `pnpm -F @proj-airi/stage-layouts typecheck`：通过
   - `pnpm -F @proj-airi/stage-tamagotchi typecheck`：通过
+  - `pnpm -F @proj-airi/stage-ui test:run -- src/stores/chat-bridge-mode.test.ts`：通过
 - LobsterAI 静态验证
   - `npm test -- src/main/libs/agentBridgeSessionStore.test.ts`：通过
   - `npx tsc --noEmit --project electron-tsconfig.json`：通过
@@ -217,6 +218,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - 提示词透传：通过，传入 `systemPrompt = Reply with exactly PASS_PROMPT...` 后，最终回复为 `PASS_PROMPT`
   - 文件链路：通过，上传 `package.json` 得到 `fileId` 后，bridge chat 可读取并返回 `name = lobsterai`
   - 图片链路：通过，上传 `image/png` 后，bridge chat 可读取图片并返回图像描述
+  - 权限链路：通过，危险删除请求会发出 `permission.request`，`permission/list` 可读到 capability token，`deny` 后请求被消费并返回拒绝结果
   - 技能基础接口：通过，技能列表与 `get-config` 接口可访问
 - 本轮补充确认
   - Bridge 提示词透传已接通：Airi 会从会话首条 system message 提取 `systemPrompt` 并传给 LobsterAI runtime
@@ -226,6 +228,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - 已为桌面聊天区补充显式发送按钮，首页自动化现可稳定触发发送
   - Airi 首页已完成一次真实文本单轮：浏览器触发 `/api/agent/bridge/chat`，用户消息与助手回复均已渲染到聊天区
   - Airi 前端可见品牌文案已统一替换为 `Xclaw`，并显式保留 `lobster-agent`、deep link、导出类型等协议标识不变
+  - 已修正 `useBridge=false` 时未必回退的问题；当前 feature flag 会直接落到 OpenAI-compatible `/chat/completions`，并有单测保护
   - 当前动作与口型尚未做单独观察记录，因此展示链路已验证，表现层联动仍建议后续补记
 
 ---
@@ -236,7 +239,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
 2. **文件清理测试**：需要检查 LobsterAI 服务端日志确认文件回收
 3. **多轮会话测试**：需要 LobsterAI 端正确维护 session 上下文
 4. **表现层待补记**：动作、口型与等待态切换尚未单独留存观察记录
-5. **当前仍阻塞项**：权限请求、回退模式仍需要界面联调或特定工具场景；图片的服务端链路已通过，前端附件操作仍待补手测
+5. **当前仍阻塞项**：权限请求与回退模式的服务端/逻辑链路已通过，但 Airi 浏览器自动化页面当前未稳定显示 DOM，界面层仍待补手测；图片前端附件操作也仍待手测
 
 ---
 
@@ -249,5 +252,5 @@ pnpm -F @proj-airi/stage-layouts typecheck
 | T037 图片附件 | ⏳ 部分通过 | `image/png -> fileId -> /api/agent/bridge/chat` 已返回图片描述；前端附件操作仍待手测 |
 | T038 普通文件 | ⏳ 部分通过 | `fileId` 上传、引用、读取已通过；文件清理与 Airi 前端展示仍待验证 |
 | T039 技能 | ⏳ 部分通过 | 技能列表与配置读取接口通过；Airi 设置页启停、勾选、生效仍待 UI 联调 |
-| T040 权限请求 | ⏸ 阻塞 | 需要可触发权限的真实工具场景与运行中服务 |
-| T041 回退模式 | ⏳ 待手测 | 已确认代码保留 feature flag 与回退路径，仍需界面联调验证 |
+| T040 权限请求 | ⏳ 部分通过 | 已触发 `permission.request`，验证 `permission/list -> deny -> 消费完成`；Airi 权限卡界面仍待手测 |
+| T041 回退模式 | ⏳ 部分通过 | 已修正 `useBridge=false` 的回退判定并补单测，且 `POST /chat/completions` 可返回 `FALLBACK_OK`；Airi 设置页开关与界面层仍待手测 |
