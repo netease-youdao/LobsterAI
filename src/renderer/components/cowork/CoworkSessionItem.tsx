@@ -260,8 +260,9 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const deleteLabel = i18nService.t('deleteSession');
   const relativeTime = formatRelativeTime(session.updatedAt);
   const showRunningIndicator = session.status === 'running';
-  const showUnreadIndicator = !showRunningIndicator && hasUnread;
-  const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
+  const showErrorIndicator = session.status === 'error';
+  const showUnreadIndicator = !showRunningIndicator && !showErrorIndicator && hasUnread;
+  const showStatusIndicator = showRunningIndicator || showErrorIndicator || showUnreadIndicator;
   const batchLabel = i18nService.t('batchOperations');
   const menuItems = useMemo(() => {
     const items = [
@@ -323,10 +324,20 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
             {/* Status indicator */}
             {showStatusIndicator && (
               <span
-                className={`block w-2 h-2 rounded-full bg-primary flex-shrink-0 ${
-                  showRunningIndicator ? 'shadow-[0_0_6px_rgba(59,130,246,0.5)] animate-pulse' : ''
+                className={`block w-2 h-2 rounded-full flex-shrink-0 ${
+                  showRunningIndicator
+                    ? 'bg-primary shadow-[0_0_6px_rgba(59,130,246,0.5)] animate-pulse'
+                    : showErrorIndicator
+                      ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]'
+                      : 'bg-primary'
                 }`}
-                title={showRunningIndicator ? i18nService.t(statusLabels[session.status]) : undefined}
+                title={
+                  showRunningIndicator
+                    ? i18nService.t(statusLabels[session.status])
+                    : showErrorIndicator
+                      ? i18nService.t(statusLabels[session.status])
+                      : undefined
+                }
               />
             )}
             {isRenaming ? (
