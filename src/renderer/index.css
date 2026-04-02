@@ -86,6 +86,16 @@ body, #root, .App, main {
   color: var(--lobster-foreground);
 }
 
+/* ── In-page search highlights (CSS Custom Highlight API) ── */
+::highlight(in-page-search) {
+  background-color: rgba(253, 224, 71, 0.45); /* yellow-300/45 */
+  color: inherit;
+}
+::highlight(in-page-search-active) {
+  background-color: rgba(234, 179, 8, 0.85);  /* yellow-500/85 */
+  color: #1a1a1a;
+}
+
 body {
   margin: 0;
   min-width: 320px;

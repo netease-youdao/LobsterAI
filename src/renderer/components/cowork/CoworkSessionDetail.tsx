@@ -28,6 +28,45 @@ import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
+import CoworkInPageSearch, { type InPageSearchState, type CoworkInPageSearchHandle } from './CoworkInPageSearch';
+
+/** One keyword match located in a live DOM Text node. */
+interface InPageDomMatch { node: Text; start: number }
+
+/**
+ * Scroll `container` so that the given DOM match sits ~100px from the top.
+ * Uses Range.getBoundingClientRect() for sub-pixel accuracy.
+ * Pure function — no React hooks, safe to call from callbacks.
+ */
+export function scrollToMatchNode(
+  match: InPageDomMatch,
+  queryLen: number,
+  container: HTMLDivElement | null,
+): void {
+  if (!container || queryLen === 0) return;
+  const nodeLen = match.node.textContent?.length ?? 0;
+  if (match.start + queryLen > nodeLen) return; // stale / split node
+  const range = document.createRange();
+  range.setStart(match.node, match.start);
+  range.setEnd(match.node, match.start + queryLen);
+  const rect = range.getBoundingClientRect();
+  const containerRect = container.getBoundingClientRect();
+  const targetScrollTop = container.scrollTop + (rect.top - containerRect.top) - 100;
+  container.scrollTo({ top: Math.max(0, targetScrollTop), behavior: 'smooth' });
+}
+
+/**
+ * Count how many times `query` appears in `text` (case-insensitive).
+ * Exported for unit testing; used by the matchCounts useMemo in CoworkSessionDetail.
+ */
+export function countQueryInText(text: string, query: string): number {
+  if (!query) return 0;
+  const q = query.toLowerCase();
+  const lower = text.toLowerCase();
+  let count = 0; let pos = 0;
+  while ((pos = lower.indexOf(q, pos)) !== -1) { count++; pos += q.length; }
+  return count;
+}
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
@@ -1337,6 +1376,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const inPageSearchInputRef = useRef<CoworkInPageSearchHandle>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
   // Clear lazy-render height cache when session changes
@@ -1366,6 +1406,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+
+  // In-page search states
+  const [inPageSearchOpen, setInPageSearchOpen] = useState(false);
+  const [inPageSearch, setInPageSearch] = useState<InPageSearchState>({
+    query: '',
+    activeIndex: 0,
+    totalCount: 0,
+  });
+  // Debounced mirror of inPageSearch.query — drives TreeWalker to avoid per-keystroke DOM scans
+  const [debouncedQuery, setDebouncedQuery] = useState('');
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1856,9 +1906,216 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return value;
   }, []);
 
+  // Ctrl+F / Cmd+F inside the detail pane → open in-page search (intercept before App.tsx)
+  useEffect(() => {
+    const root = detailRootRef.current;
+    if (!root) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.metaKey || e.ctrlKey;
+      if (isMod && e.key === 'f') {
+        e.preventDefault();
+        e.stopPropagation();
+        setInPageSearchOpen(true);
+        // If bar is already open, re-focus the input
+        requestAnimationFrame(() => inPageSearchInputRef.current?.focus());
+        // ^ calls CoworkInPageSearchHandle.focus()
+      }
+    };
+    // Use capture phase so we intercept before App.tsx's document listener
+    root.addEventListener('keydown', handleKeyDown, true);
+    return () => root.removeEventListener('keydown', handleKeyDown, true);
+  }, []);
+
+  // Reset search when session changes — also immediately clear debouncedQuery
+  // to prevent stale matchCounts from highlighting turns in the new session
+  useEffect(() => {
+    setInPageSearchOpen(false);
+    setInPageSearch({ query: '', activeIndex: 0, totalCount: 0 });
+    setDebouncedQuery('');
+  }, [sessionId]);
+
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+
+  // ── In-page search — DOM-level TreeWalker implementation ────────────────────
+  // We collect all text-node match positions from the live DOM so navigation can
+  // scroll to the exact character offset, not just a coarse turn container.
+
+  /**
+   * Ref that caches the current list of DOM matches so scrollToMatch can use it
+   * without being recreated on every query change.
+   * Cleared on session change to release stale Text node references.
+   */
+  const domMatchesRef = useRef<InPageDomMatch[]>([]);
+
+  /**
+   * Walk all rendered text nodes inside the scroll container and collect every
+   * occurrence of `query` (case-insensitive).  Nodes inside the in-page search
+   * bar itself are excluded via the `data-in-page-search` guard.
+   */
+  const collectDomMatches = useCallback((query: string): InPageDomMatch[] => {
+    const container = scrollContainerRef.current;
+    if (!container || !query) return [];
+    const q = query.toLowerCase();
+    const results: InPageDomMatch[] = [];
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if ((node.parentElement as HTMLElement | null)?.closest('[data-in-page-search]')) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      },
+    );
+    let node: Text | null;
+    while ((node = walker.nextNode() as Text | null)) {
+      const text = node.textContent ?? '';
+      const lower = text.toLowerCase();
+      let pos = 0;
+      while ((pos = lower.indexOf(q, pos)) !== -1) {
+        results.push({ node, start: pos });
+        pos += q.length;
+      }
+    }
+    return results;
+  }, []);
+
+  /**
+   * Apply CSS Custom Highlight API ranges for all matches + active match.
+   * Falls back to a no-op if the browser does not support the API.
+   */
+  const applyHighlights = useCallback((matches: InPageDomMatch[], activeIdx: number, queryLen: number) => {
+    if (!('highlights' in CSS)) return;
+    CSS.highlights.delete('in-page-search');
+    CSS.highlights.delete('in-page-search-active');
+    if (matches.length === 0 || queryLen === 0) return;
+
+    const makeRange = (node: Text, start: number): Range | null => {
+      const end = start + queryLen;
+      if (end > (node.textContent?.length ?? 0)) return null; // guard stale/split node
+      const r = new Range();
+      r.setStart(node, start);
+      r.setEnd(node, end);
+      return r;
+    };
+
+    const allRanges = matches
+      .map(({ node, start }) => makeRange(node, start))
+      .filter((r): r is Range => r !== null);
+    if (allRanges.length > 0) {
+      CSS.highlights.set('in-page-search', new Highlight(...allRanges));
+    }
+    const active = matches[activeIdx];
+    if (active) {
+      const ar = makeRange(active.node, active.start);
+      if (ar) CSS.highlights.set('in-page-search-active', new Highlight(ar));
+    }
+  }, []);
+
+  // Sync debounced query — 120ms delay keeps TreeWalker off the hot keystroke path
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(inPageSearch.query), 120);
+    return () => clearTimeout(t);
+  }, [inPageSearch.query]);
+
+  // Recompute DOM matches after debounce + rAF (so DOM is fully painted)
+  useEffect(() => {
+    const q = debouncedQuery.trim();
+    if (!q) {
+      domMatchesRef.current = [];
+      CSS.highlights?.delete('in-page-search');
+      CSS.highlights?.delete('in-page-search-active');
+      setInPageSearch((prev) => ({ ...prev, totalCount: 0, activeIndex: 0 }));
+      return;
+    }
+    const id = requestAnimationFrame(() => {
+      const matches = collectDomMatches(q);
+      domMatchesRef.current = matches;
+      applyHighlights(matches, 0, q.length);
+      setInPageSearch((prev) => ({
+        ...prev,
+        totalCount: matches.length,
+        activeIndex: 0,
+      }));
+      // Scroll to first match right after computing
+      if (matches.length > 0) {
+        scrollToMatchNode(matches[0], q.length, scrollContainerRef.current);
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQuery, turns, collectDomMatches, applyHighlights]);
+
+  // Update active highlight when activeIndex changes (e.g. prev/next navigation)
+  useEffect(() => {
+    const q = debouncedQuery.trim();
+    if (!q || domMatchesRef.current.length === 0) return;
+    applyHighlights(domMatchesRef.current, inPageSearch.activeIndex, q.length);
+  }, [inPageSearch.activeIndex, debouncedQuery, applyHighlights]);
+
+  // Clean up highlights + release node refs when search closes or session changes
+  useEffect(() => {
+    if (!inPageSearchOpen) {
+      domMatchesRef.current = [];
+      CSS.highlights?.delete('in-page-search');
+      CSS.highlights?.delete('in-page-search-active');
+    }
+  }, [inPageSearchOpen]);
+
+  /**
+   * matchCounts — used only for the yellow ring on turn containers.
+   * Derived from source text (not DOM) so it covers lazy-unrendered turns too.
+   */
+  const matchCounts = useMemo(() => {
+    const q = debouncedQuery.trim().toLowerCase();
+    if (!q) return turns.map(() => 0);
+    return turns.map((turn) => {
+      const parts: string[] = [];
+      if (turn.userMessage?.content) parts.push(turn.userMessage.content);
+      for (const item of turn.assistantItems) {
+        if ((item.type === 'assistant' || item.type === 'system') && item.message?.content) {
+          parts.push(item.message.content);
+        }
+      }
+      return countQueryInText(parts.join(' '), q);
+    });
+  }, [turns, debouncedQuery]);
+
+  const scrollToMatch = useCallback((matchIdx: number) => {
+    const matches = domMatchesRef.current;
+    if (matches.length === 0) return;
+    const match = matches[matchIdx];
+    if (!match) return;
+    scrollToMatchNode(match, debouncedQuery.trim().length, scrollContainerRef.current);
+  }, [debouncedQuery]);
+
+  const handleInPageSearchChange = useCallback((query: string) => {
+    setInPageSearch((prev) => ({ ...prev, query, activeIndex: 0 }));
+    // Actual scroll happens inside the debouncedQuery useEffect above
+  }, []);
+
+  const handleInPageSearchNavigate = useCallback((direction: 'prev' | 'next') => {
+    setInPageSearch((prev) => {
+      if (prev.totalCount === 0) return prev;
+      const next =
+        direction === 'next'
+          ? (prev.activeIndex + 1) % prev.totalCount
+          : (prev.activeIndex - 1 + prev.totalCount) % prev.totalCount;
+      scrollToMatch(next);
+      return { ...prev, activeIndex: next };
+    });
+  }, [scrollToMatch]);
+
+  const handleInPageSearchClose = useCallback(() => {
+    setInPageSearchOpen(false);
+    setInPageSearch({ query: '', activeIndex: 0, totalCount: 0 });
+  }, []);
+
+  // ── End in-page search ───────────────────────────────────────────────────────
 
   // Cache turn-level DOM elements (data-turn-index, always in DOM even for lazy turns)
   useEffect(() => {
@@ -1953,6 +2210,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
       // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX)
       const alwaysRender = index >= turns.length - 3;
+      // Highlight turns that contain at least one match when in-page search is active
+      const isMatchedTurn = inPageSearchOpen && inPageSearch.query.trim().length > 0 && matchCounts[index] > 0;
 
       // Compute rail indices for user/assistant messages (must match rail IIFE logic)
       let asstContent = '';
@@ -1965,7 +2224,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const asstRailIdx = asstContent ? railCounter++ : -1;
 
       return (
-        <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
+        <LazyRenderTurn
+          key={turn.id}
+          turnId={turn.id}
+          alwaysRender={alwaysRender}
+          data-turn-index={index}
+          className={isMatchedTurn ? 'ring-2 ring-inset ring-yellow-400/60 dark:ring-yellow-500/50 rounded-lg' : undefined}
+        >
           {turn.userMessage && (
             <div data-export-role="user-message" {...(userRailIdx >= 0 ? { 'data-rail-index': userRailIdx } : undefined)}>
               <UserMessageItem message={turn.userMessage} skills={skills} />
@@ -2064,6 +2329,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           <WindowTitleBar inline className="ml-1" />
         </div>
       </div>
+
+      {/* In-page search bar — shown below header when Ctrl+F is pressed */}
+      {inPageSearchOpen && (
+        <div data-in-page-search>
+          <CoworkInPageSearch
+            ref={inPageSearchInputRef}
+            state={inPageSearch}
+            onChange={handleInPageSearchChange}
+            onNavigate={handleInPageSearchNavigate}
+            onClose={handleInPageSearchClose}
+          />
+        </div>
+      )}
 
       {/* Floating Menu */}
       {menuPosition && (

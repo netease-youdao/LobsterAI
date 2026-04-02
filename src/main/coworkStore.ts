@@ -65,6 +65,32 @@ function normalizeMemoryText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Extract a snippet from `content` centred around the first occurrence of any
+ * of the `searchTerms`. Window: up to 60 chars before + term + 60 chars after.
+ * Exported for unit testing.
+ */
+export function extractSnippet(content: string, searchTerms: string[]): string {
+  const normalised = content.replace(/\s+/g, ' ').trim();
+  if (!normalised) return '';
+  const lower = normalised.toLowerCase();
+  let bestIdx = -1;
+  let bestTerm = '';
+  for (const term of searchTerms) {
+    if (!term.trim()) continue;
+    const idx = lower.indexOf(term.toLowerCase());
+    if (idx !== -1 && (bestIdx === -1 || idx < bestIdx)) {
+      bestIdx = idx;
+      bestTerm = term;
+    }
+  }
+  if (bestIdx === -1) return normalised.slice(0, 200);
+  const start = Math.max(0, bestIdx - 60);
+  const end = Math.min(normalised.length, bestIdx + bestTerm.length + 60);
+  const raw = normalised.slice(start, end);
+  return `${start > 0 ? '…' : ''}${raw}${end < normalised.length ? '…' : ''}`;
+}
+
 function extractConversationSearchTerms(value: string): string[] {
   const normalized = normalizeMemoryText(value).toLowerCase();
   if (!normalized) return [];
@@ -442,6 +468,8 @@ export interface CoworkConversationSearchRecord {
   url: string;
   human: string;
   assistant: string;
+  /** The normalised search terms actually used in the SQL query (for frontend highlighting). */
+  terms: string[];
 }
 
 export interface CoworkConfig {
@@ -1615,16 +1643,26 @@ export class CoworkStore {
           url: `https://claude.ai/chat/${row.session_id}`,
           human: '',
           assistant: '',
+          terms: [] as string[],
         };
         bySession.set(row.session_id, current);
       }
 
-      const snippet = truncate((row.content || '').replace(/\s+/g, ' ').trim(), 280);
-      if (row.type === 'user' && !current.human) {
-        current.human = snippet;
+      const content = row.content || '';
+      const containsKeyword = terms.some((term) => content.toLowerCase().includes(term.toLowerCase()));
+      // Prefer snippets that contain a keyword over those that don't.
+      // Since rows are ordered by created_at DESC, the first row we see per
+      // session+type is already the most-recent match — keep it unless we later
+      // find a keyword-containing row that can replace a non-keyword placeholder.
+      if (row.type === 'user') {
+        if (!current.human || (containsKeyword && !terms.some((t) => current!.human.toLowerCase().includes(t.toLowerCase())))) {
+          current.human = extractSnippet(content, terms);
+        }
       }
-      if (row.type === 'assistant' && !current.assistant) {
-        current.assistant = snippet;
+      if (row.type === 'assistant') {
+        if (!current.assistant || (containsKeyword && !terms.some((t) => current!.assistant.toLowerCase().includes(t.toLowerCase())))) {
+          current.assistant = extractSnippet(content, terms);
+        }
       }
 
       if (bySession.size >= maxResults) {
@@ -1640,6 +1678,7 @@ export class CoworkStore {
         ...entry,
         human: entry.human || this.getLatestMessageByType(entry.sessionId, 'user'),
         assistant: entry.assistant || this.getLatestMessageByType(entry.sessionId, 'assistant'),
+        terms,
       }));
 
     return records;
@@ -1689,6 +1728,7 @@ export class CoworkStore {
       url: `https://claude.ai/chat/${row.id}`,
       human: this.getLatestMessageByType(row.id, 'user'),
       assistant: this.getLatestMessageByType(row.id, 'assistant'),
+      terms: [] as string[],
     }));
   }
 

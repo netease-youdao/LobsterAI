@@ -14,6 +14,7 @@ interface CoworkSessionItemProps {
   isBatchMode: boolean;
   isSelected: boolean;
   showBatchOption?: boolean;
+  highlightKeyword?: string;
   onSelect: () => void;
   onDelete: () => void;
   onTogglePin: (pinned: boolean) => void;
@@ -86,6 +87,41 @@ const formatRelativeTime = (timestamp: number): { compact: string; full: string 
   }
 };
 
+/**
+ * Highlights all occurrences of one or more keywords in `text`.
+ * Accepts either `keyword` (single string, for title-only search) or
+ * `keywords` (array of terms, for multi-term content search).
+ */
+export const HighlightText: React.FC<{
+  text: string;
+  keyword?: string;
+  keywords?: string[];
+}> = ({ text, keyword, keywords }) => {
+  const terms = keywords ?? (keyword ? [keyword] : []);
+  const activeTerms = terms.filter((t) => t.trim());
+  if (!text || activeTerms.length === 0) return <>{text}</>;
+
+  // Build a single regex that matches any of the terms (longest first to avoid
+  // partial shadowing — e.g. "auth flow" should match before "auth").
+  const sorted = [...activeTerms].sort((a, b) => b.length - a.length);
+  const pattern = sorted.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const parts = text.split(new RegExp(`(${pattern})`, 'gi'));
+
+  return (
+    <>
+      {parts.map((part, i) =>
+        activeTerms.some((t) => part.toLowerCase() === t.toLowerCase()) ? (
+          <mark key={i} className="bg-yellow-200 dark:bg-yellow-500/40 text-inherit rounded-sm px-0.5">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+};
+
 const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   session,
   hasUnread,
@@ -93,6 +129,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   isBatchMode,
   isSelected,
   showBatchOption = true,
+  highlightKeyword = '',
   onSelect,
   onDelete,
   onTogglePin,
@@ -348,7 +385,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
               />
             ) : (
               <h3 className="text-sm font-medium text-foreground truncate">
-                {session.title}
+                {highlightKeyword ? (
+                  <HighlightText text={session.title} keyword={highlightKeyword} />
+                ) : (
+                  session.title
+                )}
               </h3>
             )}
           </div>

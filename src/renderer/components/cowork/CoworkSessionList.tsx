@@ -11,6 +11,7 @@ interface CoworkSessionListProps {
   isBatchMode: boolean;
   selectedIds: Set<string>;
   showBatchOption?: boolean;
+  highlightKeyword?: string;
   onSelectSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onTogglePin: (sessionId: string, pinned: boolean) => void;
@@ -25,6 +26,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
   isBatchMode,
   selectedIds,
   showBatchOption = true,
+  highlightKeyword = '',
   onSelectSession,
   onDeleteSession,
   onTogglePin,
@@ -73,6 +75,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           isBatchMode={isBatchMode}
           isSelected={selectedIds.has(session.id)}
           showBatchOption={showBatchOption}
+          highlightKeyword={highlightKeyword}
           onSelect={() => onSelectSession(session.id)}
           onDelete={() => onDeleteSession(session.id)}
           onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
