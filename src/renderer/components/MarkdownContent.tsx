@@ -14,7 +14,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 // @ts-ignore
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon, HashtagIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../services/i18n';
 
 const CODE_BLOCK_LINE_LIMIT = 200;
@@ -194,6 +194,31 @@ const dispatchAppToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
 };
 
+const PlainCodeWithLineNumbers: React.FC<{ code: string; isDark: boolean }> = ({ code, isDark }) => {
+  const lines = code.split('\n');
+  return (
+    <div className={`overflow-x-auto text-[13px] leading-6 ${isDark ? 'dark:bg-[#282c34]' : 'bg-[#f0f2f5]'}`}>
+      <table className="w-full border-collapse" style={{ tableLayout: 'fixed' }}>
+        <tbody>
+          {lines.map((line, index) => (
+            <tr key={index} className="hover:bg-black/5 dark:hover:bg-white/5">
+              <td
+                className="select-none text-right pr-4 pl-4 py-0 font-mono text-[12px] text-gray-400 dark:text-gray-500 border-r border-gray-200 dark:border-gray-700"
+                style={{ width: '3em', minWidth: '3em' }}
+              >
+                {index + 1}
+              </td>
+              <td className="pl-4 pr-4 py-0 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
+                {line}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
   const normalizedClassName = Array.isArray(className)
     ? className.join(' ')
@@ -211,6 +236,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     && trimmedCodeText.length <= CODE_BLOCK_CHAR_LIMIT
     && trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
   const [isCopied, setIsCopied] = useState(false);
+  const [showLineNumbers, setShowLineNumbers] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
   const isDark = useIsDark();
   const highlighterStyle = isDark ? oneDark : {
@@ -238,28 +264,53 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     }
   }, [trimmedCodeText]);
 
+  const handleToggleLineNumbers = useCallback(() => {
+    setShowLineNumbers(prev => !prev);
+  }, []);
+
   if (!isInline) {
     // Simple code block without language - minimal styling
     if (!match) {
       return (
         <div className="my-2 relative group">
-          <div className="overflow-x-auto rounded-lg dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="absolute top-2 right-2 z-10 p-2 rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors opacity-0 group-hover:opacity-100 transform-gpu"
-              title={i18nService.t('copyToClipboard')}
-              aria-label={i18nService.t('copyToClipboard')}
-            >
-              {isCopied ? (
-                <CheckIcon className="h-5 w-5 text-green-500" />
-              ) : (
-                <ClipboardDocumentIcon className="h-5 w-5" />
-              )}
-            </button>
-            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
-              {trimmedCodeText}
-            </code>
+          <div className="overflow-hidden rounded-lg dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
+            <div className="absolute top-2 right-2 z-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                type="button"
+                onClick={handleToggleLineNumbers}
+                className={`p-2 rounded-md transition-colors transform-gpu ${
+                  showLineNumbers
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+                title={showLineNumbers ? i18nService.t('codeBlockHideLineNumbers') : i18nService.t('codeBlockShowLineNumbers')}
+                aria-label={showLineNumbers ? i18nService.t('codeBlockHideLineNumbers') : i18nService.t('codeBlockShowLineNumbers')}
+              >
+                <HashtagIcon className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="p-2 rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors transform-gpu"
+                title={i18nService.t('copyToClipboard')}
+                aria-label={i18nService.t('copyToClipboard')}
+              >
+                {isCopied ? (
+                  <CheckIcon className="h-4 w-4 text-green-500" />
+                ) : (
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+            {showLineNumbers ? (
+              <PlainCodeWithLineNumbers code={trimmedCodeText} isDark={isDark} />
+            ) : (
+              <div className="overflow-x-auto">
+                <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
+                  {trimmedCodeText}
+                </code>
+              </div>
+            )}
           </div>
         </div>
       );
@@ -270,34 +321,57 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
       <div className="my-3 rounded-xl overflow-hidden border border-border relative shadow-subtle">
         <div className="bg-surface-raised px-4 py-2 text-xs text-secondary font-medium flex items-center justify-between">
           <span>{match[1]}</span>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="p-2 rounded-md hover:bg-surface-raised transition-colors transform-gpu"
-            title={i18nService.t('copyToClipboard')}
-            aria-label={i18nService.t('copyToClipboard')}
-          >
-            {isCopied ? (
-              <CheckIcon className="h-5 w-5 text-green-500" />
-            ) : (
-              <ClipboardDocumentIcon className="h-5 w-5" />
-            )}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleToggleLineNumbers}
+              className={`p-2 rounded-md transition-colors transform-gpu ${
+                showLineNumbers
+                  ? 'bg-blue-500/20 text-blue-500 dark:bg-blue-500/30 dark:text-blue-400'
+                  : 'hover:bg-surface-hover text-secondary'
+              }`}
+              title={showLineNumbers ? i18nService.t('codeBlockHideLineNumbers') : i18nService.t('codeBlockShowLineNumbers')}
+              aria-label={showLineNumbers ? i18nService.t('codeBlockHideLineNumbers') : i18nService.t('codeBlockShowLineNumbers')}
+            >
+              <HashtagIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="p-2 rounded-md hover:bg-surface-raised transition-colors transform-gpu"
+              title={i18nService.t('copyToClipboard')}
+              aria-label={i18nService.t('copyToClipboard')}
+            >
+              {isCopied ? (
+                <CheckIcon className="h-5 w-5 text-green-500" />
+              ) : (
+                <ClipboardDocumentIcon className="h-5 w-5" />
+              )}
+            </button>
+          </div>
         </div>
         {shouldHighlight ? (
           <SyntaxHighlighter
             style={highlighterStyle}
             language={match[1]}
             PreTag="div"
+            showLineNumbers={showLineNumbers}
             customStyle={{ ...SYNTAX_HIGHLIGHTER_STYLE, background: isDark ? '#282c34' : '#f0f2f5' }}
+            lineNumberStyle={{ color: isDark ? '#636d83' : '#9ca3af', fontSize: '0.8em', minWidth: '2.5em' }}
           >
             {trimmedCodeText}
           </SyntaxHighlighter>
         ) : (
-          <div className="m-0 overflow-x-auto dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
-              {trimmedCodeText}
-            </code>
+          <div className="m-0 overflow-hidden dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
+            {showLineNumbers ? (
+              <PlainCodeWithLineNumbers code={trimmedCodeText} isDark={isDark} />
+            ) : (
+              <div className="overflow-x-auto">
+                <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
+                  {trimmedCodeText}
+                </code>
+              </div>
+            )}
           </div>
         )}
       </div>
