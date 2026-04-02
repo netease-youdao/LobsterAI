@@ -33,6 +33,7 @@ const SkillsPickerModal: React.FC<SkillsPickerModalProps> = ({
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<Element | null>(null);
 
   // Filter enabled skills by tab and search
   const filteredSkills = skills
@@ -55,21 +56,52 @@ const SkillsPickerModal: React.FC<SkillsPickerModalProps> = ({
     }
   }, [filteredSkills, selectedSkillId]);
 
-  // Reset state when modal opens
+  // Reset state when modal opens; select first non-empty tab
   useEffect(() => {
     if (isOpen) {
-      setActiveTab('official');
+      triggerRef.current = document.activeElement;
+      const officialEnabled = skills.some(s => s.enabled && s.isOfficial);
+      const thirdPartyEnabled = skills.some(s => s.enabled && !s.isOfficial);
+      setActiveTab(officialEnabled ? 'official' : thirdPartyEnabled ? 'thirdParty' : 'official');
       setSearchQuery('');
       setSelectedSkillId(null);
       setTimeout(() => searchInputRef.current?.focus(), 50);
+    } else {
+      (triggerRef.current as HTMLElement)?.focus();
     }
-  }, [isOpen]);
+  }, [isOpen, skills]);
 
-  // ESC to close
+  // ESC to close + focus trap
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusableSelector = [
+          'a[href]',
+          'button:not([disabled])',
+          'input:not([disabled])',
+          'select:not([disabled])',
+          'textarea:not([disabled])',
+          '[tabindex]:not([tabindex="-1"])',
+        ].join(', ');
+        const focusable = Array.from(
+          modalRef.current.querySelectorAll<HTMLElement>(focusableSelector)
+        ).filter(el => !el.closest('[hidden]'));
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
@@ -99,6 +131,9 @@ const SkillsPickerModal: React.FC<SkillsPickerModalProps> = ({
     >
       <div
         ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skills-picker-title"
         className="w-[680px] h-[480px] flex flex-col rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
