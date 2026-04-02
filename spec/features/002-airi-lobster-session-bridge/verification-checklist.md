@@ -216,6 +216,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - `npm run electron:dev`：已启动，本地 Agent API 可用
   - `/api/agent/bridge/bind`：通过，可返回 `airiSessionId -> lobsterSessionId`
   - `/api/agent/skills`：通过，当前返回 38 个技能
+  - `POST /chat/completions`：通过；当 CoworkProxy 命中 Moonshot 429 限流时，Agent API 可自动回退到当前 provider 直连并返回 `CHAT_FIXED`
 - Bridge 真实联调
   - 单轮文本：通过，`session.bound -> state.changed -> assistant.final -> done` 链路可工作
   - 会话复用：通过，同一 `airiSessionId` 连续两轮命中同一个 `lobsterSessionId`
@@ -234,6 +235,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - Airi 前端可见品牌文案已统一替换为 `Xclaw`，并显式保留 `lobster-agent`、deep link、导出类型等协议标识不变
   - 已修正 `useBridge=false` 时未必回退的问题；当前 feature flag 会直接落到 OpenAI-compatible `/chat/completions`，并有单测保护
   - 已修正“重启后像是要重新配置”的问题；当保存的 Lobster 配置在启动早期因服务未就绪校验失败时，Airi 现会自动重试并恢复配置状态
+  - 已修正 Moonshot 429 导致 Claude/Cowork 聊天直接失败的问题；在无技能、无图片、无文件附件的普通聊天下，Agent API 与 Bridge 会自动回退到当前 provider 直连
   - 当前动作与口型尚未做单独观察记录，因此展示链路已验证，表现层联动仍建议后续补记
 
 ---
@@ -260,3 +262,4 @@ pnpm -F @proj-airi/stage-layouts typecheck
 | T040 权限请求 | ⏳ 部分通过 | 已触发 `permission.request`，验证 `permission/list -> deny -> 消费完成`；Airi 权限卡界面仍待手测 |
 | T041 回退模式 | ⏳ 部分通过 | 已修正 `useBridge=false` 的回退判定并补单测，且 `POST /chat/completions` 可返回 `FALLBACK_OK`；Airi 设置页开关与界面层仍待手测 |
 | T042 配置恢复 | ✅ 通过 | 已修正同配置失败结果被永久缓存的问题；LobsterAI 启动较慢时，Airi 会自动重试校验并恢复已保存配置 |
+| T043 Moonshot 429 恢复 | ✅ 通过 | CoworkProxy 命中 Moonshot 429 后，普通聊天会自动回退到当前 provider 直连；已验证 `/chat/completions -> CHAT_FIXED` 与 `/api/agent/bridge/chat -> BRIDGE_FIXED` |

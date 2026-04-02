@@ -2,9 +2,11 @@ import http from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { session } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 import { AgentBridgeSessionStore } from './agentBridgeSessionStore';
+import { resolveRawApiConfig } from './claudeSettings';
 
 const AGENT_API_PORT = 19888;
 const AGENT_API_HOST = '127.0.0.1';
@@ -223,6 +225,69 @@ function parsePromptAndAttachments(
   }
   const prompt = textParts.join('\n').trim() || (imageAttachments.length > 0 ? '请结合图片内容进行回答。' : '');
   return { prompt, imageAttachments };
+}
+
+function isRateLimitErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('429')
+    || normalized.includes('rate limit')
+    || normalized.includes('rate_limit')
+    || normalized.includes('tpd')
+    || normalized.includes('rpm')
+    || normalized.includes('concurrency');
+}
+
+async function requestDirectProviderChat(messages: AgentChatRequest['messages']): Promise<{ model: string; content: string }> {
+  const resolution = resolveRawApiConfig();
+  const apiConfig = resolution.config;
+  if (!apiConfig?.baseURL || !apiConfig?.apiKey || !apiConfig?.model) {
+    throw new Error('Direct provider fallback is unavailable because API configuration is incomplete.');
+  }
+
+  const response = await session.defaultSession.fetch(`${apiConfig.baseURL.replace(/\/+$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiConfig.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: apiConfig.model,
+      stream: false,
+      messages,
+      max_tokens: 512,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Direct provider fallback failed: ${response.status} ${raw}`);
+  }
+
+  const parsed = JSON.parse(raw) as {
+    model?: string
+    choices?: Array<{
+      message?: {
+        content?: string
+        reasoning_content?: string
+      }
+    }>
+  };
+
+  const choice = parsed.choices?.[0]?.message;
+  const content = typeof choice?.content === 'string' && choice.content.trim()
+    ? choice.content
+    : typeof choice?.reasoning_content === 'string'
+      ? choice.reasoning_content
+      : '';
+
+  if (!content.trim()) {
+    throw new Error('Direct provider fallback returned an empty response.');
+  }
+
+  return {
+    model: parsed.model || apiConfig.model,
+    content,
+  };
 }
 
 function parseAuthHeader(req: http.IncomingMessage): string | null {
@@ -1061,6 +1126,7 @@ export class AgentApiServer {
     let fullThinkingText = '';
     let hasError = false;
     let isCompleted = false;
+    let fallbackRateLimitMessage = '';
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -1095,6 +1161,10 @@ export class AgentApiServer {
         return;
       }
       if (message.type === 'assistant') {
+        if (skillIds.length === 0 && imageAttachments.length === 0 && fileIds.length === 0 && isRateLimitErrorMessage(content)) {
+          fallbackRateLimitMessage = content;
+          return;
+        }
         assistantMessageIds.add(message.id);
         messageOffsets.set(message.id, content.length);
         fullAssistantText = content;
@@ -1240,19 +1310,48 @@ export class AgentApiServer {
           resolve();
         }, 60000);
       });
+      if (fallbackRateLimitMessage) {
+        const fallbackMessages = systemPrompt
+          ? [{ role: 'system', content: systemPrompt }, ...messages]
+          : messages;
+        const fallback = await requestDirectProviderChat(fallbackMessages);
+        fullAssistantText = fallback.content;
+      }
     }
     catch (error) {
-      hasError = true;
       const message = String(error);
-      console.error('[AgentApiServer] Bridge cowork error:', error);
-      this.emitStateChanged(lobsterSessionId, turnId, 'error', { reason: message });
-      this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: message });
-      this.writeBridgeEvent(res, this.createBridgeEvent({
-        type: 'error',
-        sessionId: airiSessionId,
-        turnId,
-        message,
-      }));
+      if (skillIds.length === 0 && imageAttachments.length === 0 && fileIds.length === 0 && isRateLimitErrorMessage(message)) {
+        try {
+          const fallbackMessages = systemPrompt
+            ? [{ role: 'system', content: systemPrompt }, ...messages]
+            : messages;
+          const fallback = await requestDirectProviderChat(fallbackMessages);
+          fullAssistantText = fallback.content;
+        } catch (fallbackError) {
+          hasError = true;
+          console.error('[AgentApiServer] Bridge cowork error:', error);
+          console.error('[AgentApiServer] Bridge direct provider fallback error:', fallbackError);
+          this.emitStateChanged(lobsterSessionId, turnId, 'error', { reason: String(fallbackError) });
+          this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: String(fallbackError) });
+          this.writeBridgeEvent(res, this.createBridgeEvent({
+            type: 'error',
+            sessionId: airiSessionId,
+            turnId,
+            message: String(fallbackError),
+          }));
+        }
+      } else {
+        hasError = true;
+        console.error('[AgentApiServer] Bridge cowork error:', error);
+        this.emitStateChanged(lobsterSessionId, turnId, 'error', { reason: message });
+        this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: message });
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'error',
+          sessionId: airiSessionId,
+          turnId,
+          message,
+        }));
+      }
     }
     finally {
       runner.off('message', onMessage);
@@ -1331,7 +1430,7 @@ export class AgentApiServer {
     }
 
     if (!stream) {
-      await this.handleChatNoStream(req, res, userPrompt, imageAttachments, skillIds);
+      await this.handleChatNoStream(req, res, messages, userPrompt, imageAttachments, skillIds);
       return;
     }
 
@@ -1354,6 +1453,8 @@ export class AgentApiServer {
     const turnId = uuidv4();
     let messageCount = 0;
     let hasError = false;
+    let responseModel = 'claude-agent';
+    let fallbackRateLimitMessage = '';
     const messageUpdateOffsets = new Map<string, number>();
     const assistantMessageIds = new Set<string>();
 
@@ -1362,12 +1463,17 @@ export class AgentApiServer {
       messageCount++;
 
       if (message.type === 'assistant') {
+        if (skillIds.length === 0 && imageAttachments.length === 0 && isRateLimitErrorMessage(message.content || '')) {
+          fallbackRateLimitMessage = message.content || '';
+          return;
+        }
         assistantMessageIds.add(message.id);
+        responseModel = 'claude-agent';
         res.write(createSSEEvent({
           id: `chat-${sessionId}`,
           object: 'chat.completion.chunk',
           created: Date.now(),
-          model: 'claude-agent',
+          model: responseModel,
           choices: [{ index: 0, delta: { role: 'assistant', content: message.content }, finish_reason: null }],
         }));
       } else if (message.type === 'tool_use') {
@@ -1379,7 +1485,7 @@ export class AgentApiServer {
           id: `chat-${sessionId}`,
           object: 'chat.completion.chunk',
           created: Date.now(),
-          model: 'claude-agent',
+          model: responseModel,
           choices: [{
             index: 0,
             delta: {
@@ -1399,7 +1505,7 @@ export class AgentApiServer {
           id: `chat-${sessionId}`,
           object: 'chat.completion.chunk',
           created: Date.now(),
-          model: 'claude-agent',
+          model: responseModel,
           choices: [{
             index: 0,
             delta: {
@@ -1433,7 +1539,7 @@ export class AgentApiServer {
         id: `chat-${sessionId}`,
         object: 'chat.completion.chunk',
         created: Date.now(),
-        model: 'claude-agent',
+        model: responseModel,
         choices: [{ index: 0, delta: { content: deltaContent }, finish_reason: null }],
       }));
     };
@@ -1460,12 +1566,47 @@ export class AgentApiServer {
           resolve();
         }, 60000);
       });
+      if (fallbackRateLimitMessage) {
+        const fallback = await requestDirectProviderChat(messages);
+        responseModel = fallback.model;
+        res.write(createSSEEvent({
+          id: `chat-${sessionId}`,
+          object: 'chat.completion.chunk',
+          created: Date.now(),
+          model: responseModel,
+          choices: [{ index: 0, delta: { role: 'assistant', content: fallback.content }, finish_reason: null }],
+        }));
+      }
     } catch (error) {
-      hasError = true;
-      console.error('[AgentApiServer] Cowork error:', error);
-      this.emitStateChanged(sessionId, turnId, 'error', { reason: String(error) });
-      this.emitActTokenToStream(res, sessionId, 'sad');
-      res.write(createSSEEvent({ error: String(error) }));
+      const message = String(error);
+      if (skillIds.length === 0 && imageAttachments.length === 0 && isRateLimitErrorMessage(message)) {
+        try {
+          const fallback = await requestDirectProviderChat(messages);
+          responseModel = fallback.model;
+          this.emitStateChanged(sessionId, turnId, 'success');
+          this.emitActTokenToStream(res, sessionId, 'happy');
+          res.write(createSSEEvent({
+            id: `chat-${sessionId}`,
+            object: 'chat.completion.chunk',
+            created: Date.now(),
+            model: responseModel,
+            choices: [{ index: 0, delta: { role: 'assistant', content: fallback.content }, finish_reason: null }],
+          }));
+        } catch (fallbackError) {
+          hasError = true;
+          console.error('[AgentApiServer] Cowork error:', error);
+          console.error('[AgentApiServer] Direct provider fallback error:', fallbackError);
+          this.emitStateChanged(sessionId, turnId, 'error', { reason: String(fallbackError) });
+          this.emitActTokenToStream(res, sessionId, 'sad');
+          res.write(createSSEEvent({ error: String(fallbackError) }));
+        }
+      } else {
+        hasError = true;
+        console.error('[AgentApiServer] Cowork error:', error);
+        this.emitStateChanged(sessionId, turnId, 'error', { reason: message });
+        this.emitActTokenToStream(res, sessionId, 'sad');
+        res.write(createSSEEvent({ error: message }));
+      }
     } finally {
       if (!hasError) {
         this.emitStateChanged(sessionId, turnId, 'success');
@@ -1479,7 +1620,7 @@ export class AgentApiServer {
         id: `chat-${sessionId}`,
         object: 'chat.completion.chunk',
         created: Date.now(),
-        model: 'claude-agent',
+        model: responseModel,
         choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
       }));
 
@@ -1490,6 +1631,7 @@ export class AgentApiServer {
   private async handleChatNoStream(
     req: http.IncomingMessage,
     res: http.ServerResponse,
+    messages: AgentChatRequest['messages'],
     userPrompt: string,
     imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [],
     skillIds: string[] = [],
@@ -1509,13 +1651,20 @@ export class AgentApiServer {
     const turnId = uuidv4();
     let fullContent = '';
     let hasError = false;
+    let responseModel = 'claude-agent';
+    let fallbackRateLimitMessage = '';
     const assistantMessageIds = new Set<string>();
 
     const onMessage = (sid: string, message: CoworkMessage) => {
       if (sid !== sessionId) return;
       if (message.type === 'assistant') {
+        if (skillIds.length === 0 && imageAttachments.length === 0 && isRateLimitErrorMessage(message.content || '')) {
+          fallbackRateLimitMessage = message.content || '';
+          return;
+        }
         assistantMessageIds.add(message.id);
         fullContent = message.content;
+        responseModel = 'claude-agent';
       }
     };
 
@@ -1548,11 +1697,31 @@ export class AgentApiServer {
           resolve();
         }, 60000);
       });
+      if (fallbackRateLimitMessage) {
+        const fallback = await requestDirectProviderChat(messages);
+        responseModel = fallback.model;
+        fullContent = fallback.content;
+      }
     } catch (error) {
-      hasError = true;
-      console.error('[AgentApiServer] Cowork error:', error);
-      this.emitStateChanged(sessionId, turnId, 'error', { reason: String(error) });
-      fullContent = `Error: ${error}`;
+      const message = String(error);
+      if (skillIds.length === 0 && imageAttachments.length === 0 && isRateLimitErrorMessage(message)) {
+        try {
+          const fallback = await requestDirectProviderChat(messages);
+          responseModel = fallback.model;
+          fullContent = fallback.content;
+        } catch (fallbackError) {
+          hasError = true;
+          console.error('[AgentApiServer] Cowork error:', error);
+          console.error('[AgentApiServer] Direct provider fallback error:', fallbackError);
+          this.emitStateChanged(sessionId, turnId, 'error', { reason: String(fallbackError) });
+          fullContent = `Error: ${fallbackError}`;
+        }
+      } else {
+        hasError = true;
+        console.error('[AgentApiServer] Cowork error:', error);
+        this.emitStateChanged(sessionId, turnId, 'error', { reason: message });
+        fullContent = `Error: ${message}`;
+      }
     } finally {
       if (!hasError) {
         this.emitStateChanged(sessionId, turnId, 'success');
@@ -1566,7 +1735,7 @@ export class AgentApiServer {
       id: `chat-${sessionId}`,
       object: 'chat.completion',
       created: Date.now(),
-      model: 'claude-agent',
+      model: responseModel,
       choices: [{
         index: 0,
         message: { role: 'assistant', content: fullContent },
