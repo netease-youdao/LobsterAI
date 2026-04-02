@@ -216,6 +216,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - 会话复用：通过，同一 `airiSessionId` 连续两轮命中同一个 `lobsterSessionId`
   - 提示词透传：通过，传入 `systemPrompt = Reply with exactly PASS_PROMPT...` 后，最终回复为 `PASS_PROMPT`
   - 文件链路：通过，上传 `package.json` 得到 `fileId` 后，bridge chat 可读取并返回 `name = lobsterai`
+  - 图片链路：通过，上传 `image/png` 后，bridge chat 可读取图片并返回图像描述
   - 技能基础接口：通过，技能列表与 `get-config` 接口可访问
 - 本轮补充确认
   - Bridge 提示词透传已接通：Airi 会从会话首条 system message 提取 `systemPrompt` 并传给 LobsterAI runtime
@@ -235,7 +236,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
 2. **文件清理测试**：需要检查 LobsterAI 服务端日志确认文件回收
 3. **多轮会话测试**：需要 LobsterAI 端正确维护 session 上下文
 4. **表现层待补记**：动作、口型与等待态切换尚未单独留存观察记录
-5. **当前仍阻塞项**：图片、权限请求、回退模式仍需要界面联调或特定工具场景，不能仅靠接口冒烟替代
+5. **当前仍阻塞项**：权限请求、回退模式仍需要界面联调或特定工具场景；图片的服务端链路已通过，前端附件操作仍待补手测
 
 ---
 
@@ -245,7 +246,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
 |---|---|---|
 | T035 文本单轮 | ✅ 通过 | 服务端 Bridge SSE、Airi 首页发送、`/api/agent/bridge/chat` 请求与消息展示均已验证；动作/口型未单独留档 |
 | T036 多轮会话 | ⏳ 部分通过 | 同一 `airiSessionId` 成功复用同一 `lobsterSessionId`，上下文记忆验证通过；Airi 前端侧仍待联调 |
-| T037 图片附件 | ⏸ 阻塞 | 依赖前端图片上传与视觉输入场景 |
+| T037 图片附件 | ⏳ 部分通过 | `image/png -> fileId -> /api/agent/bridge/chat` 已返回图片描述；前端附件操作仍待手测 |
 | T038 普通文件 | ⏳ 部分通过 | `fileId` 上传、引用、读取已通过；文件清理与 Airi 前端展示仍待验证 |
 | T039 技能 | ⏳ 部分通过 | 技能列表与配置读取接口通过；Airi 设置页启停、勾选、生效仍待 UI 联调 |
 | T040 权限请求 | ⏸ 阻塞 | 需要可触发权限的真实工具场景与运行中服务 |
