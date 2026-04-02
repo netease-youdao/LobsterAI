@@ -668,10 +668,12 @@ const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
+  forceExpanded?: boolean | null;
 }> = ({
   group,
   isLastInSequence = true,
   mapDisplayText,
+  forceExpanded = null,
 }) => {
   const { toolUse, toolResult } = group;
   const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
@@ -692,7 +694,9 @@ const ToolCallGroup: React.FC<{
   const showNoDetailError = isToolError && !hasToolResultText;
   const toolResultFallback = showNoDetailError ? i18nService.t('coworkToolNoErrorDetail') : '';
   const displayToolResult = hasToolResultText ? toolResultDisplay : toolResultFallback;
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpandedLocal, setIsExpandedLocal] = useState(false);
+  // forceExpanded=true/false overrides local state; null means use local state
+  const isExpanded = forceExpanded !== null ? forceExpanded : isExpandedLocal;
   const resultLineCount = hasToolResultText ? getToolResultLineCount(toolResultDisplay) : 0;
   const toolResultSummary = isCronTool && hasToolResultText
     ? truncatePreview(toolResultDisplay.replace(/\s+/g, ' '))
@@ -715,7 +719,7 @@ const ToolCallGroup: React.FC<{
         <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
       )}
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={() => setIsExpandedLocal(!isExpanded)}
         className="w-full flex items-start gap-2 text-left group relative z-10"
       >
         <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
@@ -1172,6 +1176,9 @@ export const AssistantTurnBlock: React.FC<{
   showCopyButtons = true,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
+  // null = no override, true = all expanded, false = all collapsed
+  const [allExpanded, setAllExpanded] = useState<boolean | null>(null);
+  const toolGroupCount = visibleAssistantItems.filter(item => item.type === 'tool_group').length;
 
   const renderSystemMessage = (message: CoworkMessage) => {
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
@@ -1254,6 +1261,18 @@ export const AssistantTurnBlock: React.FC<{
       <div className="max-w-3xl mx-auto">
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0 px-4 py-3 space-y-3">
+            {toolGroupCount >= 2 && (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setAllExpanded(prev => prev === true ? false : true)}
+                  className="text-xs text-muted hover:text-secondary transition-colors"
+                >
+                  {allExpanded === true
+                    ? i18nService.t('coworkCollapseAllTools')
+                    : i18nService.t('coworkExpandAllTools')}
+                </button>
+              </div>
+            )}
             {visibleAssistantItems.map((item, index) => {
               if (item.type === 'assistant') {
                 if (item.message.metadata?.isThinking) {
@@ -1290,6 +1309,7 @@ export const AssistantTurnBlock: React.FC<{
                     group={item.group}
                     isLastInSequence={isLastInSequence}
                     mapDisplayText={mapDisplayText}
+                    forceExpanded={allExpanded}
                   />
                 );
               }
