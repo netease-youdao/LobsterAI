@@ -565,15 +565,17 @@ export class CoworkStore {
     systemPrompt: string = '',
     executionMode: CoworkExecutionMode = 'local',
     activeSkillIds: string[] = [],
-    agentId: string = 'main'
+    agentId: string = 'main',
+    options?: { hidden?: boolean }
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
+    const hidden = options?.hidden ? 1 : 0;
 
     this.db.run(`
-      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
-      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, 0, ?, ?)
-    `, [id, title, cwd, systemPrompt, executionMode, JSON.stringify(activeSkillIds), agentId, now, now]);
+      INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, pinned, hidden, created_at, updated_at)
+      VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    `, [id, title, cwd, systemPrompt, executionMode, JSON.stringify(activeSkillIds), agentId, hidden, now, now]);
 
     this.saveDb();
 
@@ -728,13 +730,14 @@ export class CoworkStore {
       rows = this.getAll<SessionSummaryRow>(`
         SELECT id, title, status, pinned, agent_id, created_at, updated_at
         FROM cowork_sessions
-        WHERE agent_id = ?
+        WHERE agent_id = ? AND COALESCE(hidden, 0) = 0
         ORDER BY pinned DESC, updated_at DESC
       `, [agentId]);
     } else {
       rows = this.getAll<SessionSummaryRow>(`
         SELECT id, title, status, pinned, agent_id, created_at, updated_at
         FROM cowork_sessions
+        WHERE COALESCE(hidden, 0) = 0
         ORDER BY pinned DESC, updated_at DESC
       `);
     }
@@ -1575,6 +1578,7 @@ export class CoworkStore {
     const clauses: string[] = [
       "m.type IN ('user', 'assistant')",
       `(${likeClauses.join(' OR ')})`,
+      'COALESCE(s.hidden, 0) = 0',
     ];
     const params: Array<string | number> = terms.map((term) => `%${term}%`);
 
@@ -1656,7 +1660,7 @@ export class CoworkStore {
     const beforeMs = parseTimeToMs(options.before);
     const afterMs = parseTimeToMs(options.after);
 
-    const clauses: string[] = [];
+    const clauses: string[] = ['COALESCE(hidden, 0) = 0'];
     const params: Array<string | number> = [];
 
     if (beforeMs !== null) {
@@ -1668,7 +1672,7 @@ export class CoworkStore {
       params.push(afterMs);
     }
 
-    const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const whereClause = `WHERE ${clauses.join(' AND ')}`;
 
     const rows = this.getAll<{
       id: string;

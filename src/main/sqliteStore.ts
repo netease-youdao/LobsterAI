@@ -260,6 +260,19 @@ export class SqliteStore {
       // Column already exists or migration not needed.
     }
 
+    // Migration: Add hidden column to cowork_sessions
+    try {
+      const sessionCols2 = this.db.exec("PRAGMA table_info(cowork_sessions);");
+      const sessionColNames2 = sessionCols2[0]?.values.map((row) => row[1]) || [];
+      if (!sessionColNames2.includes('hidden')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;');
+        this.db.run("UPDATE cowork_sessions SET hidden = 1 WHERE title = '[OpenClaw]';");
+        this.save();
+      }
+    } catch {
+      // Column already exists or migration not needed.
+    }
+
     // Migration: Ensure default 'main' agent exists
     try {
       const mainAgent = this.db.exec("SELECT id FROM agents WHERE id = 'main'");
