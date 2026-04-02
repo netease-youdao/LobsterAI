@@ -1,5 +1,6 @@
 import cronstrue from 'cronstrue/i18n';
 import { i18nService } from '../../services/i18n';
+import { PlatformRegistry } from '../../../shared/platform';
 import type {
   ScheduledTask,
   ScheduledTaskDelivery,
@@ -205,14 +206,27 @@ export function formatPayloadLabel(payload: ScheduledTaskPayload): string {
   return `${i18nService.t('scheduledTasksFormPayloadKindAgentTurn')} · ${payload.message}${timeoutLabel}`;
 }
 
+/**
+ * Resolve a channel name to a user-friendly display name via i18n + PlatformRegistry.
+ * e.g. 'feishu' → '飞书', 'openclaw-weixin' → '微信', 'moltbot-popo' → 'POPO'
+ */
+function resolveChannelDisplayName(channel: string): string {
+  const platform = PlatformRegistry.platformOfChannel(channel);
+  if (platform) {
+    return i18nService.t(platform) || PlatformRegistry.get(platform).label;
+  }
+  return channel;
+}
+
 export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
   if (delivery.mode === 'none' && !delivery.channel) {
     return i18nService.t('scheduledTasksFormDeliveryModeNone');
   }
 
   if (delivery.mode === 'none' && delivery.channel) {
+    const channelName = resolveChannelDisplayName(delivery.channel);
     const toLabel = delivery.to ? ` -> ${delivery.to}` : '';
-    return `${delivery.channel}${toLabel}`;
+    return `${channelName}${toLabel}`;
   }
 
   if (delivery.mode === 'webhook') {
@@ -221,9 +235,9 @@ export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
       : i18nService.t('scheduledTasksFormDeliveryModeWebhook');
   }
 
-  const channel = delivery.channel || 'last';
+  const channelName = delivery.channel ? resolveChannelDisplayName(delivery.channel) : 'last';
   const toLabel = delivery.to ? ` -> ${delivery.to}` : '';
-  return `${i18nService.t('scheduledTasksFormDeliveryModeAnnounce')} · ${channel}${toLabel}`;
+  return `${i18nService.t('scheduledTasksFormDeliveryModeAnnounce')} · ${channelName}${toLabel}`;
 }
 
 export type PlanType = 'once' | 'daily' | 'weekly' | 'monthly' | 'advanced';

@@ -12,6 +12,14 @@ export function initScheduledTaskHelpers(d: ScheduledTaskHelperDeps): void {
   deps = d;
 }
 
+/**
+ * List notification channels for scheduled tasks.
+ *
+ * Data source: IM Gateway config (same as Settings → IM 机器人).
+ * Channel-to-config-key mapping is resolved automatically via PlatformRegistry,
+ * so adding a new IM platform only requires updating PlatformRegistry — no
+ * changes needed here.
+ */
 export function listScheduledTaskChannels(): Array<{ value: string; label: string }> {
   const manager = deps?.getIMGatewayManager();
   const config = manager?.getConfig();
@@ -19,6 +27,7 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
     return [...PlatformRegistry.channelOptions()];
   }
 
+  // Collect enabled platform IDs from IM config
   const enabledConfigKeys = new Set<string>();
   const configEntries: Array<[string, unknown]> = Object.entries(
     config as unknown as Record<string, unknown>,
@@ -29,16 +38,13 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
     }
   }
 
+  // Filter channels by resolving channel → platform ID via PlatformRegistry
   return PlatformRegistry.channelOptions().filter((option) => {
-    if (option.value === 'dingtalk') {
-      return enabledConfigKeys.has('dingtalk');
+    const platform = PlatformRegistry.platformOfChannel(option.value);
+    if (platform) {
+      return enabledConfigKeys.has(platform);
     }
-    if (option.value === 'qqbot') {
-      return enabledConfigKeys.has('qq');
-    }
-    if (option.value === 'openclaw-weixin') {
-      return enabledConfigKeys.has('weixin');
-    }
+    // Unknown channel: keep if its value directly matches a config key
     return enabledConfigKeys.has(option.value);
   });
 }

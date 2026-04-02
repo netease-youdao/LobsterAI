@@ -397,28 +397,112 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     );
   };
 
+  const [channelDropdownOpen, setChannelDropdownOpen] = useState(false);
+  const channelDropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (channelDropdownRef.current && !channelDropdownRef.current.contains(event.target as Node)) {
+        setChannelDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const getChannelLogo = (channelValue: string): string | null => {
+    const platform = PlatformRegistry.platformOfChannel(channelValue);
+    if (platform) {
+      return PlatformRegistry.logo(platform);
+    }
+    return null;
+  };
+
+  const isChannelUnsupported = (channelValue: string): boolean => {
+    return channelValue === 'qqbot' || channelValue === 'netease-bee';
+  };
+
+  const getChannelDisplayLabel = (channelValue: string): string => {
+    if (channelValue === 'none') return i18nService.t('scheduledTasksFormNotifyChannelNone');
+    // Use i18n translation for platform name (e.g. weixin → '微信', feishu → '飞书')
+    const platform = PlatformRegistry.platformOfChannel(channelValue);
+    if (platform) {
+      const label = i18nService.t(platform) || PlatformRegistry.get(platform).label;
+      return isChannelUnsupported(channelValue) ? `${label} (${i18nService.t('scheduledTasksChannelUnsupported')})` : label;
+    }
+    const option = channelOptions.find(c => c.value === channelValue);
+    return option ? option.label : channelValue;
+  };
+
   const renderNotifyRow = () => {
+    const selectedLogo = getChannelLogo(form.notifyChannel);
+
     return (
       <div>
         <label className={labelClass}>{i18nService.t('scheduledTasksFormNotifyChannel')}</label>
         <div className="flex items-center gap-3">
-          <select
-            value={form.notifyChannel}
-            onChange={(event) => updateForm({ notifyChannel: event.target.value, notifyTo: '' })}
-            className={`${inputClass} ${showConversationSelector ? 'flex-1 min-w-0' : ''}`}
-          >
-            <option value="none">{i18nService.t('scheduledTasksFormNotifyChannelNone')}</option>
-            {channelOptions.map((channel) => {
-              const unsupported = channel.value === 'openclaw-weixin' || channel.value === 'qqbot' || channel.value === 'netease-bee';
-              return (
-                <option key={channel.value} value={channel.value} disabled={unsupported}>
-                  {unsupported
-                    ? `${channel.label} (${i18nService.t('scheduledTasksChannelUnsupported')})`
-                    : channel.label}
-                </option>
-              );
-            })}
-          </select>
+          <div className={`relative ${showConversationSelector ? 'flex-1 min-w-0' : 'w-full'}`} ref={channelDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setChannelDropdownOpen(!channelDropdownOpen)}
+              className={`${inputClass} w-full flex items-center justify-between cursor-pointer`}
+            >
+              <span className="flex items-center gap-2 truncate">
+                {selectedLogo && (
+                  <img src={selectedLogo} alt="" className="w-5 h-5 object-contain rounded" />
+                )}
+                <span className="truncate">{getChannelDisplayLabel(form.notifyChannel)}</span>
+              </span>
+              <svg className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${channelDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {channelDropdownOpen && (
+              <div className="absolute z-50 w-full mt-1 rounded-xl border border-border bg-surface shadow-lg overflow-hidden">
+                <div
+                  className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-raised transition-colors"
+                  onClick={() => { updateForm({ notifyChannel: 'none', notifyTo: '' }); setChannelDropdownOpen(false); }}
+                >
+                  <span className="w-5 h-5" />
+                  <span className="text-sm text-foreground">{i18nService.t('scheduledTasksFormNotifyChannelNone')}</span>
+                </div>
+                {channelOptions.map((channel) => {
+                  const unsupported = isChannelUnsupported(channel.value);
+                  const logo = getChannelLogo(channel.value);
+                  const platform = PlatformRegistry.platformOfChannel(channel.value);
+                  const displayName = platform ? (i18nService.t(platform) || channel.label) : channel.label;
+                  return (
+                    <div
+                      key={channel.value}
+                      className={`flex items-center gap-2 px-3 py-2 transition-colors ${
+                        unsupported
+                          ? 'opacity-50 cursor-not-allowed'
+                          : 'cursor-pointer hover:bg-surface-raised'
+                      } ${form.notifyChannel === channel.value ? 'bg-surface-raised' : ''}`}
+                      onClick={() => {
+                        if (!unsupported) {
+                          updateForm({ notifyChannel: channel.value, notifyTo: '' });
+                          setChannelDropdownOpen(false);
+                        }
+                      }}
+                    >
+                      {logo ? (
+                        <img src={logo} alt={displayName} className="w-5 h-5 object-contain rounded" />
+                      ) : (
+                        <span className="w-5 h-5" />
+                      )}
+                      <span className={`text-sm ${unsupported ? 'text-foreground-secondary' : 'text-foreground'}`}>
+                        {unsupported
+                          ? `${displayName} (${i18nService.t('scheduledTasksChannelUnsupported')})`
+                          : displayName}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {showConversationSelector && (
             <select
               value={form.notifyTo}
