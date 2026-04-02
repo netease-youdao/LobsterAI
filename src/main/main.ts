@@ -4256,6 +4256,11 @@ if (!gotTheLock) {
     } catch {
       // CronJobService may not have been initialized — safe to ignore.
     }
+
+    // Flush any pending SQLite writes to disk before exit
+    if (store) {
+      store.flushSync();
+    }
   };
 
   app.on('before-quit', (e) => {

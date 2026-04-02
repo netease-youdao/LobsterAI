@@ -528,6 +528,7 @@ interface CoworkUserMemoryRow {
 export class CoworkStore {
   private db: Database;
   private saveDb: () => void;
+  private configCache: CoworkConfig | null = null;
 
   constructor(db: Database, saveDb: () => void) {
     this.db = db;
@@ -993,6 +994,8 @@ export class CoworkStore {
 
   // Config operations
   getConfig(): CoworkConfig {
+    if (this.configCache) return this.configCache;
+
     interface ConfigRow {
       value: string;
     }
@@ -1008,7 +1011,7 @@ export class CoworkStore {
 
     const normalizedAgentEngine = normalizeCoworkAgentEngineValue(agentEngineRow?.value);
 
-    return {
+    const config: CoworkConfig = {
       workingDirectory: workingDirRow?.value || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
       executionMode: (executionModeRow?.value as CoworkExecutionMode) || 'local',
@@ -1025,6 +1028,8 @@ export class CoworkStore {
       memoryGuardLevel: normalizeMemoryGuardLevel(memoryGuardLevelRow?.value),
       memoryUserMemoriesMaxItems: clampMemoryUserMemoriesMaxItems(Number(memoryUserMemoriesMaxItemsRow?.value)),
     };
+    this.configCache = config;
+    return config;
   }
 
   setConfig(config: CoworkConfigUpdate): void {
@@ -1111,6 +1116,7 @@ export class CoworkStore {
       `, [String(clampMemoryUserMemoriesMaxItems(config.memoryUserMemoriesMaxItems)), now]);
     }
 
+    this.configCache = null;
     this.saveDb();
   }
 

@@ -29,11 +29,17 @@ function loadWasmBinary(): ArrayBuffer {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
+const SAVE_DEBOUNCE_MS = 500;
+
 export class SqliteStore {
   private db: Database;
   private dbPath: string;
   private emitter = new EventEmitter();
   private static sqlPromise: Promise<SqlJsStatic> | null = null;
+
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private saveInFlight: Promise<void> | null = null;
+  private dirty = false;
 
   private constructor(db: Database, dbPath: string) {
     this.db = db;
@@ -302,9 +308,50 @@ export class SqliteStore {
   }
 
   save() {
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.persistNow();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  private persistNow(): void {
+    this.dirty = false;
     const data = this.db.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(this.dbPath, buffer);
+    const tmpPath = this.dbPath + '.tmp';
+    this.saveInFlight = fs.promises
+      .writeFile(tmpPath, buffer)
+      .then(() => fs.promises.rename(tmpPath, this.dbPath))
+      .catch((err) => {
+        console.error('[SqliteStore] async write failed, falling back to sync write:', err);
+        try {
+          fs.writeFileSync(this.dbPath, buffer);
+        } catch (syncErr) {
+          console.error('[SqliteStore] sync fallback also failed:', syncErr);
+        }
+      })
+      .finally(() => {
+        this.saveInFlight = null;
+      });
+  }
+
+  /**
+   * Flush any pending save to disk synchronously.
+   * Call this before app quit to avoid data loss.
+   */
+  flushSync(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.dirty) {
+      const data = this.db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(this.dbPath, buffer);
+      this.dirty = false;
+    }
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
