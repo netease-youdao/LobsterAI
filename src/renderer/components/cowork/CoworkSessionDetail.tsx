@@ -28,11 +28,13 @@ import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
+import { isRetryableErrorKey } from '../../../common/coworkErrorClassify';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
   onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
+  onRetry?: () => void;
   onNavigateHome?: () => void;
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -1164,12 +1166,14 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  onRetry?: () => void;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  onRetry,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1182,6 +1186,9 @@ export const AssistantTurnBlock: React.FC<{
     const content = mapDisplayText ? mapDisplayText(normalizedContent) : normalizedContent;
     if (!content.trim()) return null;
 
+    const errorKey = typeof message.metadata?.errorKey === 'string' ? message.metadata.errorKey : null;
+    const showRetryButton = errorKey !== null && isRetryableErrorKey(errorKey) && !!onRetry;
+
     return (
       <div className="rounded-lg border border-border bg-background px-3 py-2">
         <div className="flex items-center gap-2">
@@ -1189,9 +1196,17 @@ export const AssistantTurnBlock: React.FC<{
             ? <ExclamationTriangleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
             : <InformationCircleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
           }
-          <div className="text-xs whitespace-pre-wrap text-secondary">
+          <div className="flex-1 text-xs whitespace-pre-wrap text-secondary">
             {content}
           </div>
+          {showRetryButton && (
+            <button
+              onClick={onRetry}
+              className="ml-2 flex-shrink-0 text-xs px-2 py-1 rounded-md border border-border text-secondary hover:text-foreground hover:border-foreground/40 hover:bg-surface-raised transition-colors"
+            >
+              {i18nService.t('coworkRetry')}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -1324,6 +1339,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onManageSkills,
   onContinue,
   onStop,
+  onRetry,
   onNavigateHome,
   isSidebarCollapsed,
   onToggleSidebar,
@@ -1942,6 +1958,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             resolveLocalFilePath={resolveLocalFilePath}
             showTypingIndicator
             showCopyButtons={!isStreaming}
+            onRetry={onRetry}
           />
         </div>
       );
@@ -1979,6 +1996,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                onRetry={isLastTurn ? onRetry : undefined}
               />
             </div>
           )}

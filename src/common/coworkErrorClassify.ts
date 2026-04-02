@@ -41,3 +41,24 @@ export function classifyErrorKey(error: string): string | null {
   }
   return null;
 }
+
+/**
+ * Error keys that are transient and safe to retry without user input changes.
+ * These errors are caused by server-side rate limits, network issues, or temporary failures.
+ */
+export const RETRYABLE_ERROR_KEYS = new Set([
+  'coworkErrorRateLimit',
+  'coworkErrorNetworkError',
+  'coworkErrorServerError',
+  'coworkErrorGatewayDisconnected',
+  'coworkErrorServiceRestart',
+  'coworkErrorGatewayDraining',
+  'coworkErrorUnknown',
+]);
+
+/**
+ * Returns true if the given i18n error key represents a retryable error.
+ */
+export function isRetryableErrorKey(key: string): boolean {
+  return RETRYABLE_ERROR_KEYS.has(key);
+}

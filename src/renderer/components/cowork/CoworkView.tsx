@@ -343,6 +343,15 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     await coworkService.stopSession(currentSession.id);
   };
 
+  const handleRetrySession = async () => {
+    if (!currentSession || isStreaming) return;
+    // Find the last user message to re-submit as a retry
+    const messages = currentSession.messages ?? [];
+    const lastUserMessage = [...messages].reverse().find(m => m.type === 'user');
+    if (!lastUserMessage) return;
+    await handleContinueSession(lastUserMessage.content);
+  };
+
   // Get selected quick action
   const selectedAction = React.useMemo(() => {
     return quickActions.find(action => action.id === selectedActionId);
@@ -500,6 +509,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           onManageSkills={() => onShowSkills?.()}
           onContinue={handleContinueSession}
           onStop={handleStopSession}
+          onRetry={handleRetrySession}
           onNavigateHome={() => dispatch(clearCurrentSession())}
           isSidebarCollapsed={isSidebarCollapsed}
           onToggleSidebar={onToggleSidebar}
