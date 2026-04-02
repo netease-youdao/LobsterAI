@@ -502,11 +502,12 @@ export const DEFAULT_NIM_CONFIG: NimConfig = {
   token: '',
 };
 
+// ==================== NetEase Bee Types ====================
+
 export const DEFAULT_NETEASE_BEE_CONFIG: NeteaseBeeChanConfig = {
   enabled: false,
   clientId: '',
   secret: '',
-  debug: true,
 };
 
 export const DEFAULT_TELEGRAM_OPENCLAW_CONFIG: TelegramOpenClawConfig = {

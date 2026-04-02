@@ -49,6 +49,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // API设置
     apiKey: 'API Key',
     apiKeyPlaceholder: '输入你的 API Key',
+    getApiKey: '获取 API Key',
+    visitOfficialSite: '访问官网',
     baseUrl: 'API Base URL',
     baseUrlPlaceholder: '输入 API 基础 URL',
     baseUrlHint1: 'Anthropic 兼容（以硅基流动为例）：',
@@ -1238,6 +1240,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // API Settings
     apiKey: 'API Key',
     apiKeyPlaceholder: 'Enter your API Key',
+    getApiKey: 'Get API Key',
+    visitOfficialSite: 'Visit official site',
     baseUrl: 'API Base URL',
     baseUrlPlaceholder: 'Enter API Base URL',
     baseUrlHint1: 'Anthropic compatible (e.g. SiliconFlow):',

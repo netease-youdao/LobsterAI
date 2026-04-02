@@ -9,7 +9,7 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import TrashIcon from './icons/TrashIcon';
@@ -161,7 +161,24 @@ const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode 
   ) as Record<(typeof CUSTOM_PROVIDER_KEYS)[number], { label: string; icon: React.ReactNode }>,
 };
 
-const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
+const providerLinks: Partial<Record<ProviderType, { website: string; apiKey?: string }>> = {
+  openai:       { website: 'https://platform.openai.com',              apiKey: 'https://platform.openai.com/api-keys' },
+  gemini:       { website: 'https://aistudio.google.com',              apiKey: 'https://aistudio.google.com/apikey' },
+  anthropic:    { website: 'https://console.anthropic.com',            apiKey: 'https://console.anthropic.com/settings/keys' },
+  deepseek:     { website: 'https://platform.deepseek.com',            apiKey: 'https://platform.deepseek.com/api_keys' },
+  moonshot:     { website: 'https://platform.moonshot.cn',             apiKey: 'https://platform.moonshot.cn/console/api-keys' },
+  zhipu:        { website: 'https://open.bigmodel.cn',                 apiKey: 'https://open.bigmodel.cn/usercenter/apikeys' },
+  minimax:      { website: 'https://platform.minimaxi.com',            apiKey: 'https://platform.minimaxi.com/user-center/basic-information/interface-key' },
+  volcengine:   { website: 'https://console.volcengine.com/ark',       apiKey: 'https://console.volcengine.com/ark' },
+  qwen:         { website: 'https://dashscope.console.aliyun.com',     apiKey: 'https://dashscope.console.aliyun.com/apiKey' },
+  youdaozhiyun: { website: 'https://ai.youdao.com',                    apiKey: 'https://ai.youdao.com/console' },
+  stepfun:      { website: 'https://platform.stepfun.com',             apiKey: 'https://platform.stepfun.com/interface-key' },
+  xiaomi:       { website: 'https://dev.mi.com/platform',              apiKey: 'https://dev.mi.com/platform' },
+  openrouter:   { website: 'https://openrouter.ai',                    apiKey: 'https://openrouter.ai/keys' },
+  ollama:       { website: 'https://ollama.com' },
+};
+
+const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'github-copilot';
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
@@ -2766,12 +2783,25 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             {/* Provider Settings - Right Side */}
             <div className="w-3/5 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
               <div className="flex items-center justify-between pb-2 border-b border-border">
-                <h3 className="text-base font-medium text-foreground">
-                  {isCustomProvider(activeProvider)
-                    ? ((providers[activeProvider] as ProviderConfig)?.displayName || getCustomProviderDefaultName(activeProvider))
-                    : (providerMeta[activeProvider]?.label ?? getProviderDisplayName(activeProvider))
-                  } {i18nService.t('providerSettings')}
-                </h3>
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-base font-medium text-foreground">
+                    {isCustomProvider(activeProvider)
+                      ? ((providers[activeProvider] as ProviderConfig)?.displayName || getCustomProviderDefaultName(activeProvider))
+                      : (providerMeta[activeProvider]?.label ?? getProviderDisplayName(activeProvider))
+                    } {i18nService.t('providerSettings')}
+                  </h3>
+                  {providerLinks[activeProvider]?.website && (
+                    <button
+                      type="button"
+                      onClick={() => void window.electron.shell.openExternal(providerLinks[activeProvider]!.website)}
+                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                      title={i18nService.t('visitOfficialSite')}
+                      aria-label={i18nService.t('visitOfficialSite')}
+                    >
+                      <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
                 <div
                   className={`px-2 py-0.5 rounded-lg text-xs font-medium ${
                     providers[activeProvider].enabled
@@ -2811,7 +2841,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
                   {/* API Key mode */}
                   {providers.minimax.authType !== 'oauth' && (
-                    <div className="relative">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label htmlFor="minimax-apiKey" className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
+                          {i18nService.t('apiKey')}
+                        </label>
+                        {providerLinks.minimax?.apiKey && (
+                          <button
+                            type="button"
+                            onClick={() => void window.electron.shell.openExternal(providerLinks.minimax!.apiKey!)}
+                            className="text-[11px] text-claude-accent hover:underline transition-colors"
+                          >
+                            {i18nService.t('getApiKey')} →
+                          </button>
+                        )}
+                      </div>
+                      <div className="relative">
                       <input
                         type={showApiKey ? 'text' : 'password'}
                         id="minimax-apiKey"
@@ -2839,6 +2884,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                         >
                           {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                         </button>
+                      </div>
                       </div>
                     </div>
                   )}
@@ -2995,8 +3041,211 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               {/* Standard API key section for non-MiniMax providers */}
               {providerRequiresApiKey(activeProvider) && activeProvider !== 'minimax' && (
                 <div>
-                  <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium text-foreground mb-1">
-                    {i18nService.t('apiKey')}
+                  {/* Standard API Key input for non-Qwen providers */}
+                  {activeProvider !== 'qwen' && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
+                          {i18nService.t('apiKey')}
+                        </label>
+                        {providerLinks[activeProvider]?.apiKey && (
+                          <button
+                            type="button"
+                            onClick={() => void window.electron.shell.openExternal(providerLinks[activeProvider]!.apiKey!)}
+                            className="text-[11px] text-claude-accent hover:underline transition-colors"
+                          >
+                            {i18nService.t('getApiKey')} →
+                          </button>
+                        )}
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showApiKey ? 'text' : 'password'}
+                          id={`${activeProvider}-apiKey`}
+                          value={providers[activeProvider].apiKey}
+                          onChange={(e) => handleProviderConfigChange(activeProvider, 'apiKey', e.target.value)}
+                          className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-xs"
+                          placeholder={i18nService.t('apiKeyPlaceholder')}
+                        />
+                        <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                          {providers[activeProvider].apiKey && (
+                            <button
+                              type="button"
+                              onClick={() => handleProviderConfigChange(activeProvider, 'apiKey', '')}
+                              className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                              title={i18nService.t('clear') || 'Clear'}
+                            >
+                              <XCircleIconSolid className="h-4 w-4" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setShowApiKey(!showApiKey)}
+                            className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                            title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                          >
+                            {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Special Qwen section with both API Key and OAuth support */}
+                  {activeProvider === 'qwen' && (
+                    <div className="space-y-4">
+                      {/* Tab switching for authentication methods */}
+                      <div className="flex space-x-1 bg-claude-surface/50 dark:bg-claude-darkSurface/50 rounded-lg p-1">
+                        <button
+                          type="button"
+                          onClick={() => setQwenAuthTab('apikey')}
+                          className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md relative ${
+                            qwenAuthTab === 'apikey'
+                              ? 'bg-white dark:bg-claude-darkSurface text-claude-text dark:text-claude-darkText'
+                              : 'text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-text dark:hover:text-claude-darkText'
+                          }`}
+                        >
+                          API Key
+                          {qwenAuthTab === 'apikey' && (
+                            <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-6 h-0.5 bg-claude-accent rounded-full"></div>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQwenAuthTab('oauth')}
+                          className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md relative ${
+                            qwenAuthTab === 'oauth'
+                              ? 'bg-white dark:bg-claude-darkSurface text-claude-text dark:text-claude-darkText'
+                              : 'text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-text dark:hover:text-claude-darkText'
+                          }`}
+                        >
+                          {i18nService.t('qwenOAuthTab')}
+                          {providers.qwen.oauthCredentials && (
+                            <span className="ml-1 inline-block w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                          )}
+                          {qwenAuthTab === 'oauth' && (
+                            <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-6 h-0.5 bg-claude-accent rounded-full"></div>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* API Key Tab */}
+                      {qwenAuthTab === 'apikey' && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label htmlFor="qwen-apiKey" className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
+                              API Key
+                            </label>
+                            {providerLinks.qwen?.apiKey && (
+                              <button
+                                type="button"
+                                onClick={() => void window.electron.shell.openExternal(providerLinks.qwen!.apiKey!)}
+                                className="text-[11px] text-claude-accent hover:underline transition-colors"
+                              >
+                                {i18nService.t('getApiKey')} →
+                              </button>
+                            )}
+                          </div>
+                          <div className="relative">
+                            <input
+                              type={showApiKey ? 'text' : 'password'}
+                              id="qwen-apiKey"
+                              value={providers.qwen.apiKey}
+                              onChange={(e) => handleProviderConfigChange('qwen', 'apiKey', e.target.value)}
+                              className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-xs"
+                              placeholder={i18nService.t('apiKeyPlaceholder')}
+                            />
+                            <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                              {providers.qwen.apiKey && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleProviderConfigChange('qwen', 'apiKey', '')}
+                                  className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                                  title={i18nService.t('clear') || 'Clear'}
+                                >
+                                  <XCircleIconSolid className="h-4 w-4" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setShowApiKey(!showApiKey)}
+                                className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                                title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                              >
+                                {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* OAuth Tab */}
+                      {qwenAuthTab === 'oauth' && (
+                        <div>
+                          <label className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-2">
+                            {i18nService.t('qwenOAuthLoginFree')}
+                          </label>
+
+                          {providers.qwen.oauthCredentials ? (
+                            <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/30">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-2">
+                                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                                  <span className="text-xs text-green-600 dark:text-green-400 font-medium">
+                                    {i18nService.t('qwenOAuthLoggedIn')}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={handleQwenOAuthLogout}
+                                  className="px-2 py-1 text-xs text-green-600 dark:text-green-400 hover:text-white hover:bg-green-600 dark:hover:bg-green-500 rounded-md border border-green-500/30 hover:border-green-600 dark:hover:border-green-500 transition-all duration-200 shadow-sm hover:shadow-md"
+                                >
+                                  {i18nService.t('qwenOAuthLogout')}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <button
+                                type="button"
+                                onClick={handleQwenOAuthLogin}
+                                disabled={qwenOAuthLoading}
+                                className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl bg-claude-accent hover:bg-claude-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-sm transition-colors"
+                              >
+                                {qwenOAuthLoading ? (
+                                  <>
+                                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                    <span>{i18nService.t('qwenOAuthLoggingIn')}</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <UserCircleIcon className="w-4 h-4" />
+                                    <span>{i18nService.t('qwenOAuthLogin')}</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {qwenOAuthProgress && (
+                                <div className="p-2 rounded-lg bg-claude-accent/10 border border-claude-accent/20">
+                                  <p className="text-xs text-claude-accent dark:text-claude-accent">
+                                    {qwenOAuthProgress}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeProvider === 'github-copilot' && (
+                <div>
+                  <label className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-2">
+                    {i18nService.t('githubCopilotAuth')}
                   </label>
                   <div className="relative">
                     <input

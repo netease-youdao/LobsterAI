@@ -537,6 +537,20 @@ export class IMGatewayManager extends EventEmitter {
       return this.testPopoOpenClawConnectivity(configOverride);
     }
 
+    // NetEase Bee is an internal relay channel with no standalone gateway to test
+    if (platform === 'netease-bee') {
+      return {
+        platform,
+        testedAt: Date.now(),
+        verdict: 'warn',
+        checks: [{
+          code: 'gateway_running',
+          level: 'info',
+          message: 'NetEase Bee channel does not support standalone connectivity testing.',
+        }],
+      };
+    }
+
     const config = this.buildMergedConfig(configOverride);
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
