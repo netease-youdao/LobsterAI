@@ -205,6 +205,10 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - `pnpm -F @proj-airi/stage-layouts typecheck`：通过
   - `pnpm -F @proj-airi/stage-tamagotchi typecheck`：通过
   - `pnpm -F @proj-airi/stage-ui test:run -- src/stores/chat-bridge-mode.test.ts`：通过
+- 配置恢复与启动排障
+  - 已确认 `apiKey/baseUrl` 本身会持久化，问题根因是 Airi 把失败校验结果按相同配置永久缓存
+  - 已修正 provider 失败校验缓存与自动重试逻辑；当 LobsterAI 启动较慢时，Airi 会在后台继续重试校验并自动恢复为已配置
+  - 已确认 LobsterAI 启动失败的直接原因是旧的 `vite --port 5175` 进程占用端口，而非 RxJS 本身故障
 - LobsterAI 静态验证
   - `npm test -- src/main/libs/agentBridgeSessionStore.test.ts`：通过
   - `npx tsc --noEmit --project electron-tsconfig.json`：通过
@@ -229,6 +233,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - Airi 首页已完成一次真实文本单轮：浏览器触发 `/api/agent/bridge/chat`，用户消息与助手回复均已渲染到聊天区
   - Airi 前端可见品牌文案已统一替换为 `Xclaw`，并显式保留 `lobster-agent`、deep link、导出类型等协议标识不变
   - 已修正 `useBridge=false` 时未必回退的问题；当前 feature flag 会直接落到 OpenAI-compatible `/chat/completions`，并有单测保护
+  - 已修正“重启后像是要重新配置”的问题；当保存的 Lobster 配置在启动早期因服务未就绪校验失败时，Airi 现会自动重试并恢复配置状态
   - 当前动作与口型尚未做单独观察记录，因此展示链路已验证，表现层联动仍建议后续补记
 
 ---
@@ -254,3 +259,4 @@ pnpm -F @proj-airi/stage-layouts typecheck
 | T039 技能 | ⏳ 部分通过 | 技能列表与配置读取接口通过；Airi 设置页启停、勾选、生效仍待 UI 联调 |
 | T040 权限请求 | ⏳ 部分通过 | 已触发 `permission.request`，验证 `permission/list -> deny -> 消费完成`；Airi 权限卡界面仍待手测 |
 | T041 回退模式 | ⏳ 部分通过 | 已修正 `useBridge=false` 的回退判定并补单测，且 `POST /chat/completions` 可返回 `FALLBACK_OK`；Airi 设置页开关与界面层仍待手测 |
+| T042 配置恢复 | ✅ 通过 | 已修正同配置失败结果被永久缓存的问题；LobsterAI 启动较慢时，Airi 会自动重试校验并恢复已保存配置 |
