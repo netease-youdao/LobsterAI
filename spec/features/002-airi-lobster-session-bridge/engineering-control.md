@@ -4,6 +4,8 @@
 
 - 完成按 session 拉取 pending permission 列表
 - 完成前端权威恢复与过期提示
+- 完成权限回包一次性 capability 校验
+- 完成 Airi ChatArea 对 Bridge SSE 与权限 capability 回包的接入
 - 对当前 Bridge 对接进行工程控制复查
 - 准备本地 git 存档前的检查依据
 
@@ -11,6 +13,14 @@
 
 - LobsterAI 编译
   - `npm run compile:electron`
+- LobsterAI 权限 store 单元测试
+  - `npm run test -- src/main/libs/agentBridgeSessionStore.test.ts`
+- airi ChatArea 类型检查
+  - `pnpm -F @proj-airi/stage-layouts typecheck`
+- airi Skills 设置页类型检查
+  - `pnpm -F @proj-airi/stage-pages typecheck`
+- airi stage-ui 类型检查
+  - `pnpm -F @proj-airi/stage-ui typecheck`
 - airi 类型检查
   - `pnpm -r -F @proj-airi/stage-web run typecheck`
   - `pnpm -r -F @proj-airi/stage-ui run typecheck`
@@ -25,11 +35,39 @@
 - 服务端 permission binding 现在保留 `toolName`、`toolInput`
 - 前端恢复 pending permission 时优先拉取服务端列表并以服务端为准
 - 若服务端无 pending request，则清除本地卡片并提示 expired / not_found 语义
+- 服务端为每个 pending permission 生成 capability token
+- `permission.request`、`permission/status`、`permission/list` 现在都会返回 capability token
+- `permission.respond` 现在必须命中 `airiSessionId + requestId + capabilityToken`
+- Airi `ChatArea.vue` 已切到 `/api/agent/bridge/chat`，并消费 `assistant.*`、`reasoning.*`、`tool.*`、`permission.request`
+- Airi 现在可恢复服务端 pending permission 列表，并在聊天区提交 capability token 版 `allow / deny`
+- Airi 设置页已新增 `settings/skills`，可查看技能列表、启停技能、读取保存配置、添加来源并确认风险安装
+- Airi 聊天区技能条已补充技能数量摘要与“管理技能”跳转入口
+- Airi 已抽出共享 `use-lobster-skills` composable，统一 `/api/agent/skills` 拉取、字段规范化与技能计数口径
+- 已修复技能总数 / 启用数显示不稳定与聊天区摘要显示异常问题
+- Airi 技能配置区已改为表单化键值编辑，补上重复键校验、敏感字段遮罩与新增/删除配置项
+- 技能安装成功后会高亮新技能并自动打开配置区，便于继续编辑
+- Airi 聊天区底部附件 / 语音控制已改为正常文档流布局，不再覆盖技能统计与技能列表
+- `InteractiveArea.vue` 与 `ChatContainer.vue` 已补上 `min-h-0` 约束，消息区在输入区变高时可正常收缩滚动
+- Airi 聊天区底部已拆出 `LobsterSkillsBar`、`LobsterPermissionList`、`ChatInputControls` 三个组件，降低后续 UI 拼装成本
+- Airi `ChatActionButtons` 已回到正常布局流，不再压在聊天卡片右下角
+- Airi 聊天桥接消费已兼容 `assistant / reasoning / tool_use / tool_result` 等别名事件，并在初始化时立即拉取技能状态
+- 技能条与底部控制条已补上启用状态展示，避免只看到总数看不到启用情况
+- Airi 聊天区已收敛为仅展示技能统计，不再平铺完整技能列表，减少对消息区的视觉干扰
+- LobsterAI 在 bridge 绑定命中失效 session 时会自动重建 runner session，避免继续报 `Session ... not found`
+- Claude runtime 已补 `onSessionDeleted` 清理，session 删除后会同步停止旧 runtime session，减少残留引用
+- Airi Bridge 请求现在会从当前会话首条 system message 提取 `systemPrompt` 并透传给 LobsterAI
+- Airi 角色卡中的 `systemPrompt`、`description`、`personality` 现在会沿着会话 system message 一起进入 Lobster runtime，不再长期停留在默认 Claude 风格提示词
+- 用户当前可直接通过 Airi `settings/airi-card` 页面维护提示词与性格，Bridge 路径会复用这份配置
 
 ## 合规结论
 
 - 类型检查：通过
 - 编译检查：通过
+- 权限 capability 单元测试：通过
+- Airi ChatArea 类型检查：通过
+- Airi Skills 设置页类型检查：通过
+- Airi stage-ui 类型检查：通过
+- Airi stage-pages 类型检查：通过
 - 文件编码：通过
 - 基础协议一致性：通过
 - 本地恢复行为：通过
@@ -41,11 +79,17 @@
   - `Access-Control-Allow-Origin: *` 仍开放
   - 技能配置接口仍会直接读写敏感 `.env`
 - P1
-  - 权限回包仍缺一次性 capability
   - 服务端 pending permissions 仍为内存态，进程重启后丢失
   - temp 上传文件仍缺物理回收
 - P2
   - `ChatArea.vue` 继续承载较多技能/权限 UI 逻辑
+  - `ChatArea.vue` 当前仍同时承担 Bridge 协议解析与状态协调，后续仍需继续拆分
+  - 技能配置表单当前仍基于键值对启发式渲染，尚未接入真实 schema 元数据
+  - 技能共享状态目前仍未补安装完成后的跨页面提示与更细粒度刷新反馈
+  - 聊天布局虽已止血，但底部区域仍有较多交互状态从 `ChatArea.vue` 下发，后续仍建议继续下沉
+  - Airi / LobsterAI 事件命名仍可能继续漂移，后续最好补统一适配层和专项回归测试
+  - bridge 绑定重建目前仍依赖运行时 session 探测，后续可继续补显式 reset/rebind 能力
+  - 目前仍依赖删除事件驱动清理，后续可补更强的会话一致性自检
   - `lobster-bridge.ts` 请求样板仍可抽象
   - `hooks.ts` 与 bridge adapter 仍有进一步收口空间
 
@@ -78,6 +122,10 @@
 ## 下一步建议
 
 - 收紧默认 key 与 CORS
-- 引入权限一次性 capability
 - 增加按 session 的服务端 pending permission 持久化
 - 抽离 `ChatArea.vue` 的技能/权限逻辑
+- 抽离 `ChatArea.vue` 的 Bridge SSE 解析与请求封装
+- 推进技能配置 schema 映射，让表单摆脱启发式键值渲染
+- 将底部子组件继续配套抽出 composable / adapter，减少 `ChatArea.vue` 状态协调压力
+- 补一轮 Airi / LobsterAI 桥接事件兼容性的专项验证
+- 为 bridge 会话增加显式 reset/rebind 能力，降低失效 binding 的恢复成本
