@@ -14,11 +14,13 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 // @ts-ignore
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../services/i18n';
 
 const CODE_BLOCK_LINE_LIMIT = 200;
 const CODE_BLOCK_CHAR_LIMIT = 20000;
+const CODE_BLOCK_COLLAPSE_THRESHOLD = 15;
+const CODE_BLOCK_COLLAPSED_LINES = 10;
 const SYNTAX_HIGHLIGHTER_STYLE = {
   margin: 0,
   borderRadius: 0,
@@ -207,10 +209,14 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
       : !match;
   const codeText = Array.isArray(children) ? children.join('') : String(children);
   const trimmedCodeText = codeText.replace(/\n$/, '');
+  const codeLines = trimmedCodeText.split('\n');
+  const totalLines = codeLines.length;
+  const isCollapsible = !isInline && totalLines > CODE_BLOCK_COLLAPSE_THRESHOLD;
   const shouldHighlight = !isInline && match
     && trimmedCodeText.length <= CODE_BLOCK_CHAR_LIMIT
-    && trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
+    && totalLines <= CODE_BLOCK_LINE_LIMIT;
   const [isCopied, setIsCopied] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(isCollapsible);
   const copyTimeoutRef = useRef<number | null>(null);
   const isDark = useIsDark();
   const highlighterStyle = isDark ? oneDark : {
@@ -218,6 +224,10 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     'pre[class*="language-"]': { ...(oneLight as Record<string, React.CSSProperties>)['pre[class*="language-"]'], background: '#f0f2f5' },
     'code[class*="language-"]': { ...(oneLight as Record<string, React.CSSProperties>)['code[class*="language-"]'], background: '#f0f2f5' },
   };
+
+  const collapsedCodeText = isCollapsible
+    ? codeLines.slice(0, CODE_BLOCK_COLLAPSED_LINES).join('\n')
+    : trimmedCodeText;
 
   useEffect(() => () => {
     if (copyTimeoutRef.current != null) {
@@ -238,28 +248,58 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     }
   }, [trimmedCodeText]);
 
+  const toggleCollapse = useCallback(() => {
+    setIsCollapsed(prev => !prev);
+  }, []);
+
+  const collapseToggleButton = isCollapsible ? (
+    <button
+      type="button"
+      onClick={toggleCollapse}
+      className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-secondary hover:text-foreground hover:bg-surface-raised/50 transition-colors cursor-pointer border-t border-border/50"
+    >
+      {isCollapsed ? (
+        <>
+          <ChevronDownIcon className="h-3.5 w-3.5" />
+          <span>{i18nService.t('codeBlockShowMore').replace('{lines}', String(totalLines))}</span>
+        </>
+      ) : (
+        <>
+          <ChevronUpIcon className="h-3.5 w-3.5" />
+          <span>{i18nService.t('codeBlockShowLess')}</span>
+        </>
+      )}
+    </button>
+  ) : null;
+
   if (!isInline) {
     // Simple code block without language - minimal styling
     if (!match) {
       return (
         <div className="my-2 relative group">
-          <div className="overflow-x-auto rounded-lg dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="absolute top-2 right-2 z-10 p-2 rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors opacity-0 group-hover:opacity-100 transform-gpu"
-              title={i18nService.t('copyToClipboard')}
-              aria-label={i18nService.t('copyToClipboard')}
-            >
-              {isCopied ? (
-                <CheckIcon className="h-5 w-5 text-green-500" />
-              ) : (
-                <ClipboardDocumentIcon className="h-5 w-5" />
+          <div className="overflow-hidden rounded-lg dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
+            <div className="overflow-x-auto relative">
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="absolute top-2 right-2 z-10 p-2 rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors opacity-0 group-hover:opacity-100 transform-gpu"
+                title={i18nService.t('copyToClipboard')}
+                aria-label={i18nService.t('copyToClipboard')}
+              >
+                {isCopied ? (
+                  <CheckIcon className="h-5 w-5 text-green-500" />
+                ) : (
+                  <ClipboardDocumentIcon className="h-5 w-5" />
+                )}
+              </button>
+              <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
+                {isCollapsed ? collapsedCodeText : trimmedCodeText}
+              </code>
+              {isCollapsed && (
+                <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t dark:from-[#282c34] from-[#f0f2f5] to-transparent pointer-events-none" />
               )}
-            </button>
-            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
-              {trimmedCodeText}
-            </code>
+            </div>
+            {collapseToggleButton}
           </div>
         </div>
       );
@@ -269,7 +309,12 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     return (
       <div className="my-3 rounded-xl overflow-hidden border border-border relative shadow-subtle">
         <div className="bg-surface-raised px-4 py-2 text-xs text-secondary font-medium flex items-center justify-between">
-          <span>{match[1]}</span>
+          <span>
+            {match[1]}
+            {isCollapsible && (
+              <span className="ml-2 text-muted">({totalLines} {totalLines === 1 ? 'line' : 'lines'})</span>
+            )}
+          </span>
           <button
             type="button"
             onClick={handleCopy}
@@ -284,22 +329,28 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
             )}
           </button>
         </div>
-        {shouldHighlight ? (
-          <SyntaxHighlighter
-            style={highlighterStyle}
-            language={match[1]}
-            PreTag="div"
-            customStyle={{ ...SYNTAX_HIGHLIGHTER_STYLE, background: isDark ? '#282c34' : '#f0f2f5' }}
-          >
-            {trimmedCodeText}
-          </SyntaxHighlighter>
-        ) : (
-          <div className="m-0 overflow-x-auto dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
-              {trimmedCodeText}
-            </code>
-          </div>
-        )}
+        <div className="relative">
+          {shouldHighlight ? (
+            <SyntaxHighlighter
+              style={highlighterStyle}
+              language={match[1]}
+              PreTag="div"
+              customStyle={{ ...SYNTAX_HIGHLIGHTER_STYLE, background: isDark ? '#282c34' : '#f0f2f5' }}
+            >
+              {isCollapsed ? collapsedCodeText : trimmedCodeText}
+            </SyntaxHighlighter>
+          ) : (
+            <div className="m-0 overflow-x-auto dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
+              <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
+                {isCollapsed ? collapsedCodeText : trimmedCodeText}
+              </code>
+            </div>
+          )}
+          {isCollapsed && (
+            <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t dark:from-[#282c34] from-[#f0f2f5] to-transparent pointer-events-none" />
+          )}
+        </div>
+        {collapseToggleButton}
       </div>
     );
   }
