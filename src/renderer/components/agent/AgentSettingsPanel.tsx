@@ -31,6 +31,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [icon, setIcon] = useState('');
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
 
@@ -43,6 +44,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     if (!agentId) return;
     setActiveTab('basic');
     setShowDeleteConfirm(false);
+    setDeleting(false);
     window.electron?.agents?.get(agentId).then((a) => {
       if (a) {
         setAgent(a);
@@ -70,6 +72,20 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       }
     });
   }, [agentId]);
+
+  useEffect(() => {
+    if (!agentId) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (showDeleteConfirm) {
+        setShowDeleteConfirm(false);
+      } else {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [agentId, showDeleteConfirm, onClose]);
 
   if (!agentId) return null;
 
@@ -113,9 +129,15 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   };
 
   const handleDelete = async () => {
-    const success = await agentService.deleteAgent(agentId);
-    if (success) {
-      onClose();
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const success = await agentService.deleteAgent(agentId);
+      if (success) {
+        onClose();
+      }
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -323,15 +345,17 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 <span className="text-xs text-red-500">{i18nService.t('confirmDelete') || 'Confirm?'}</span>
                 <button
                   type="button"
-                  onClick={handleDelete}
-                  className="px-2 py-1 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600"
+                  onClick={() => { void handleDelete(); }}
+                  disabled={deleting}
+                  className="px-2 py-1 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {i18nService.t('delete') || 'Delete'}
+                  {deleting ? i18nService.t('deleting') : (i18nService.t('delete') || 'Delete')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowDeleteConfirm(false)}
-                  className="px-2 py-1 text-xs font-medium rounded text-secondary hover:bg-surface-raised"
+                  disabled={deleting}
+                  className="px-2 py-1 text-xs font-medium rounded text-secondary hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {i18nService.t('cancel') || 'Cancel'}
                 </button>
