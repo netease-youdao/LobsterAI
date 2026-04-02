@@ -20,6 +20,7 @@ export interface AgentBridgeFileBinding {
 
 export interface AgentBridgePermissionBinding {
   requestId: string;
+  capabilityToken: string;
   airiSessionId: string;
   lobsterSessionId: string;
   turnId: string;
@@ -119,11 +120,15 @@ export class AgentBridgeSessionStore {
     return Array.from(this.permissions.values()).filter(permission => permission.airiSessionId === airiSessionId);
   }
 
-  consumePermission(requestId: string): AgentBridgePermissionBinding | null {
+  consumePermission(requestId: string, airiSessionId: string, capabilityToken: string): AgentBridgePermissionBinding | null {
     const permission = this.permissions.get(requestId) ?? null;
-    if (permission) {
-      this.permissions.delete(requestId);
-    }
+    if (!permission)
+      return null;
+    if (permission.airiSessionId !== airiSessionId)
+      return null;
+    if (permission.capabilityToken !== capabilityToken)
+      return null;
+    this.permissions.delete(requestId);
     return permission;
   }
 

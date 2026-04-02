@@ -59,6 +59,10 @@ export class ClaudeRuntimeAdapter extends EventEmitter implements CoworkRuntime 
     return this.runner.getSessionConfirmationMode(sessionId);
   }
 
+  onSessionDeleted(sessionId: string): void {
+    this.runner.stopSession(sessionId);
+  }
+
   private bindRunnerEvents(): void {
     this.runner.on('message', (sessionId, message) => {
       this.emit('message', sessionId, message);

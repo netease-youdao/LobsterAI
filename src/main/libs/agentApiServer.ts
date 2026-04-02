@@ -32,6 +32,7 @@ interface AgentBridgeChatRequest extends AgentChatRequest {
 interface AgentBridgePermissionRequest {
   airiSessionId: string;
   requestId: string;
+  capabilityToken: string;
   decision: 'allow' | 'deny';
 }
 
@@ -510,6 +511,14 @@ export class AgentApiServer {
     return uuidv4();
   }
 
+  private hasRunnerSession(runner: any, sessionId: string): boolean {
+    const store = runner?.store;
+    if (store && typeof store.getSession === 'function') {
+      return Boolean(store.getSession(sessionId));
+    }
+    return true;
+  }
+
   private async startRunnerSession(
     runner: any,
     sessionId: string,
@@ -619,6 +628,12 @@ export class AgentApiServer {
   private getOrCreateBridgeBinding(runner: any, airiSessionId: string): { lobsterSessionId: string; isNew: boolean } {
     const existing = this.bridgeSessions.get(airiSessionId);
     if (existing) {
+      if (!this.hasRunnerSession(runner, existing.lobsterSessionId)) {
+        this.bridgeSessions.delete(airiSessionId);
+        const lobsterSessionId = this.createRunnerSession(runner);
+        this.bridgeSessions.bind(airiSessionId, lobsterSessionId);
+        return { lobsterSessionId, isNew: true };
+      }
       this.bridgeSessions.touch(airiSessionId);
       return { lobsterSessionId: existing.lobsterSessionId, isNew: false };
     }
@@ -639,7 +654,7 @@ export class AgentApiServer {
     return resolved;
   }
 
-  private resolvePermissionStatus(airiSessionId: string, requestId: string): { status: 'pending' | 'expired' | 'not_found'; expiresAt?: number } {
+  private resolvePermissionStatus(airiSessionId: string, requestId: string): { status: 'pending' | 'expired' | 'not_found'; capabilityToken?: string; expiresAt?: number } {
     const permission = this.bridgeSessions.getPermission(requestId);
     if (!permission || permission.airiSessionId !== airiSessionId) {
       return { status: 'not_found' };
@@ -649,11 +664,12 @@ export class AgentApiServer {
       this.bridgeSessions.deletePermission(requestId);
       return { status: 'expired', expiresAt };
     }
-    return { status: 'pending', expiresAt };
+    return { status: 'pending', capabilityToken: permission.capabilityToken, expiresAt };
   }
 
   private listPendingPermissions(airiSessionId: string): Array<{
     requestId: string;
+    capabilityToken: string;
     toolName: string;
     toolInput: Record<string, unknown>;
     createdAt: number;
@@ -664,6 +680,7 @@ export class AgentApiServer {
     const now = Date.now();
     const pending: Array<{
       requestId: string;
+      capabilityToken: string;
       toolName: string;
       toolInput: Record<string, unknown>;
       createdAt: number;
@@ -678,6 +695,7 @@ export class AgentApiServer {
       }
       pending.push({
         requestId: permission.requestId,
+        capabilityToken: permission.capabilityToken,
         toolName: permission.toolName,
         toolInput: permission.toolInput,
         createdAt: permission.createdAt,
@@ -932,7 +950,7 @@ export class AgentApiServer {
       return;
     }
     const parsed = await this.readRequestBody(req) as AgentBridgePermissionRequest | null;
-    if (!parsed?.airiSessionId?.trim() || !parsed?.requestId?.trim() || !parsed?.decision) {
+    if (!parsed?.airiSessionId?.trim() || !parsed?.requestId?.trim() || !parsed?.capabilityToken?.trim() || !parsed?.decision) {
       sendError(res, 400, 'Invalid payload');
       return;
     }
@@ -943,8 +961,8 @@ export class AgentApiServer {
       sendError(res, 410, 'Permission request expired');
       return;
     }
-    const permission = this.bridgeSessions.consumePermission(requestId);
-    if (!permission || permission.airiSessionId !== airiSessionId) {
+    const permission = this.bridgeSessions.consumePermission(requestId, airiSessionId, parsed.capabilityToken.trim());
+    if (!permission) {
       sendError(res, 404, 'Permission request not found');
       return;
     }
@@ -1156,8 +1174,10 @@ export class AgentApiServer {
 
     const onPermissionRequest = (sid: string, request: { requestId: string; toolName: string; toolInput: Record<string, unknown> }) => {
       if (sid !== lobsterSessionId) return;
+      const capabilityToken = uuidv4();
       this.bridgeSessions.bindPermission({
         requestId: request.requestId,
+        capabilityToken,
         airiSessionId,
         lobsterSessionId,
         turnId,
@@ -1174,8 +1194,10 @@ export class AgentApiServer {
         sessionId: airiSessionId,
         turnId,
         requestId: request.requestId,
+        capabilityToken,
         toolName: request.toolName,
         toolInput: request.toolInput || {},
+        expiresAt: Date.now() + BRIDGE_PERMISSION_TTL_MS,
       }));
     };
 
