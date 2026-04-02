@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type {
@@ -9,12 +9,14 @@ import type {
 } from '../../../scheduledTask/types';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
 import { PlatformRegistry } from '@shared/platform';
+import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
 interface TaskFormProps {
   mode: 'create' | 'edit';
   task?: ScheduledTask;
   onCancel: () => void;
   onSaved: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface FormState {
@@ -114,8 +116,9 @@ const WEEKDAY_KEYS = [
   'scheduledTasksFormWeekSat',
 ] as const;
 
-const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
+const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDirtyChange }) => {
   const [form, setForm] = useState<FormState>(() => createFormState(task));
+  const initialFormRef = useRef<FormState>(createFormState(task));
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
     const savedChannel = task?.delivery.channel;
@@ -128,12 +131,39 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
 
   const isAdvanced = form.planType === 'advanced';
   const showConversationSelector = isIMChannel(form.notifyChannel);
 
+  const isDirty = useMemo(() => {
+    const initial = initialFormRef.current;
+    return (
+      form.name !== initial.name ||
+      form.description !== initial.description ||
+      form.planType !== initial.planType ||
+      form.year !== initial.year ||
+      form.month !== initial.month ||
+      form.day !== initial.day ||
+      form.hour !== initial.hour ||
+      form.minute !== initial.minute ||
+      form.second !== initial.second ||
+      form.weekday !== initial.weekday ||
+      form.monthDay !== initial.monthDay ||
+      form.payloadText !== initial.payloadText ||
+      form.notifyChannel !== initial.notifyChannel ||
+      form.notifyTo !== initial.notifyTo
+    );
+  }, [form]);
+
   useEffect(() => {
-    setForm(createFormState(task));
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    const newState = createFormState(task);
+    setForm(newState);
+    initialFormRef.current = newState;
   }, [task]);
 
   useEffect(() => {
@@ -181,6 +211,14 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const updateForm = (patch: Partial<FormState>) => {
     setForm((current) => ({ ...current, ...patch }));
   };
+
+  const handleCancelRequest = useCallback(() => {
+    if (isDirty) {
+      setShowUnsavedModal(true);
+    } else {
+      onCancel();
+    }
+  }, [isDirty, onCancel]);
 
   const validate = (): boolean => {
     const nextErrors: Record<string, string> = {};
@@ -483,7 +521,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       <div className="flex items-center justify-end gap-3 pt-2">
         <button
           type="button"
-          onClick={onCancel}
+          onClick={handleCancelRequest}
           className="px-4 py-2 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors"
         >
           {i18nService.t('cancel')}
@@ -501,6 +539,48 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               : i18nService.t('scheduledTasksFormUpdate')}
         </button>
       </div>
+
+      {/* Unsaved changes confirmation modal */}
+      {showUnsavedModal && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center"
+          onClick={() => setShowUnsavedModal(false)}
+        >
+          <div className="absolute inset-0 bg-black/40 dark:bg-black/60" />
+          <div
+            className="relative w-80 rounded-xl shadow-2xl bg-surface border border-border p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center">
+              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mb-3">
+                <ExclamationTriangleIcon className="w-5 h-5 text-amber-500" />
+              </div>
+              <h3 className="text-sm font-semibold text-foreground mb-2">
+                {i18nService.t('scheduledTasksUnsavedTitle')}
+              </h3>
+              <p className="text-sm text-secondary mb-5">
+                {i18nService.t('scheduledTasksUnsavedMessage')}
+              </p>
+              <div className="flex items-center gap-3 w-full">
+                <button
+                  type="button"
+                  onClick={() => setShowUnsavedModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+                >
+                  {i18nService.t('scheduledTasksUnsavedStay')}
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="flex-1 px-4 py-2 text-sm rounded-lg text-foreground border border-border hover:bg-surface-raised transition-colors"
+                >
+                  {i18nService.t('scheduledTasksUnsavedLeave')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
