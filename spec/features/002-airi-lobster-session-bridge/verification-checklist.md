@@ -1,0 +1,246 @@
+# Phase 8 验证与联调清单
+
+**Feature**: 002-airi-lobster-session-bridge  
+**验证日期**: 2026-04-02  
+**前置条件**: 
+- LobsterAI 服务已启动 (`http://127.0.0.1:19888`)
+- Airi 已配置 `lobster-agent` provider (baseUrl: `http://127.0.0.1:19888`)
+- 两个项目均已拉取最新代码
+
+---
+
+## T035 文本单轮：验证等待态、流式文本、完成态全链路
+
+### 测试步骤
+1. 打开 Airi，选择 `Lobster Agent` 作为 provider
+2. 在聊天框输入：`你好，请简单介绍一下你自己`
+3. 点击发送
+
+### 验证点
+- [ ] **等待态**：发送后，Airi 角色进入等待/思考状态（Think 表情/动作）
+- [ ] **流式文本**：回复内容逐字显示，不是等待完成后一次性显示
+- [ ] **口型驱动**：Airi 说话时口型与文本同步（如果启用了 TTS 或文本口型）
+- [ ] **完成态**：回复完成后，Airi 恢复 idle 状态（呼吸动画）
+- [ ] **消息持久化**：刷新页面后，聊天记录仍然存在
+
+### 预期结果
+```
+用户发送 → Airi 进入 Think 态 → 流式输出文本 + 口型驱动 → 完成后恢复 idle
+```
+
+---
+
+## T036 多轮会话：验证 runtime session 复用与上下文保持
+
+### 测试步骤
+1. 完成 T035 后，继续发送第二条消息：`你刚才说了什么？`
+2. 继续发送第三条消息：`请用三个词总结我们的对话`
+
+### 验证点
+- [ ] **上下文保持**：第二条消息的回复引用了第一条消息的内容
+- [ ] **session 复用**：LobsterAI 服务端使用同一个 `lobsterSessionId`（可在浏览器 DevTools Network 面板查看 `/api/agent/bridge/bind` 响应）
+- [ ] **多轮连贯**：第三条消息的回复能总结前两轮对话
+
+### 预期结果
+```
+第一问 → 第二问（引用第一问） → 第三问（总结前两轮）
+session bind 只调用一次，后续复用
+```
+
+---
+
+## T037 图片附件：验证图片识别与流式展示
+
+### 测试步骤
+1. 点击聊天框的附件按钮，选择一张图片
+2. 输入：`这张图片里有什么？`
+3. 点击发送
+
+### 验证点
+- [ ] **图片上传**：图片以 base64 data URL 形式内联到消息中（不走 fileId 上传）
+- [ ] **图片识别**：LobsterAI 能正确识别图片内容
+- [ ] **流式回复**：回复内容流式显示
+- [ ] **消息展示**：用户消息中显示图片缩略图
+
+### 预期结果
+```
+用户消息 = [{ type: 'text', text: '...' }, { type: 'image_url', image_url: { url: 'data:...' } }]
+Airi 回复流式显示图片分析结果
+```
+
+---
+
+## T038 普通文件：验证上传、引用、读取与清理
+
+### 测试步骤
+1. 准备一个文本文件（如 `test.txt`，内容随意）
+2. 点击附件按钮上传该文件
+3. 输入：`读取这个文件的内容`
+4. 点击发送
+
+### 验证点
+- [ ] **文件上传**：文件通过 `/api/agent/files/upload` 上传，返回 `fileId`
+- [ ] **fileId 引用**：请求中包含 `fileIds: ["xxx"]` 而非绝对路径
+- [ ] **文件读取**：LobsterAI 能读取文件内容并回复
+- [ ] **文件清理**：session 结束后文件被清理（需检查 LobsterAI 服务端日志）
+
+### 预期结果
+```
+POST /api/agent/files/upload → { file: { id: "xxx", ... } }
+POST /api/agent/bridge/chat → { fileIds: ["xxx"], ... }
+```
+
+---
+
+## T039 技能：验证查看、启停、勾选、配置编辑和生效
+
+### 测试步骤
+1. 打开 Airi 设置 → 技能页面
+2. 查看技能列表
+3. 启用/禁用一个技能
+4. 编辑一个技能的配置
+5. 回到聊天界面，勾选一个技能
+6. 发送消息触发该技能
+
+### 验证点
+- [ ] **技能列表**：能正确显示 LobsterAI 返回的技能列表
+- [ ] **启停操作**：切换开关后，技能状态立即更新
+- [ ] **配置编辑**：能读取和保存技能配置
+- [ ] **勾选生效**：勾选的技能在 turn 级 `skillIds` 中传递
+- [ ] **i18n**：所有文本使用翻译 key，无硬编码中文
+
+### 预期结果
+```
+技能面板显示：总技能 N | 已启用 M | 管理技能按钮
+勾选技能后，请求中包含 skillIds: ["xxx"]
+```
+
+---
+
+## T040 权限请求：验证 Airi 侧确认后 runtime 可继续推进
+
+### 测试步骤
+1. 发送一个需要权限的操作（如文件写入、命令执行）
+2. 等待权限请求弹出
+3. 点击 Allow 或 Deny
+4. 观察后续行为
+
+### 验证点
+- [ ] **权限弹窗**：`LobsterPermissionList.vue` 显示权限请求
+- [ ] **工具信息**：显示工具名称和输入参数
+- [ ] **Allow 行为**：点击 Allow 后，LobsterAI 继续执行
+- [ ] **Deny 行为**：点击 Deny 后，LobsterAI 跳过该工具或报错
+- [ ] **状态映射**：权限请求时，Airi 进入 `ask_user` 等待态（Awkward 表情）
+
+### 预期结果
+```
+tool.call → permission.request 事件 → UI 显示权限弹窗
+用户点击 Allow → POST /api/agent/bridge/permission → runtime 继续
+```
+
+---
+
+## T041 回退模式：验证关闭 Bridge 时文本兼容模式仍可工作
+
+### 测试步骤
+1. 打开 Airi 设置 → Provider 设置 → Lobster Agent
+2. 关闭 `Use Bridge Protocol` 开关
+3. 回到聊天界面，发送消息
+4. 重新打开 Bridge，再次发送消息
+
+### 验证点
+- [ ] **降级模式**：关闭 Bridge 后，消息走 `/v1/chat/completions` 兼容路径
+- [ ] **文本正常**：回复内容正常显示，无流式失真
+- [ ] **功能降级**：技能深接入、文件 fileId、权限请求等高级能力不可用（符合预期）
+- [ ] **恢复 Bridge**：重新打开 Bridge 后，所有功能恢复正常
+
+### 预期结果
+```
+useBridge = false → performSend() 走 llmStore.stream() 路径
+useBridge = true → performSend() 走 streamChat() 路径
+```
+
+---
+
+## 快速验证命令
+
+### 检查 LobsterAI Bridge 端点是否可用
+```bash
+curl -X POST http://127.0.0.1:19888/api/agent/bridge/bind \
+  -H "Authorization: Bearer lobsterai-agent-default-key" \
+  -H "Content-Type: application/json" \
+  -d '{"airiSessionId": "test-session-001"}'
+```
+
+预期响应：
+```json
+{
+  "session": {
+    "airiSessionId": "test-session-001",
+    "lobsterSessionId": "xxx"
+  }
+}
+```
+
+### 检查技能列表端点
+```bash
+curl http://127.0.0.1:19888/api/agent/skills \
+  -H "Authorization: Bearer lobsterai-agent-default-key"
+```
+
+### 检查 Airi 类型编译
+```bash
+cd airi/airi
+pnpm -F @proj-airi/stage-ui typecheck
+pnpm -F @proj-airi/stage-layouts typecheck
+```
+
+---
+
+## 本轮已执行验证（2026-04-02）
+
+- Airi 类型检查
+  - `pnpm -F @proj-airi/stage-ui typecheck`：通过
+  - `pnpm -F @proj-airi/stage-pages typecheck`：通过
+  - `pnpm -F @proj-airi/stage-layouts typecheck`：通过
+- LobsterAI 静态验证
+  - `npm test -- src/main/libs/agentBridgeSessionStore.test.ts`：通过
+  - `npx tsc --noEmit --project electron-tsconfig.json`：通过
+- LobsterAI 服务与端点探测
+  - `npm run electron:dev`：已启动，本地 Agent API 可用
+  - `/api/agent/bridge/bind`：通过，可返回 `airiSessionId -> lobsterSessionId`
+  - `/api/agent/skills`：通过，当前返回 38 个技能
+- Bridge 真实联调
+  - 单轮文本：通过，`session.bound -> state.changed -> assistant.final -> done` 链路可工作
+  - 会话复用：通过，同一 `airiSessionId` 连续两轮命中同一个 `lobsterSessionId`
+  - 提示词透传：通过，传入 `systemPrompt = Reply with exactly PASS_PROMPT...` 后，最终回复为 `PASS_PROMPT`
+  - 文件链路：通过，上传 `package.json` 得到 `fileId` 后，bridge chat 可读取并返回 `name = lobsterai`
+  - 技能基础接口：通过，技能列表与 `get-config` 接口可访问
+- 本轮补充确认
+  - Bridge 提示词透传已接通：Airi 会从会话首条 system message 提取 `systemPrompt` 并传给 LobsterAI runtime
+  - 当前角色卡中的 `systemPrompt + description + personality` 会随会话进入 Lobster runtime
+  - 当前 Airi 浏览器态仍命中 `localhost:11434` 兼容 provider，请在 UI 联调前先把 active provider 切到 `lobster-agent`
+
+---
+
+## 已知限制
+
+1. **权限请求测试**：需要 LobsterAI 端配置了需要权限的工具才能触发
+2. **文件清理测试**：需要检查 LobsterAI 服务端日志确认文件回收
+3. **多轮会话测试**：需要 LobsterAI 端正确维护 session 上下文
+4. **Airi UI 联调前置**：当前浏览器配置仍在请求 `localhost:11434`，需先切到 `lobster-agent` provider 才能完成前端链路联调
+5. **当前仍阻塞项**：图片、权限请求、回退模式仍需要界面联调或特定工具场景，不能仅靠接口冒烟替代
+
+---
+
+## 验证结果记录
+
+| 测试项 | 状态 | 备注 |
+|---|---|---|
+| T035 文本单轮 | ⏳ 部分通过 | 服务端 Bridge SSE 全链路已验证通过；Airi 前端动作/口型/展示仍待 UI 联调 |
+| T036 多轮会话 | ⏳ 部分通过 | 同一 `airiSessionId` 成功复用同一 `lobsterSessionId`，上下文记忆验证通过；Airi 前端侧仍待联调 |
+| T037 图片附件 | ⏸ 阻塞 | 依赖前端图片上传与视觉输入场景 |
+| T038 普通文件 | ⏳ 部分通过 | `fileId` 上传、引用、读取已通过；文件清理与 Airi 前端展示仍待验证 |
+| T039 技能 | ⏳ 部分通过 | 技能列表与配置读取接口通过；Airi 设置页启停、勾选、生效仍待 UI 联调 |
+| T040 权限请求 | ⏸ 阻塞 | 需要可触发权限的真实工具场景与运行中服务 |
+| T041 回退模式 | ⏳ 待手测 | 已确认代码保留 feature flag 与回退路径，仍需界面联调验证 |
