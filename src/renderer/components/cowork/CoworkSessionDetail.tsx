@@ -1366,6 +1366,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [isExportingMarkdown, setIsExportingMarkdown] = useState(false);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1697,6 +1698,92 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         }
       })();
     });
+  };
+
+  const handleExportMarkdown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentSession || isExportingMarkdown) return;
+    closeMenu();
+    setIsExportingMarkdown(true);
+    void (async () => {
+      try {
+        const messages = currentSession.messages ?? [];
+        const turns = buildConversationTurns(buildDisplayItems(messages));
+        const parts: string[] = [];
+        const NL = String.fromCharCode(10);
+        parts.push('# ' + (currentSession.title || 'Untitled') + NL + NL);
+        parts.push('> 导出时间：' + formatExportTimestamp(new Date()) + '  ' + NL);
+        parts.push('> 对话时间：' + formatExportTimestamp(new Date(currentSession.createdAt ?? Date.now())) + NL);
+        parts.push(NL + '---' + NL + NL);
+        for (const turn of turns) {
+          if (turn.userMessage) {
+            parts.push('## 🧑 用户' + NL + NL);
+            parts.push((turn.userMessage.content || '') + NL + NL);
+          }
+          const assistantTexts: string[] = [];
+          const toolSummaries: string[] = [];
+          for (const item of turn.assistantItems) {
+            if (item.type === 'assistant' && item.message.content?.trim()) {
+              assistantTexts.push(item.message.content.trim());
+            } else if (item.type === 'tool_group') {
+              const rawName = typeof item.group.toolUse.metadata?.toolName === 'string'
+                ? item.group.toolUse.metadata.toolName
+                : 'Tool';
+              const toolName = getToolDisplayName(rawName);
+              const inputSummary = getToolInputSummary(
+                rawName,
+                item.group.toolUse.metadata?.toolInput as Record<string, unknown> | undefined,
+              );
+              const resultDisplay = item.group.toolResult
+                ? getToolResultDisplay(item.group.toolResult)
+                : '';
+              let toolBlock = '**[' + toolName + ']';
+              if (inputSummary) toolBlock += ' ' + inputSummary;
+              toolBlock += '**';
+              if (resultDisplay.trim()) {
+                toolBlock += NL + '```' + NL + truncatePreview(resultDisplay, 300) + NL + '```';
+              }
+              toolSummaries.push(toolBlock);
+            }
+          }
+          if (toolSummaries.length > 0) {
+            parts.push('## 🤖 助手' + NL + NL);
+            for (const summary of toolSummaries) {
+              parts.push(summary + NL + NL);
+            }
+          }
+          if (assistantTexts.length > 0) {
+            if (toolSummaries.length === 0) {
+              parts.push('## 🤖 助手' + NL + NL);
+            }
+            parts.push(assistantTexts.join(NL + NL) + NL + NL);
+          }
+        }
+        const mdContent = parts.join('');
+        const timestamp = formatExportTimestamp(new Date());
+        const fileName = sanitizeExportFileName(currentSession.title) + '-' + timestamp + '.md';
+        const base64 = btoa(unescape(encodeURIComponent(mdContent)));
+        const saveResult = await window.electron.dialog.saveInlineFile({
+          dataBase64: base64,
+          fileName,
+          mimeType: 'text/markdown',
+        });
+        if (saveResult?.success && saveResult?.path != null) {
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: i18nService.t('coworkExportMarkdownSuccess'),
+          }));
+        } else if (saveResult && !saveResult.success) {
+          throw new Error(saveResult.error || 'Failed to export');
+        }
+      } catch (error) {
+        console.error('Failed to export session markdown:', error);
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkExportMarkdownFailed'),
+        }));
+      } finally {
+        setIsExportingMarkdown(false);
+      }
+    })();
   };
 
   const handleConfirmDelete = async () => {
@@ -2100,6 +2187,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           >
             <ShareIcon className="h-4 w-4 text-secondary" />
             {i18nService.t('coworkShareSession')}
+          </button>
+          <button
+            type="button"
+            onClick={handleExportMarkdown}
+            disabled={isExportingMarkdown}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            {i18nService.t('coworkExportMarkdown')}
           </button>
           <button
             type="button"
