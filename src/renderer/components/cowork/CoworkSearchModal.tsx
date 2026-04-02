@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import SearchIcon from '../icons/SearchIcon';
 import { i18nService } from '../../services/i18n';
@@ -6,6 +6,15 @@ import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionList from './CoworkSessionList';
 
 const emptySet = new Set<string>();
+const DEBOUNCE_MS = 300;
+
+interface ContentMatchResult {
+  sessionId: string;
+  title: string;
+  updatedAt: number;
+  human: string;
+  assistant: string;
+}
 
 interface CoworkSearchModalProps {
   isOpen: boolean;
@@ -29,13 +38,72 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   onRenameSession,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [contentResults, setContentResults] = useState<ContentMatchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const filteredSessions = useMemo(() => {
+  const titleFilteredSessions = useMemo(() => {
     const trimmedQuery = searchQuery.trim().toLowerCase();
     if (!trimmedQuery) return sessions;
     return sessions.filter((session) => session.title.toLowerCase().includes(trimmedQuery));
   }, [sessions, searchQuery]);
+
+  const titleMatchedIds = useMemo(
+    () => new Set(titleFilteredSessions.map((s) => s.id)),
+    [titleFilteredSessions],
+  );
+
+  const contentOnlyResults = useMemo(
+    () => contentResults.filter((r) => !titleMatchedIds.has(r.sessionId)),
+    [contentResults, titleMatchedIds],
+  );
+
+  const searchContent = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setContentResults([]);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    try {
+      const response = await window.electron.cowork.searchSessions({
+        query: trimmed,
+        maxResults: 10,
+      });
+      if (response.success && response.results) {
+        setContentResults(response.results);
+      } else {
+        setContentResults([]);
+      }
+    } catch {
+      setContentResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setContentResults([]);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    debounceTimerRef.current = setTimeout(() => {
+      searchContent(trimmed);
+    }, DEBOUNCE_MS);
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [searchQuery, searchContent]);
 
   useEffect(() => {
     if (isOpen) {
@@ -46,6 +114,8 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
       return;
     }
     setSearchQuery('');
+    setContentResults([]);
+    setIsSearching(false);
   }, [isOpen]);
 
   useEffect(() => {
@@ -65,6 +135,9 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   };
 
   if (!isOpen) return null;
+
+  const hasQuery = searchQuery.trim().length > 0;
+  const hasAnyResult = titleFilteredSessions.length > 0 || contentOnlyResults.length > 0;
 
   return (
     <div
@@ -99,24 +172,59 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
           </button>
         </div>
         <div className="px-3 py-3 max-h-[60vh] overflow-y-auto">
-          {filteredSessions.length === 0 ? (
+          {!hasAnyResult && !isSearching ? (
             <div className="py-10 text-center text-sm text-secondary">
-              {i18nService.t('searchNoResults')}
+              {hasQuery ? i18nService.t('searchNoResults') : i18nService.t('searchNoResults')}
             </div>
           ) : (
-            <CoworkSessionList
-              sessions={filteredSessions}
-              currentSessionId={currentSessionId}
-              isBatchMode={false}
-              selectedIds={emptySet}
-              showBatchOption={false}
-              onSelectSession={handleSelectSession}
-              onDeleteSession={onDeleteSession}
-              onTogglePin={onTogglePin}
-              onRenameSession={onRenameSession}
-              onToggleSelection={() => {}}
-              onEnterBatchMode={() => {}}
-            />
+            <>
+              {titleFilteredSessions.length > 0 && (
+                <CoworkSessionList
+                  sessions={titleFilteredSessions}
+                  currentSessionId={currentSessionId}
+                  isBatchMode={false}
+                  selectedIds={emptySet}
+                  showBatchOption={false}
+                  onSelectSession={handleSelectSession}
+                  onDeleteSession={onDeleteSession}
+                  onTogglePin={onTogglePin}
+                  onRenameSession={onRenameSession}
+                  onToggleSelection={() => {}}
+                  onEnterBatchMode={() => {}}
+                />
+              )}
+              {hasQuery && contentOnlyResults.length > 0 && (
+                <div className={titleFilteredSessions.length > 0 ? 'mt-3 pt-3 border-t border-border' : ''}>
+                  <div className="px-1 pb-2 text-xs font-medium text-secondary uppercase tracking-wider">
+                    {i18nService.t('searchContentMatch')}
+                  </div>
+                  <div className="space-y-1">
+                    {contentOnlyResults.map((result) => (
+                      <button
+                        key={result.sessionId}
+                        type="button"
+                        onClick={() => handleSelectSession(result.sessionId)}
+                        className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-surface-raised transition-colors group"
+                      >
+                        <div className="text-sm font-medium text-foreground truncate">
+                          {result.title}
+                        </div>
+                        {result.human && (
+                          <div className="mt-1 text-xs text-secondary line-clamp-2">
+                            {result.human}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {isSearching && hasQuery && (
+                <div className="py-4 text-center">
+                  <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-primary border-r-transparent" />
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

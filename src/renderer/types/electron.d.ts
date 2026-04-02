@@ -235,6 +235,14 @@ interface ProfileSummaryData {
   creditItems: CreditItem[];
 }
 
+interface CoworkConversationSearchResult {
+  sessionId: string;
+  title: string;
+  updatedAt: number;
+  human: string;
+  assistant: string;
+}
+
 interface IElectronAPI {
   platform: string;
   arch: string;
@@ -335,6 +343,7 @@ interface IElectronAPI {
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     remoteManaged: (sessionId: string) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
     listSessions: (agentId?: string) => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
+    searchSessions: (options: { query: string; maxResults?: number }) => Promise<{ success: boolean; results?: CoworkConversationSearchResult[]; error?: string }>;
     exportResultImage: (options: {
       rect: { x: number; y: number; width: number; height: number };
       defaultFileName?: string;

@@ -2704,7 +2704,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('cowork:session:list', async (_event, agentId?: string) => {
+   ipcMain.handle('cowork:session:list', async (_event, agentId?: string) => {
     try {
       const sessions = getCoworkStore().listSessions(agentId);
       return { success: true, sessions };
@@ -2712,6 +2712,24 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to list sessions',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:search', async (_event, options: {
+    query: string;
+    maxResults?: number;
+  }) => {
+    try {
+      const results = getCoworkStore().conversationSearch({
+        query: options.query,
+        maxResults: options.maxResults ?? 20,
+      });
+      return { success: true, results };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to search sessions',
       };
     }
   });
