@@ -170,9 +170,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // POPO
     imPopoFillWebhookCredentials: '请补全 appKey、appSecret、token 和 aesKey 后重新测试连通性。',
     imPopoFillWsCredentials: '请补全 appKey、appSecret 和 aesKey 后重新测试连通性。',
-    imPopoConfigReady: 'POPO 配置已就绪。',
+    imPopoAuthPassed: 'POPO 鉴权通过。',
+    imPopoAuthFailed: 'POPO 鉴权失败: {error}',
+    imPopoCheckCredentials: '请检查 appKey 和 appSecret 是否正确。',
     imPopoOpenClawHint: 'POPO 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
-    imPopoConfigReadyOpenClaw: 'POPO 配置已就绪，通过 OpenClaw 运行。',
 
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
@@ -331,9 +332,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // POPO
     imPopoFillWebhookCredentials: 'Please provide the appKey, appSecret, token, and aesKey and test connectivity again.',
     imPopoFillWsCredentials: 'Please provide the appKey, appSecret, and aesKey and test connectivity again.',
-    imPopoConfigReady: 'POPO configuration is ready.',
+    imPopoAuthPassed: 'POPO authentication passed.',
+    imPopoAuthFailed: 'POPO authentication failed: {error}',
+    imPopoCheckCredentials: 'Please check that the appKey and appSecret are correct.',
     imPopoOpenClawHint: 'POPO runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imPopoConfigReadyOpenClaw: 'POPO configuration is ready, running via OpenClaw.',
 
     'enterprise.updateBlocked': 'Updates are managed by enterprise',
   },
