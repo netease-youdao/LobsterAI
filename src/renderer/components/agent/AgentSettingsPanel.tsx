@@ -4,7 +4,7 @@ import { RootState } from '../../store';
 import { agentService } from '../../services/agent';
 import { imService } from '../../services/im';
 import { i18nService } from '../../services/i18n';
-import { XMarkIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, TrashIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 import type { Agent } from '../../types/agent';
 import type { Platform } from '@shared/platform';
 import type { IMGatewayConfig } from '../../types/im';
@@ -307,7 +307,17 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-4 border-t border-border">
-          <div>
+          <div className="flex items-center gap-2">
+            {agentId && (
+              <button
+                type="button"
+                onClick={() => agentService.exportAgents([agentId])}
+                className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+              >
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                {i18nService.t('agentExport')}
+              </button>
+            )}
             {!isMainAgent && !showDeleteConfirm && (
               <button
                 type="button"

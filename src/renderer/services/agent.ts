@@ -158,6 +158,51 @@ class AgentService {
       store.dispatch(clearActiveSkills());
     }
   }
+
+  // --- Import / Export ---
+
+  async exportAgents(agentIds: string[]): Promise<{ success: boolean; filePath?: string; error?: string }> {
+    try {
+      const result = await window.electron?.agents?.export(agentIds);
+      return result ?? { success: false, error: 'Bridge not available' };
+    } catch (error) {
+      console.error('Failed to export agents:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Export failed' };
+    }
+  }
+
+  async importAgents(): Promise<{
+    success: boolean;
+    imported?: Array<{ id: string; name: string }>;
+    conflicts?: Array<{ id: string; name: string; existingAgentName: string; incomingAgentName: string }>;
+    error?: string;
+  }> {
+    try {
+      const result = await window.electron?.agents?.importFile();
+      if (result?.success && result.imported?.length) {
+        // Reload agents to pick up newly imported ones
+        await this.loadAgents();
+      }
+      return result ?? { success: false, error: 'Bridge not available' };
+    } catch (error) {
+      console.error('Failed to import agents:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Import failed' };
+    }
+  }
+
+  async confirmImport(resolutions: Array<{ id: string; action: string }>): Promise<{ success: boolean; importedCount?: number; error?: string }> {
+    try {
+      const result = await window.electron?.agents?.importConfirm(resolutions);
+      if (result?.success) {
+        // Reload agents to reflect resolved imports
+        await this.loadAgents();
+      }
+      return result ?? { success: false, error: 'Bridge not available' };
+    } catch (error) {
+      console.error('Failed to confirm import:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Confirm import failed' };
+    }
+  }
 }
 
 export const agentService = new AgentService();
