@@ -982,6 +982,14 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                 )}
               </div>
               <div className="flex items-center justify-end gap-1.5 mt-1">
+                {message.timestamp > 0 && (
+                  <span
+                    className="text-[10px] text-secondary/50 mr-auto"
+                    title={new Date(message.timestamp).toLocaleString()}
+                  >
+                    {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
                 {messageSkills.map(skill => (
                   <div
                     key={skill.id}
@@ -1051,6 +1059,14 @@ const AssistantMessageItem: React.FC<{
       </div>
       {showCopyButton && (
         <div className="flex items-center gap-1.5 mt-1">
+          {message.timestamp > 0 && (
+            <span
+              className="text-[10px] text-secondary/50"
+              title={new Date(message.timestamp).toLocaleString()}
+            >
+              {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
           <CopyButton
             content={displayContent}
             visible={isHovered}
