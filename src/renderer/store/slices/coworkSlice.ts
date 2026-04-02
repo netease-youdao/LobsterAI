@@ -17,6 +17,7 @@ export interface DraftAttachment {
 
 interface CoworkState {
   sessions: CoworkSessionSummary[];
+  sessionsLoaded: boolean;
   currentSessionId: string | null;
   currentSession: CoworkSession | null;
   draftPrompts: Record<string, string>;
@@ -32,6 +33,7 @@ interface CoworkState {
 
 const initialState: CoworkState = {
   sessions: [],
+  sessionsLoaded: false,
   currentSessionId: null,
   currentSession: null,
   draftPrompts: {},
@@ -114,6 +116,7 @@ const coworkSlice = createSlice({
 
     setSessions(state, action: PayloadAction<CoworkSessionSummary[]>) {
       state.sessions = action.payload;
+      state.sessionsLoaded = true;
       const validSessionIds = new Set(action.payload.map((session) => session.id));
       state.unreadSessionIds = state.unreadSessionIds.filter((id) => {
         return validSessionIds.has(id) && id !== state.currentSessionId;

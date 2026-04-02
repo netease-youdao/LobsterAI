@@ -49,6 +49,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const sessions = useSelector((state: RootState) => state.cowork.sessions);
+  const sessionsLoaded = useSelector((state: RootState) => state.cowork.sessionsLoaded);
   const filteredSessions = sessions.filter((s) => !s.agentId || s.agentId === currentAgentId);
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -250,18 +251,29 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div className="px-3 pb-2 text-sm font-medium text-secondary">
           {i18nService.t('coworkHistory')}
         </div>
-        <CoworkSessionList
-          sessions={filteredSessions}
-          currentSessionId={currentSessionId}
-          isBatchMode={isBatchMode}
-          selectedIds={selectedIds}
-          onSelectSession={handleSelectSession}
-          onDeleteSession={handleDeleteSession}
-          onTogglePin={handleTogglePin}
-          onRenameSession={handleRenameSession}
-          onToggleSelection={handleToggleSelection}
-          onEnterBatchMode={handleEnterBatchMode}
-        />
+        {!sessionsLoaded ? (
+          <div className="space-y-2 px-1" aria-label={i18nService.t('loading')} aria-busy="true">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="p-3 rounded-lg">
+                <div className="skeleton h-3.5 rounded mb-2" style={{ width: `${65 + (i % 3) * 10}%` }} />
+                <div className="skeleton h-2.5 rounded" style={{ width: `${40 + (i % 4) * 8}%` }} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <CoworkSessionList
+            sessions={filteredSessions}
+            currentSessionId={currentSessionId}
+            isBatchMode={isBatchMode}
+            selectedIds={selectedIds}
+            onSelectSession={handleSelectSession}
+            onDeleteSession={handleDeleteSession}
+            onTogglePin={handleTogglePin}
+            onRenameSession={handleRenameSession}
+            onToggleSelection={handleToggleSelection}
+            onEnterBatchMode={handleEnterBatchMode}
+          />
+        )}
       </div>
       <CoworkSearchModal
         isOpen={isSearchOpen}
