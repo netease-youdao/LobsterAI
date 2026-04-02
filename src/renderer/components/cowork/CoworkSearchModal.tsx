@@ -72,27 +72,27 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="modal-content w-full max-w-2xl mt-10 rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-modal overflow-hidden"
+        className="modal-content w-full max-w-2xl mt-10 rounded-2xl border border-border bg-surface shadow-modal overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label={i18nService.t('search')}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
           <div className="relative flex-1">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
             <input
               ref={searchInputRef}
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder={i18nService.t('searchConversations')}
-              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-2 focus:ring-claude-accent"
+              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            className="p-2 rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             aria-label={i18nService.t('close')}
           >
             <XMarkIcon className="h-5 w-5" />
@@ -100,7 +100,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
         </div>
         <div className="px-3 py-3 max-h-[60vh] overflow-y-auto">
           {filteredSessions.length === 0 ? (
-            <div className="py-10 text-center text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <div className="py-10 text-center text-sm text-secondary">
               {i18nService.t('searchNoResults')}
             </div>
           ) : (

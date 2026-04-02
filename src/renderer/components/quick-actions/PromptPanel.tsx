@@ -29,7 +29,7 @@ const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => 
     <div className="w-full animate-fade-in-up">
       {/* 标题 */}
       <div className="mb-2.5 px-0.5">
-        <span className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        <span className="text-xs font-medium text-secondary">
           {action.label}
         </span>
       </div>
@@ -49,14 +49,14 @@ const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => 
                 border text-left transition-all duration-200
                 ${
                   isPromptSelected
-                    ? 'dark:bg-claude-accentMuted bg-claude-accentMuted border-claude-accent/50'
-                    : 'dark:bg-claude-darkSurface bg-claude-surface dark:border-claude-darkBorder border-claude-border dark:hover:border-claude-darkBorder hover:border-claude-border dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+                    ? 'dark:bg-primary-muted bg-primary-muted border-primary/50'
+                    : 'bg-surface border-border hover:border-border hover:border-border hover:bg-surface-raised'
                 }
               `}
             >
               {/* 标题 */}
               <div className="flex items-center justify-between w-full">
-                <span className={`text-sm font-medium ${isPromptSelected ? 'text-claude-accent' : 'dark:text-claude-darkText text-claude-text'}`}>
+                <span className={`text-sm font-medium ${isPromptSelected ? 'text-primary' : 'text-foreground'}`}>
                   {prompt.label}
                 </span>
                 <ArrowRightIcon
@@ -64,8 +64,8 @@ const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => 
                     w-3.5 h-3.5 transition-all duration-200
                     ${
                       isPromptSelected
-                        ? 'text-claude-accent translate-x-0 opacity-100'
-                        : 'dark:text-claude-darkTextSecondary text-claude-textSecondary -translate-x-1 opacity-0 group-hover:translate-x-0 group-hover:opacity-100'
+                        ? 'text-primary translate-x-0 opacity-100'
+                        : 'text-secondary -translate-x-1 opacity-0 group-hover:translate-x-0 group-hover:opacity-100'
                     }
                   `}
                 />
@@ -73,7 +73,7 @@ const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => 
 
               {/* 描述 */}
               {prompt.description && (
-                <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2">
+                <p className="text-xs text-secondary line-clamp-2">
                   {prompt.description}
                 </p>
               )}

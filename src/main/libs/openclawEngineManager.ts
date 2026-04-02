@@ -16,7 +16,8 @@ const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
 const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
-const GATEWAY_RESTART_DELAY_MS = 3000;
+const GATEWAY_MAX_RESTART_ATTEMPTS = 5;
+const GATEWAY_RESTART_DELAYS = [3_000, 5_000, 10_000, 20_000, 30_000];
 
 export type OpenClawEnginePhase =
   | 'not_installed'
@@ -154,6 +155,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayProcess: GatewayProcess | null = null;
   private readonly expectedGatewayExits = new WeakSet<object>();
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
+  private gatewayRestartAttempt = 0;
   private shutdownRequested = false;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
@@ -516,6 +518,8 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     console.log(`[OpenClaw] startGateway: gateway is running, total startup time: ${elapsed()}`);
+    // Reset restart counter on successful start — gateway is healthy
+    this.gatewayRestartAttempt = 0;
     this.setStatus({
       phase: 'running',
       version: runtime.version,
@@ -554,6 +558,8 @@ export class OpenClawEngineManager extends EventEmitter {
   async restartGateway(): Promise<OpenClawEngineStatus> {
     console.log('[OpenClaw] restartGateway: stopping existing gateway...');
     await this.stopGateway();
+    // Reset restart counter on manual restart so user can always retry
+    this.gatewayRestartAttempt = 0;
     console.log('[OpenClaw] restartGateway: starting gateway with new env...');
     return this.startGateway();
   }
@@ -1295,11 +1301,26 @@ export class OpenClawEngineManager extends EventEmitter {
     if (this.shutdownRequested) return;
     if (this.gatewayRestartTimer) return;
 
+    if (this.gatewayRestartAttempt >= GATEWAY_MAX_RESTART_ATTEMPTS) {
+      console.error(`[OpenClaw] gateway auto-restart limit reached (${GATEWAY_MAX_RESTART_ATTEMPTS} attempts), giving up`);
+      this.setStatus({
+        phase: 'error',
+        version: this.status.version,
+        message: `OpenClaw gateway failed to start after ${GATEWAY_MAX_RESTART_ATTEMPTS} attempts. Check model configuration or restart manually.`,
+        canRetry: true,
+      });
+      return;
+    }
+
+    const delay = GATEWAY_RESTART_DELAYS[Math.min(this.gatewayRestartAttempt, GATEWAY_RESTART_DELAYS.length - 1)];
+    this.gatewayRestartAttempt++;
+    console.log(`[OpenClaw] scheduling gateway restart attempt ${this.gatewayRestartAttempt}/${GATEWAY_MAX_RESTART_ATTEMPTS} in ${delay}ms`);
+
     this.gatewayRestartTimer = setTimeout(() => {
       this.gatewayRestartTimer = null;
       if (this.shutdownRequested) return;
       void this.startGateway();
-    }, GATEWAY_RESTART_DELAY_MS);
+    }, delay);
   }
 
   private setStatus(next: OpenClawEngineStatus): void {

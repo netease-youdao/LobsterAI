@@ -96,7 +96,7 @@ const LazyRenderTurn: React.FC<LazyRenderTurnProps> = ({
       {shouldRender ? children : (
         <div
           style={{ height: cachedHeight || 80 }}
-          className="dark:bg-claude-darkBg bg-claude-bg"
+          className="bg-background"
         />
       )}
     </div>

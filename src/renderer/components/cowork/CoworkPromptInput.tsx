@@ -149,7 +149,7 @@ export interface CoworkPromptInputRef {
 }
 
 interface CoworkPromptInputProps {
-  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => void;
+  onSubmit: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop?: () => void;
   isStreaming?: boolean;
   placeholder?: string;
@@ -162,6 +162,8 @@ interface CoworkPromptInputProps {
   onManageSkills?: () => void;
   enableMentions?: boolean;
   sessionId?: string;
+  /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
+  remoteManaged?: boolean;
 }
 
 const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInputProps>(
@@ -180,6 +182,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       onManageSkills,
       enableMentions = true,
       sessionId = '',
+      remoteManaged = false,
     } = props;
 
     const dispatch = useDispatch();
@@ -296,8 +299,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     );
     const editorContentClassName = useMemo(
       () => (isLarge
-        ? 'min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words px-4 pt-2.5 pb-2 text-[15px] leading-6 text-claude-text dark:text-claude-darkText focus:outline-none'
-        : 'min-h-[24px] max-h-[200px] flex-1 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-claude-text dark:text-claude-darkText focus:outline-none'),
+        ? 'min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words px-4 pt-2.5 pb-2 text-[15px] leading-6 text-foreground focus:outline-none'
+        : 'min-h-[24px] max-h-[200px] flex-1 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground focus:outline-none'),
       [isLarge],
     );
 
@@ -813,12 +816,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }, [editor, expandedImage]);
 
     const containerClass = isLarge
-      ? 'relative rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-card focus-within:shadow-elevated focus-within:ring-1 focus-within:ring-claude-accent/40 focus-within:border-claude-accent'
-      : 'relative flex items-end gap-2 p-3 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface';
+      ? 'relative rounded-2xl border border-border bg-surface shadow-card focus-within:shadow-elevated focus-within:ring-1 focus-within:ring-primary/40 focus-within:border-primary'
+      : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
 
     const editorClass = isLarge ? 'w-full' : 'flex-1';
     const enhancedContainerClass = isDraggingFiles
-      ? `${containerClass} ring-2 ring-claude-accent/50 border-claude-accent/60`
+      ? `${containerClass} ring-2 ring-primary/50 border-primary/60`
       : containerClass;
 
     const canSubmit = !disabled && (!!draftText.trim() || attachments.length > 0);
@@ -873,10 +876,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             {attachments.map((attachment) => (
               <div
                 key={attachment.mentionId}
-                className={`group inline-flex max-w-full items-center gap-1 rounded-full border py-1 text-xs dark:text-claude-darkText text-claude-text transition-colors ${
+                className={`group inline-flex max-w-full items-center gap-1 rounded-full border py-1 text-xs text-foreground transition-colors ${
                   attachment.isImage
-                    ? 'px-1.5 dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface hover:border-claude-accent/50 dark:hover:border-claude-accent/50'
-                    : 'gap-1.5 px-2.5 dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface'
+                    ? 'px-1.5 border-border bg-surface hover:border-primary/50'
+                    : 'gap-1.5 px-2.5 border-border bg-surface'
                 }`}
                 title={attachment.path}
               >
@@ -889,13 +892,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     }}
                     className={`inline-flex min-w-0 items-center gap-2 rounded-full pr-1 transition-all ${
                       attachment.dataUrl
-                        ? 'cursor-pointer hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                        ? 'cursor-pointer hover:bg-surface-raised'
                         : 'cursor-default'
                     }`}
                     disabled={!attachment.dataUrl}
                   >
                     {attachment.dataUrl ? (
-                      <span className="flex h-8 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-black/5 transition-transform transition-colors group-hover:border-claude-accent/50 dark:border-claude-darkBorder/50 border-claude-border/50 dark:bg-white/5 group-hover:scale-[1.02]">
+                      <span className="flex h-8 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-black/5 transition-transform transition-colors group-hover:border-primary/50 border-border/50 dark:bg-white/5 group-hover:scale-[1.02]">
                         <img
                           src={attachment.dataUrl}
                           alt={attachment.label}
@@ -916,7 +919,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 <button
                   type="button"
                   onClick={() => handleRemoveAttachment(attachment)}
-                  className="ml-0.5 rounded-full p-0.5 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
+                  className="ml-0.5 rounded-full p-0.5 hover:bg-surface-raised"
                   aria-label={i18nService.t('coworkAttachmentRemove')}
                   title={i18nService.t('coworkAttachmentRemove')}
                 >
@@ -951,7 +954,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           onDrop={handleDrop}
         >
           {isDraggingFiles && (
-            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-claude-accent/10 text-xs font-medium text-claude-accent">
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-primary/10 text-xs font-medium text-primary">
               {i18nService.t('coworkDropFileHint')}
             </div>
           )}
@@ -961,7 +964,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 {editor && (
                   <div className="relative">
                     {isEditorEmpty && (
-                      <div className="pointer-events-none absolute left-4 top-2.5 text-[15px] leading-6 text-claude-textSecondary/60 dark:text-claude-darkTextSecondary/60">
+                      <div className="pointer-events-none absolute left-4 top-2.5 text-[15px] leading-6 text-secondary/60">
                         {placeholder}
                       </div>
                     )}
@@ -978,7 +981,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                           ref={folderButtonRef}
                           type="button"
                           onClick={() => setShowFolderMenu(!showFolderMenu)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
                         >
                           <FolderIcon className="h-4 w-4" />
                           <span className="max-w-[150px] truncate text-xs">
@@ -986,7 +989,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                           </span>
                         </button>
                         {!showFolderMenu && (
-                          <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-50 max-w-[400px] break-all whitespace-nowrap">
+                          <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl bg-background text-foreground border-border border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-50 max-w-[400px] break-all whitespace-nowrap">
                             {truncatePath(workingDirectory, 120)}
                           </div>
                         )}
@@ -999,22 +1002,28 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                       />
                     </>
                   )}
-                  {showModelSelector && <ModelSelector dropdownDirection="up" />}
-                  <button
-                    type="button"
-                    onClick={handleAddFile}
-                    className="flex items-center justify-center p-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-                    title={i18nService.t('coworkAddFile')}
-                    aria-label={i18nService.t('coworkAddFile')}
-                    disabled={disabled || isStreaming || isAddingFile}
-                  >
-                    <PaperClipIcon className="h-4 w-4" />
-                  </button>
-                  <SkillsButton
-                    onSelectSkill={handleSelectSkill}
-                    onManageSkills={handleManageSkills}
-                  />
-                  <ActiveSkillBadge />
+                  {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
+                  {!remoteManaged && (
+                    <button
+                      type="button"
+                      onClick={handleAddFile}
+                      className="flex items-center justify-center p-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                      title={i18nService.t('coworkAddFile')}
+                      aria-label={i18nService.t('coworkAddFile')}
+                      disabled={disabled || isStreaming || isAddingFile}
+                    >
+                      <PaperClipIcon className="h-4 w-4" />
+                    </button>
+                  )}
+                  {!remoteManaged && (
+                    <>
+                      <SkillsButton
+                        onSelectSkill={handleSelectSkill}
+                        onManageSkills={handleManageSkills}
+                      />
+                      <ActiveSkillBadge />
+                    </>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {isStreaming ? (
@@ -1031,7 +1040,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                       type="button"
                       onClick={handleSubmit}
                       disabled={!canSubmit}
-                      className="p-2 rounded-xl bg-claude-accent hover:bg-claude-accentHover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-2 rounded-xl bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                       aria-label="Send"
                     >
                       <PaperAirplaneIcon className="h-5 w-5" />
@@ -1046,7 +1055,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 {editor && (
                   <div className="relative">
                     {isEditorEmpty && (
-                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center text-sm text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center text-sm text-secondary">
                         {placeholder}
                       </div>
                     )}
@@ -1054,18 +1063,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={handleAddFile}
-                  className="flex-shrink-0 p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-                  title={i18nService.t('coworkAddFile')}
-                  aria-label={i18nService.t('coworkAddFile')}
-                  disabled={disabled || isStreaming || isAddingFile}
-                >
-                  <PaperClipIcon className="h-4 w-4" />
-                </button>
-              </div>
+              {!remoteManaged && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handleAddFile}
+                    className="flex-shrink-0 p-1.5 rounded-lg text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                    title={i18nService.t('coworkAddFile')}
+                    aria-label={i18nService.t('coworkAddFile')}
+                    disabled={disabled || isStreaming || isAddingFile}
+                  >
+                    <PaperClipIcon className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
               {isStreaming ? (
                 <button
                   type="button"
@@ -1080,7 +1091,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   type="button"
                   onClick={handleSubmit}
                   disabled={!canSubmit}
-                  className="flex-shrink-0 p-2 rounded-lg bg-claude-accent hover:bg-claude-accentHover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-shrink-0 p-2 rounded-lg bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   aria-label="Send"
                 >
                   <PaperAirplaneIcon className="h-4 w-4" />

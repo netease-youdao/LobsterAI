@@ -27,6 +27,7 @@
     "films-search": { "order": 222, "enabled": true },
     "music-search": { "order": 223, "enabled": true },
     "technology-news-search": { "order": 224, "enabled": false },
+    "youdaonote": { "order": 298, "enabled": true },
     "skill-vetter": { "order": 299, "enabled": true },
     "skill-creator": { "order": 300, "enabled": true }
   }

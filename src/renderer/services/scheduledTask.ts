@@ -19,7 +19,7 @@ import type {
   ScheduledTaskInput,
   ScheduledTaskStatusEvent,
   ScheduledTaskRunEvent,
-} from '../../scheduled-task/types';
+} from '../../scheduledTask/types';
 
 class ScheduledTaskService {
   private cleanupFns: (() => void)[] = [];

@@ -7,8 +7,10 @@
 
 import type { CoworkStore } from '../coworkStore';
 import type { IMStore } from '../im/imStore';
-import type { IMPlatform } from '../im/types';
+import type { Platform } from '../im/types';
+import { PlatformRegistry } from '../../shared/platform';
 import { t } from '../i18n';
+
 
 const LOBSTERAI_SESSION_PREFIX = 'lobsterai:';
 export const DEFAULT_MANAGED_AGENT_ID = 'main';
@@ -58,27 +60,6 @@ export function isManagedSessionKey(sessionKey: string | undefined | null): bool
   return parseManagedSessionKey(sessionKey) !== null;
 }
 
-/** Known OpenClaw channel prefixes mapped to IM platforms. */
-export const CHANNEL_PLATFORM_MAP: Record<string, IMPlatform> = {
-  telegram: 'telegram',
-  discord: 'discord',
-  feishu: 'feishu',
-  'dingtalk-connector': 'dingtalk',
-  qqbot: 'qq',
-  'wecom-openclaw-plugin': 'wecom',
-  wecom: 'wecom',
-  popo: 'popo',
-  'moltbot-popo': 'popo',
-  nim: 'nim',
-  'openclaw-weixin': 'weixin',
-  xiaomifeng: 'xiaomifeng',
-};
-
-/** Reverse map: IM platform → preferred OpenClaw channel name. */
-export const PLATFORM_TO_CHANNEL_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(CHANNEL_PLATFORM_MAP).map(([channel, platform]) => [platform, channel]),
-);
-
 /** Parse a channel sessionKey into platform + conversationId.
  *  Supports three formats:
  *  - OpenClaw format: "agent:{agentId}:{platform}:{subtype}:{conversationId}"
@@ -87,7 +68,7 @@ export const PLATFORM_TO_CHANNEL_MAP: Record<string, string> = Object.fromEntrie
  *  - Legacy format:   "{platform}:{conversationId}"
  *  Exported for reuse by delivery target resolution.
  */
-export function parseChannelSessionKey(sessionKey: string): { platform: IMPlatform; conversationId: string } | null {
+export function parseChannelSessionKey(sessionKey: string): { platform: Platform; conversationId: string } | null {
   if (!sessionKey || isManagedSessionKey(sessionKey)) return null;
 
   // Handle OpenClaw format: agent:{agentId}:{platform}:{subtype}:{conversationId}
@@ -106,7 +87,7 @@ export function parseChannelSessionKey(sessionKey: string): { platform: IMPlatfo
       try {
         const ctx = JSON.parse(jsonStr);
         if (ctx && typeof ctx.channel === 'string') {
-          const platform = CHANNEL_PLATFORM_MAP[ctx.channel];
+          const platform = PlatformRegistry.platformOfChannel(ctx.channel);
           if (platform) {
             // Build a stable conversationId from the JSON context fields
             const conversationId = ctx.peerid || ctx.conversationId || ctx.accountid || jsonStr;
@@ -121,7 +102,7 @@ export function parseChannelSessionKey(sessionKey: string): { platform: IMPlatfo
     const parts = sessionKey.split(':');
     // Need at least: agent, agentId, platform, and one more segment
     if (parts.length >= 4) {
-      let platform = CHANNEL_PLATFORM_MAP[parts[2]];
+      let platform = PlatformRegistry.platformOfChannel(parts[2]);
       if (platform) {
         const conversationId = parts.slice(3).join(':');
         if (conversationId) return { platform, conversationId };
@@ -129,7 +110,7 @@ export function parseChannelSessionKey(sessionKey: string): { platform: IMPlatfo
       // Fallback: parts[2] may be a session subtype (e.g. "openai-user");
       // check parts[3] for the actual channel name.
       if (!platform && parts.length >= 5) {
-        platform = CHANNEL_PLATFORM_MAP[parts[3]];
+        platform = PlatformRegistry.platformOfChannel(parts[3]);
         if (platform) {
           const conversationId = parts.slice(4).join(':');
           if (conversationId) return { platform, conversationId };
@@ -144,7 +125,7 @@ export function parseChannelSessionKey(sessionKey: string): { platform: IMPlatfo
   if (colonIndex <= 0) return null;
 
   const channelName = sessionKey.slice(0, colonIndex);
-  const platform = CHANNEL_PLATFORM_MAP[channelName];
+  const platform = PlatformRegistry.platformOfChannel(channelName);
   if (!platform) return null;
 
   const conversationId = sessionKey.slice(colonIndex + 1);
@@ -194,6 +175,7 @@ function getChannelTitlePrefix(platform: string): string {
     'wecom-openclaw-plugin': t('channelPrefixWecom'),
     nim: t('channelPrefixNim'),
     weixin: t('channelPrefixWeixin'),
+    'netease-bee': t('channelPrefixNeteaseBee'),
   };
   const staticMap: Record<string, string> = {
     telegram: 'TG',

@@ -11,9 +11,10 @@ import { loadClaudeSdk } from './claudeSdk';
 import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
+import { isDeleteCommand, isDangerousCommand } from './commandSafety';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
 import { setCoworkProxySessionId } from './coworkOpenAICompatProxy';
-import { SCHEDULED_TASK_SWITCH_MESSAGE } from '../../scheduled-task/enginePrompt';
+import { SCHEDULED_TASK_SWITCH_MESSAGE } from '../../scheduledTask/enginePrompt';
 import { z } from 'zod';
 
 const ATTACHMENT_LINE_RE = /^\s*(?:[-*]\s*)?(输入文件|input\s*file)\s*[:：]\s*(.+?)\s*$/i;
@@ -56,9 +57,6 @@ const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
 const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
-const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item)\b/i;
-const FIND_DELETE_COMMAND_RE = /\bfind\b[\s\S]*\s-delete\b/i;
-const GIT_CLEAN_COMMAND_RE = /\bgit\s+clean\b/i;
 const PYTHON_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:python(?:3)?|py(?:\.exe)?|pip(?:3)?)(?:\s+-3)?(?:\s|$)|\.py(?:\s|$)/i;
 const PYTHON_PIP_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|py(?:\.exe)?\s+-m\s+pip)(?:\s|$)/i;
 const MEMORY_REQUEST_TAIL_SPLIT_RE = /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
@@ -1243,9 +1241,7 @@ export class CoworkRunner extends EventEmitter {
     if (!command.trim()) {
       return false;
     }
-    return DELETE_COMMAND_RE.test(command)
-      || FIND_DELETE_COMMAND_RE.test(command)
-      || GIT_CLEAN_COMMAND_RE.test(command);
+    return isDeleteCommand(command);
   }
 
   private truncateCommandPreview(command: string, maxLength = 120): string {
@@ -1342,18 +1338,40 @@ export class CoworkRunner extends EventEmitter {
     toolName: string,
     toolInput: Record<string, unknown>
   ): Promise<PermissionResult | null> {
+    // 1. Non-Bash delete tools (e.g. dedicated 'rm' tool) → delete confirmation
     if (this.isDeleteOperation(toolName, toolInput)) {
-      const deleteQuestion = `即将执行删除操作，是否允许？`;
       const approved = await this.requestSafetyApproval(
         sessionId,
         signal,
         activeSession,
-        deleteQuestion,
+        '即将执行删除操作，是否允许？',
         toolName,
         toolInput
       );
       if (!approved) {
         return { behavior: 'deny', message: 'Delete operation denied by user.' };
+      }
+      return null;
+    }
+
+    // 2. Bash commands → only confirm if dangerous
+    if (toolName === 'Bash') {
+      const command = this.extractToolCommand(toolInput);
+      if (command && isDangerousCommand(command)) {
+        const question = isDeleteCommand(command)
+          ? '即将执行删除操作，是否允许？'
+          : '即将执行危险命令，是否允许？';
+        const approved = await this.requestSafetyApproval(
+          sessionId,
+          signal,
+          activeSession,
+          question,
+          toolName,
+          toolInput
+        );
+        if (!approved) {
+          return { behavior: 'deny', message: 'Dangerous command denied by user.' };
+        }
       }
     }
 

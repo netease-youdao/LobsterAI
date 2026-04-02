@@ -6,24 +6,14 @@ import { imService } from '../../services/im';
 import { i18nService } from '../../services/i18n';
 import { XMarkIcon, TrashIcon } from '@heroicons/react/24/outline';
 import type { Agent } from '../../types/agent';
-import type { IMPlatform, IMGatewayConfig } from '../../types/im';
+import type { Platform } from '@shared/platform';
+import type { IMGatewayConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
+import { PlatformRegistry } from '@shared/platform';
 import AgentSkillSelector from './AgentSkillSelector';
+import EmojiPicker from './EmojiPicker';
 
 type SettingsTab = 'basic' | 'skills' | 'im';
-
-const IM_PLATFORMS: { key: IMPlatform; logo: string }[] = [
-  { key: 'dingtalk', logo: 'dingding.png' },
-  { key: 'feishu', logo: 'feishu.png' },
-  { key: 'qq', logo: 'qq_bot.jpeg' },
-  { key: 'telegram', logo: 'telegram.svg' },
-  { key: 'discord', logo: 'discord.svg' },
-  { key: 'nim', logo: 'nim.png' },
-  { key: 'xiaomifeng', logo: 'xiaomifeng.png' },
-  { key: 'weixin', logo: 'weixin.png' },
-  { key: 'wecom', logo: 'wecom.png' },
-  { key: 'popo', logo: 'popo.png' },
-];
 
 interface AgentSettingsPanelProps {
   agentId: string | null;
@@ -46,8 +36,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
 
   // IM binding state
   const [imConfig, setImConfig] = useState<IMGatewayConfig | null>(null);
-  const [boundPlatforms, setBoundPlatforms] = useState<Set<IMPlatform>>(new Set());
-  const [initialBoundPlatforms, setInitialBoundPlatforms] = useState<Set<IMPlatform>>(new Set());
+  const [boundPlatforms, setBoundPlatforms] = useState<Set<Platform>>(new Set());
+  const [initialBoundPlatforms, setInitialBoundPlatforms] = useState<Set<Platform>>(new Set());
 
   useEffect(() => {
     if (!agentId) return;
@@ -69,10 +59,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       if (cfg) {
         setImConfig(cfg);
         const bindings = cfg.settings?.platformAgentBindings || {};
-        const bound = new Set<IMPlatform>();
+        const bound = new Set<Platform>();
         for (const [platform, boundAgentId] of Object.entries(bindings)) {
           if (boundAgentId === agentId) {
-            bound.add(platform as IMPlatform);
+            bound.add(platform as Platform);
           }
         }
         setBoundPlatforms(bound);
@@ -129,7 +119,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     }
   };
 
-  const handleToggleIMBinding = (platform: IMPlatform) => {
+  const handleToggleIMBinding = (platform: Platform) => {
     const next = new Set(boundPlatforms);
     if (next.has(platform)) {
       next.delete(platform);
@@ -139,7 +129,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     setBoundPlatforms(next);
   };
 
-  const isPlatformConfigured = (platform: IMPlatform): boolean => {
+  const isPlatformConfigured = (platform: Platform): boolean => {
     if (!imConfig) return false;
     return imConfig[platform]?.enabled === true;
   };
@@ -155,24 +145,24 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div
-        className="w-full max-w-2xl mx-4 rounded-xl shadow-xl bg-white dark:bg-claude-darkSurface border dark:border-claude-darkBorder border-claude-border max-h-[80vh] flex flex-col"
+        className="w-full max-w-2xl mx-4 rounded-xl shadow-xl bg-surface border border-border max-h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header: agent icon + name + close */}
-        <div className="flex items-center justify-between px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2">
             <span className="text-xl">{icon || '🤖'}</span>
-            <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+            <h3 className="text-base font-semibold text-foreground">
               {name || (i18nService.t('agentSettings') || 'Agent Settings')}
             </h3>
           </div>
-          <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover">
-            <XMarkIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-surface-raised">
+            <XMarkIcon className="h-5 w-5 text-secondary" />
           </button>
         </div>
 
         {/* Tab bar */}
-        <div className="flex border-b dark:border-claude-darkBorder border-claude-border px-5">
+        <div className="flex border-b border-border px-5">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -180,13 +170,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
               onClick={() => setActiveTab(tab.key)}
               className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
                 activeTab === tab.key
-                  ? 'text-claude-accent'
-                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText'
+                  ? 'text-primary'
+                  : 'text-secondary hover:text-foreground'
               }`}
             >
               {tab.label}
               {activeTab === tab.key && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-claude-accent rounded-full" />
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
               )}
             </button>
           ))}
@@ -197,50 +187,43 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
           {activeTab === 'basic' && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                <label className="block text-sm font-medium text-secondary mb-1">
                   {i18nService.t('agentName') || 'Name'}
                 </label>
                 <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={icon}
-                    onChange={(e) => setIcon(e.target.value)}
-                    placeholder="🤖"
-                    className="w-12 px-2 py-2 text-center rounded-lg border dark:border-claude-darkBorder border-claude-border bg-transparent dark:text-claude-darkText text-claude-text text-lg"
-                    maxLength={4}
-                  />
+                  <EmojiPicker value={icon} onChange={setIcon} />
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="flex-1 px-3 py-2 rounded-lg border dark:border-claude-darkBorder border-claude-border bg-transparent dark:text-claude-darkText text-claude-text text-sm"
+                    className="flex-1 px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                <label className="block text-sm font-medium text-secondary mb-1">
                   {i18nService.t('agentDescription') || 'Description'}
                 </label>
                 <input
                   type="text"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border dark:border-claude-darkBorder border-claude-border bg-transparent dark:text-claude-darkText text-claude-text text-sm"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                <label className="block text-sm font-medium text-secondary mb-1">
                   {i18nService.t('systemPrompt') || 'System Prompt'}
                 </label>
                 <textarea
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
                   rows={4}
-                  className="w-full px-3 py-2 rounded-lg border dark:border-claude-darkBorder border-claude-border bg-transparent dark:text-claude-darkText text-claude-text text-sm resize-none"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm resize-none"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+                <label className="block text-sm font-medium text-secondary mb-1">
                   {i18nService.t('agentIdentity') || 'Identity'}
                 </label>
                 <textarea
@@ -248,33 +231,34 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                   onChange={(e) => setIdentity(e.target.value)}
                   rows={3}
                   placeholder={i18nService.t('agentIdentityPlaceholder') || 'Identity description (IDENTITY.md)...'}
-                  className="w-full px-3 py-2 rounded-lg border dark:border-claude-darkBorder border-claude-border bg-transparent dark:text-claude-darkText text-claude-text text-sm resize-none"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm resize-none"
                 />
               </div>
             </div>
           )}
 
           {activeTab === 'skills' && (
-            <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} variant="expanded" />
+            <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
           )}
 
           {activeTab === 'im' && (
             <div>
-              <p className="text-xs dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 mb-4">
+              <p className="text-xs text-secondary/60 mb-4">
                 {i18nService.t('agentIMBindHint') || 'Select IM channels this Agent responds to'}
               </p>
               <div className="space-y-1">
-                {IM_PLATFORMS
-                  .filter(({ key }) => (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(key))
-                  .map(({ key: platform, logo }) => {
-                  const configured = isPlatformConfigured(platform);
-                  const bound = boundPlatforms.has(platform);
+               {PlatformRegistry.platforms
+                  .filter((platform) => (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(platform))
+                  .map((platform) => {
+                    const logo = PlatformRegistry.logo(platform);
+                   const configured = isPlatformConfigured(platform);
+                   const bound = boundPlatforms.has(platform);
                   return (
                     <div
                       key={platform}
                       className={`flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors ${
                         configured
-                          ? 'hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover cursor-pointer'
+                          ? 'hover:bg-surface-raised cursor-pointer'
                           : 'opacity-50'
                       }`}
                       onClick={() => configured && handleToggleIMBinding(platform)}
@@ -284,11 +268,11 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                           <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
                         </div>
                         <div>
-                          <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                          <div className="text-sm font-medium text-foreground">
                             {i18nService.t(platform)}
                           </div>
                           {!configured && (
-                            <div className="text-xs dark:text-claude-darkTextSecondary/50 text-claude-textSecondary/50">
+                            <div className="text-xs text-secondary/50">
                               {i18nService.t('agentIMNotConfiguredHint') || 'Please configure in Settings > IM Bots first'}
                             </div>
                           )}
@@ -298,7 +282,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                         {configured ? (
                           <div
                             className={`relative w-9 h-5 rounded-full transition-colors ${
-                              bound ? 'bg-claude-accent' : 'bg-gray-300 dark:bg-gray-600'
+                              bound ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                             }`}
                           >
                             <div
@@ -308,7 +292,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                             />
                           </div>
                         ) : (
-                          <span className="text-xs dark:text-claude-darkTextSecondary/50 text-claude-textSecondary/50">
+                          <span className="text-xs text-secondary/50">
                             {i18nService.t('agentIMNotConfigured') || 'Not configured'}
                           </span>
                         )}
@@ -322,7 +306,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
           <div>
             {!isMainAgent && !showDeleteConfirm && (
               <button
@@ -347,7 +331,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
                 <button
                   type="button"
                   onClick={() => setShowDeleteConfirm(false)}
-                  className="px-2 py-1 text-xs font-medium rounded dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
+                  className="px-2 py-1 text-xs font-medium rounded text-secondary hover:bg-surface-raised"
                 >
                   {i18nService.t('cancel') || 'Cancel'}
                 </button>
@@ -359,7 +343,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
               <button
                 type="button"
                 onClick={() => onSwitchAgent(agentId)}
-                className="px-4 py-2 text-sm font-medium rounded-lg border border-claude-accent text-claude-accent hover:bg-claude-accent/10 transition-colors"
+                className="px-4 py-2 text-sm font-medium rounded-lg border border-primary text-primary hover:bg-primary/10 transition-colors"
               >
                 {i18nService.t('switchToAgent') || 'Use this Agent'}
               </button>
@@ -367,7 +351,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             >
               {i18nService.t('cancel') || 'Cancel'}
             </button>
@@ -375,7 +359,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
               type="button"
               onClick={handleSave}
               disabled={!name.trim() || saving}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {saving ? (i18nService.t('saving') || 'Saving...') : (i18nService.t('save') || 'Save')}
             </button>

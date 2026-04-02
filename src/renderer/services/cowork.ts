@@ -130,6 +130,12 @@ class CoworkService {
     });
     this.streamListenerCleanups.push(permissionCleanup);
 
+    // Permission dismiss listener (timeout or server-side resolution)
+    const permissionDismissCleanup = cowork.onStreamPermissionDismiss(({ requestId }) => {
+      store.dispatch(dequeuePendingPermission({ requestId }));
+    });
+    this.streamListenerCleanups.push(permissionDismissCleanup);
+
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));

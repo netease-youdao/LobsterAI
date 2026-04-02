@@ -1,0 +1,19 @@
+{
+  "id": "ask-user-question",
+  "name": "AskUserQuestion",
+  "description": "Structured user confirmation tool for LobsterAI desktop.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "callbackUrl": {
+        "type": "string",
+        "description": "LobsterAI HTTP callback URL for approval requests"
+      },
+      "secret": {
+        "type": "string",
+        "description": "Shared secret for callback authentication"
+      }
+    }
+  }
+}

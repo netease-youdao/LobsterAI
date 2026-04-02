@@ -6,15 +6,15 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.3.26",
+  "version": "2026.4.1",
   "openclaw": {
     "version": "v2026.3.2",
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
-        "id": "dingtalk-connector",
-        "npm": "@dingtalk-real-ai/dingtalk-connector",
-        "version": "0.7.9"
+        "id": "dingtalk",
+        "npm": "@soimy/dingtalk",
+        "version": "3.3.0"
       },
       {
         "id": "feishu-openclaw-plugin",
@@ -34,7 +34,7 @@
       {
         "id": "openclaw-weixin",
         "npm": "@tencent-weixin/openclaw-weixin",
-        "version": "1.0.2"
+        "version": "1.0.3"
       },
       {
         "id": "moltbot-popo",
@@ -46,7 +46,12 @@
       {
         "id": "nim",
         "npm": "openclaw-nim",
-        "version": "0.3.0"
+        "version": "0.3.1"
+      },
+      {
+        "id": "openclaw-netease-bee",
+        "npm": "openclaw-netease-bee",
+        "version": "0.1.3"
       }
     ]
   },

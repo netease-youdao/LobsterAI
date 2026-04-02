@@ -1087,7 +1087,10 @@ export class SkillManager {
     root: string;
     skillDirs: string[];
     timer: NodeJS.Timeout;
+    isUpgrade?: boolean;
+    existingSkillDir?: string;
   }>();
+  private upgradingSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
 
@@ -1101,6 +1104,43 @@ export class SkillManager {
       fs.mkdirSync(root, { recursive: true });
     }
     return root;
+  }
+
+  recoverInterruptedUpgrades(): void {
+    const root = this.getSkillsRoot();
+    if (!fs.existsSync(root)) return;
+
+    try {
+      const entries = fs.readdirSync(root);
+      for (const entry of entries) {
+        if (!entry.endsWith('.upgrading')) continue;
+        const backupDir = path.join(root, entry);
+        const stat = fs.statSync(backupDir);
+        if (!stat.isDirectory()) continue;
+
+        const originalName = entry.replace(/\.upgrading$/, '');
+        const originalDir = path.join(root, originalName);
+
+        try {
+          if (fs.existsSync(originalDir) && fs.existsSync(path.join(originalDir, SKILL_FILE_NAME))) {
+            // Upgrade completed successfully, clean up backup
+            console.log(`[SkillManager] cleaning up completed upgrade backup: ${entry}`);
+            fs.rmSync(backupDir, { recursive: true, force: true });
+          } else {
+            // Upgrade was interrupted, roll back
+            console.log(`[SkillManager] rolling back interrupted upgrade: ${entry} → ${originalName}`);
+            if (fs.existsSync(originalDir)) {
+              fs.rmSync(originalDir, { recursive: true, force: true });
+            }
+            fs.renameSync(backupDir, originalDir);
+          }
+        } catch (error) {
+          console.warn(`[SkillManager] failed to recover upgrade for ${entry}:`, error);
+        }
+      }
+    } catch (error) {
+      console.warn('[SkillManager] failed to recover interrupted upgrades:', error);
+    }
   }
 
   syncBundledSkillsToUserData(): void {
@@ -1229,9 +1269,9 @@ export class SkillManager {
     try {
       const raw = fs.readFileSync(path.join(skillDir, SKILL_FILE_NAME), 'utf8');
       const { frontmatter } = parseFrontmatter(raw);
-      return typeof frontmatter.version === 'string' ? frontmatter.version
-        : typeof frontmatter.version === 'number' ? String(frontmatter.version)
-        : '';
+      const meta = frontmatter.metadata as Record<string, unknown> | undefined;
+      const v = frontmatter.version ?? meta?.version;
+      return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
     } catch {
       return '';
     }
@@ -1539,6 +1579,202 @@ export class SkillManager {
     }
   }
 
+  async upgradeSkill(skillId: string, downloadUrl: string): Promise<{
+    success: boolean;
+    skills?: SkillRecord[];
+    error?: string;
+    auditReport?: SkillSecurityReport;
+    pendingInstallId?: string;
+  }> {
+    // Prevent concurrent upgrades of the same skill
+    if (this.upgradingSkillIds.has(skillId)) {
+      return { success: false, error: `Skill "${skillId}" is already being upgraded` };
+    }
+
+    // Find the installed skill
+    const installedSkills = this.listSkills();
+    const installed = installedSkills.find(s => s.id === skillId);
+    if (!installed) {
+      return { success: false, error: `Skill "${skillId}" is not installed` };
+    }
+
+    const existingSkillDir = path.dirname(installed.skillPath);
+    if (!fs.existsSync(existingSkillDir)) {
+      return { success: false, error: `Skill directory not found: ${existingSkillDir}` };
+    }
+
+    this.upgradingSkillIds.add(skillId);
+    try {
+      return await this.performUpgradeDownload(skillId, downloadUrl, existingSkillDir);
+    } finally {
+      this.upgradingSkillIds.delete(skillId);
+    }
+  }
+
+  private async performUpgradeDownload(skillId: string, downloadUrl: string, existingSkillDir: string): Promise<{
+    success: boolean;
+    skills?: SkillRecord[];
+    error?: string;
+    auditReport?: SkillSecurityReport;
+    pendingInstallId?: string;
+  }> {    let cleanupPath: string | null = null;
+    try {
+      console.log(`[SkillManager] starting upgrade for skill "${skillId}"`);
+      const root = this.ensureSkillsRoot();
+
+      // Download new version (reuse downloadSkill's download logic)
+      const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-upgrade-'));
+      cleanupPath = tempRoot;
+
+      let localSource: string;
+      if (isRemoteZipUrl(downloadUrl)) {
+        localSource = await downloadZipUrl(downloadUrl, tempRoot);
+      } else {
+        const normalized = this.normalizeGitSource(downloadUrl);
+        if (!normalized) {
+          cleanupPathSafely(cleanupPath);
+          return { success: false, error: 'Invalid download URL' };
+        }
+        const repoName = normalizeFolderName(normalized.repoNameHint || deriveRepoName(normalized.repoUrl));
+        const clonePath = path.join(tempRoot, repoName);
+        const githubSource = parseGithubRepoSource(normalized.repoUrl);
+        let downloadedSourceRoot = clonePath;
+        let downloaded = false;
+
+        if (githubSource) {
+          try {
+            downloadedSourceRoot = await downloadGithubArchive(githubSource, tempRoot, normalized.ref);
+            downloaded = true;
+          } catch {
+            // Fall through to git clone
+          }
+        }
+
+        if (!downloaded) {
+          const cloneArgs = ['clone', '--depth', '1'];
+          if (normalized.ref) cloneArgs.push('--branch', normalized.ref);
+          cloneArgs.push(normalized.repoUrl, clonePath);
+          const gitRuntime = resolveGitCommand();
+          await runCommand(gitRuntime.command, cloneArgs, { env: gitRuntime.env });
+        }
+
+        if (normalized.sourceSubpath) {
+          const scopedSource = resolveWithin(downloadedSourceRoot, normalized.sourceSubpath);
+          if (!fs.existsSync(scopedSource)) {
+            cleanupPathSafely(cleanupPath);
+            return { success: false, error: `Path "${normalized.sourceSubpath}" not found` };
+          }
+          localSource = fs.statSync(scopedSource).isFile() && path.basename(scopedSource) === SKILL_FILE_NAME
+            ? path.dirname(scopedSource)
+            : scopedSource;
+        } else {
+          localSource = downloadedSourceRoot;
+        }
+      }
+
+      const skillDirs = collectSkillDirsFromSource(localSource);
+      if (skillDirs.length === 0) {
+        cleanupPathSafely(cleanupPath);
+        return { success: false, error: t('skillErrNoSkillMd') };
+      }
+
+      // Find the matching skill dir for this ID
+      const matchingSkillDir = skillDirs.find(d => normalizeFolderName(path.basename(d)) === skillId) || skillDirs[0];
+
+      // Security scan
+      let auditReport: SkillSecurityReport | null = null;
+      try {
+        const reports = await scanMultipleSkillDirs([matchingSkillDir]);
+        auditReport = mergeReports(reports);
+      } catch (err) {
+        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+      }
+
+      // If risk detected, cache for user confirmation
+      if (auditReport && auditReport.riskLevel !== 'safe') {
+        const pendingId = crypto.randomUUID();
+        console.log(`[SkillManager] Upgrade risk detected (${auditReport.riskLevel}), pending confirmation: ${pendingId}`);
+        const timer = setTimeout(() => {
+          const pending = this.pendingInstalls.get(pendingId);
+          if (pending) {
+            cleanupPathSafely(pending.cleanupPath);
+            this.pendingInstalls.delete(pendingId);
+          }
+        }, 5 * 60 * 1000);
+
+        this.pendingInstalls.set(pendingId, {
+          tempDir: localSource,
+          cleanupPath,
+          root,
+          skillDirs: [matchingSkillDir],
+          timer,
+          isUpgrade: true,
+          existingSkillDir,
+        });
+
+        // Ownership of cleanupPath transferred to pendingInstalls
+        cleanupPath = null;
+        return { success: true, auditReport, pendingInstallId: pendingId };
+      }
+
+      // Safe — perform upgrade
+      this.performSkillUpgrade(matchingSkillDir, existingSkillDir);
+
+      cleanupPathSafely(cleanupPath);
+      cleanupPath = null;
+
+      this.startWatching();
+      this.notifySkillsChanged();
+      return { success: true, skills: this.listSkills() };
+    } catch (error) {
+      cleanupPathSafely(cleanupPath);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to upgrade skill' };
+    }
+  }
+
+  private performSkillUpgrade(newSkillDir: string, existingSkillDir: string): void {
+    const upgradingDir = existingSkillDir + '.upgrading';
+
+    // Back up .env and _meta.json
+    let envBackup: Buffer | null = null;
+    let metaBackup: Buffer | null = null;
+    const envPath = path.join(existingSkillDir, '.env');
+    const metaPath = path.join(existingSkillDir, '_meta.json');
+    if (fs.existsSync(envPath)) {
+      envBackup = fs.readFileSync(envPath);
+    }
+    if (fs.existsSync(metaPath)) {
+      metaBackup = fs.readFileSync(metaPath);
+    }
+
+    // Atomic rename old dir to .upgrading backup
+    fs.renameSync(existingSkillDir, upgradingDir);
+
+    try {
+      // Copy new version to original path
+      cpRecursiveSync(newSkillDir, existingSkillDir);
+
+      // Restore .env and _meta.json
+      if (envBackup !== null) {
+        fs.writeFileSync(path.join(existingSkillDir, '.env'), envBackup);
+      }
+      if (metaBackup !== null) {
+        fs.writeFileSync(path.join(existingSkillDir, '_meta.json'), metaBackup);
+      }
+    } catch (error) {
+      // Roll back: remove partial new dir and restore backup
+      console.error('[SkillManager] upgrade copy failed, rolling back:', error);
+      if (fs.existsSync(existingSkillDir)) {
+        fs.rmSync(existingSkillDir, { recursive: true, force: true });
+      }
+      fs.renameSync(upgradingDir, existingSkillDir);
+      throw error;
+    }
+
+    // Remove backup
+    fs.rmSync(upgradingDir, { recursive: true, force: true });
+  }
+
   confirmPendingInstall(
     pendingId: string,
     action: SecurityReportAction
@@ -1560,16 +1796,26 @@ export class SkillManager {
 
     // Install the skill(s)
     const installedIds: string[] = [];
-    for (const skillDir of pending.skillDirs) {
-      const folderName = normalizeFolderName(path.basename(skillDir));
-      let targetDir = resolveWithin(pending.root, folderName);
-      let suffix = 1;
-      while (fs.existsSync(targetDir)) {
-        targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
-        suffix += 1;
+
+    // Upgrade path: overwrite existing skill directory
+    if (pending.isUpgrade && pending.existingSkillDir) {
+      for (const skillDir of pending.skillDirs) {
+        this.performSkillUpgrade(skillDir, pending.existingSkillDir);
+        installedIds.push(path.basename(pending.existingSkillDir));
       }
-      cpRecursiveSync(skillDir, targetDir);
-      installedIds.push(path.basename(targetDir));
+    } else {
+      // Fresh install path: find unique directory name
+      for (const skillDir of pending.skillDirs) {
+        const folderName = normalizeFolderName(path.basename(skillDir));
+        let targetDir = resolveWithin(pending.root, folderName);
+        let suffix = 1;
+        while (fs.existsSync(targetDir)) {
+          targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
+          suffix += 1;
+        }
+        cpRecursiveSync(skillDir, targetDir);
+        installedIds.push(path.basename(targetDir));
+      }
     }
 
     cleanupPathSafely(pending.cleanupPath);
@@ -1677,9 +1923,9 @@ export class SkillManager {
       const name = (String(frontmatter.name || '') || path.basename(dir)).trim() || path.basename(dir);
       const description = (String(frontmatter.description || '') || extractDescription(content) || name).trim();
       const isOfficial = isTruthy(frontmatter.official) || isTruthy(frontmatter.isOfficial);
-      const version = typeof frontmatter.version === 'string' ? frontmatter.version
-        : typeof frontmatter.version === 'number' ? String(frontmatter.version)
-        : undefined;
+      const meta = frontmatter.metadata as Record<string, unknown> | undefined;
+      const v = frontmatter.version ?? meta?.version;
+      const version = typeof v === 'string' ? v : typeof v === 'number' ? String(v) : undefined;
       const updatedAt = fs.statSync(skillFile).mtimeMs;
       const id = path.basename(dir);
       const prompt = content.trim();

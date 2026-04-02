@@ -235,7 +235,7 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 ### Pattern
 
 ```typescript
-// In constants.ts (one per module, e.g. src/scheduled-task/constants.ts)
+// In constants.ts (one per module, e.g. src/scheduledTask/constants.ts)
 export const SessionTarget = {
   Main: 'main',
   Isolated: 'isolated',
@@ -259,7 +259,7 @@ export type SessionTarget = typeof SessionTarget[keyof typeof SessionTarget];
 
 ### Existing reference
 
-`src/scheduled-task/constants.ts` is the canonical example of this pattern, covering schedule kinds, payload kinds, delivery modes, session targets, wake modes, origin kinds, binding kinds, task status, IPC channels, and migration keys.
+`src/scheduledTask/constants.ts` is the canonical example of this pattern, covering schedule kinds, payload kinds, delivery modes, session targets, wake modes, origin kinds, binding kinds, task status, IPC channels, and migration keys.
 
 ## Logging Guidelines
 

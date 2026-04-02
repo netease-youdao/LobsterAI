@@ -100,8 +100,14 @@ class AgentService {
 
   async deleteAgent(id: string): Promise<boolean> {
     try {
+      const wasCurrentAgent = store.getState().agent.currentAgentId === id;
       await window.electron?.agents?.delete(id);
       store.dispatch(removeAgent(id));
+      if (wasCurrentAgent) {
+        this.switchAgent('main');
+        const { coworkService } = await import('./cowork');
+        coworkService.loadSessions('main');
+      }
       return true;
     } catch (error) {
       console.error('Failed to delete agent:', error);

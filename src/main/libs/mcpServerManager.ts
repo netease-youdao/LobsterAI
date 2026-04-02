@@ -2,7 +2,7 @@
  * McpServerManager — manages MCP server lifecycles and tool discovery
  * for the OpenClaw MCP Bridge.
  *
- * Starts enabled MCP servers as child processes via the MCP SDK stdio transport,
+ * Starts enabled MCP servers via MCP SDK transports (stdio, SSE, Streamable HTTP),
  * discovers available tools, and routes tool calls to the correct server.
  */
 import { app } from 'electron';
@@ -10,7 +10,10 @@ import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerRecord } from '../mcpStore';
 import { getElectronNodeRuntimePath, getEnhancedEnv } from './coworkUtil';
 
@@ -24,7 +27,7 @@ export interface McpToolManifestEntry {
 interface ManagedMcpServer {
   record: McpServerRecord;
   client: Client;
-  transport: StdioClientTransport;
+  transport: Transport;
   tools: McpToolManifestEntry[];
 }
 
@@ -267,12 +270,15 @@ export class McpServerManager {
    * Start MCP servers and discover their tools.
    */
   async startServers(enabledServers: McpServerRecord[]): Promise<McpToolManifestEntry[]> {
-    // Only handle stdio servers for now
-    const stdioServers = enabledServers.filter(s => s.transportType === 'stdio');
-    log('INFO', `Starting ${stdioServers.length} stdio MCP servers`);
+    if (this.servers.size > 0) {
+      log('INFO', `Restarting ${this.servers.size} existing MCP server connections before refresh`);
+      await this.stopServers();
+    }
+
+    log('INFO', `Starting ${enabledServers.length} MCP servers`);
 
     const results = await Promise.allSettled(
-      stdioServers.map(server => this.startSingleServer(server))
+      enabledServers.map(server => this.startSingleServer(server))
     );
 
     // Collect tools from all successfully started servers
@@ -281,7 +287,7 @@ export class McpServerManager {
       if (result.status === 'fulfilled' && result.value) {
         this._toolManifest.push(...result.value.tools);
       } else if (result.status === 'rejected') {
-        log('WARN', `Failed to start MCP server "${stdioServers[i].name}": ${result.reason}`);
+        log('WARN', `Failed to start MCP server "${enabledServers[i].name}": ${result.reason}`);
       }
     }
 
@@ -289,43 +295,81 @@ export class McpServerManager {
     return this._toolManifest;
   }
 
-  private async startSingleServer(record: McpServerRecord): Promise<ManagedMcpServer | null> {
-    if (record.transportType !== 'stdio') {
-      log('WARN', `Skipping non-stdio server "${record.name}" (type=${record.transportType})`);
-      return null;
+  private buildRemoteRequestInit(record: McpServerRecord): RequestInit | undefined {
+    if (!record.headers || Object.keys(record.headers).length === 0) {
+      return undefined;
     }
 
-    const resolved = await resolveStdioCommand(record);
-    if (!resolved.command) {
-      log('WARN', `Server "${record.name}" has no command, skipping`);
-      return null;
-    }
-
-    log('INFO', `Starting "${record.name}": command=${resolved.command}, args=${JSON.stringify(resolved.args)}`);
-
-    const enhancedEnv = await getEnhancedEnv();
-    const spawnEnv: Record<string, string> = {
-      ...Object.fromEntries(
-        Object.entries(enhancedEnv).filter((e): e is [string, string] => typeof e[1] === 'string'),
-      ),
-      ...(resolved.env || {}),
+    return {
+      headers: { ...record.headers },
     };
+  }
 
-    const transport = new StdioClientTransport({
-      command: resolved.command,
-      args: resolved.args,
-      env: spawnEnv,
-    });
-
+  private async startSingleServer(record: McpServerRecord): Promise<ManagedMcpServer | null> {
     const stderrChunks: string[] = [];
-    if (transport.stderr) {
-      transport.stderr.on('data', (chunk: Buffer) => {
-        const text = chunk.toString().trim();
-        if (text) {
-          stderrChunks.push(text);
-          log('WARN', `"${record.name}" stderr: ${text}`);
-        }
+
+    let transport: Transport;
+    if (record.transportType === 'stdio') {
+      const resolved = await resolveStdioCommand(record);
+      if (!resolved.command) {
+        log('WARN', `Server "${record.name}" has no command, skipping`);
+        return null;
+      }
+
+      log('INFO', `Starting "${record.name}" via stdio: command=${resolved.command}, args=${JSON.stringify(resolved.args)}`);
+
+      const enhancedEnv = await getEnhancedEnv();
+      const spawnEnv: Record<string, string> = {
+        ...Object.fromEntries(
+          Object.entries(enhancedEnv).filter((e): e is [string, string] => typeof e[1] === 'string'),
+        ),
+        ...(resolved.env || {}),
+      };
+
+      const stdioTransport = new StdioClientTransport({
+        command: resolved.command,
+        args: resolved.args,
+        env: spawnEnv,
       });
+      if (stdioTransport.stderr) {
+        stdioTransport.stderr.on('data', (chunk: Buffer) => {
+          const text = chunk.toString().trim();
+          if (text) {
+            stderrChunks.push(text);
+            log('WARN', `"${record.name}" stderr: ${text}`);
+          }
+        });
+      }
+      transport = stdioTransport;
+    } else {
+      const rawUrl = record.url?.trim();
+      if (!rawUrl) {
+        log('WARN', `Server "${record.name}" has no URL configured for ${record.transportType} transport`);
+        return null;
+      }
+
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(rawUrl);
+      } catch (error) {
+        log('WARN', `Server "${record.name}" has invalid URL "${rawUrl}": ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      }
+
+      const requestInit = this.buildRemoteRequestInit(record);
+      if (record.transportType === 'sse') {
+        log('INFO', `Starting "${record.name}" via SSE: url=${parsedUrl.toString()}`);
+        transport = new SSEClientTransport(
+          parsedUrl,
+          requestInit ? { requestInit } : undefined,
+        );
+      } else {
+        log('INFO', `Starting "${record.name}" via Streamable HTTP: url=${parsedUrl.toString()}`);
+        transport = new StreamableHTTPClientTransport(
+          parsedUrl,
+          requestInit ? { requestInit } : undefined,
+        );
+      }
     }
 
     const client = new Client(

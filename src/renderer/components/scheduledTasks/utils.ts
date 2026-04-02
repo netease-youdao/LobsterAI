@@ -7,7 +7,7 @@ import type {
   Schedule,
   ScheduleCron,
   TaskLastStatus,
-} from '../../../scheduled-task/types';
+} from '../../../scheduledTask/types';
 
 const WEEKDAY_KEYS = [
   'scheduledTasksFormWeekSun',
@@ -319,7 +319,7 @@ export function getStatusTone(status: TaskLastStatus): string {
   if (status === 'error') return 'text-red-500';
   if (status === 'skipped') return 'text-yellow-500';
   if (status === 'running') return 'text-blue-500';
-  return 'dark:text-claude-darkTextSecondary text-claude-textSecondary';
+  return 'text-secondary';
 }
 
 export function getStatusLabelKey(status: TaskLastStatus): string {

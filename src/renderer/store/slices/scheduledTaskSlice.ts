@@ -5,7 +5,7 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
   ScheduledTaskViewMode,
-} from '../../../scheduled-task/types';
+} from '../../../scheduledTask/types';
 
 interface ScheduledTaskState {
   tasks: ScheduledTask[];
