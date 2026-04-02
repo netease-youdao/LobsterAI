@@ -43,14 +43,24 @@ const AgentSkillSelector: React.FC<AgentSkillSelectorProps> = ({ selectedSkillId
     }
   };
 
+  const handleSelectAll = () => {
+    const filteredIds = filteredSkills.map((s) => s.id);
+    const merged = Array.from(new Set([...selectedSkillIds, ...filteredIds]));
+    onChange(merged);
+  };
+
+  const handleClearAll = () => {
+    onChange([]);
+  };
+
   return (
     <div className="flex flex-col h-full">
       <p className="text-xs text-secondary/60 mb-3">
         {i18nService.t('agentSkillsHint') || 'Select skills available to this Agent. Leave empty to use all enabled skills.'}
       </p>
-      {enabledSkills.length > 5 && (
-        <div className="mb-2">
-          <div className="relative">
+      <div className="mb-2 flex items-center gap-2">
+        {enabledSkills.length > 5 && (
+          <div className="relative flex-1">
             <MagnifyingGlassIcon className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary/50" />
             <input
               type="text"
@@ -60,8 +70,26 @@ const AgentSkillSelector: React.FC<AgentSkillSelectorProps> = ({ selectedSkillId
               className="w-full pl-8 pr-3 py-1.5 text-sm rounded border border-border bg-transparent text-foreground"
             />
           </div>
-        </div>
-      )}
+        )}
+        {enabledSkills.length <= 5 && <div className="flex-1" />}
+        <span className="text-xs text-secondary/50 whitespace-nowrap">
+          {i18nService.t('agentSkillsSelected') || 'Selected'} {selectedSkillIds.length}/{enabledSkills.length}
+        </span>
+        <button
+          type="button"
+          onClick={handleSelectAll}
+          className="text-xs text-primary hover:text-primary/80 transition-colors whitespace-nowrap"
+        >
+          {i18nService.t('batchSelectAll') || 'Select All'}
+        </button>
+        <button
+          type="button"
+          onClick={handleClearAll}
+          className="text-xs text-secondary/60 hover:text-secondary transition-colors whitespace-nowrap"
+        >
+          {i18nService.t('clearAll') || 'Clear All'}
+        </button>
+      </div>
       <div className="flex-1 overflow-y-auto">
         {filteredSkills.length === 0 ? (
           <div className="px-3 py-3 text-sm text-secondary/50 text-center">
