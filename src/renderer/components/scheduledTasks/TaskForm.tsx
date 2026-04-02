@@ -101,6 +101,10 @@ function buildScheduleInput(form: FormState): ScheduledTaskInput['schedule'] {
     return { kind: 'cron', expr: `${min} ${hr} * * ${form.weekday}` };
   }
 
+  if (form.planType === 'workdays') {
+    return { kind: 'cron', expr: `${min} ${hr} * * 1-5` };
+  }
+
   return { kind: 'cron', expr: `${min} ${hr} ${form.monthDay} * *` };
 }
 
@@ -287,6 +291,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         <option value="once">{i18nService.t('scheduledTasksFormScheduleModeOnce')}</option>
         <option value="daily">{i18nService.t('scheduledTasksFormScheduleModeDaily')}</option>
         <option value="weekly">{i18nService.t('scheduledTasksFormScheduleModeWeekly')}</option>
+        <option value="workdays">{i18nService.t('scheduledTasksFormScheduleModeWorkdays')}</option>
         <option value="monthly">{i18nService.t('scheduledTasksFormScheduleModeMonthly')}</option>
       </select>
     );
@@ -328,6 +333,23 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     }
 
     if (form.planType === 'daily') {
+      return (
+        <div>
+          <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
+          <div className="flex items-center gap-3">
+            {planSelect}
+            <input
+              type="time"
+              value={timeValue}
+              onChange={(e) => handleTimeChange(e.target.value)}
+              className={`${inputClass} flex-1 min-w-0`}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (form.planType === 'workdays') {
       return (
         <div>
           <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>

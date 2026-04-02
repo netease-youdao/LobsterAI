@@ -226,7 +226,7 @@ export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
   return `${i18nService.t('scheduledTasksFormDeliveryModeAnnounce')} · ${channel}${toLabel}`;
 }
 
-export type PlanType = 'once' | 'daily' | 'weekly' | 'monthly' | 'advanced';
+export type PlanType = 'once' | 'daily' | 'weekly' | 'workdays' | 'monthly' | 'advanced';
 
 export interface PlanInfo {
   planType: PlanType;
@@ -300,6 +300,11 @@ export function scheduleToPlanInfo(schedule: Schedule): PlanInfo {
   // Weekly: M H * * DOW (single value)
   if (dom && dom.type === 'any' && dow && dow.type === 'value' && dow.value >= 0 && dow.value <= 6) {
     return { ...base, planType: 'weekly', weekday: dow.value };
+  }
+
+  // Workdays: M H * * 1-5
+  if (dom && dom.type === 'any' && dow && dow.type === 'range' && dow.from === 1 && dow.to === 5) {
+    return { ...base, planType: 'workdays' };
   }
 
   // Monthly: M H DOM * *
