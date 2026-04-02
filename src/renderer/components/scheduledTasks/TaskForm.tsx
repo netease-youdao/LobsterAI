@@ -9,6 +9,8 @@ import type {
 } from '../../../scheduledTask/types';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
 import { PlatformRegistry } from '@shared/platform';
+import CustomSelect from './CustomSelect';
+import TimePicker from './TimePicker';
 
 interface TaskFormProps {
   mode: 'create' | 'edit';
@@ -253,14 +255,6 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const labelClass = 'block text-sm font-medium text-foreground mb-1';
   const errorClass = 'text-xs text-red-500 mt-1';
 
-  const timeValue = `${String(form.hour).padStart(2, '0')}:${String(form.minute).padStart(2, '0')}`;
-  const handleTimeChange = (value: string) => {
-    const [h, m] = value.split(':').map(Number);
-    if (!Number.isNaN(h) && !Number.isNaN(m)) {
-      updateForm({ hour: h, minute: m });
-    }
-  };
-
   const renderScheduleRow = () => {
     if (isAdvanced) {
       return (
@@ -279,21 +273,21 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     }
 
     const planSelect = (
-      <select
+      <CustomSelect
         value={form.planType}
-        onChange={(event) => updateForm({ planType: event.target.value as PlanType })}
-        className={`${inputClass} flex-1 min-w-0`}
-      >
-        <option value="once">{i18nService.t('scheduledTasksFormScheduleModeOnce')}</option>
-        <option value="daily">{i18nService.t('scheduledTasksFormScheduleModeDaily')}</option>
-        <option value="weekly">{i18nService.t('scheduledTasksFormScheduleModeWeekly')}</option>
-        <option value="monthly">{i18nService.t('scheduledTasksFormScheduleModeMonthly')}</option>
-      </select>
+        options={[
+          { value: 'once', label: i18nService.t('scheduledTasksFormScheduleModeOnce') },
+          { value: 'daily', label: i18nService.t('scheduledTasksFormScheduleModeDaily') },
+          { value: 'weekly', label: i18nService.t('scheduledTasksFormScheduleModeWeekly') },
+          { value: 'monthly', label: i18nService.t('scheduledTasksFormScheduleModeMonthly') },
+        ]}
+        onChange={(v) => updateForm({ planType: v as PlanType })}
+        className="flex-1 min-w-0"
+      />
     );
 
     if (form.planType === 'once') {
       const dateValue = `${form.year}-${String(form.month).padStart(2, '0')}-${String(form.day).padStart(2, '0')}`;
-      const fullTimeValue = `${timeValue}:${String(form.second).padStart(2, '0')}`;
       return (
         <div>
           <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
@@ -308,19 +302,13 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               }}
               className={`${inputClass} flex-1 min-w-0`}
             />
-            <input
-              type="time"
-              step="1"
-              value={fullTimeValue}
-              onChange={(e) => {
-                const parts = e.target.value.split(':').map(Number);
-                const patch: Partial<FormState> = {};
-                if (!Number.isNaN(parts[0])) patch.hour = parts[0];
-                if (!Number.isNaN(parts[1])) patch.minute = parts[1];
-                if (parts.length > 2 && !Number.isNaN(parts[2])) patch.second = parts[2];
-                updateForm(patch);
-              }}
-              className={`${inputClass} flex-1 min-w-0`}
+            <TimePicker
+              hour={form.hour}
+              minute={form.minute}
+              second={form.second}
+              showSeconds
+              onChange={(v) => updateForm({ hour: v.hour, minute: v.minute, second: v.second ?? form.second })}
+              className="flex-1 min-w-0"
             />
           </div>
         </div>
@@ -333,11 +321,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
           <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
           <div className="flex items-center gap-3">
             {planSelect}
-            <input
-              type="time"
-              value={timeValue}
-              onChange={(e) => handleTimeChange(e.target.value)}
-              className={`${inputClass} flex-1 min-w-0`}
+            <TimePicker
+              hour={form.hour}
+              minute={form.minute}
+              onChange={(v) => updateForm({ hour: v.hour, minute: v.minute })}
+              className="flex-1 min-w-0"
             />
           </div>
         </div>
@@ -350,20 +338,20 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
           <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
           <div className="flex items-center gap-3">
             {planSelect}
-            <select
-              value={form.weekday}
-              onChange={(e) => updateForm({ weekday: Number(e.target.value) })}
-              className={`${inputClass} flex-1 min-w-0`}
-            >
-              {WEEKDAY_KEYS.map((key, idx) => (
-                <option key={idx} value={idx}>{i18nService.t(key)}</option>
-              ))}
-            </select>
-            <input
-              type="time"
-              value={timeValue}
-              onChange={(e) => handleTimeChange(e.target.value)}
-              className={`${inputClass} flex-1 min-w-0`}
+            <CustomSelect
+              value={String(form.weekday)}
+              options={WEEKDAY_KEYS.map((key, idx) => ({
+                value: String(idx),
+                label: i18nService.t(key),
+              }))}
+              onChange={(v) => updateForm({ weekday: Number(v) })}
+              className="flex-1 min-w-0"
+            />
+            <TimePicker
+              hour={form.hour}
+              minute={form.minute}
+              onChange={(v) => updateForm({ hour: v.hour, minute: v.minute })}
+              className="flex-1 min-w-0"
             />
           </div>
         </div>
@@ -375,22 +363,20 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
         <div className="flex items-center gap-3">
           {planSelect}
-          <select
-            value={form.monthDay}
-            onChange={(e) => updateForm({ monthDay: Number(e.target.value) })}
-            className={`${inputClass} flex-1 min-w-0`}
-          >
-            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-              <option key={d} value={d}>
-                {d}{i18nService.t('scheduledTasksFormMonthDaySuffix')}
-              </option>
-            ))}
-          </select>
-          <input
-            type="time"
-            value={timeValue}
-            onChange={(e) => handleTimeChange(e.target.value)}
-            className={`${inputClass} flex-1 min-w-0`}
+          <CustomSelect
+            value={String(form.monthDay)}
+            options={Array.from({ length: 31 }, (_, i) => ({
+              value: String(i + 1),
+              label: `${i + 1}${i18nService.t('scheduledTasksFormMonthDaySuffix')}`,
+            }))}
+            onChange={(v) => updateForm({ monthDay: Number(v) })}
+            className="flex-1 min-w-0"
+          />
+          <TimePicker
+            hour={form.hour}
+            minute={form.minute}
+            onChange={(v) => updateForm({ hour: v.hour, minute: v.minute })}
+            className="flex-1 min-w-0"
           />
         </div>
       </div>
@@ -402,42 +388,41 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       <div>
         <label className={labelClass}>{i18nService.t('scheduledTasksFormNotifyChannel')}</label>
         <div className="flex items-center gap-3">
-          <select
+          <CustomSelect
             value={form.notifyChannel}
-            onChange={(event) => updateForm({ notifyChannel: event.target.value, notifyTo: '' })}
-            className={`${inputClass} ${showConversationSelector ? 'flex-1 min-w-0' : ''}`}
-          >
-            <option value="none">{i18nService.t('scheduledTasksFormNotifyChannelNone')}</option>
-            {channelOptions.map((channel) => {
-              const unsupported = channel.value === 'openclaw-weixin' || channel.value === 'qqbot' || channel.value === 'netease-bee';
-              return (
-                <option key={channel.value} value={channel.value} disabled={unsupported}>
-                  {unsupported
+            options={[
+              { value: 'none', label: i18nService.t('scheduledTasksFormNotifyChannelNone') },
+              ...channelOptions.map((channel) => {
+                const unsupported = channel.value === 'openclaw-weixin' || channel.value === 'qqbot' || channel.value === 'netease-bee';
+                return {
+                  value: channel.value,
+                  label: unsupported
                     ? `${channel.label} (${i18nService.t('scheduledTasksChannelUnsupported')})`
-                    : channel.label}
-                </option>
-              );
-            })}
-          </select>
+                    : channel.label,
+                  disabled: unsupported,
+                };
+              }),
+            ]}
+            onChange={(v) => updateForm({ notifyChannel: v, notifyTo: '' })}
+            className={showConversationSelector ? 'flex-1 min-w-0' : ''}
+          />
           {showConversationSelector && (
-            <select
+            <CustomSelect
               value={form.notifyTo}
-              onChange={(event) => updateForm({ notifyTo: event.target.value })}
+              options={
+                conversationsLoading
+                  ? [{ value: '', label: i18nService.t('scheduledTasksFormNotifyConversationLoading') }]
+                  : conversations.length === 0
+                    ? [{ value: '', label: i18nService.t('scheduledTasksFormNotifyConversationNone') }]
+                    : conversations.map((conv) => ({
+                        value: conv.conversationId,
+                        label: conv.conversationId,
+                      }))
+              }
+              onChange={(v) => updateForm({ notifyTo: v })}
               disabled={conversationsLoading}
-              className={`${inputClass} flex-1 min-w-0`}
-            >
-              {conversationsLoading ? (
-                <option value="">{i18nService.t('scheduledTasksFormNotifyConversationLoading')}</option>
-              ) : conversations.length === 0 ? (
-                <option value="">{i18nService.t('scheduledTasksFormNotifyConversationNone')}</option>
-              ) : (
-                conversations.map((conv) => (
-                  <option key={conv.conversationId} value={conv.conversationId}>
-                    {conv.conversationId}
-                  </option>
-                ))
-              )}
-            </select>
+              className="flex-1 min-w-0"
+            />
           )}
         </div>
       </div>
