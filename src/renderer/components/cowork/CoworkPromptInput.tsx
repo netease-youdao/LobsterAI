@@ -20,7 +20,7 @@ import { getCompactFolderName } from '../../utils/path';
 // so that attachment state survives view switches (cowork ↔ skills, etc.)
 type CoworkAttachment = DraftAttachment;
 
-const INPUT_FILE_LABEL = '输入文件';
+const INPUT_FILE_LABEL = () => i18nService.t('coworkInputFileLabel') || 'Input file';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
@@ -254,7 +254,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Note: inline/clipboard images have pseudo-paths starting with 'inline:' and are excluded.
     const attachmentLines = attachments
       .filter((a) => !a.path.startsWith('inline:'))
-      .map((attachment) => `${INPUT_FILE_LABEL}: ${attachment.path}`)
+      .map((attachment) => `${INPUT_FILE_LABEL()}: ${attachment.path}`)
       .join('\n');
     const finalPrompt = trimmedValue
       ? (attachmentLines ? `${trimmedValue}\n\n${attachmentLines}` : trimmedValue)
