@@ -7,6 +7,8 @@ export interface Model {
   provider?: string; // 模型所属的提供商
   providerKey?: string; // 模型所属的提供商 key（用于唯一标识）
   supportsImage?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
   isServerModel?: boolean; // 是否为服务端套餐模型
   serverApiFormat?: string; // 服务端模型的 API 格式 ("openai" | "anthropic")
 }
@@ -42,6 +44,8 @@ function buildInitialModels(): Model[] {
             provider: getProviderDisplayName(providerName, config),
             providerKey: providerName,
             supportsImage: model.supportsImage ?? false,
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxTokens,
           });
         });
       }

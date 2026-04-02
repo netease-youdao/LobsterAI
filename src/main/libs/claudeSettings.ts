@@ -15,6 +15,8 @@ type ProviderModel = {
   id: string;
   name?: string;
   supportsImage?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 type ProviderConfig = {
@@ -42,6 +44,8 @@ export type ApiConfigResolution = {
     codingPlanEnabled: boolean;
     supportsImage?: boolean;
     modelName?: string;
+    contextWindow?: number;
+    maxTokens?: number;
   };
 };
 
@@ -120,6 +124,8 @@ type MatchedProvider = {
   baseURL: string;
   supportsImage?: boolean;
   modelName?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
@@ -267,6 +273,8 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       baseURL,
       supportsImage: matchedModel?.supportsImage,
       modelName: matchedModel?.name,
+      contextWindow: matchedModel?.contextWindow,
+      maxTokens: matchedModel?.maxTokens,
     },
   };
 }
@@ -316,6 +324,9 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
         providerName: matched.providerName,
         codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
         supportsImage: matched.supportsImage,
+        modelName: matched.modelName,
+        contextWindow: matched.contextWindow,
+        maxTokens: matched.maxTokens,
       },
     };
   }
@@ -353,6 +364,10 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
     providerMetadata: {
       providerName: matched.providerName,
       codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+      supportsImage: matched.supportsImage,
+      modelName: matched.modelName,
+      contextWindow: matched.contextWindow,
+      maxTokens: matched.maxTokens,
     },
   };
 }
@@ -402,6 +417,8 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
       supportsImage: matched.supportsImage,
       modelName: matched.modelName,
+      contextWindow: matched.contextWindow,
+      maxTokens: matched.maxTokens,
     },
   };
 }
@@ -442,7 +459,7 @@ export type ProviderRawConfig = {
   apiKey: string;
   apiType: 'anthropic' | 'openai';
   codingPlanEnabled: boolean;
-  models: Array<{ id: string; name?: string; supportsImage?: boolean }>;
+  models: Array<{ id: string; name?: string; supportsImage?: boolean; contextWindow?: number; maxTokens?: number }>;
 };
 
 export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {

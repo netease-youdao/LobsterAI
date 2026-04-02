@@ -560,6 +560,8 @@ export const buildProviderSelection = (options: {
   codingPlanEnabled?: boolean;
   supportsImage?: boolean;
   modelName?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 }): OpenClawProviderSelection => {
   const providerName = options.providerName ?? '';
   const descriptor = resolveDescriptor(providerName, !!options.codingPlanEnabled);
@@ -584,6 +586,8 @@ export const buildProviderSelection = (options: {
     providerName === ProviderName.Moonshot && !options.codingPlanEnabled
       ? options.modelId.includes('thinking')
       : undefined;
+  const contextWindow = options.contextWindow ?? descriptor.modelDefaults?.contextWindow;
+  const maxTokens = options.maxTokens ?? descriptor.modelDefaults?.maxTokens;
 
   return {
     providerId: descriptor.providerId,
@@ -609,11 +613,11 @@ export const buildProviderSelection = (options: {
           ...(descriptor.modelDefaults?.cost
             ? { cost: descriptor.modelDefaults.cost }
             : {}),
-          ...(descriptor.modelDefaults?.contextWindow
-            ? { contextWindow: descriptor.modelDefaults.contextWindow }
+          ...(contextWindow
+            ? { contextWindow }
             : {}),
-          ...(descriptor.modelDefaults?.maxTokens
-            ? { maxTokens: descriptor.modelDefaults.maxTokens }
+          ...(maxTokens
+            ? { maxTokens }
             : {}),
         },
       ],
@@ -746,6 +750,8 @@ export class OpenClawConfigSync {
       codingPlanEnabled: apiResolution.providerMetadata?.codingPlanEnabled,
       supportsImage: apiResolution.providerMetadata?.supportsImage,
       modelName: apiResolution.providerMetadata?.modelName,
+      contextWindow: apiResolution.providerMetadata?.contextWindow,
+      maxTokens: apiResolution.providerMetadata?.maxTokens,
     });
 
     const allProvidersMap: Record<string, OpenClawProviderSelection['providerConfig']> = {};
@@ -761,6 +767,8 @@ export class OpenClawConfigSync {
           codingPlanEnabled: p.codingPlanEnabled,
           supportsImage: m.supportsImage,
           modelName: m.name,
+          contextWindow: m.contextWindow,
+          maxTokens: m.maxTokens,
         });
         if (!allProvidersMap[sel.providerId]) {
           allProvidersMap[sel.providerId] = { ...sel.providerConfig, models: [] };

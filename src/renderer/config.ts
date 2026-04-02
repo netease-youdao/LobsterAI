@@ -1,5 +1,13 @@
 import { ProviderRegistry } from '@shared/providers';
 
+export interface ProviderModelConfig {
+  id: string;
+  name: string;
+  supportsImage?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
 // 配置类型定义
 export interface AppConfig {
   // API 配置
@@ -11,11 +19,7 @@ export interface AppConfig {
   customProviderNextId?: number;
   // 模型配置
   model: {
-    availableModels: Array<{
-      id: string;
-      name: string;
-      supportsImage?: boolean;
-    }>;
+    availableModels: ProviderModelConfig[];
     defaultModel: string;
     defaultModelProvider?: string;
   };
@@ -27,22 +31,14 @@ export interface AppConfig {
       baseUrl: string;
       // API 协议格式：anthropic 为 Anthropic 兼容，openai 为 OpenAI 兼容
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     deepseek: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     moonshot: {
       enabled: boolean;
@@ -51,11 +47,7 @@ export interface AppConfig {
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Moonshot Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     zhipu: {
       enabled: boolean;
@@ -64,11 +56,7 @@ export interface AppConfig {
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 GLM Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     minimax: {
       enabled: boolean;
@@ -81,22 +69,14 @@ export interface AppConfig {
       oauthRefreshToken?: string;
       /** OAuth token expiry as Unix timestamp in milliseconds */
       oauthTokenExpiresAt?: number;
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     youdaozhiyun: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     qwen: {
       enabled: boolean;
@@ -105,44 +85,28 @@ export interface AppConfig {
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Qwen Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     openrouter: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     gemini: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     anthropic: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     volcengine: {
       enabled: boolean;
@@ -151,44 +115,28 @@ export interface AppConfig {
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Volcengine Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     xiaomi: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     stepfun: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     ollama: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
       apiFormat?: 'anthropic' | 'openai' | 'gemini';
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
     [key: string]: {
       enabled: boolean;
@@ -200,11 +148,7 @@ export interface AppConfig {
       oauthRefreshToken?: string;
       oauthTokenExpiresAt?: number;
       displayName?: string;
-      models?: Array<{
-        id: string;
-        name: string;
-        supportsImage?: boolean;
-      }>;
+      models?: ProviderModelConfig[];
     };
   };
   // 主题配置
@@ -243,7 +187,7 @@ const buildDefaultProviders = (): AppConfig['providers'] => {
     baseUrl: string;
     apiFormat?: 'anthropic' | 'openai' | 'gemini';
     codingPlanEnabled?: boolean;
-    models?: Array<{ id: string; name: string; supportsImage?: boolean }>;
+    models?: ProviderModelConfig[];
   }> = {};
 
   for (const id of ProviderRegistry.providerIds) {

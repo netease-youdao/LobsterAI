@@ -29,7 +29,15 @@ import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
-import { defaultConfig, type AppConfig, getVisibleProviders, isCustomProvider, getCustomProviderDefaultName,getProviderDisplayName } from '../config';
+import {
+  defaultConfig,
+  type AppConfig,
+  type ProviderModelConfig,
+  getVisibleProviders,
+  isCustomProvider,
+  getCustomProviderDefaultName,
+  getProviderDisplayName,
+} from '../config';
 import {
   OpenAIIcon,
   DeepSeekIcon,
@@ -91,7 +99,7 @@ const providerKeys = [
 type ProviderType = (typeof providerKeys)[number];
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
-type Model = NonNullable<ProviderConfig['models']>[number];
+type Model = ProviderModelConfig;
 type ProviderConnectionTestResult = {
   success: boolean;
   message: string;
@@ -362,6 +370,8 @@ const getDefaultProviders = (): ProvidersConfig => {
         models: providerConfig.models?.map(model => ({
           ...model,
           supportsImage: model.supportsImage ?? false,
+          ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+          ...(typeof model.maxTokens === 'number' ? { maxTokens: model.maxTokens } : {}),
         })),
       },
     ])
@@ -372,6 +382,18 @@ const getDefaultActiveProvider = (): ProviderType => {
   const providers = (defaultConfig.providers ?? {}) as ProvidersConfig;
   const firstEnabledProvider = providerKeys.find(providerKey => providers[providerKey]?.enabled);
   return firstEnabledProvider ?? providerKeys[0];
+};
+
+const parseOptionalPositiveInteger = (value: string): number | undefined | null => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed > 0 ? parsed : null;
 };
 
 /** Join workspace directory with a filename using platform-aware separator. */
@@ -519,6 +541,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [newModelName, setNewModelName] = useState('');
   const [newModelId, setNewModelId] = useState('');
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
+  const [newModelContextWindow, setNewModelContextWindow] = useState('');
+  const [newModelMaxTokens, setNewModelMaxTokens] = useState('');
   const [modelFormError, setModelFormError] = useState<string | null>(null);
 
   // About tab
@@ -871,6 +895,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               const models = providerConfig.models?.map(model => ({
                 ...model,
                 supportsImage: model.supportsImage ?? false,
+                ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+                ...(typeof model.maxTokens === 'number' ? { maxTokens: model.maxTokens } : {}),
               }));
               return [
                 providerKey,
@@ -1528,7 +1554,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       });
 
       // 更新 Redux store 中的可用模型列表
-      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
+      const allModels: Array<{
+        id: string;
+        name: string;
+        provider?: string;
+        providerKey?: string;
+        supportsImage?: boolean;
+        contextWindow?: number;
+        maxTokens?: number;
+      }> = [];
       Object.entries(normalizedProviders).forEach(([providerName, config]) => {
         if (config.enabled && config.models) {
           config.models.forEach(model => {
@@ -1538,6 +1572,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               provider: getProviderDisplayName(providerName, config),
               providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
+              contextWindow: model.contextWindow,
+              maxTokens: model.maxTokens,
             });
           });
         }
@@ -1616,16 +1652,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelContextWindow('');
+    setNewModelMaxTokens('');
     setModelFormError(null);
   };
 
-  const handleEditModel = (modelId: string, modelName: string, supportsImage?: boolean) => {
+  const handleEditModel = (
+    modelId: string,
+    modelName: string,
+    supportsImage?: boolean,
+    contextWindow?: number,
+    maxTokens?: number,
+  ) => {
     setIsAddingModel(false);
     setIsEditingModel(true);
     setEditingModelId(modelId);
     setNewModelName(modelName);
     setNewModelId(modelId);
     setNewModelSupportsImage(!!supportsImage);
+    setNewModelContextWindow(typeof contextWindow === 'number' ? String(contextWindow) : '');
+    setNewModelMaxTokens(typeof maxTokens === 'number' ? String(maxTokens) : '');
     setModelFormError(null);
   };
 
@@ -1676,10 +1722,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       return;
     }
 
+    const contextWindow = parseOptionalPositiveInteger(newModelContextWindow);
+    if (contextWindow === null) {
+      setModelFormError(i18nService.t('modelContextWindowInvalid'));
+      return;
+    }
+
+    const maxTokens = parseOptionalPositiveInteger(newModelMaxTokens);
+    if (maxTokens === null) {
+      setModelFormError(i18nService.t('modelMaxTokensInvalid'));
+      return;
+    }
+
     const nextModel = {
       id: modelId,
       name: modelName,
       supportsImage: newModelSupportsImage,
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
     };
     const updatedModels = isEditingModel && editingModelId
       ? currentModels.map(model => (model.id === editingModelId ? nextModel : model))
@@ -1699,6 +1759,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelContextWindow('');
+    setNewModelMaxTokens('');
     setModelFormError(null);
   };
 
@@ -1709,6 +1771,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     setNewModelName('');
     setNewModelId('');
     setNewModelSupportsImage(false);
+    setNewModelContextWindow('');
+    setNewModelMaxTokens('');
     setModelFormError(null);
   };
 
@@ -1891,6 +1955,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     models?.map(model => ({
       ...model,
       supportsImage: model.supportsImage ?? false,
+      ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model.maxTokens === 'number' ? { maxTokens: model.maxTokens } : {}),
     }));
 
   const DEFAULT_EXPORT_PASSWORD = EXPORT_PASSWORD;
@@ -3338,9 +3404,25 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                               {i18nService.t('imageInput')}
                             </span>
                           )}
+                          {typeof model.contextWindow === 'number' && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-surface-inset text-secondary">
+                              {`${i18nService.t('modelContextWindowBadge')} ${model.contextWindow}`}
+                            </span>
+                          )}
+                          {typeof model.maxTokens === 'number' && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-surface-inset text-secondary">
+                              {`${i18nService.t('modelMaxTokensBadge')} ${model.maxTokens}`}
+                            </span>
+                          )}
                           <button
                             type="button"
-                            onClick={() => handleEditModel(model.id, model.name, model.supportsImage)}
+                            onClick={() => handleEditModel(
+                              model.id,
+                              model.name,
+                              model.supportsImage,
+                              model.contextWindow,
+                              model.maxTokens,
+                            )}
                             className="p-0.5 text-secondary hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
                           >
                             <PencilIcon className="h-3.5 w-3.5" />
@@ -3928,6 +4010,50 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     >
                       {i18nService.t('supportsImageInput')}
                     </label>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-secondary mb-1">
+                      {i18nService.t('modelContextWindow')}
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={newModelContextWindow}
+                      onChange={(e) => {
+                        setNewModelContextWindow(e.target.value);
+                        if (modelFormError) {
+                          setModelFormError(null);
+                        }
+                      }}
+                      className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
+                      placeholder="65536"
+                    />
+                    <p className="mt-1 text-[11px] text-muted">
+                      {i18nService.t('modelContextWindowHint')}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-secondary mb-1">
+                      {i18nService.t('modelMaxTokens')}
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={newModelMaxTokens}
+                      onChange={(e) => {
+                        setNewModelMaxTokens(e.target.value);
+                        if (modelFormError) {
+                          setModelFormError(null);
+                        }
+                      }}
+                      className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
+                      placeholder="8192"
+                    />
+                    <p className="mt-1 text-[11px] text-muted">
+                      {i18nService.t('modelMaxTokensHint')}
+                    </p>
                   </div>
                 </div>
 

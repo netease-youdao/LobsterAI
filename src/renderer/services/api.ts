@@ -91,6 +91,13 @@ class ApiService {
     return provider === 'openai';
   }
 
+  private resolveModelMaxTokens(configuredMaxTokens: number | undefined, fallback: number): number {
+    if (typeof configuredMaxTokens === 'number' && Number.isFinite(configuredMaxTokens) && configuredMaxTokens > 0) {
+      return Math.floor(configuredMaxTokens);
+    }
+    return fallback;
+  }
+
   private buildImageHint(images?: ImageAttachment[]): string {
     if (!images?.length) return '';
     return `[images: ${images.length}]`;
@@ -349,14 +356,39 @@ class ApiService {
     console.log(`[api-chat] provider=${provider}, model=${selectedModel.id}, apiFormat=${normalizedApiFormat}, baseUrl=${effectiveConfig.baseUrl}`);
 
     if (normalizedApiFormat === 'gemini') {
-      return this.chatWithGemini(userMessage, onProgress, history, selectedModel.id, effectiveConfig, supportsImages);
+      return this.chatWithGemini(
+        userMessage,
+        onProgress,
+        history,
+        selectedModel.id,
+        effectiveConfig,
+        supportsImages,
+        selectedModel.maxTokens,
+      );
     }
 
     if (normalizedApiFormat === 'anthropic') {
-      return this.chatWithAnthropic(userMessage, onProgress, history, selectedModel.id, effectiveConfig, supportsImages);
+      return this.chatWithAnthropic(
+        userMessage,
+        onProgress,
+        history,
+        selectedModel.id,
+        effectiveConfig,
+        supportsImages,
+        selectedModel.maxTokens,
+      );
     }
 
-    return this.chatWithOpenAICompatible(userMessage, onProgress, history, selectedModel.id, effectiveConfig, supportsImages, provider);
+    return this.chatWithOpenAICompatible(
+      userMessage,
+      onProgress,
+      history,
+      selectedModel.id,
+      effectiveConfig,
+      supportsImages,
+      provider,
+      selectedModel.maxTokens,
+    );
   }
 
   // Anthropic API 调用
@@ -366,7 +398,8 @@ class ApiService {
     history: ChatMessagePayload[] = [],
     modelId: string = 'claude-3-5-sonnet-20241022',
     config: ApiConfig = this.config!,
-    supportsImages: boolean = false
+    supportsImages: boolean = false,
+    configuredMaxTokens?: number,
   ): Promise<{ content: string; reasoning?: string }> {
     let fullContent = '';
     let fullReasoning = '';
@@ -395,7 +428,7 @@ class ApiService {
 
       const requestBody: any = {
         model: modelId,
-        max_tokens: 8192,
+        max_tokens: this.resolveModelMaxTokens(configuredMaxTokens, 8192),
         messages: messages,
         stream: true,
       };
@@ -417,12 +450,12 @@ class ApiService {
                               modelId.includes('claude-opus-4');
 
       if (isThinkingModel) {
+        const finalMaxTokens = this.resolveModelMaxTokens(configuredMaxTokens, 16000);
         requestBody.thinking = {
           type: 'enabled',
-          budget_tokens: 10000
+          budget_tokens: Math.min(10000, finalMaxTokens)
         };
-        // Thinking 模型需要更大的 max_tokens
-        requestBody.max_tokens = 16000;
+        requestBody.max_tokens = finalMaxTokens;
       }
 
       return new Promise((resolve, reject) => {
@@ -531,7 +564,8 @@ class ApiService {
     history: ChatMessagePayload[] = [],
     modelId: string = 'gemini-3-pro-preview',
     config: ApiConfig = this.config!,
-    supportsImages: boolean = false
+    supportsImages: boolean = false,
+    configuredMaxTokens?: number,
   ): Promise<{ content: string; reasoning?: string }> {
     let fullContent = '';
     let fullReasoning = '';
@@ -588,7 +622,9 @@ class ApiService {
         }
       }
 
-      requestBody.generationConfig = { maxOutputTokens: 8192 };
+      requestBody.generationConfig = {
+        maxOutputTokens: this.resolveModelMaxTokens(configuredMaxTokens, 8192),
+      };
 
       const baseUrl = config.baseUrl.trim().replace(/\/+$/, '') || 'https://generativelanguage.googleapis.com/v1beta';
       const requestUrl = `${baseUrl}/models/${modelId}:streamGenerateContent?alt=sse`;
@@ -696,7 +732,8 @@ class ApiService {
     modelId: string = 'gpt-4',
     config: ApiConfig = this.config!,
     supportsImages: boolean = false,
-    provider: string = 'openai'
+    provider: string = 'openai',
+    configuredMaxTokens?: number,
   ): Promise<{ content: string; reasoning?: string }> {
     let fullContent = '';
     let fullReasoning = '';
@@ -864,11 +901,13 @@ class ApiService {
               model: modelId,
               input: responseInputMessages,
               stream: true,
+              max_output_tokens: this.resolveModelMaxTokens(configuredMaxTokens, 8192),
             }
           : {
               model: modelId,
               messages: messages,
               stream: true,
+              max_tokens: this.resolveModelMaxTokens(configuredMaxTokens, 8192),
             };
         if (useResponsesApi && systemInstructions) {
           requestBody.instructions = systemInstructions;

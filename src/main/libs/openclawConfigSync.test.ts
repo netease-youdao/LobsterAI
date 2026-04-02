@@ -247,6 +247,49 @@ const resolveDescriptor = (
   };
 };
 
+const buildProviderSelection = (options: {
+  baseURL: string;
+  modelId: string;
+  apiType: 'anthropic' | 'openai' | undefined;
+  providerName?: string;
+  codingPlanEnabled?: boolean;
+  supportsImage?: boolean;
+  modelName?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}) => {
+  const providerName = options.providerName ?? '';
+  const descriptor = resolveDescriptor(providerName, !!options.codingPlanEnabled);
+  const api = descriptor.resolveApi({
+    apiType: options.apiType,
+    baseURL: options.baseURL,
+  });
+  const sessionModelId = descriptor.resolveSessionModelId
+    ? descriptor.resolveSessionModelId(options.modelId)
+    : options.modelId;
+  const contextWindow = options.contextWindow ?? descriptor.modelDefaults?.contextWindow;
+  const maxTokens = options.maxTokens ?? descriptor.modelDefaults?.maxTokens;
+
+  return {
+    providerId: descriptor.providerId,
+    primaryModel: `${descriptor.providerId}/${sessionModelId}`,
+    providerConfig: {
+      baseUrl: descriptor.normalizeBaseUrl(options.baseURL),
+      api,
+      models: [
+        {
+          id: sessionModelId,
+          name: options.modelName ?? sessionModelId,
+          api,
+          input: options.supportsImage ? ['text', 'image'] : ['text'],
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+        },
+      ],
+    },
+  };
+};
+
 describe('resolveDescriptor', () => {
   test('gemini maps to google providerId with google-generative-ai API', () => {
     const d = resolveDescriptor(ProviderName.Gemini, false);
@@ -327,6 +370,34 @@ describe('resolveDescriptor', () => {
   test('volcengine without codingPlan uses volcengine providerId', () => {
     const d = resolveDescriptor(ProviderName.Volcengine, false);
     expect(d.providerId).toBe(OpenClawProviderId.Volcengine);
+  });
+});
+
+describe('buildProviderSelection', () => {
+  test('prefers model-specific limits over descriptor defaults', () => {
+    const selection = buildProviderSelection({
+      baseURL: 'https://api.moonshot.cn/v1',
+      modelId: 'moonshot-v1',
+      apiType: 'openai',
+      providerName: ProviderName.Moonshot,
+      contextWindow: 131072,
+      maxTokens: 4096,
+    });
+
+    expect(selection.providerConfig.models[0]?.contextWindow).toBe(131072);
+    expect(selection.providerConfig.models[0]?.maxTokens).toBe(4096);
+  });
+
+  test('falls back to descriptor defaults when model-specific limits are absent', () => {
+    const selection = buildProviderSelection({
+      baseURL: 'https://api.moonshot.cn/v1',
+      modelId: 'moonshot-v1',
+      apiType: 'openai',
+      providerName: ProviderName.Moonshot,
+    });
+
+    expect(selection.providerConfig.models[0]?.contextWindow).toBe(256000);
+    expect(selection.providerConfig.models[0]?.maxTokens).toBe(8192);
   });
 });
 

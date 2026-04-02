@@ -1,4 +1,4 @@
-import { AppConfig, CONFIG_KEYS, defaultConfig, isCustomProvider } from '../config';
+import { AppConfig, CONFIG_KEYS, defaultConfig, isCustomProvider, type ProviderModelConfig } from '../config';
 import { localStore } from './store';
 
 const getFixedProviderApiFormat = (providerKey: string): 'anthropic' | 'openai' | 'gemini' | null => {
@@ -56,7 +56,40 @@ const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'a
   return 'anthropic';
 };
 
-const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig['providers'] => {
+export const normalizePositiveInteger = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : undefined;
+};
+
+export const normalizeProviderModels = (models?: ProviderModelConfig[]): ProviderModelConfig[] | undefined => {
+  return models?.map((model) => {
+    const normalizedModel: ProviderModelConfig = {
+      ...model,
+      supportsImage: model.supportsImage ?? false,
+    };
+
+    const contextWindow = normalizePositiveInteger(model.contextWindow);
+    if (contextWindow !== undefined) {
+      normalizedModel.contextWindow = contextWindow;
+    } else {
+      delete normalizedModel.contextWindow;
+    }
+
+    const maxTokens = normalizePositiveInteger(model.maxTokens);
+    if (maxTokens !== undefined) {
+      normalizedModel.maxTokens = maxTokens;
+    } else {
+      delete normalizedModel.maxTokens;
+    }
+
+    return normalizedModel;
+  });
+};
+
+export const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig['providers'] => {
   if (!providers) {
     return providers;
   }
@@ -68,6 +101,7 @@ const normalizeProvidersConfig = (providers: AppConfig['providers']): AppConfig[
         ...providerConfig,
         baseUrl: normalizeProviderBaseUrl(providerKey, providerConfig.baseUrl),
         apiFormat: normalizeProviderApiFormat(providerKey, providerConfig.apiFormat),
+        models: normalizeProviderModels(providerConfig.models),
       },
     ])
   ) as AppConfig['providers'];
@@ -168,6 +202,7 @@ class ConfigService {
                     ...mergedProvider,
                     baseUrl: normalizeProviderBaseUrl(providerKey, mergedProvider.baseUrl),
                     apiFormat: normalizeProviderApiFormat(providerKey, mergedProvider.apiFormat),
+                    models: normalizeProviderModels(mergedProvider.models),
                   };
                 })(),
               ])
@@ -181,9 +216,11 @@ class ConfigService {
           migratedModel.defaultModel = defaultConfig.model.defaultModel;
         }
         if (migratedModel.availableModels) {
-          migratedModel.availableModels = migratedModel.availableModels.filter(
-            (m: { id: string }) => !allRemovedIds.includes(m.id)
-          );
+          migratedModel.availableModels = normalizeProviderModels(
+            migratedModel.availableModels.filter(
+              (m: { id: string }) => !allRemovedIds.includes(m.id)
+            )
+          ) ?? [];
         }
 
         this.config = migrateCustomProviders({
