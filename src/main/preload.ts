@@ -168,6 +168,15 @@ contextBridge.exposeInMainWorld('electron', {
       const result = await ipcRenderer.invoke('agents:addPreset', presetId);
       return result?.success ? result.agent : null;
     },
+    export: async (agentIds: string[]) => {
+      return await ipcRenderer.invoke('agents:export', { agentIds });
+    },
+    importFile: async () => {
+      return await ipcRenderer.invoke('agents:importFile');
+    },
+    importConfirm: async (resolutions: Array<{ id: string; action: string }>) => {
+      return await ipcRenderer.invoke('agents:importConfirm', { resolutions });
+    },
   },
   cowork: {
     // Session management

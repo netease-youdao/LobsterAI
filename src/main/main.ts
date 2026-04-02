@@ -2812,6 +2812,99 @@ if (!gotTheLock) {
     }
   });
 
+  // --- Agent Import/Export ---
+
+  // Holds pending conflict agents between importFile and importConfirm calls
+  let pendingImportAgents: Map<string, import('./agentConstants').ExportedAgent> = new Map();
+
+  ipcMain.handle('agents:export', async (_event, opts: { agentIds: string[] }) => {
+    try {
+      const manager = getAgentManager();
+      const envelope = manager.exportAgents(opts.agentIds);
+
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+      const defaultPath = `agents-export-${dateStr}.json`;
+
+      const win = BrowserWindow.getFocusedWindow();
+      const result = await dialog.showSaveDialog(win!, {
+        defaultPath,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { success: false, error: 'cancelled' };
+      }
+
+      await fs.promises.writeFile(result.filePath, JSON.stringify(envelope, null, 2), 'utf-8');
+      return { success: true, filePath: result.filePath };
+    } catch (error) {
+      console.error('[AgentImportExport] export failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to export agents' };
+    }
+  });
+
+  ipcMain.handle('agents:importFile', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow();
+      const result = await dialog.showOpenDialog(win!, {
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+        properties: ['openFile'],
+      });
+
+      if (result.canceled || !result.filePaths.length) {
+        return { success: false, error: 'cancelled' };
+      }
+
+      const content = await fs.promises.readFile(result.filePaths[0], 'utf-8');
+      const manager = getAgentManager();
+
+      const validation = manager.validateImportFile(content);
+      if (!validation.valid) {
+        return { success: false, error: (validation as { valid: false; error: string }).error };
+      }
+
+      const { toImport, conflicts } = manager.detectConflicts((validation as { valid: true; envelope: import('./agentConstants').AgentExportEnvelope }).envelope);
+
+      // Auto-import non-conflicting agents
+      const imported = manager.importAgents(toImport);
+
+      // Store conflicting agents for the confirm step
+      pendingImportAgents = new Map();
+      for (const agent of validation.envelope.agents) {
+        if (conflicts.some(c => c.id === agent.id)) {
+          pendingImportAgents.set(agent.id, agent);
+        }
+      }
+
+      syncOpenClawConfig({ reason: 'agents-imported' }).catch(() => {});
+
+      return {
+        success: true,
+        imported: imported.map(a => ({ id: a.id, name: a.name })),
+        conflicts,
+      };
+    } catch (error) {
+      console.error('[AgentImportExport] import failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to import agents' };
+    }
+  });
+
+  ipcMain.handle('agents:importConfirm', async (_event, opts: { resolutions: import('./agentConstants').ImportResolution[] }) => {
+    try {
+      const manager = getAgentManager();
+      const { importedCount } = manager.resolveConflicts(opts.resolutions, pendingImportAgents);
+      pendingImportAgents = new Map();
+
+      syncOpenClawConfig({ reason: 'agents-import-confirmed' }).catch(() => {});
+
+      return { success: true, importedCount };
+    } catch (error) {
+      console.error('[AgentImportExport] import confirm failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to confirm import' };
+    }
+  });
+
   ipcMain.handle('cowork:session:exportResultImage', async (
     event,
     options: {

@@ -4,10 +4,12 @@ import { RootState } from '../../store';
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
-import { PlusIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, ArrowDownTrayIcon, ArrowUpTrayIcon, ArrowsUpDownIcon } from '@heroicons/react/24/outline';
 import type { PresetAgent } from '../../types/agent';
 import AgentCreateModal from './AgentCreateModal';
 import AgentSettingsPanel from './AgentSettingsPanel';
+import AgentImportConflictModal from './AgentImportConflictModal';
+import AgentExportSelectModal from './AgentExportSelectModal';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
@@ -34,6 +36,11 @@ const AgentsView: React.FC<AgentsViewProps> = ({
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
   const [addingPreset, setAddingPreset] = useState<string | null>(null);
+  const [importConflicts, setImportConflicts] = useState<Array<{
+    id: string; name: string; existingAgentName: string; incomingAgentName: string;
+  }> | null>(null);
+  const [isExportSelectOpen, setIsExportSelectOpen] = useState(false);
+  const [isImportExportMenuOpen, setIsImportExportMenuOpen] = useState(false);
 
   useEffect(() => {
     agentService.loadAgents();
@@ -65,6 +72,22 @@ const AgentsView: React.FC<AgentsViewProps> = ({
     onShowCowork?.();
   };
 
+  const handleExport = () => {
+    setIsImportExportMenuOpen(false);
+    const exportable = agents.filter((a) => a.id !== 'main');
+    if (exportable.length === 0) return;
+    setIsExportSelectOpen(true);
+  };
+
+  const handleImport = async () => {
+    setIsImportExportMenuOpen(false);
+    const result = await agentService.importAgents();
+    if (!result.success) return;
+    if (result.conflicts && result.conflicts.length > 0) {
+      setImportConflicts(result.conflicts);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col bg-background h-full">
       {/* Header */}
@@ -93,7 +116,43 @@ const AgentsView: React.FC<AgentsViewProps> = ({
             {i18nService.t('myAgents')}
           </h1>
         </div>
-        <WindowTitleBar inline />
+        <div className="non-draggable flex items-center gap-2">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsImportExportMenuOpen((v) => !v)}
+              className="h-8 px-3 inline-flex items-center gap-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised transition-colors"
+            >
+              <ArrowsUpDownIcon className="h-4 w-4" />
+              {i18nService.t('agentImportExport')}
+            </button>
+            {isImportExportMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setIsImportExportMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 z-50 w-40 py-1 rounded-lg border border-border bg-surface shadow-lg">
+                  <button
+                    type="button"
+                    onClick={handleImport}
+                    className="w-full px-4 py-2 text-left text-sm text-foreground hover:bg-surface-raised transition-colors flex items-center gap-2"
+                  >
+                    <ArrowUpTrayIcon className="h-4 w-4 text-secondary" />
+                    {i18nService.t('agentImport')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExport}
+                    disabled={agents.filter((a) => a.id !== 'main').length === 0}
+                    className="w-full px-4 py-2 text-left text-sm text-foreground hover:bg-surface-raised transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ArrowDownTrayIcon className="h-4 w-4 text-secondary" />
+                    {i18nService.t('agentExport')}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          <WindowTitleBar inline />
+        </div>
       </div>
 
       {/* Content */}
@@ -184,6 +243,28 @@ const AgentsView: React.FC<AgentsViewProps> = ({
           handleSwitchAgent(id);
         }}
       />
+      {isExportSelectOpen && (
+        <AgentExportSelectModal
+          agents={agents.map((a) => ({
+            id: a.id,
+            name: a.name,
+            icon: a.icon,
+            description: a.description,
+            source: a.source,
+          }))}
+          onClose={() => setIsExportSelectOpen(false)}
+        />
+      )}
+      {importConflicts && importConflicts.length > 0 && (
+        <AgentImportConflictModal
+          conflicts={importConflicts}
+          onClose={() => setImportConflicts(null)}
+          onResolved={() => {
+            setImportConflicts(null);
+            agentService.loadAgents();
+          }}
+        />
+      )}
     </div>
   );
 };

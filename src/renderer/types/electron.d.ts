@@ -277,6 +277,9 @@ interface IElectronAPI {
     delete: (id: string) => Promise<void>;
     presets: () => Promise<PresetAgent[]>;
     addPreset: (presetId: string) => Promise<Agent>;
+    export: (agentIds: string[]) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+    importFile: () => Promise<{ success: boolean; imported?: Array<{ id: string; name: string }>; conflicts?: Array<{ id: string; name: string; existingAgentName: string; incomingAgentName: string }>; error?: string }>;
+    importConfirm: (resolutions: Array<{ id: string; action: string }>) => Promise<{ success: boolean; importedCount?: number; error?: string }>;
   };
   api: {
     fetch: (options: {
