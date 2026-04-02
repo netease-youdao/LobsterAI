@@ -475,6 +475,27 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         continue;
       }
 
+      // Virtual file from Windows drag (e.g., .pptx/.docx): size is 0 and path is empty
+      // because Windows Explorer uses CFSTR_FILEDESCRIPTOR instead of CF_HDROP.
+      // FileReader cannot read content, so open native file picker as fallback.
+      if (file.size === 0 && file.name) {
+        const ext = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : undefined;
+        try {
+          const result = await window.electron.dialog.selectFiles({
+            title: file.name,
+            filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : undefined,
+          });
+          if (result.success && result.paths.length > 0) {
+            for (const filePath of result.paths) {
+              addAttachment(filePath);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to open file picker for virtual file:', error);
+        }
+        continue;
+      }
+
       const stagedPath = await saveInlineFile(file);
       if (stagedPath) {
         addAttachment(stagedPath);
@@ -534,7 +555,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const hasFileTransfer = (dataTransfer: DataTransfer | null): boolean => {
     if (!dataTransfer) return false;
     if (dataTransfer.files.length > 0) return true;
-    return Array.from(dataTransfer.types).includes('Files');
+    if (Array.from(dataTransfer.types).includes('Files')) return true;
+    // Fallback: check items for file-kind entries (handles Windows Office file drags
+    // where dataTransfer.types may not include 'Files' or files may be empty)
+    if (dataTransfer.items) {
+      for (let i = 0; i < dataTransfer.items.length; i++) {
+        if (dataTransfer.items[i].kind === 'file') return true;
+      }
+    }
+    return false;
   };
 
   const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
@@ -571,7 +600,34 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     dragDepthRef.current = 0;
     setIsDraggingFiles(false);
     if (disabled || isStreaming) return;
-    void handleIncomingFiles(event.dataTransfer.files);
+    // Collect files from both dataTransfer.files and dataTransfer.items.
+    // On Windows, Office shell extensions (Word/PowerPoint preview handlers)
+    // can interfere with dataTransfer.files for certain file types (.docx, .pptx),
+    // leaving files only accessible via dataTransfer.items.
+    const fileSet = new Map<string, File>();
+    // Source 1: dataTransfer.files (standard path)
+    for (let i = 0; i < event.dataTransfer.files.length; i++) {
+      const file = event.dataTransfer.files[i];
+      const key = `${file.name}-${file.size}-${file.lastModified}`;
+      fileSet.set(key, file);
+    }
+    // Source 2: dataTransfer.items (fallback for Office files on Windows)
+    if (event.dataTransfer.items) {
+      for (let i = 0; i < event.dataTransfer.items.length; i++) {
+        const item = event.dataTransfer.items[i];
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) {
+            const key = `${file.name}-${file.size}-${file.lastModified}`;
+            if (!fileSet.has(key)) {
+              fileSet.set(key, file);
+            }
+          }
+        }
+      }
+    }
+    const filesToProcess = Array.from(fileSet.values());
+    void handleIncomingFiles(filesToProcess);
   };
 
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
