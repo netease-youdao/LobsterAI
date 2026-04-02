@@ -394,6 +394,11 @@ contextBridge.exposeInMainWorld('electron', {
     listChannels: () => ipcRenderer.invoke(ScheduledTaskIpc.ListChannels),
     listChannelConversations: (channel: string) => ipcRenderer.invoke(ScheduledTaskIpc.ListChannelConversations, channel),
 
+    // Export / Import
+    exportTasks: (taskIds: string[]) => ipcRenderer.invoke(ScheduledTaskIpc.ExportTasks, taskIds),
+    importParse: () => ipcRenderer.invoke(ScheduledTaskIpc.ImportParse),
+    importExecute: (tasks: any[]) => ipcRenderer.invoke(ScheduledTaskIpc.ImportExecute, tasks),
+
     // Stream event listeners
     onStatusUpdate: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);

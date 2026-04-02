@@ -19,6 +19,8 @@ import type {
   ScheduledTaskInput,
   ScheduledTaskStatusEvent,
   ScheduledTaskRunEvent,
+  ExportedTask,
+  ImportResult,
 } from '../../scheduledTask/types';
 
 class ScheduledTaskService {
@@ -240,6 +242,30 @@ class ScheduledTaskService {
     } catch {
       return [];
     }
+  }
+
+  async exportTasks(taskIds: string[]): Promise<'success' | 'cancelled'> {
+    const api = window.electron?.scheduledTasks;
+    if (!api?.exportTasks) throw new Error('Export not available');
+    const result = await api.exportTasks(taskIds);
+    if (!result.success) throw new Error(result.error ?? 'Export failed');
+    return result.result ?? 'cancelled';
+  }
+
+  async importParse(): Promise<{ tasks: ExportedTask[]; filename: string } | null> {
+    const api = window.electron?.scheduledTasks;
+    if (!api?.importParse) throw new Error('Import not available');
+    const result = await api.importParse();
+    if (!result.success) throw new Error(result.error ?? 'Failed to parse import file');
+    return result.result ?? null;
+  }
+
+  async importExecute(tasks: ExportedTask[]): Promise<ImportResult> {
+    const api = window.electron?.scheduledTasks;
+    if (!api?.importExecute) throw new Error('Import execute not available');
+    const result = await api.importExecute(tasks);
+    if (!result.success) throw new Error(result.error ?? 'Import execution failed');
+    return result.result ?? { successCount: 0, failCount: 0, errors: [] };
   }
 }
 

@@ -16,6 +16,8 @@ interface ScheduledTaskState {
   allRuns: ScheduledTaskRunWithName[];
   loading: boolean;
   error: string | null;
+  selectionMode: boolean;
+  selectedTaskIds: string[];
 }
 
 const initialState: ScheduledTaskState = {
@@ -27,6 +29,8 @@ const initialState: ScheduledTaskState = {
   allRuns: [],
   loading: false,
   error: null,
+  selectionMode: false,
+  selectedTaskIds: [],
 };
 
 const scheduledTaskSlice = createSlice({
@@ -119,6 +123,29 @@ const scheduledTaskSlice = createSlice({
     appendAllRuns(state, action: PayloadAction<ScheduledTaskRunWithName[]>) {
       state.allRuns = [...state.allRuns, ...action.payload];
     },
+    enterSelectionMode(state) {
+      state.selectionMode = true;
+      state.selectedTaskIds = [];
+    },
+    exitSelectionMode(state) {
+      state.selectionMode = false;
+      state.selectedTaskIds = [];
+    },
+    toggleTaskSelection(state, action: PayloadAction<string>) {
+      const id = action.payload;
+      const idx = state.selectedTaskIds.indexOf(id);
+      if (idx === -1) {
+        state.selectedTaskIds.push(id);
+      } else {
+        state.selectedTaskIds.splice(idx, 1);
+      }
+    },
+    selectAllTasks(state) {
+      state.selectedTaskIds = state.tasks.map((t) => t.id);
+    },
+    deselectAllTasks(state) {
+      state.selectedTaskIds = [];
+    },
   },
 });
 
@@ -137,6 +164,11 @@ export const {
   addOrUpdateRun,
   setAllRuns,
   appendAllRuns,
+  enterSelectionMode,
+  exitSelectionMode,
+  toggleTaskSelection,
+  selectAllTasks,
+  deselectAllTasks,
 } = scheduledTaskSlice.actions;
 
 export default scheduledTaskSlice.reducer;

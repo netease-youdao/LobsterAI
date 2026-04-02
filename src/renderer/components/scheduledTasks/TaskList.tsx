@@ -2,7 +2,7 @@ import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { ClockIcon, EllipsisVerticalIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
-import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
+import { selectTask, setViewMode, toggleTaskSelection } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type { ScheduledTask } from '../../../scheduledTask/types';
@@ -11,9 +11,11 @@ import { formatScheduleLabel, getStatusLabelKey, getStatusTone } from './utils';
 interface TaskListItemProps {
   task: ScheduledTask;
   onRequestDelete: (taskId: string, taskName: string) => void;
+  selectionMode?: boolean;
+  isSelected?: boolean;
 }
 
-const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) => {
+const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete, selectionMode, isSelected }) => {
   const dispatch = useDispatch();
   const [showMenu, setShowMenu] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
@@ -32,6 +34,32 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
 
   const statusLabel = i18nService.t(getStatusLabelKey(task.state.lastStatus));
   const statusTone = getStatusTone(task.state.lastStatus);
+
+  if (selectionMode) {
+    return (
+      <div
+        className={`flex items-center gap-3 px-4 py-3 border-b border-border-subtle cursor-pointer transition-colors ${isSelected ? 'bg-primary/5' : 'hover:bg-surface-raised/50'}`}
+        onClick={() => dispatch(toggleTaskSelection(task.id))}
+      >
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={() => dispatch(toggleTaskSelection(task.id))}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 rounded accent-primary cursor-pointer shrink-0"
+        />
+        <div className="flex-1 min-w-0">
+          <div className={`text-sm truncate ${task.enabled ? 'text-foreground' : 'text-secondary'}`}>
+            {task.name}
+          </div>
+          <div className="text-xs text-secondary truncate">
+            {formatScheduleLabel(task.schedule)}
+          </div>
+        </div>
+        <span className={`text-xs font-medium ${statusTone} shrink-0`}>{statusLabel}</span>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -137,6 +165,8 @@ interface TaskListProps {
 const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const loading = useSelector((state: RootState) => state.scheduledTask.loading);
+  const selectionMode = useSelector((state: RootState) => state.scheduledTask.selectionMode);
+  const selectedTaskIds = useSelector((state: RootState) => state.scheduledTask.selectedTaskIds);
 
   if (loading) {
     return (
@@ -179,7 +209,13 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
         </div>
       </div>
       {tasks.map((task) => (
-        <TaskListItem key={task.id} task={task} onRequestDelete={onRequestDelete} />
+        <TaskListItem
+          key={task.id}
+          task={task}
+          onRequestDelete={onRequestDelete}
+          selectionMode={selectionMode}
+          isSelected={selectedTaskIds.includes(task.id)}
+        />
       ))}
     </div>
   );

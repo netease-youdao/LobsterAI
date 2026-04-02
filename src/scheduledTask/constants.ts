@@ -118,6 +118,9 @@ export const IpcChannel = {
   StatusUpdate: 'scheduledTask:statusUpdate',
   RunUpdate: 'scheduledTask:runUpdate',
   Refresh: 'scheduledTask:refresh',
+  ExportTasks: 'scheduledTask:exportTasks',
+  ImportParse: 'scheduledTask:importParse',
+  ImportExecute: 'scheduledTask:importExecute',
 } as const;
 
 // ─── Migration Keys ─────────────────────────────────────────────────────────

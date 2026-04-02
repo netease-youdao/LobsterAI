@@ -467,6 +467,9 @@ interface IElectronAPI {
       conversations?: import('../../scheduledTask/types').ScheduledTaskConversationOption[];
       error?: string;
     }>;
+    exportTasks: (taskIds: string[]) => Promise<{ success: boolean; result?: 'success' | 'cancelled'; error?: string }>;
+    importParse: () => Promise<{ success: boolean; result?: { tasks: import('../../scheduledTask/types').ExportedTask[]; filename: string } | null; error?: string }>;
+    importExecute: (tasks: import('../../scheduledTask/types').ExportedTask[]) => Promise<{ success: boolean; result?: import('../../scheduledTask/types').ImportResult; error?: string }>;
     onStatusUpdate: (callback: (data: import('../../scheduledTask/types').ScheduledTaskStatusEvent) => void) => () => void;
     onRunUpdate: (callback: (data: import('../../scheduledTask/types').ScheduledTaskRunEvent) => void) => () => void;
     onRefresh: (callback: () => void) => () => void;
