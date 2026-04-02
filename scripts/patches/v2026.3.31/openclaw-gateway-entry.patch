@@ -1,0 +1,128 @@
+diff --git a/src/cli/gateway-cli/run.ts b/src/cli/gateway-cli/run.ts
+index 291328273..deb8d3469 100644
+--- a/src/cli/gateway-cli/run.ts
++++ b/src/cli/gateway-cli/run.ts
+@@ -32,7 +32,7 @@ import {
+   toOptionString,
+ } from "./shared.js";
+ 
+-type GatewayRunOpts = {
++export type GatewayRunOpts = {
+   port?: unknown;
+   bind?: unknown;
+   token?: unknown;
+@@ -134,7 +134,7 @@ function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): Gate
+   return resolved;
+ }
+ 
+-async function runGatewayCommand(opts: GatewayRunOpts) {
++export async function runGatewayCommand(opts: GatewayRunOpts) {
+   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
+   const devMode = Boolean(opts.dev) || isDevProfile;
+   if (opts.reset && !devMode) {
+diff --git a/tsdown.config.ts b/tsdown.config.ts
+index b4c9d97b4..d4d6e7ca7 100644
+--- a/tsdown.config.ts
++++ b/tsdown.config.ts
+@@ -17,6 +17,12 @@ export default defineConfig([
+     fixedExtension: false,
+     platform: "node",
+   },
++  {
++    entry: "src/gateway-entry.ts",
++    env,
++    fixedExtension: false,
++    platform: "node",
++  },
+   {
+     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
+     entry: "src/cli/daemon-cli.ts",
+diff --git a/src/gateway-entry.ts b/src/gateway-entry.ts
+new file mode 100644
+index 000000000..66171bc20
+--- /dev/null
++++ b/src/gateway-entry.ts
+@@ -0,0 +1,83 @@
++/**
++ * Embedded gateway entry point — skips full CLI infrastructure.
++ *
++ * When loaded inside Electron's utilityProcess, the standard entry.ts path
++ * pulls in the entire Commander CLI module graph (~1100 files), which takes
++ * 80-100s to resolve in that environment.  This dedicated entry imports only
++ * the gateway-run codepath, cutting startup to ~15-20s.
++ */
++import process from "node:process";
++import { normalizeEnv } from "./infra/env.js";
++import { loadDotEnv } from "./infra/dotenv.js";
++import { assertSupportedRuntime } from "./infra/runtime-guard.js";
++import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
++import { formatUncaughtError } from "./infra/errors.js";
++import { enableConsoleCapture } from "./logging/console.js";
++import { isMainModule } from "./infra/is-main.js";
++import { fileURLToPath } from "node:url";
++
++const ENTRY_WRAPPER_PAIRS = [
++  { wrapperBasename: "openclaw.mjs", entryBasename: "gateway-entry.js" },
++  { wrapperBasename: "gateway-bundle.mjs", entryBasename: "gateway-entry.js" },
++] as const;
++
++if (
++  !isMainModule({
++    currentFile: fileURLToPath(import.meta.url),
++    wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
++  })
++) {
++  // Imported as a dependency — skip all entry-point side effects.
++} else {
++  process.title = "openclaw";
++  normalizeEnv();
++  loadDotEnv({ quiet: true });
++  assertSupportedRuntime();
++  enableConsoleCapture();
++  installUnhandledRejectionHandler();
++
++  process.on("uncaughtException", (error) => {
++    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
++    process.exit(1);
++  });
++
++  // Parse minimal gateway CLI args (skip Commander overhead).
++  const argv = process.argv.slice(2);
++  // Strip "gateway" and "run" subcommand tokens if present.
++  for (const token of ["gateway", "run"]) {
++    const idx = argv.indexOf(token);
++    if (idx !== -1) argv.splice(idx, 1);
++  }
++
++  function extractOpt(name: string): string | undefined {
++    const i = argv.indexOf(name);
++    if (i === -1 || i + 1 >= argv.length) return undefined;
++    return argv[i + 1];
++  }
++
++  const opts = {
++    bind: extractOpt("--bind"),
++    port: extractOpt("--port"),
++    token: extractOpt("--token"),
++    auth: extractOpt("--auth"),
++    password: extractOpt("--password"),
++    verbose: argv.includes("--verbose"),
++    allowUnconfigured: argv.includes("--allow-unconfigured"),
++    force: argv.includes("--force"),
++    dev: argv.includes("--dev"),
++  };
++
++  // Use process.nextTick to defer past any ESM loader re-entrancy lock
++  // (relevant when this file is require()'d from a CJS launcher).
++  process.nextTick(() => {
++    import("./cli/gateway-cli/run.js")
++      .then(({ runGatewayCommand }) => runGatewayCommand(opts))
++      .catch((error) => {
++        console.error(
++          "[openclaw] Failed to start gateway:",
++          error instanceof Error ? (error.stack ?? error.message) : error,
++        );
++        process.exit(1);
++      });
++  });
++}

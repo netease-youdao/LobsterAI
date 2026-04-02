@@ -21,8 +21,8 @@ importers:
         specifier: ^2.1.1
         version: 2.2.0(react@18.3.1)
       '@larksuite/openclaw-lark':
-        specifier: ^2026.3.17
-        version: 2026.3.31(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+        specifier: ^2026.4.1
+        version: 2026.4.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       '@larksuite/openclaw-lark-tools':
         specifier: ~1.0.26
         version: 1.0.35(@types/node@24.12.0)
@@ -80,9 +80,6 @@ importers:
       mermaid:
         specifier: ^10.9.5
         version: 10.9.5
-      nim-web-sdk-ng:
-        specifier: 10.9.77-alpha.4
-        version: 10.9.77-alpha.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       npm:
         specifier: ^11.11.0
         version: 11.12.1
@@ -697,8 +694,8 @@ packages:
     resolution: {integrity: sha512-w/pEU3K6vHk4Sd97jnnVf0Jfy8h8D/7U29HuhWgltAbR8FvDbc8iFcfhw2FHPGq0Y4ozhaAUQsCm4Nl84MqmiQ==}
     hasBin: true
 
-  '@larksuite/openclaw-lark@2026.3.31':
-    resolution: {integrity: sha512-5rq4w5WX12UXFZg0NXU/H+atTG8QcV2yp/SoDBY75TYhIyLMclptm+2zG0Qv6svi69HOBfrlJ2BwhXccYlBs5w==}
+  '@larksuite/openclaw-lark@2026.4.1':
+    resolution: {integrity: sha512-IUZ5CajR7UTSVYYDyyU/P/I+DeWDcVnbM2WTLo747gED225uKQ4/jBu5hQt8oz3GUq3FqT+RDRYelE8fIqUPag==}
     engines: {node: '>=22'}
     hasBin: true
     peerDependencies:
@@ -3187,9 +3184,6 @@ packages:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
 
-  nim-web-sdk-ng@10.9.77-alpha.4:
-    resolution: {integrity: sha512-0BoL/e5hiB2/7wNirnfL9IuN4A0W8GtCBD3ottf0rUzxKE4ZZhQY4hAy/D3aUgqHaAeE6mSwQOtT2Q27W697Sw==}
-
   node-addon-api@1.7.2:
     resolution: {integrity: sha512-ibPK3iA+vaY1eEjESkQkM0BbCqFOaZMiXRTtdB0u7b4djtY6JnsjvPdUHVMg6xQt3B8fpTTWHI9A+ADjM9frzg==}
 
@@ -4800,7 +4794,7 @@ snapshots:
       - '@types/node'
       - debug
 
-  '@larksuite/openclaw-lark@2026.3.31(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+  '@larksuite/openclaw-lark@2026.4.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
     dependencies:
       '@larksuiteoapi/node-sdk': 1.60.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       '@sinclair/typebox': 0.34.48
@@ -7855,13 +7849,6 @@ snapshots:
   natural-compare@1.4.0: {}
 
   negotiator@1.0.0: {}
-
-  nim-web-sdk-ng@10.9.77-alpha.4(bufferutil@4.1.0)(utf-8-validate@6.0.6):
-    dependencies:
-      ws: 8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
 
   node-addon-api@1.7.2:
     optional: true

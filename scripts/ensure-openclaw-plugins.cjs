@@ -330,11 +330,11 @@ const weixinApiPath = path.join(runtimeExtensionsDir, 'openclaw-weixin', 'src', 
 if (fs.existsSync(weixinApiPath)) {
   let apiSrc = fs.readFileSync(weixinApiPath, 'utf8');
   const versionBefore = 'const CHANNEL_VERSION = readChannelVersion();';
-  const versionAfter = 'const CHANNEL_VERSION = "1.0.3";';
+  const versionAfter = 'const CHANNEL_VERSION = "2.1.1";';
   if (apiSrc.includes(versionBefore)) {
     apiSrc = apiSrc.replace(versionBefore, versionAfter);
     fs.writeFileSync(weixinApiPath, apiSrc);
-    log('Patched openclaw-weixin/src/api/api.ts: replaced readChannelVersion() with hardcoded "1.0.3"');
+    log('Patched openclaw-weixin/src/api/api.ts: replaced readChannelVersion() with hardcoded "2.1.1"');
   } else if (apiSrc.includes(versionAfter)) {
     log('openclaw-weixin/src/api/api.ts already has hardcoded CHANNEL_VERSION, skipping patch');
   } else {
