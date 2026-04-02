@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, store } from './store';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
-import Sidebar from './components/Sidebar';
+import Sidebar, { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './components/Sidebar';
 import Toast from './components/Toast';
 import WindowTitleBar from './components/window/WindowTitleBar';
 import { CoworkView } from './components/cowork';
@@ -41,6 +41,7 @@ const App: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [updateModalState, setUpdateModalState] = useState<'info' | 'downloading' | 'installing' | 'error'>('info');
@@ -260,6 +261,11 @@ const App: React.FC = () => {
 
   const handleToggleSidebar = useCallback(() => {
     setIsSidebarCollapsed((prev) => !prev);
+  }, []);
+
+  const handleSidebarWidthChange = useCallback((newWidth: number) => {
+    const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, newWidth));
+    setSidebarWidth(clamped);
   }, []);
 
   const handleNewChat = useCallback(() => {
@@ -660,6 +666,8 @@ const App: React.FC = () => {
           onToggleCollapse={handleToggleSidebar}
           updateBadge={!isSidebarCollapsed ? updateBadge : null}
           hideLogin={enterpriseConfig?.ui?.login === 'hide'}
+          width={sidebarWidth}
+          onWidthChange={handleSidebarWidthChange}
         />
         <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
           <div className="relative h-full min-h-0 rounded-xl bg-background overflow-hidden">

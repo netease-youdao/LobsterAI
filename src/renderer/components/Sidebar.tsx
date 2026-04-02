@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../store';
 import { agentService } from '../services/agent';
@@ -17,6 +17,10 @@ import TrashIcon from './icons/TrashIcon';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import UserGroupIcon from './icons/UserGroupIcon';
 
+export const SIDEBAR_MIN_WIDTH = 180;
+export const SIDEBAR_MAX_WIDTH = 480;
+export const SIDEBAR_DEFAULT_WIDTH = 240;
+
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
@@ -31,6 +35,8 @@ interface SidebarProps {
   onToggleCollapse: () => void;
   updateBadge?: React.ReactNode;
   hideLogin?: boolean;
+  width?: number;
+  onWidthChange?: (width: number) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -46,6 +52,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
   updateBadge,
   hideLogin,
+  width = SIDEBAR_DEFAULT_WIDTH,
+  onWidthChange,
 }) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const sessions = useSelector((state: RootState) => state.cowork.sessions);
@@ -56,6 +64,42 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
   const isMac = window.electron.platform === 'darwin';
+
+  // Drag-to-resize state
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(width);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    if (isCollapsed) return;
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = width;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = moveEvent.clientX - dragStartX.current;
+      const newWidth = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, dragStartWidth.current + delta)
+      );
+      onWidthChange?.(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      isDragging.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [isCollapsed, width, onWidthChange]);
 
   useEffect(() => {
     const handleSearch = () => {
@@ -139,10 +183,19 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`shrink-0 bg-surface-raised flex flex-col sidebar-transition overflow-hidden ${
-        isCollapsed ? 'w-0' : 'w-60'
+      className={`relative shrink-0 bg-surface-raised flex flex-col sidebar-transition ${
+        isCollapsed ? 'w-0 overflow-hidden' : 'overflow-hidden'
       }`}
+      style={isCollapsed ? undefined : { width: `${width}px` }}
     >
+      {/* Drag handle */}
+      {!isCollapsed && onWidthChange && (
+        <div
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-primary/30 active:bg-primary/50 transition-colors"
+          onMouseDown={handleDragStart}
+          title={i18nService.t('sidebarResizeHint')}
+        />
+      )}
       <div className="pt-3 pb-3">
         <div className="draggable sidebar-header-drag h-8 flex items-center justify-between px-3">
           <div className={`${isMac ? 'pl-[68px]' : ''}`}>
