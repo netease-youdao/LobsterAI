@@ -20,10 +20,21 @@ import type {
   ScheduledTaskStatusEvent,
   ScheduledTaskRunEvent,
 } from '../../scheduledTask/types';
+import type { ScheduledTaskErrorCode } from '../../scheduledTask/constants';
 
 class ScheduledTaskService {
   private cleanupFns: (() => void)[] = [];
   private initialized = false;
+
+  private createError(message: string, errorCode?: ScheduledTaskErrorCode): Error & {
+    errorCode?: ScheduledTaskErrorCode;
+  } {
+    const error = new Error(message) as Error & {
+      errorCode?: ScheduledTaskErrorCode;
+    };
+    error.errorCode = errorCode;
+    return error;
+  }
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -95,7 +106,7 @@ class ScheduledTaskService {
       if (result.success && result.task) {
         store.dispatch(addTask(result.task));
       } else {
-        throw new Error(result.error || 'Failed to create task');
+        throw this.createError(result.error || 'Failed to create task', result.errorCode);
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
@@ -117,7 +128,7 @@ class ScheduledTaskService {
       } else if (!result.success) {
         const errorMsg = result.error || 'Failed to update task';
         store.dispatch(setError(errorMsg));
-        throw new Error(errorMsg);
+        throw this.createError(errorMsg, result.errorCode);
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));

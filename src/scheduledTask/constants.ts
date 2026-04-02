@@ -80,6 +80,13 @@ export const TaskStatus = {
 } as const;
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 
+// ─── Scheduled Task Error Codes ────────────────────────────────────────────
+export const ScheduledTaskErrorCode = {
+  DuplicateName: 'duplicate_name',
+} as const;
+export type ScheduledTaskErrorCode =
+  typeof ScheduledTaskErrorCode[keyof typeof ScheduledTaskErrorCode];
+
 // ─── Gateway Status (OpenClaw wire format) ────────────────────────────────���─
 export const GatewayStatus = {
   Ok: 'ok',

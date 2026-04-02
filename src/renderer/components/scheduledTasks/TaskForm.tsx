@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
+import { RootState } from '../../store';
 import type {
   ScheduledTask,
   ScheduledTaskChannelOption,
   ScheduledTaskConversationOption,
   ScheduledTaskInput,
 } from '../../../scheduledTask/types';
+import { ScheduledTaskErrorCode } from '../../../scheduledTask/constants';
+import { hasDuplicateScheduledTaskName } from '../../../scheduledTask/nameValidation';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
 import { PlatformRegistry } from '@shared/platform';
 
@@ -115,6 +119,7 @@ const WEEKDAY_KEYS = [
 ] as const;
 
 const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
+  const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const [form, setForm] = useState<FormState>(() => createFormState(task));
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
@@ -131,9 +136,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
   const isAdvanced = form.planType === 'advanced';
   const showConversationSelector = isIMChannel(form.notifyChannel);
+  const currentTaskId = task?.id;
 
   useEffect(() => {
     setForm(createFormState(task));
+    setErrors({});
   }, [task]);
 
   useEffect(() => {
@@ -182,11 +189,36 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     setForm((current) => ({ ...current, ...patch }));
   };
 
+  const getNameError = (name: string): string | null => {
+    if (!name.trim()) {
+      return i18nService.t('scheduledTasksFormValidationNameRequired');
+    }
+    if (hasDuplicateScheduledTaskName(tasks, name, currentTaskId)) {
+      return i18nService.t('scheduledTasksFormValidationNameDuplicate');
+    }
+    return null;
+  };
+
+  const syncNameError = (name: string) => {
+    setErrors((current) => {
+      const nextNameError = getNameError(name);
+      if (nextNameError) {
+        return { ...current, name: nextNameError };
+      }
+      if (!current.name) {
+        return current;
+      }
+      const { name: _name, ...rest } = current;
+      return rest;
+    });
+  };
+
   const validate = (): boolean => {
     const nextErrors: Record<string, string> = {};
 
-    if (!form.name.trim()) {
-      nextErrors.name = i18nService.t('scheduledTasksFormValidationNameRequired');
+    const nameError = getNameError(form.name);
+    if (nameError) {
+      nextErrors.name = nameError;
     }
     if (!form.payloadText.trim()) {
       nextErrors.payloadText = i18nService.t('scheduledTasksFormValidationPromptRequired');
@@ -242,8 +274,15 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         await scheduledTaskService.updateTaskById(task.id, input);
       }
       onSaved();
-    } catch {
-      // Service handles error state.
+    } catch (error) {
+      if ((error as Error & { errorCode?: string }).errorCode === ScheduledTaskErrorCode.DuplicateName) {
+        setErrors((current) => ({
+          ...current,
+          name: i18nService.t('scheduledTasksFormValidationNameDuplicate'),
+        }));
+        return;
+      }
+      // Service handles non-field error state.
     } finally {
       setSubmitting(false);
     }
@@ -455,7 +494,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         <input
           type="text"
           value={form.name}
-          onChange={(event) => updateForm({ name: event.target.value })}
+          onChange={(event) => {
+            const nextName = event.target.value;
+            updateForm({ name: nextName });
+            syncNameError(nextName);
+          }}
           className={inputClass}
           placeholder={i18nService.t('scheduledTasksFormNamePlaceholder')}
         />

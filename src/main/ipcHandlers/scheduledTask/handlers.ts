@@ -4,7 +4,9 @@ import {
   DeliveryMode as STDeliveryMode,
   SessionTarget as STSessionTarget,
   PayloadKind as STPayloadKind,
+  ScheduledTaskErrorCode,
 } from '../../../scheduledTask/constants';
+import { hasDuplicateScheduledTaskName } from '../../../scheduledTask/nameValidation';
 import { PlatformRegistry } from '../../../shared/platform';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
 import { listScheduledTaskChannels } from './helpers';
@@ -33,6 +35,14 @@ export interface ScheduledTaskHandlerDeps {
     getGatewayClient: () => unknown;
     fetchSessionByKey: (sessionKey: string) => Promise<unknown>;
   } | null;
+}
+
+function duplicateNameResult() {
+  return {
+    success: false as const,
+    error: 'Scheduled task name already exists',
+    errorCode: ScheduledTaskErrorCode.DuplicateName,
+  };
 }
 
 export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): void {
@@ -67,6 +77,13 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       console.log('[IPC][scheduledTask:create] normalizedInput:', JSON.stringify(normalizedInput, null, 2));
       console.log('[IPC][scheduledTask:create] delivery:', JSON.stringify(normalizedInput.delivery, null, 2));
+
+      if (
+        typeof normalizedInput.name === 'string'
+        && hasDuplicateScheduledTaskName(await getCronJobService().listJobs(), normalizedInput.name)
+      ) {
+        return duplicateNameResult();
+      }
 
       // When an IM conversation is selected as notification target, let OpenClaw
       // handle delivery natively via its announce mechanism. We keep
@@ -125,6 +142,13 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       console.log('[IPC][scheduledTask:update] id:', id, 'normalizedInput:', JSON.stringify(normalizedInput, null, 2));
       console.log('[IPC][scheduledTask:update] delivery:', JSON.stringify(normalizedInput.delivery, null, 2));
+
+      if (
+        typeof normalizedInput.name === 'string'
+        && hasDuplicateScheduledTaskName(await getCronJobService().listJobs(), normalizedInput.name, id)
+      ) {
+        return duplicateNameResult();
+      }
 
       // Same OpenClaw native announce delivery logic as create handler.
       const delivery = normalizedInput.delivery;

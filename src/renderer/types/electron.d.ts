@@ -443,8 +443,18 @@ interface IElectronAPI {
   scheduledTasks: {
     list: () => Promise<{ success: boolean; tasks?: import('../../scheduledTask/types').ScheduledTask[]; error?: string }>;
     get: (id: string) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; error?: string }>;
-    create: (input: import('../../scheduledTask/types').ScheduledTaskInput) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; error?: string }>;
-    update: (id: string, input: Partial<import('../../scheduledTask/types').ScheduledTaskInput>) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; error?: string }>;
+    create: (input: import('../../scheduledTask/types').ScheduledTaskInput) => Promise<{
+      success: boolean;
+      task?: import('../../scheduledTask/types').ScheduledTask;
+      error?: string;
+      errorCode?: import('../../scheduledTask/constants').ScheduledTaskErrorCode;
+    }>;
+    update: (id: string, input: Partial<import('../../scheduledTask/types').ScheduledTaskInput>) => Promise<{
+      success: boolean;
+      task?: import('../../scheduledTask/types').ScheduledTask;
+      error?: string;
+      errorCode?: import('../../scheduledTask/constants').ScheduledTaskErrorCode;
+    }>;
     delete: (id: string) => Promise<{ success: boolean; error?: string }>;
     toggle: (id: string, enabled: boolean) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; warning?: string; error?: string }>;
     runManually: (id: string) => Promise<{ success: boolean; error?: string }>;
