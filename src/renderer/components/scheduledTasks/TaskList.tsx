@@ -8,6 +8,14 @@ import { i18nService } from '../../services/i18n';
 import type { ScheduledTask } from '../../../scheduledTask/types';
 import { formatScheduleLabel, formatNextRunRelative, getStatusLabelKey, getStatusTone } from './utils';
 
+function useAgentName(agentId: string | null | undefined): string | null {
+  return useSelector((state: RootState) => {
+    if (!agentId) return null;
+    const agent = state.agent.agents.find((a) => a.id === agentId);
+    return agent?.name ?? agentId;
+  });
+}
+
 interface TaskListItemProps {
   task: ScheduledTask;
   onRequestDelete: (taskId: string, taskName: string) => void;
@@ -15,6 +23,7 @@ interface TaskListItemProps {
 
 const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) => {
   const dispatch = useDispatch();
+  const agentName = useAgentName(task.agentId);
   const [showMenu, setShowMenu] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
 
@@ -35,7 +44,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
 
   return (
     <div
-      className="grid grid-cols-[1.2fr_1fr_110px_40px] items-center gap-3 px-4 py-3 border-b border-border-subtle hover:bg-surface-raised/50 cursor-pointer transition-colors"
+      className="grid grid-cols-[1.2fr_1fr_1fr_110px_40px] items-center gap-3 px-4 py-3 border-b border-border-subtle hover:bg-surface-raised/50 cursor-pointer transition-colors"
       onClick={() => dispatch(selectTask(task.id))}
     >
       <div className="min-w-0">
@@ -58,6 +67,12 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
             {formatNextRunRelative(task.state.nextRunAtMs)}
           </div>
         )}
+      </div>
+
+      <div className="min-w-0">
+        <div className="text-sm truncate text-secondary">
+          {agentName ?? i18nService.t('scheduledTasksFormAgentDefault' as Parameters<typeof i18nService.t>[0])}
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-2">
@@ -171,12 +186,15 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
 
   return (
     <div>
-      <div className="grid grid-cols-[1.2fr_1fr_110px_40px] items-center gap-3 px-4 py-2 border-b border-border-subtle">
+      <div className="grid grid-cols-[1.2fr_1fr_1fr_110px_40px] items-center gap-3 px-4 py-2 border-b border-border-subtle">
         <div className="text-xs font-medium text-secondary">
           {i18nService.t('scheduledTasksListColTitle')}
         </div>
         <div className="text-xs font-medium text-secondary">
           {i18nService.t('scheduledTasksListColSchedule')}
+        </div>
+        <div className="text-xs font-medium text-secondary">
+          {i18nService.t('scheduledTasksFormAgent' as Parameters<typeof i18nService.t>[0])}
         </div>
         <div className="text-xs font-medium text-secondary">
           {i18nService.t('scheduledTasksListColStatus')}

@@ -641,20 +641,17 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
             <p className="text-sm text-secondary">
               {formatScheduleLabel(task!.schedule)}
             </p>
-            <div className="flex items-center justify-between mt-2">
-              <p className="text-xs text-secondary">
-                {i18nService.t('scheduledTasksAdvancedSchedule')}
-              </p>
-              {existingExpr && (
+            {existingExpr && (
+              <div className="flex items-center justify-end mt-2">
                 <button
                   type="button"
                   onClick={() => updateForm({ planType: 'cron', cronExpr: existingExpr, cronTz: existingTz })}
-                  className="text-xs text-primary hover:text-primary/80 font-medium transition-colors shrink-0 ml-3"
+                  className="text-xs text-primary hover:text-primary/80 font-medium transition-colors shrink-0"
                 >
                   {i18nService.t('scheduledTasksFormAdvancedEditAsCron' as Parameters<typeof i18nService.t>[0])}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       );
