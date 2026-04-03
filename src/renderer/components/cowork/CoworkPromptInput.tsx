@@ -1,26 +1,33 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
+import { EditorContent, useEditor } from '@tiptap/react';
+import type { JSONContent } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
 import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
 import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
+import CoworkImageLightbox from './CoworkImageLightbox';
+import { createAttachmentMentionItem } from './mentions/attachmentMentions';
+import type { AttachmentMentionItem } from './mentions/types';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
-import { setDraftPrompt, setDraftAttachments, clearDraftAttachments, type DraftAttachment } from '../../store/slices/coworkSlice';
-import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
+import { setDraftPrompt } from '../../store/slices/coworkSlice';
+import { setSkills, toggleActiveSkill, setActiveSkillIds } from '../../store/slices/skillSlice';
+import { selectAction, selectPrompt } from '../../store/slices/quickActionSlice';
 import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
 import { getCompactFolderName } from '../../utils/path';
+import { buildComposerPrompt, buildDraftTextFromDoc } from './composer/promptSerializer';
+import { createSkillMentionItem, buildSlashCommandItems, type ComposerResourceItem, type SkillMentionItem } from './composer/types';
+import { ResourceMention } from './composer/resourceMention';
+import { SlashCommand } from './composer/slashCommand';
 
-// CoworkAttachment is aliased from the Redux-persisted DraftAttachment type
-// so that attachment state survives view switches (cowork ↔ skills, etc.)
-type CoworkAttachment = DraftAttachment;
-
-const INPUT_FILE_LABEL = '输入文件';
+type CoworkAttachment = AttachmentMentionItem;
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
@@ -68,10 +75,76 @@ const buildInlinedSkillPrompt = (skill: Skill): string => {
   ].join('\n');
 };
 
+const createDocFromText = (value: string): JSONContent => {
+  const normalized = value.replace(/\r\n/g, '\n');
+  const paragraphs = normalized.split(/\n{2,}/);
+  return {
+    type: 'doc',
+    content: paragraphs.map((paragraph) => {
+      const lines = paragraph.split('\n');
+      const content: JSONContent[] = [];
+      lines.forEach((line, index) => {
+        if (line) {
+          content.push({ type: 'text', text: line });
+        }
+        if (index < lines.length - 1) {
+          content.push({ type: 'hardBreak' });
+        }
+      });
+      return {
+        type: 'paragraph',
+        content,
+      };
+    }),
+  };
+};
+
+const removeAttachmentMentionsFromEditor = (
+  editor: NonNullable<ReturnType<typeof useEditor>>,
+  attachmentId: string,
+) => {
+  const positions: number[] = [];
+
+  editor.state.doc.descendants((node, pos) => {
+    if (
+      node.type.name === 'resourceMention'
+      && node.attrs.kind === 'attachment'
+      && node.attrs.resourceId === attachmentId
+    ) {
+      positions.push(pos);
+    }
+  });
+
+  if (positions.length === 0) {
+    return;
+  }
+
+  const tr = editor.state.tr;
+  positions.reverse().forEach((pos) => {
+    const node = tr.doc.nodeAt(pos);
+    if (!node) {
+      return;
+    }
+
+    let from = pos;
+    let to = pos + node.nodeSize;
+    const nextCharacter = tr.doc.textBetween(to, to + 1, '', '');
+    const previousCharacter = tr.doc.textBetween(Math.max(0, from - 1), from, '', '');
+
+    if (nextCharacter === ' ') {
+      to += 1;
+    } else if (previousCharacter === ' ') {
+      from -= 1;
+    }
+
+    tr.delete(from, to);
+  });
+
+  editor.view.dispatch(tr);
+};
+
 export interface CoworkPromptInputRef {
-  /** 设置输入框值 */
   setValue: (value: string) => void;
-  /** 聚焦输入框 */
   focus: () => void;
 }
 
@@ -87,6 +160,7 @@ interface CoworkPromptInputProps {
   showFolderSelector?: boolean;
   showModelSelector?: boolean;
   onManageSkills?: () => void;
+  enableMentions?: boolean;
   sessionId?: string;
   /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
   remoteManaged?: boolean;
@@ -106,506 +180,745 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showFolderSelector = false,
       showModelSelector = false,
       onManageSkills,
-      sessionId,
+      enableMentions = true,
+      sessionId = '',
       remoteManaged = false,
     } = props;
+
     const dispatch = useDispatch();
-    const draftKey = sessionId || '__home__';
-    const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[draftKey] || '');
-    const attachments = useSelector((state: RootState) => state.cowork.draftAttachments[draftKey] || []) as CoworkAttachment[];
-    const [value, setValue] = useState(draftPrompt);
+    const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[sessionId] ?? '');
+    const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
+    const skills = useSelector((state: RootState) => state.skill.skills);
+    const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
+    const quickActions = useSelector((state: RootState) => state.quickAction.actions);
+
+    const [attachments, setAttachments] = useState<CoworkAttachment[]>([]);
     const [showFolderMenu, setShowFolderMenu] = useState(false);
     const [showFolderRequiredWarning, setShowFolderRequiredWarning] = useState(false);
     const [isDraggingFiles, setIsDraggingFiles] = useState(false);
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
+    const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
+    const [draftText, setDraftText] = useState(draftPrompt);
+    const [isEditorEmpty, setIsEditorEmpty] = useState(!draftPrompt.trim());
 
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const attachmentsRef = useRef<CoworkAttachment[]>([]);
+    const activeSkillIdsRef = useRef<string[]>(activeSkillIds);
+    const skillsRef = useRef<Skill[]>(skills);
+    const disabledRef = useRef(disabled);
+    const isStreamingRef = useRef(isStreaming);
+    const showFolderSelectorRef = useRef(showFolderSelector);
+    const workingDirectoryRef = useRef(workingDirectory);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const dragDepthRef = useRef(0);
+    const nextClipboardImageIndexRef = useRef(1);
+    const usedMentionTokensRef = useRef<Set<string>>(new Set());
+    const handleSubmitRef = useRef<() => void>(() => {});
 
-  // 暴露方法给父组件
-  React.useImperativeHandle(ref, () => ({
-    setValue: (newValue: string) => {
-      setValue(newValue);
-      // 触发自动调整高度
-      requestAnimationFrame(() => {
-        const textarea = textareaRef.current;
-        if (textarea) {
-          textarea.style.height = 'auto';
-          textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight)}px`;
-        }
-      });
-    },
-    focus: () => {
-      textareaRef.current?.focus();
-    },
-  }));
+    const isLarge = size === 'large';
+    const selectedModelSupportsImage = !!selectedModel?.supportsImage;
+    const modelSupportsImageRef = useRef(selectedModelSupportsImage);
 
-  const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
-  const skills = useSelector((state: RootState) => state.skill.skills);
-
-  const isLarge = size === 'large';
-  const minHeight = isLarge ? 60 : 24;
-  const maxHeight = isLarge ? 200 : 200;
-
-  // Load skills on mount
-  useEffect(() => {
-    const loadSkills = async () => {
-      const loadedSkills = await skillService.loadSkills();
-      dispatch(setSkills(loadedSkills));
-    };
-    loadSkills();
-  }, [dispatch]);
-
-  useEffect(() => {
-    const unsubscribe = skillService.onSkillsChanged(async () => {
-      const loadedSkills = await skillService.loadSkills();
-      dispatch(setSkills(loadedSkills));
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [dispatch]);
-
-  // Auto-resize textarea
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight)}px`;
-    }
-  }, [value, minHeight, maxHeight]);
-
-  useEffect(() => {
-    const handleFocusInput = (event: Event) => {
-      const detail = (event as CustomEvent<{ clear?: boolean }>).detail;
-      const shouldClear = detail?.clear ?? true;
-      if (shouldClear) {
-        setValue('');
-        dispatch(clearDraftAttachments(draftKey));
+    const skillMentionItems = useMemo(
+      () => skills.filter((skill) => skill.enabled).map(createSkillMentionItem),
+      [skills],
+    );
+    const skillMentionItemsRef = useRef<SkillMentionItem[]>(skillMentionItems);
+    const slashItems = useMemo(() => buildSlashCommandItems(quickActions), [quickActions]);
+    const slashItemsRef = useRef(slashItems);
+    const getResourceItems = useCallback((query: string): ComposerResourceItem[] => {
+      if (!enableMentions) {
+        return [];
       }
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus();
+      const normalizedQuery = query.trim().toLowerCase();
+      const attachmentItems = attachmentsRef.current;
+      const allItems: ComposerResourceItem[] = [...attachmentItems, ...skillMentionItemsRef.current];
+
+      if (!normalizedQuery) {
+        return allItems.slice(0, 8);
+      }
+
+      return allItems
+        .filter((item) => item.searchText.some((text) => text.toLowerCase().includes(normalizedQuery)))
+        .slice(0, 8);
+    }, [enableMentions]);
+
+    const getSlashItems = useCallback((query: string) => {
+      const normalizedQuery = query.trim().toLowerCase();
+      const items = slashItemsRef.current;
+      if (!normalizedQuery) {
+        return items.slice(0, 8);
+      }
+      return items.filter((item) =>
+        item.searchText.some((text) => text.toLowerCase().includes(normalizedQuery)),
+      ).slice(0, 8);
+    }, []);
+
+    const starterKitExtension = useMemo(() => StarterKit.configure({
+      blockquote: false,
+      bulletList: false,
+      codeBlock: false,
+      code: false,
+      heading: false,
+      horizontalRule: false,
+      orderedList: false,
+      strike: false,
+    }), []);
+    const resourceMentionExtension = useMemo(() => ResourceMention.configure({
+      emptyText: i18nService.t('coworkMentionNoResults'),
+      suggestion: {
+        char: '@',
+        allowSpaces: false,
+        items: ({ query }) => getResourceItems(query),
+        command: ({ props: item }) => {
+          if (item.kind === 'skill' && !activeSkillIdsRef.current.includes(item.skillId)) {
+            dispatch(toggleActiveSkill(item.skillId));
+          }
+        },
+      },
+    }), [dispatch, getResourceItems]);
+    const slashCommandExtension = useMemo(() => SlashCommand.configure({
+      emptyText: i18nService.t('coworkSlashNoResults'),
+      suggestion: {
+        char: '/',
+        allowSpaces: true,
+        startOfLine: false,
+        items: ({ query }) => getSlashItems(query),
+        command: ({ props: item }) => {
+          dispatch(selectAction(item.actionId));
+          dispatch(selectPrompt(item.promptId));
+          if (item.skillMapping && skillsRef.current.some((skill) => skill.id === item.skillMapping)) {
+            dispatch(setActiveSkillIds([item.skillMapping]));
+          }
+        },
+      },
+    }), [dispatch, getSlashItems]);
+    const editorExtensions = useMemo(
+      () => [starterKitExtension, resourceMentionExtension, slashCommandExtension],
+      [resourceMentionExtension, slashCommandExtension, starterKitExtension],
+    );
+    const editorContentClassName = useMemo(
+      () => (isLarge
+        ? 'min-h-[60px] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words px-4 pt-2.5 pb-2 text-[15px] leading-6 text-foreground focus:outline-none'
+        : 'min-h-[24px] max-h-[200px] flex-1 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground focus:outline-none'),
+      [isLarge],
+    );
+
+    useEffect(() => {
+      attachmentsRef.current = attachments;
+    }, [attachments]);
+
+    useEffect(() => {
+      activeSkillIdsRef.current = activeSkillIds;
+    }, [activeSkillIds]);
+
+    useEffect(() => {
+      skillsRef.current = skills;
+    }, [skills]);
+
+    useEffect(() => {
+      skillMentionItemsRef.current = skillMentionItems;
+    }, [skillMentionItems]);
+
+    useEffect(() => {
+      slashItemsRef.current = slashItems;
+    }, [quickActions, slashItems]);
+
+    useEffect(() => {
+      disabledRef.current = disabled;
+      isStreamingRef.current = isStreaming;
+      showFolderSelectorRef.current = showFolderSelector;
+      workingDirectoryRef.current = workingDirectory;
+      modelSupportsImageRef.current = selectedModelSupportsImage;
+    }, [disabled, isStreaming, selectedModelSupportsImage, showFolderSelector, workingDirectory]);
+
+    const editor = useEditor({
+      immediatelyRender: true,
+      extensions: editorExtensions,
+      content: createDocFromText(draftPrompt),
+      editorProps: {
+        attributes: {
+          class: editorContentClassName,
+        },
+        handleKeyDown: (_view, event) => {
+          if (event.isComposing || event.keyCode === 229) {
+            return false;
+          }
+
+          const activeTrigger = (editor?.storage as unknown as Record<string, unknown> | undefined)?.__composerTrigger;
+          if (event.key === 'Enter' && activeTrigger) {
+            return false;
+          }
+
+          if (event.key === 'Enter' && event.shiftKey) {
+            event.preventDefault();
+            editor?.commands.setHardBreak();
+            return true;
+          }
+
+          if (event.key === 'Enter' && !event.shiftKey && !disabledRef.current && !isStreamingRef.current) {
+            event.preventDefault();
+            handleSubmitRef.current();
+            return true;
+          }
+
+          return false;
+        },
+        handlePaste: (_view, event) => {
+          if (disabledRef.current || isStreamingRef.current) {
+            return false;
+          }
+          const files = Array.from(event.clipboardData?.files ?? []);
+          if (files.length === 0) {
+            return false;
+          }
+          event.preventDefault();
+          void handleIncomingFiles(files);
+          return true;
+        },
+      },
+      onUpdate: ({ editor: currentEditor }) => {
+        const doc = currentEditor.getJSON();
+        const nextDraftText = buildDraftTextFromDoc(doc);
+        setDraftText(nextDraftText);
+        setIsEditorEmpty(currentEditor.isEmpty);
+      },
+    }, [editorContentClassName, editorExtensions]);
+
+    useEffect(() => {
+      const loadSkills = async () => {
+        const loadedSkills = await skillService.loadSkills();
+        dispatch(setSkills(loadedSkills));
+      };
+      loadSkills();
+    }, [dispatch]);
+
+    useEffect(() => {
+      const unsubscribe = skillService.onSkillsChanged(async () => {
+        const loadedSkills = await skillService.loadSkills();
+        dispatch(setSkills(loadedSkills));
       });
-    };
-    window.addEventListener('cowork:focus-input', handleFocusInput);
-    return () => {
-      window.removeEventListener('cowork:focus-input', handleFocusInput);
-    };
-  }, []);
+      return () => {
+        unsubscribe();
+      };
+    }, [dispatch]);
 
-  useEffect(() => {
-    if (workingDirectory?.trim()) {
-      setShowFolderRequiredWarning(false);
-    }
-  }, [workingDirectory]);
+    useEffect(() => {
+      if (!editor) {
+        return;
+      }
 
-  // Sync value from draft when sessionId changes
-  useEffect(() => {
-    setValue(draftPrompt);
-  }, [draftKey]); // intentionally omit draftPrompt to only trigger on session switch
+      if (draftPrompt === draftText) {
+        return;
+      }
 
-  useEffect(() => {
-    if (value !== draftPrompt) {
       const timer = setTimeout(() => {
-        dispatch(setDraftPrompt({ sessionId: draftKey, draft: value }));
+        dispatch(setDraftPrompt({ sessionId, draft: draftText }));
       }, 300);
+
       return () => clearTimeout(timer);
-    }
-  }, [value, draftPrompt, dispatch, draftKey]);
+    }, [dispatch, draftPrompt, draftText, editor]);
 
-  const handleSubmit = useCallback(async () => {
-    if (showFolderSelector && !workingDirectory?.trim()) {
-      setShowFolderRequiredWarning(true);
-      return;
-    }
+    useEffect(() => {
+      if (workingDirectory?.trim()) {
+        setShowFolderRequiredWarning(false);
+      }
+    }, [workingDirectory]);
 
-    const trimmedValue = value.trim();
-    if ((!trimmedValue && attachments.length === 0) || isStreaming || disabled) return;
-    setShowFolderRequiredWarning(false);
+    useEffect(() => {
+      const handleFocusInput = (event: Event) => {
+        const detail = (event as CustomEvent<{ clear?: boolean }>).detail;
+        const shouldClear = detail?.clear ?? true;
+        if (shouldClear) {
+          editor?.commands.clearContent(true);
+          attachmentsRef.current = [];
+          setAttachments([]);
+          setExpandedImage(null);
+          setImageVisionHint(false);
+          setDraftText('');
+          setIsEditorEmpty(true);
+          nextClipboardImageIndexRef.current = 1;
+          usedMentionTokensRef.current = new Set();
+        }
+        requestAnimationFrame(() => {
+          editor?.commands.focus('end');
+        });
+      };
 
-    // Get active skills prompts and combine them
-    const activeSkills = activeSkillIds
-      .map(id => skills.find(s => s.id === id))
-      .filter((s): s is Skill => s !== undefined);
-    const skillPrompt = activeSkills.length > 0
-      ? activeSkills.map(buildInlinedSkillPrompt).join('\n\n')
-      : undefined;
+      window.addEventListener('cowork:focus-input', handleFocusInput);
+      return () => {
+        window.removeEventListener('cowork:focus-input', handleFocusInput);
+      };
+    }, [editor]);
 
-    // Extract image attachments (with base64 data) for vision-capable models
-    const imageAtts: CoworkImageAttachment[] = [];
-    for (const attachment of attachments) {
-      if (attachment.isImage && attachment.dataUrl) {
-        const extracted = extractBase64FromDataUrl(attachment.dataUrl);
-        if (extracted) {
-          imageAtts.push({
-            name: attachment.name,
-            mimeType: extracted.mimeType,
-            base64Data: extracted.base64Data,
-          });
+    React.useImperativeHandle(ref, () => ({
+      setValue: (newValue: string) => {
+        editor?.commands.setContent(createDocFromText(newValue), { emitUpdate: false });
+        setDraftText(newValue);
+        setIsEditorEmpty(!newValue.trim());
+      },
+      focus: () => {
+        editor?.commands.focus('end');
+      },
+    }), [editor]);
+
+    const handleSubmit = useCallback(() => {
+      if (!editor) {
+        return;
+      }
+
+      if (showFolderSelectorRef.current && !workingDirectoryRef.current?.trim()) {
+        setShowFolderRequiredWarning(true);
+        return;
+      }
+
+      const currentDoc = editor.getJSON();
+      const { prompt: finalPrompt, skillIds } = buildComposerPrompt({
+        doc: currentDoc,
+        attachments: attachmentsRef.current,
+        skills: skillMentionItemsRef.current,
+        inputFileLabel: i18nService.t('coworkInputFileLabel'),
+        attachmentSectionTitle: i18nService.t('coworkAttachmentReferencesTitle'),
+        skillSectionTitle: i18nService.t('coworkSkillReferencesTitle'),
+        clipboardImageDescription: i18nService.t('coworkAttachmentReferenceClipboardDescription'),
+        imageDescription: i18nService.t('coworkAttachmentReferenceImageDescription'),
+        fileDescription: i18nService.t('coworkAttachmentReferenceFileDescription'),
+      });
+
+      if ((!finalPrompt.trim() && attachmentsRef.current.length === 0) || isStreamingRef.current || disabledRef.current) {
+        return;
+      }
+
+      setShowFolderRequiredWarning(false);
+
+      const imageAtts: CoworkImageAttachment[] = [];
+      for (const attachment of attachmentsRef.current) {
+        if (modelSupportsImageRef.current && attachment.isImage && attachment.dataUrl) {
+          const extracted = extractBase64FromDataUrl(attachment.dataUrl);
+          if (extracted) {
+            imageAtts.push({
+              name: attachment.label,
+              mimeType: extracted.mimeType,
+              base64Data: extracted.base64Data,
+            });
+          }
         }
       }
-    }
 
-    // Build prompt with ALL attachments that have real file paths (both regular files and images).
-    // Image attachments also need their file paths in the prompt so the model knows
-    // where the original files are located (e.g., for skills like seedream that need --image <path>).
-    // Note: inline/clipboard images have pseudo-paths starting with 'inline:' and are excluded.
-    const attachmentLines = attachments
-      .filter((a) => !a.path.startsWith('inline:'))
-      .map((attachment) => `${INPUT_FILE_LABEL}: ${attachment.path}`)
-      .join('\n');
-    const finalPrompt = trimmedValue
-      ? (attachmentLines ? `${trimmedValue}\n\n${attachmentLines}` : trimmedValue)
-      : attachmentLines;
+      const effectiveSkillIds = Array.from(new Set([...activeSkillIdsRef.current, ...skillIds]));
+      const activeSkills = effectiveSkillIds
+        .map((id) => skillsRef.current.find((skill) => skill.id === id))
+        .filter((skill): skill is Skill => skill !== undefined);
+      const skillPrompt = activeSkills.length > 0
+        ? activeSkills.map(buildInlinedSkillPrompt).join('\n\n')
+        : undefined;
 
-    if (imageAtts.length > 0) {
-      console.log('[CoworkPromptInput] handleSubmit: passing imageAtts to onSubmit', {
-        count: imageAtts.length,
-        names: imageAtts.map(a => a.name),
-        base64Lengths: imageAtts.map(a => a.base64Data.length),
-      });
-    }
-    const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
-    if (result === false) return;
-    setValue('');
-    dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
-    dispatch(clearDraftAttachments(draftKey));
-    setImageVisionHint(false);
-  }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);
+      onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
 
-  const handleSelectSkill = useCallback((skill: Skill) => {
-    dispatch(toggleActiveSkill(skill.id));
-  }, [dispatch]);
+      editor.commands.clearContent(true);
+      attachmentsRef.current = [];
+      dispatch(setDraftPrompt({ sessionId, draft: '' }));
+      setDraftText('');
+      setIsEditorEmpty(true);
+      setAttachments([]);
+      setImageVisionHint(false);
+      setExpandedImage(null);
+      nextClipboardImageIndexRef.current = 1;
+      usedMentionTokensRef.current = new Set();
+    }, [dispatch, editor, onSubmit]);
 
-  const handleManageSkills = useCallback(() => {
-    if (onManageSkills) {
-      onManageSkills();
-    }
-  }, [onManageSkills]);
+    handleSubmitRef.current = handleSubmit;
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to submit, any modifier+Enter (Shift/Ctrl/Cmd/Alt) for new line
-    const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
-    if (event.key === 'Enter' && !isComposing) {
-      const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
-      if (!hasModifier && !isStreaming && !disabled) {
-        event.preventDefault();
-        handleSubmit();
-      } else if (hasModifier && !event.shiftKey) {
-        // Shift+Enter already inserts newline natively; for Ctrl/Cmd/Alt+Enter, insert via execCommand to preserve undo history
-        event.preventDefault();
-        document.execCommand('insertText', false, '\n');
+    const handleStopClick = () => {
+      if (onStop) {
+        onStop();
       }
-    }
-  };
+    };
 
-  const handleStopClick = () => {
-    if (onStop) {
-      onStop();
-    }
-  };
+    const truncatePath = (path: string, maxLength = 30): string => {
+      if (!path) return i18nService.t('noFolderSelected');
+      return getCompactFolderName(path, maxLength) || i18nService.t('noFolderSelected');
+    };
 
-  const containerClass = isLarge
-    ? 'relative rounded-2xl border border-border bg-surface shadow-card focus-within:shadow-elevated focus-within:ring-1 focus-within:ring-primary/40 focus-within:border-primary'
-    : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
+    const handleFolderSelect = (path: string) => {
+      if (onWorkingDirectoryChange) {
+        onWorkingDirectoryChange(path);
+      }
+    };
 
-  const textareaClass = isLarge
-    ? `w-full resize-none bg-transparent px-4 pt-2.5 pb-2 text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/60 focus:outline-none text-[15px] leading-6 min-h-[${minHeight}px] max-h-[${maxHeight}px]`
-    : 'flex-1 resize-none bg-transparent text-foreground placeholder:placeholder:text-secondary focus:outline-none text-sm leading-relaxed min-h-[24px] max-h-[200px]';
+    const createLocalAttachment = useCallback((params: {
+      path: string;
+      name: string;
+      isImage?: boolean;
+      dataUrl?: string;
+      sourceKindOverride?: CoworkAttachment['sourceKind'];
+    }): CoworkAttachment => {
+      const existingAttachments = attachmentsRef.current;
+      const isClipboardImage = params.sourceKindOverride === 'clipboard_image' || (params.isImage && params.path.startsWith('inline:'));
+      const clipboardImageIndex = isClipboardImage ? nextClipboardImageIndexRef.current++ : undefined;
+      const nextAttachment = createAttachmentMentionItem({
+        path: params.path,
+        name: params.name,
+        isImage: params.isImage,
+        dataUrl: params.dataUrl,
+        clipboardImageIndex,
+        existingItems: existingAttachments,
+        reservedMentionTokens: Array.from(usedMentionTokensRef.current),
+        sourceKindOverride: params.sourceKindOverride,
+      });
+      usedMentionTokensRef.current.add(nextAttachment.mentionToken);
+      return nextAttachment;
+    }, []);
 
-  const truncatePath = (path: string, maxLength = 30): string => {
-    if (!path) return i18nService.t('noFolderSelected');
-    return getCompactFolderName(path, maxLength) || i18nService.t('noFolderSelected');
-  };
+    const addAttachment = useCallback((filePath: string, imageInfo?: {
+      isImage: boolean;
+      dataUrl?: string;
+      sourceKindOverride?: CoworkAttachment['sourceKind'];
+    }) => {
+      if (!filePath) {
+        return;
+      }
+      if (attachmentsRef.current.some((attachment) => attachment.path === filePath)) {
+        return;
+      }
 
-  const handleFolderSelect = (path: string) => {
-    if (onWorkingDirectoryChange) {
-      onWorkingDirectoryChange(path);
-    }
-  };
-
-  const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
-  const modelSupportsImage = !!selectedModel?.supportsImage;
-
-  const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
-    if (!filePath) return;
-    const current = attachments;
-    if (current.some((attachment) => attachment.path === filePath)) return;
-    dispatch(setDraftAttachments({
-      draftKey,
-      attachments: [...current, {
+      const nextAttachment = createLocalAttachment({
         path: filePath,
         name: getFileNameFromPath(filePath),
         isImage: imageInfo?.isImage,
         dataUrl: imageInfo?.dataUrl,
-      }],
-    }));
-  }, [attachments, dispatch, draftKey]);
+        sourceKindOverride: imageInfo?.sourceKindOverride,
+      });
 
-  const addImageAttachmentFromDataUrl = useCallback((name: string, dataUrl: string) => {
-    // Use the dataUrl as the unique key (no file path for inline images)
-    const pseudoPath = `inline:${name}:${Date.now()}`;
-    dispatch(setDraftAttachments({
-      draftKey,
-      attachments: [...attachments, {
+      const nextAttachments = [...attachmentsRef.current, nextAttachment];
+      attachmentsRef.current = nextAttachments;
+      setAttachments(nextAttachments);
+    }, [createLocalAttachment]);
+
+    const addImageAttachmentFromDataUrl = useCallback((name: string, dataUrl: string) => {
+      const pseudoPath = `inline:${name}:${Date.now()}`;
+      const nextAttachment = createLocalAttachment({
         path: pseudoPath,
         name,
         isImage: true,
         dataUrl,
-      }],
-    }));
-  }, [attachments, dispatch, draftKey]);
+      });
 
-  const fileToDataUrl = useCallback((file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result;
-        if (typeof result !== 'string') {
-          reject(new Error('Failed to read file'));
-          return;
+      const nextAttachments = [...attachmentsRef.current, nextAttachment];
+      attachmentsRef.current = nextAttachments;
+      setAttachments(nextAttachments);
+    }, [createLocalAttachment]);
+
+    const fileToDataUrl = useCallback((file: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          if (typeof result !== 'string') {
+            reject(new Error('Failed to read file'));
+            return;
+          }
+          resolve(result);
+        };
+        reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+    }, []);
+
+    const fileToBase64 = useCallback((file: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          if (typeof result !== 'string') {
+            reject(new Error('Failed to read file'));
+            return;
+          }
+          const commaIndex = result.indexOf(',');
+          resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+        };
+        reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+    }, []);
+
+    const getNativeFilePath = useCallback((file: File): string | null => {
+      const maybePath = (file as File & { path?: string }).path;
+      if (typeof maybePath === 'string' && maybePath.trim()) {
+        return maybePath;
+      }
+      return null;
+    }, []);
+
+    const saveInlineFile = useCallback(async (file: File): Promise<string | null> => {
+      try {
+        const dataBase64 = await fileToBase64(file);
+        if (!dataBase64) {
+          return null;
         }
-        resolve(result);
-      };
-      reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
-      reader.readAsDataURL(file);
-    });
-  }, []);
-
-  const fileToBase64 = useCallback((file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result;
-        if (typeof result !== 'string') {
-          reject(new Error('Failed to read file'));
-          return;
+        const result = await window.electron.dialog.saveInlineFile({
+          dataBase64,
+          fileName: file.name,
+          mimeType: file.type,
+          cwd: workingDirectoryRef.current,
+        });
+        if (result.success && result.path) {
+          return result.path;
         }
-        const commaIndex = result.indexOf(',');
-        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
-      };
-      reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
-      reader.readAsDataURL(file);
-    });
-  }, []);
-
-  const getNativeFilePath = useCallback((file: File): string | null => {
-    const maybePath = (file as File & { path?: string }).path;
-    if (typeof maybePath === 'string' && maybePath.trim()) {
-      return maybePath;
-    }
-    return null;
-  }, []);
-
-  const saveInlineFile = useCallback(async (file: File): Promise<string | null> => {
-    try {
-      const dataBase64 = await fileToBase64(file);
-      if (!dataBase64) {
+        return null;
+      } catch (error) {
+        console.error('Failed to save inline file:', error);
         return null;
       }
-      const result = await window.electron.dialog.saveInlineFile({
-        dataBase64,
-        fileName: file.name,
-        mimeType: file.type,
-        cwd: workingDirectory,
-      });
-      if (result.success && result.path) {
-        return result.path;
-      }
-      return null;
-    } catch (error) {
-      console.error('Failed to save inline file:', error);
-      return null;
-    }
-  }, [fileToBase64, workingDirectory]);
+    }, [fileToBase64]);
 
-  const handleIncomingFiles = useCallback(async (fileList: FileList | File[]) => {
-    if (disabled || isStreaming) return;
-    const files = Array.from(fileList ?? []);
-    if (files.length === 0) return;
+    const handleIncomingFiles = useCallback(async (fileList: FileList | File[]) => {
+      if (disabledRef.current || isStreamingRef.current) return;
+      const files = Array.from(fileList ?? []);
+      if (files.length === 0) return;
 
-    let hasImageWithoutVision = false;
-    for (const file of files) {
-      const nativePath = getNativeFilePath(file);
+      let hasImageWithoutVision = false;
+      for (const file of files) {
+        const nativePath = getNativeFilePath(file);
+        const fileIsImage = nativePath ? isImagePath(nativePath) : isImageMimeType(file.type);
 
-      // Check if this is an image file and model supports images
-      const fileIsImage = nativePath
-        ? isImagePath(nativePath)
-        : isImageMimeType(file.type);
-
-      if (fileIsImage) {
-        if (modelSupportsImage) {
-          // For images on vision-capable models, read as data URL
+        if (fileIsImage) {
+          let imageDataUrl: string | undefined;
           if (nativePath) {
             try {
               const result = await window.electron.dialog.readFileAsDataUrl(nativePath);
               if (result.success && result.dataUrl) {
-                addAttachment(nativePath, { isImage: true, dataUrl: result.dataUrl });
-                continue;
+                imageDataUrl = result.dataUrl;
               }
             } catch (error) {
               console.error('Failed to read image as data URL:', error);
             }
-            // Fallback: add as regular file attachment
-            addAttachment(nativePath);
           } else {
-            // No native path (clipboard/drag from browser) - read via FileReader
             try {
-              const dataUrl = await fileToDataUrl(file);
-              addImageAttachmentFromDataUrl(file.name, dataUrl);
+              imageDataUrl = await fileToDataUrl(file);
             } catch (error) {
               console.error('Failed to read image from clipboard:', error);
+            }
+          }
+
+          if (modelSupportsImageRef.current) {
+            if (nativePath) {
+              addAttachment(nativePath, { isImage: true, dataUrl: imageDataUrl });
+            } else if (imageDataUrl) {
+              addImageAttachmentFromDataUrl(file.name, imageDataUrl);
+            } else {
               const stagedPath = await saveInlineFile(file);
               if (stagedPath) {
-                addAttachment(stagedPath);
+                addAttachment(stagedPath, {
+                  isImage: true,
+                  sourceKindOverride: 'clipboard_image',
+                });
               }
             }
+            continue;
+          }
+
+          hasImageWithoutVision = true;
+          if (nativePath) {
+            addAttachment(nativePath, { isImage: true, dataUrl: imageDataUrl });
+            continue;
+          }
+
+          const stagedPath = await saveInlineFile(file);
+          if (stagedPath) {
+            addAttachment(stagedPath, {
+              isImage: true,
+              dataUrl: imageDataUrl,
+              sourceKindOverride: 'clipboard_image',
+            });
           }
           continue;
         }
-        // Model doesn't support image input — add as file path and show hint
-        hasImageWithoutVision = true;
+
+        if (nativePath) {
+          addAttachment(nativePath);
+          continue;
+        }
+
+        const stagedPath = await saveInlineFile(file);
+        if (stagedPath) {
+          addAttachment(stagedPath);
+        }
       }
 
-      // Non-image file or model doesn't support images: use original flow
-      if (nativePath) {
-        addAttachment(nativePath);
-        continue;
+      if (hasImageWithoutVision) {
+        setImageVisionHint(true);
       }
+    }, [addAttachment, addImageAttachmentFromDataUrl, fileToDataUrl, getNativeFilePath, saveInlineFile]);
 
-      const stagedPath = await saveInlineFile(file);
-      if (stagedPath) {
-        addAttachment(stagedPath);
-      }
-    }
-    if (hasImageWithoutVision) {
-      setImageVisionHint(true);
-    }
-  }, [addAttachment, addImageAttachmentFromDataUrl, disabled, fileToDataUrl, getNativeFilePath, isStreaming, modelSupportsImage, saveInlineFile]);
-
-  const handleAddFile = useCallback(async () => {
-    if (isAddingFile || disabled || isStreaming) return;
-    setIsAddingFile(true);
-    try {
-      const result = await window.electron.dialog.selectFiles({
-        title: i18nService.t('coworkAddFile'),
-      });
-      if (!result.success || result.paths.length === 0) return;
-      let hasImageWithoutVision = false;
-      for (const filePath of result.paths) {
-        if (isImagePath(filePath)) {
-          if (modelSupportsImage) {
+    const handleAddFile = useCallback(async () => {
+      if (isAddingFile || disabled || isStreaming) return;
+      setIsAddingFile(true);
+      try {
+        const result = await window.electron.dialog.selectFiles({
+          title: i18nService.t('coworkAddFile'),
+        });
+        if (!result.success || result.paths.length === 0) return;
+        let hasImageWithoutVision = false;
+        for (const filePath of result.paths) {
+          if (isImagePath(filePath)) {
+            let imageDataUrl: string | undefined;
             try {
               const readResult = await window.electron.dialog.readFileAsDataUrl(filePath);
               if (readResult.success && readResult.dataUrl) {
-                addAttachment(filePath, { isImage: true, dataUrl: readResult.dataUrl });
-                continue;
+                imageDataUrl = readResult.dataUrl;
               }
             } catch (error) {
               console.error('Failed to read image as data URL:', error);
-
             }
-          } else {
-            hasImageWithoutVision = true;
+
+            if (!selectedModelSupportsImage) {
+              hasImageWithoutVision = true;
+            }
+
+            addAttachment(filePath, { isImage: true, dataUrl: imageDataUrl });
+            continue;
           }
+          addAttachment(filePath);
         }
-        addAttachment(filePath);
+        if (hasImageWithoutVision) {
+          setImageVisionHint(true);
+        }
+      } catch (error) {
+        console.error('Failed to select file:', error);
+      } finally {
+        setIsAddingFile(false);
       }
-      if (hasImageWithoutVision) {
-        setImageVisionHint(true);
+    }, [addAttachment, disabled, isAddingFile, isStreaming, selectedModelSupportsImage]);
 
+    const handleSelectSkill = useCallback((skill: Skill) => {
+      dispatch(toggleActiveSkill(skill.id));
+    }, [dispatch]);
+
+    const handleManageSkills = useCallback(() => {
+      if (onManageSkills) {
+        onManageSkills();
       }
-    } catch (error) {
-      console.error('Failed to select file:', error);
-    } finally {
-      setIsAddingFile(false);
-    }
-  }, [addAttachment, isAddingFile, disabled, isStreaming, modelSupportsImage]);
+    }, [onManageSkills]);
 
-  const handleRemoveAttachment = useCallback((path: string) => {
-    dispatch(setDraftAttachments({
-      draftKey,
-      attachments: attachments.filter((attachment) => attachment.path !== path),
-    }));
-  }, [attachments, dispatch, draftKey]);
+    const handleRemoveAttachment = useCallback((attachment: CoworkAttachment) => {
+      const nextAttachments = attachmentsRef.current.filter((item) => item.path !== attachment.path);
+      attachmentsRef.current = nextAttachments;
+      setAttachments(nextAttachments);
 
-  const hasFileTransfer = (dataTransfer: DataTransfer | null): boolean => {
-    if (!dataTransfer) return false;
-    if (dataTransfer.files.length > 0) return true;
-    return Array.from(dataTransfer.types).includes('Files');
-  };
+      if (attachment.isImage && expandedImage?.alt === attachment.label) {
+        setExpandedImage(null);
+      }
 
-  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!hasFileTransfer(event.dataTransfer)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    dragDepthRef.current += 1;
-    if (!disabled && !isStreaming) {
-      setIsDraggingFiles(true);
-    }
-  };
+      if (editor) {
+        removeAttachmentMentionsFromEditor(editor, attachment.mentionId);
+      }
+    }, [editor, expandedImage]);
 
-  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!hasFileTransfer(event.dataTransfer)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = disabled || isStreaming ? 'none' : 'copy';
-  };
+    const containerClass = isLarge
+      ? 'relative rounded-2xl border border-border bg-surface shadow-card focus-within:shadow-elevated focus-within:ring-1 focus-within:ring-primary/40 focus-within:border-primary'
+      : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
 
-  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!hasFileTransfer(event.dataTransfer)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) {
+    const editorClass = isLarge ? 'w-full' : 'flex-1';
+    const enhancedContainerClass = isDraggingFiles
+      ? `${containerClass} ring-2 ring-primary/50 border-primary/60`
+      : containerClass;
+
+    const canSubmit = !disabled && (!!draftText.trim() || attachments.length > 0);
+
+    const hasFileTransfer = (dataTransfer: DataTransfer | null): boolean => {
+      if (!dataTransfer) return false;
+      if (dataTransfer.files.length > 0) return true;
+      return Array.from(dataTransfer.types).includes('Files');
+    };
+
+    const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+      if (!hasFileTransfer(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current += 1;
+      if (!disabled && !isStreaming) {
+        setIsDraggingFiles(true);
+      }
+    };
+
+    const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+      if (!hasFileTransfer(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = disabled || isStreaming ? 'none' : 'copy';
+    };
+
+    const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+      if (!hasFileTransfer(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) {
+        setIsDraggingFiles(false);
+      }
+    };
+
+    const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+      if (!hasFileTransfer(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current = 0;
       setIsDraggingFiles(false);
-    }
-  };
+      if (disabled || isStreaming) return;
+      void handleIncomingFiles(event.dataTransfer.files);
+    };
 
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!hasFileTransfer(event.dataTransfer)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    dragDepthRef.current = 0;
-    setIsDraggingFiles(false);
-    if (disabled || isStreaming) return;
-    void handleIncomingFiles(event.dataTransfer.files);
-  };
-
-  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (disabled || isStreaming) return;
-    const files = Array.from(event.clipboardData?.files ?? []);
-    if (files.length === 0) return;
-    event.preventDefault();
-    void handleIncomingFiles(files);
-  }, [disabled, handleIncomingFiles, isStreaming]);
-
-  const canSubmit = !disabled && (!!value.trim() || attachments.length > 0);
-  const enhancedContainerClass = isDraggingFiles
-    ? `${containerClass} ring-2 ring-primary/50 border-primary/60`
-    : containerClass;
-
-  return (
-    <div className="relative">
-      {attachments.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {attachments.map((attachment) => (
+    return (
+      <div className="relative">
+        {attachments.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {attachments.map((attachment) => (
               <div
-                key={attachment.path}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-foreground max-w-full"
+                key={attachment.mentionId}
+                className={`group inline-flex max-w-full items-center gap-1 rounded-full border py-1 text-xs text-foreground transition-colors ${
+                  attachment.isImage
+                    ? 'px-1.5 border-border bg-surface hover:border-primary/50'
+                    : 'gap-1.5 px-2.5 border-border bg-surface'
+                }`}
                 title={attachment.path}
               >
                 {attachment.isImage ? (
-                  <PhotoIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!attachment.dataUrl) return;
+                      setExpandedImage({ src: attachment.dataUrl, alt: attachment.label });
+                    }}
+                    className={`inline-flex min-w-0 items-center gap-2 rounded-full pr-1 transition-all ${
+                      attachment.dataUrl
+                        ? 'cursor-pointer hover:bg-surface-raised'
+                        : 'cursor-default'
+                    }`}
+                    disabled={!attachment.dataUrl}
+                  >
+                    {attachment.dataUrl ? (
+                      <span className="flex h-8 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-black/5 transition-transform transition-colors group-hover:border-primary/50 border-border/50 dark:bg-white/5 group-hover:scale-[1.02]">
+                        <img
+                          src={attachment.dataUrl}
+                          alt={attachment.label}
+                          className="h-full w-full object-contain"
+                        />
+                      </span>
+                    ) : (
+                      <PhotoIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+                    )}
+                    <span className="truncate max-w-[180px]">{attachment.label}</span>
+                  </button>
                 ) : (
-                  <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                  <>
+                    <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span className="truncate max-w-[180px]">{attachment.label}</span>
+                  </>
                 )}
-                <span className="truncate max-w-[180px]">{attachment.name}</span>
                 <button
                   type="button"
-                  onClick={() => handleRemoveAttachment(attachment.path)}
+                  onClick={() => handleRemoveAttachment(attachment)}
                   className="ml-0.5 rounded-full p-0.5 hover:bg-surface-raised"
                   aria-label={i18nService.t('coworkAttachmentRemove')}
                   title={i18nService.t('coworkAttachmentRemove')}
@@ -613,190 +926,193 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   <XMarkIcon className="h-3 w-3" />
                 </button>
               </div>
-          ))}
-        </div>
-      )}
-      {imageVisionHint && (
-        <div className="mb-2 flex items-start gap-1.5 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
-          <ExclamationTriangleIcon className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
-          <span>
-            {i18nService.getLanguage() === 'zh'
-              ? '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。'
-              : 'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.'}
-          </span>
-          <button
-            type="button"
-            onClick={() => setImageVisionHint(false)}
-            className="ml-auto flex-shrink-0 rounded-full p-0.5 hover:bg-amber-200/50 dark:hover:bg-amber-800/50"
-          >
-            <XMarkIcon className="h-3 w-3" />
-          </button>
-        </div>
-      )}
-      <div
-        className={enhancedContainerClass}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        {isDraggingFiles && (
-          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-primary/10 text-xs font-medium text-primary">
-            {i18nService.t('coworkDropFileHint')}
+            ))}
           </div>
         )}
-        {isLarge ? (
-          <>
-            <textarea
-              ref={textareaRef}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={placeholder}
-              disabled={disabled}
-              rows={isLarge ? 2 : 1}
-              className={textareaClass}
-              style={{ minHeight: `${minHeight}px` }}
-            />
-            <div className="flex items-center justify-between px-4 pb-2 pt-1.5">
-              <div className="flex items-center gap-2 relative">
-                {showFolderSelector && (
-                  <>
-                    <div className="relative group">
-                      <button
-                        ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
-                        type="button"
-                        onClick={() => setShowFolderMenu(!showFolderMenu)}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
-                      >
-                        <FolderIcon className="h-4 w-4" />
-                        <span className="max-w-[150px] truncate text-xs">
-                          {truncatePath(workingDirectory)}
-                        </span>
-                      </button>
-                      {/* Tooltip - hidden when folder menu is open */}
-                      {!showFolderMenu && (
-                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl bg-background text-foreground border-border border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-50 max-w-[400px] break-all whitespace-nowrap">
-                          {truncatePath(workingDirectory, 120)}
-                        </div>
-                      )}
-                    </div>
-                    <FolderSelectorPopover
-                      isOpen={showFolderMenu}
-                      onClose={() => setShowFolderMenu(false)}
-                      onSelectFolder={handleFolderSelect}
-                      anchorRef={folderButtonRef as React.RefObject<HTMLElement>}
-                    />
-                  </>
+        {imageVisionHint && (
+          <div className="mb-2 flex items-start gap-1.5 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
+            <ExclamationTriangleIcon className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+            <span>
+              {i18nService.getLanguage() === 'zh'
+                ? '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。'
+                : 'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setImageVisionHint(false)}
+              className="ml-auto flex-shrink-0 rounded-full p-0.5 hover:bg-amber-200/50 dark:hover:bg-amber-800/50"
+            >
+              <XMarkIcon className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+        <div
+          className={enhancedContainerClass}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {isDraggingFiles && (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-primary/10 text-xs font-medium text-primary">
+              {i18nService.t('coworkDropFileHint')}
+            </div>
+          )}
+          {isLarge ? (
+            <>
+              <div className={editorClass}>
+                {editor && (
+                  <div className="relative">
+                    {isEditorEmpty && (
+                      <div className="pointer-events-none absolute left-4 top-2.5 text-[15px] leading-6 text-secondary/60">
+                        {placeholder}
+                      </div>
+                    )}
+                    <EditorContent editor={editor} />
+                  </div>
                 )}
-                {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
-                {!remoteManaged && (
+              </div>
+              <div className="flex items-center justify-between px-4 pb-2 pt-1.5">
+                <div className="flex items-center gap-2 relative">
+                  {showFolderSelector && (
+                    <>
+                      <div className="relative group">
+                        <button
+                          ref={folderButtonRef}
+                          type="button"
+                          onClick={() => setShowFolderMenu(!showFolderMenu)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                        >
+                          <FolderIcon className="h-4 w-4" />
+                          <span className="max-w-[150px] truncate text-xs">
+                            {truncatePath(workingDirectory)}
+                          </span>
+                        </button>
+                        {!showFolderMenu && (
+                          <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl bg-background text-foreground border-border border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-50 max-w-[400px] break-all whitespace-nowrap">
+                            {truncatePath(workingDirectory, 120)}
+                          </div>
+                        )}
+                      </div>
+                      <FolderSelectorPopover
+                        isOpen={showFolderMenu}
+                        onClose={() => setShowFolderMenu(false)}
+                        onSelectFolder={handleFolderSelect}
+                        anchorRef={folderButtonRef as React.RefObject<HTMLElement>}
+                      />
+                    </>
+                  )}
+                  {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
+                  {!remoteManaged && (
+                    <button
+                      type="button"
+                      onClick={handleAddFile}
+                      className="flex items-center justify-center p-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                      title={i18nService.t('coworkAddFile')}
+                      aria-label={i18nService.t('coworkAddFile')}
+                      disabled={disabled || isStreaming || isAddingFile}
+                    >
+                      <PaperClipIcon className="h-4 w-4" />
+                    </button>
+                  )}
+                  {!remoteManaged && (
+                    <>
+                      <SkillsButton
+                        onSelectSkill={handleSelectSkill}
+                        onManageSkills={handleManageSkills}
+                      />
+                      <ActiveSkillBadge />
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {isStreaming ? (
+                    <button
+                      type="button"
+                      onClick={handleStopClick}
+                      className="p-2 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-all shadow-subtle hover:shadow-card active:scale-95"
+                      aria-label="Stop"
+                    >
+                      <StopIcon className="h-5 w-5" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleSubmit}
+                      disabled={!canSubmit}
+                      className="p-2 rounded-xl bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Send"
+                    >
+                      <PaperAirplaneIcon className="h-5 w-5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={editorClass}>
+                {editor && (
+                  <div className="relative">
+                    {isEditorEmpty && (
+                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center text-sm text-secondary">
+                        {placeholder}
+                      </div>
+                    )}
+                    <EditorContent editor={editor} />
+                  </div>
+                )}
+              </div>
+              {!remoteManaged && (
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
                     onClick={handleAddFile}
-                    className="flex items-center justify-center p-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                    className="flex-shrink-0 p-1.5 rounded-lg text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
                     title={i18nService.t('coworkAddFile')}
                     aria-label={i18nService.t('coworkAddFile')}
                     disabled={disabled || isStreaming || isAddingFile}
                   >
                     <PaperClipIcon className="h-4 w-4" />
                   </button>
-                )}
-                {!remoteManaged && (
-                  <>
-                    <SkillsButton
-                      onSelectSkill={handleSelectSkill}
-                      onManageSkills={handleManageSkills}
-                    />
-                    <ActiveSkillBadge />
-                  </>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {isStreaming ? (
-                  <button
-                    type="button"
-                    onClick={handleStopClick}
-                    className="p-2 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-all shadow-subtle hover:shadow-card active:scale-95"
-                    aria-label="Stop"
-                  >
-                    <StopIcon className="h-5 w-5" />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                    className="p-2 rounded-xl bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                    aria-label="Send"
-                  >
-                    <PaperAirplaneIcon className="h-5 w-5" />
-                  </button>
-                )}
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <textarea
-              ref={textareaRef}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={placeholder}
-              disabled={disabled}
-              rows={1}
-              className={textareaClass}
-            />
-
-            {!remoteManaged && (
-              <div className="flex items-center gap-1">
+                </div>
+              )}
+              {isStreaming ? (
                 <button
                   type="button"
-                  onClick={handleAddFile}
-                  className="flex-shrink-0 p-1.5 rounded-lg text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
-                  title={i18nService.t('coworkAddFile')}
-                  aria-label={i18nService.t('coworkAddFile')}
-                  disabled={disabled || isStreaming || isAddingFile}
+                  onClick={handleStopClick}
+                  className="flex-shrink-0 p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all shadow-subtle hover:shadow-card active:scale-95"
+                  aria-label="Stop"
                 >
-                  <PaperClipIcon className="h-4 w-4" />
+                  <StopIcon className="h-4 w-4" />
                 </button>
-              </div>
-            )}
-
-            {isStreaming ? (
-              <button
-                type="button"
-                onClick={handleStopClick}
-                className="flex-shrink-0 p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all shadow-subtle hover:shadow-card active:scale-95"
-                aria-label="Stop"
-              >
-                <StopIcon className="h-4 w-4" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                className="flex-shrink-0 p-2 rounded-lg bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                aria-label="Send"
-              >
-                <PaperAirplaneIcon className="h-4 w-4" />
-              </button>
-            )}
-          </>
-        )}
-      </div>
-      {showFolderRequiredWarning && (
-        <div className="mt-2 text-xs text-red-500 dark:text-red-400">
-          {i18nService.t('coworkSelectFolderFirst')}
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={!canSubmit}
+                  className="flex-shrink-0 p-2 rounded-lg bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Send"
+                >
+                  <PaperAirplaneIcon className="h-4 w-4" />
+                </button>
+              )}
+            </>
+          )}
         </div>
-      )}
-    </div>
-  );
-  }
+        {showFolderRequiredWarning && (
+          <div className="mt-2 text-xs text-red-500 dark:text-red-400">
+            {i18nService.t('coworkSelectFolderFirst')}
+          </div>
+        )}
+        <CoworkImageLightbox
+          imageSrc={expandedImage?.src ?? null}
+          imageAlt={expandedImage?.alt}
+          onClose={() => setExpandedImage(null)}
+        />
+      </div>
+    );
+  },
 );
 
 CoworkPromptInput.displayName = 'CoworkPromptInput';
