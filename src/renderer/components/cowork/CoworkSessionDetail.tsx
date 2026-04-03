@@ -1824,15 +1824,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setCurrentRailIndex(railIndex);
   }, []);
 
-  const navigateToTurn = useCallback((direction: 'prev' | 'next') => {
-    const turnEls = turnElsCacheRef.current;
-    if (turnEls.length === 0) return;
-    const idx = currentTurnIndexRef.current;
-    const targetIndex = direction === 'prev' ? idx - 1 : idx + 1;
-    if (targetIndex < 0 || targetIndex >= turnEls.length) return;
-    navigateToTurnByIndex(targetIndex);
-  }, [navigateToTurnByIndex]);
-
   // ── In-session search ──────────────────────────────────────────────────────
 
   const openSearch = useCallback(() => {
@@ -1931,11 +1922,34 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   }, [searchVisible]);
 
   useEffect(() => {
+    // When the session changes, clear stale match state immediately so the UI
+    // never shows a count that belongs to the previous session.
+    setSearchMatchCount(0);
+    setSearchCurrentIndex(0);
+    if (markInstanceRef.current) {
+      markInstanceRef.current.unmark();
+    }
+
+    // If the search bar is still open with an active query, re-apply it to the
+    // new session's messages. A short delay lets React commit the new session's
+    // DOM before mark.js scans it.
+    let reapplyTimer: ReturnType<typeof setTimeout> | null = null;
+    if (searchVisible && searchQuery.trim()) {
+      reapplyTimer = setTimeout(() => {
+        applySearch(searchQuery);
+      }, 100);
+    }
+
     return () => {
+      if (reapplyTimer) clearTimeout(reapplyTimer);
       if (markInstanceRef.current) {
         markInstanceRef.current.unmark();
       }
     };
+    // searchVisible / searchQuery / applySearch are intentionally excluded from
+    // deps: this effect must only fire on session change. Their current values
+    // are captured correctly from the render that produced the new session id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession?.id]);
 
   // Pause highlighting during streaming to avoid React DOM conflicts
