@@ -1023,19 +1023,37 @@ const AssistantMessageItem: React.FC<{
 };
 
 // Streaming activity bar shown between messages and input
-const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ messages }) => {
-  // Walk messages backwards to find the latest tool_use without a paired tool_result
+const StreamingActivityBar: React.FC<{ messages: CoworkMessage[]; startedAt: number }> = ({ messages, startedAt }) => {
+  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startedAt) / 1000));
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+
+  const formatElapsed = (seconds: number): string => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m > 0) {
+      return i18nService.getLanguage() === 'zh'
+        ? `已运行 ${m}m ${s}s`
+        : `${m}m ${s}s elapsed`;
+    }
+    return i18nService.getLanguage() === 'zh'
+      ? `已运行 ${s}s`
+      : `${s}s elapsed`;
+  };
+
   const getStatusText = (): string => {
-    const toolUseIds = new Set<string>();
     const toolResultIds = new Set<string>();
     for (const msg of messages) {
       const id = msg.metadata?.toolUseId;
-      if (typeof id === 'string') {
-        if (msg.type === 'tool_result') toolResultIds.add(id);
-        if (msg.type === 'tool_use') toolUseIds.add(id);
+      if (typeof id === 'string' && msg.type === 'tool_result') {
+        toolResultIds.add(id);
       }
     }
-    // Walk backwards to find latest unresolved tool_use
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.type === 'tool_use') {
@@ -1048,16 +1066,19 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
         }
       }
     }
-    return `${i18nService.t('coworkToolRunning')}`;
+    return i18nService.t('coworkToolRunning');
   };
 
   return (
     <div className="shrink-0 animate-fade-in px-4">
       <div className="max-w-3xl mx-auto">
         <div className="streaming-bar" />
-        <div className="py-1">
+        <div className="py-1 flex items-center justify-between">
           <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
             {getStatusText()}
+          </span>
+          <span className="text-xs dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 tabular-nums">
+            {formatElapsed(elapsed)}
           </span>
         </div>
       </div>
@@ -2336,7 +2357,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       </div>
 
       {/* Streaming Activity Bar */}
-      {isStreaming && <StreamingActivityBar messages={currentSession.messages} />}
+      {isStreaming && (
+        <StreamingActivityBar
+          messages={currentSession.messages}
+          startedAt={
+            [...currentSession.messages].reverse().find(m => m.type === 'user')?.timestamp
+            ?? currentSession.createdAt
+          }
+        />
+      )}
 
       {/* Input Area */}
       <div className="p-4 shrink-0">
