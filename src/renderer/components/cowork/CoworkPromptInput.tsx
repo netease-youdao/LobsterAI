@@ -228,7 +228,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Get active skills prompts and combine them
     const activeSkills = activeSkillIds
       .map(id => skills.find(s => s.id === id))
-      .filter((s): s is Skill => s !== undefined);
+      .filter((s): s is Skill => s !== undefined && s.enabled);
     const skillPrompt = activeSkills.length > 0
       ? activeSkills.map(buildInlinedSkillPrompt).join('\n\n')
       : undefined;

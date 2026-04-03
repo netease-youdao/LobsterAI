@@ -17,9 +17,9 @@ const skillSlice = createSlice({
   reducers: {
     setSkills: (state, action: PayloadAction<Skill[]>) => {
       state.skills = action.payload;
-      // Remove any active skill IDs that no longer exist
+      // Remove any active skill IDs that no longer exist or have been disabled
       state.activeSkillIds = state.activeSkillIds.filter(id =>
-        action.payload.some(skill => skill.id === id)
+        action.payload.some(skill => skill.id === id && skill.enabled)
       );
     },
     addSkill: (state, action: PayloadAction<Skill>) => {
@@ -39,6 +39,10 @@ const skillSlice = createSlice({
       const skill = state.skills.find(s => s.id === action.payload);
       if (skill) {
         skill.enabled = !skill.enabled;
+        // If the skill is being disabled, remove it from active selections
+        if (!skill.enabled) {
+          state.activeSkillIds = state.activeSkillIds.filter(id => id !== action.payload);
+        }
       }
     },
     toggleActiveSkill: (state, action: PayloadAction<string>) => {
