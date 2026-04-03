@@ -1,0 +1,51 @@
+src/renderer/components/Settings.tsx
+  2b2ff65b361f10e0 1119
+  5b46bad0281c90e9 1195-1200,1203,1206-1212
+  a4c40bceffd17f4c 1230-1234,1237,1239-1245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "ffedfa40dc6482ed554a808aed3a3b8dee2ff7a0",
+  "prompts": {
+    "2b2ff65b361f10e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-11e8ee1b-e02e-4202-9b93-e4b1dac829dc",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "5b46bad0281c90e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-712330cb-bec5-48fe-afc7-35059f6de77d",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 14,
+      "total_deletions": 6,
+      "accepted_lines": 14,
+      "overriden_lines": 0
+    },
+    "a4c40bceffd17f4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-fb60c4b7-c927-44fd-8dd9-3e9a09f6782c",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 5,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    }
+  }
+}
