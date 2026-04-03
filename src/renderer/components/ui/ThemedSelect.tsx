@@ -45,14 +45,14 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
   };
 
   return (
-    <div className="relative" ref={dropdownRef}>
-      <div className="flex items-center space-x-3">
+    <div className="relative w-full" ref={dropdownRef}>
+      <div className="flex items-center space-x-3 w-full">
         {label && (
           <label htmlFor={id} className="text-sm font-medium text-foreground whitespace-nowrap">
             {label}
           </label>
         )}
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <button
             id={id}
             type="button"
@@ -66,7 +66,7 @@ const ThemedSelect: React.FC<ThemedSelectProps> = ({
           </button>
 
           {isOpen && (
-            <div className="absolute z-10 w-full mt-1 overflow-auto rounded-md popover-enter shadow-popover max-h-60 focus:outline-none">
+            <div className="absolute z-50 right-0 min-w-full mt-1 overflow-auto rounded-md popover-enter shadow-popover max-h-60 focus:outline-none">
               <ul
                 className="py-1 overflow-auto text-sm bg-surface border border-border rounded-lg"
                 role="listbox"

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
-import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
+import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus, setActiveAgentId } from '../../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
 import { setActions, selectAction, clearSelection } from '../../store/slices/quickActionSlice';
 import { coworkService } from '../../services/cowork';
@@ -46,8 +46,21 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     currentSession,
     isStreaming,
     config,
+    agents,
+    activeAgentId,
   } = useSelector((state: RootState) => state.cowork);
   const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
+
+  // For multi-agent: local selected agent (defaults to active agent from Redux)
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(() => activeAgentId || '');
+  // Keep in sync when activeAgentId changes externally (e.g. settings save)
+  const prevActiveAgentIdRef = useRef(activeAgentId);
+  useEffect(() => {
+    if (activeAgentId && activeAgentId !== prevActiveAgentIdRef.current) {
+      prevActiveAgentIdRef.current = activeAgentId;
+      setSelectedAgentId(activeAgentId);
+    }
+  }, [activeAgentId]);
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
@@ -253,6 +266,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         activeSkillIds: sessionSkillIds,
         agentId: currentAgentId,
         imageAttachments,
+        agentId: selectedAgentId || activeAgentId || undefined,
       });
 
       if (!startedSession && startError) {
@@ -535,6 +549,65 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
           {/* Prompt Input Area - Large version with folder selector */}
           <div className="space-y-3">
+            {shouldShowEngineStatus && openClawStatus && (
+              <div className={`rounded-xl border px-4 py-3 ${isEngineError
+                ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
+                : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm">
+                    {resolveEngineStatusText(openClawStatus)}
+                    {typeof openClawStatus.progressPercent === 'number' && (
+                      <span className="ml-2 text-xs opacity-80">
+                        {Math.max(0, Math.min(100, Math.round(openClawStatus.progressPercent)))}%
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRestartGateway}
+                    disabled={isRestartingGateway}
+                    className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isEngineError
+                      ? 'bg-red-600 text-white hover:bg-red-700'
+                      : 'bg-amber-600 text-white hover:bg-amber-700'}`}
+                  >
+                      {i18nService.t('coworkOpenClawRestartGateway')}
+                    </button>
+                </div>
+              </div>
+            )}
+            {agents.length > 1 && (
+              <div className="flex items-center gap-2 px-1">
+                <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('agentActiveLabel')}:
+                </span>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {agents.map(agent => (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedAgentId(agent.id);
+                        // Sync activeAgentId to Redux + persist to DB
+                        dispatch(setActiveAgentId(agent.id));
+                        void coworkService.saveAgents(agents, agent.id);
+                        // Update working directory to match the selected agent
+                        if (agent.workingDirectory) {
+                          void coworkService.updateConfig({ workingDirectory: agent.workingDirectory });
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                        (selectedAgentId || activeAgentId) === agent.id
+                          ? 'bg-claude-accent text-white'
+                          : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:bg-claude-darkSurfaceInset hover:bg-claude-surfaceInset'
+                      }`}
+                    >
+                      {agent.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="shadow-glow-accent rounded-2xl">
               <CoworkPromptInput
                 ref={promptInputRef}

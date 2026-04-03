@@ -17,6 +17,7 @@ import {
   clearPendingPermissions,
   setConfig,
   clearCurrentSession,
+  setAgents,
 } from '../store/slices/coworkSlice';
 import type {
   CoworkSession,
@@ -28,6 +29,7 @@ import type {
   OpenClawEngineStatus,
   CoworkStartOptions,
   CoworkContinueOptions,
+  AgentConfig,
 } from '../types/cowork';
 import { i18nService } from './i18n';
 import { classifyErrorKey } from '../../common/coworkErrorClassify';
@@ -51,6 +53,9 @@ class CoworkService {
 
     // Load initial config
     await this.loadConfig();
+
+    // Load agents
+    await this.loadAgents();
 
     // Load sessions list
     await this.loadSessions();
@@ -113,8 +118,8 @@ class CoworkService {
     this.streamListenerCleanups.push(messageCleanup);
 
     // Message update listener (for streaming content updates)
-    const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content }) => {
-      store.dispatch(updateMessageContent({ sessionId, messageId, content }));
+    const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content, metadata }) => {
+      store.dispatch(updateMessageContent({ sessionId, messageId, content, metadata }));
     });
     this.streamListenerCleanups.push(messageUpdateCleanup);
 
@@ -217,6 +222,29 @@ class CoworkService {
     if (result?.success && result.config) {
       store.dispatch(setConfig(result.config));
     }
+  }
+
+  async loadAgents(): Promise<void> {
+    const result = await window.electron?.cowork?.getAgents();
+    if (result?.success && Array.isArray(result.agents)) {
+      store.dispatch(setAgents({ agents: result.agents as AgentConfig[], activeAgentId: result.activeAgentId || 'main' }));
+    }
+  }
+
+  async saveAgents(agents: AgentConfig[], activeAgentId: string): Promise<{ success: boolean; error?: string }> {
+    const result = await window.electron?.cowork?.setAgents({ agents, activeAgentId });
+    if (result?.success) {
+      store.dispatch(setAgents({ agents, activeAgentId }));
+    }
+    return result ?? { success: false, error: 'API not available' };
+  }
+
+  async pickWorkingDirectory(): Promise<string | null> {
+    const result = await window.electron?.dialog?.selectDirectory();
+    if (result?.success && result.path) {
+      return result.path as string;
+    }
+    return null;
   }
 
   async loadOpenClawEngineStatus(): Promise<OpenClawEngineStatus | null> {

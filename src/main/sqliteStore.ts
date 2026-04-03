@@ -216,6 +216,11 @@ export class SqliteStore {
         this.save();
       }
 
+      if (!columns.includes('agent_id')) {
+        this.db.run('ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT;');
+        this.save();
+      }
+
       // Migration: Add sequence column to cowork_messages
       const msgColsResult = this.db.exec("PRAGMA table_info(cowork_messages);");
       const msgColumns = msgColsResult[0]?.values.map((row) => row[1]) || [];

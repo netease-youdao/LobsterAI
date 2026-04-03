@@ -4,6 +4,7 @@ import type {
   CoworkSessionSummary,
   CoworkMessage,
   CoworkConfig,
+  AgentConfig,
   CoworkPermissionRequest,
   CoworkSessionStatus,
 } from '../../types/cowork';
@@ -28,6 +29,8 @@ interface CoworkState {
   remoteManaged: boolean;
   pendingPermissions: CoworkPermissionRequest[];
   config: CoworkConfig;
+  agents: AgentConfig[];
+  activeAgentId: string;
 }
 
 const initialState: CoworkState = {
@@ -51,7 +54,11 @@ const initialState: CoworkState = {
     memoryLlmJudgeEnabled: false,
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
+    agents: [],
+    activeAgentId: 'main',
   },
+  agents: [],
+  activeAgentId: 'main',
 };
 
 const markSessionRead = (state: CoworkState, sessionId: string | null) => {
@@ -238,8 +245,8 @@ const coworkSlice = createSlice({
       markSessionUnread(state, sessionId);
     },
 
-    updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string }>) {
-      const { sessionId, messageId, content } = action.payload;
+    updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }>) {
+      const { sessionId, messageId, content, metadata } = action.payload;
 
       if (state.currentSession?.id === sessionId) {
         const messageIndex = state.currentSession.messages.findIndex(m => m.id === messageId);
@@ -249,6 +256,13 @@ const coworkSlice = createSlice({
             state.currentSession.messages[messageIndex].content = mergeStreamingMessageContent(previousContent, content);
           } else {
             state.currentSession.messages[messageIndex].content = content;
+          }
+          // Update metadata if provided (e.g. orchProgress updates from subagent poller)
+          if (metadata) {
+            state.currentSession.messages[messageIndex].metadata = {
+              ...state.currentSession.messages[messageIndex].metadata,
+              ...metadata,
+            };
           }
         }
       }
@@ -338,6 +352,15 @@ const coworkSlice = createSlice({
     clearDraftAttachments(state, action: PayloadAction<string>) {
       delete state.draftAttachments[action.payload];
     },
+
+    setAgents(state, action: PayloadAction<{ agents: AgentConfig[]; activeAgentId: string }>) {
+      state.agents = action.payload.agents;
+      state.activeAgentId = action.payload.activeAgentId;
+    },
+
+    setActiveAgentId(state, action: PayloadAction<string>) {
+      state.activeAgentId = action.payload;
+    },
   },
 });
 
@@ -365,6 +388,8 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  setAgents,
+  setActiveAgentId,
 } = coworkSlice.actions;
 
 export default coworkSlice.reducer;

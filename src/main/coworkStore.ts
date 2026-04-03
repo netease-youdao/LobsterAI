@@ -444,6 +444,19 @@ export interface CoworkConversationSearchRecord {
   assistant: string;
 }
 
+// Agent config record stored in cowork_config table
+export interface CoworkAgentRecord {
+  id: string;
+  name: string;
+  workingDirectory: string;
+  systemPrompt: string;
+  executionMode: CoworkExecutionMode;
+  identity: string;
+  soul: string;
+  user: string;
+  invocable?: boolean; // default true
+}
+
 export interface CoworkConfig {
   workingDirectory: string;
   systemPrompt: string;
@@ -454,6 +467,9 @@ export interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: CoworkMemoryGuardLevel;
   memoryUserMemoriesMaxItems: number;
+  // Multi-agent support (optional for backward compat)
+  agents?: CoworkAgentRecord[];
+  activeAgentId?: string;
 }
 
 export type CoworkConfigUpdate = Partial<Pick<
@@ -1111,6 +1127,83 @@ export class CoworkStore {
       `, [String(clampMemoryUserMemoriesMaxItems(config.memoryUserMemoriesMaxItems)), now]);
     }
 
+    this.saveDb();
+  }
+
+  // Multi-agent support — AgentConfig type (mirrors src/renderer/types/cowork.ts)
+  // Defined locally to avoid cross-process import issues.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private parseAgentConfig(raw: unknown): any[] {
+    if (!Array.isArray(raw)) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return raw.filter((a: any) => a && typeof a === 'object' && typeof a.id === 'string' && a.id);
+  }
+
+  getAgents(): { agents: CoworkAgentRecord[]; activeAgentId: string } {
+    interface ConfigRow { value: string; }
+    const agentsRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['agentsConfig']);
+    const activeRow = this.getOne<ConfigRow>('SELECT value FROM cowork_config WHERE key = ?', ['activeAgentId']);
+
+    if (!agentsRow?.value) {
+      // Migration: no agentsConfig yet — bootstrap from legacy single-agent config
+      const legacyConfig = this.getConfig();
+      const defaultAgent: CoworkAgentRecord = {
+        id: 'main',
+        name: '主 Agent',
+        workingDirectory: legacyConfig.workingDirectory,
+        systemPrompt: legacyConfig.systemPrompt,
+        executionMode: legacyConfig.executionMode,
+        identity: '',
+        soul: '',
+        user: '',
+      };
+      this.setAgents([defaultAgent], 'main');
+      return { agents: [defaultAgent], activeAgentId: 'main' };
+    }
+
+    let agents: CoworkAgentRecord[] = [];
+    try {
+      agents = this.parseAgentConfig(JSON.parse(agentsRow.value));
+    } catch {
+      agents = [];
+    }
+
+    if (agents.length === 0) {
+      const legacyConfig = this.getConfig();
+      const defaultAgent: CoworkAgentRecord = {
+        id: 'main',
+        name: '主 Agent',
+        workingDirectory: legacyConfig.workingDirectory,
+        systemPrompt: legacyConfig.systemPrompt,
+        executionMode: legacyConfig.executionMode,
+        identity: '',
+        soul: '',
+        user: '',
+      };
+      this.setAgents([defaultAgent], 'main');
+      return { agents: [defaultAgent], activeAgentId: 'main' };
+    }
+
+    const activeAgentId = activeRow?.value || agents[0]!.id;
+    return { agents, activeAgentId };
+  }
+
+  setAgents(agents: CoworkAgentRecord[], activeAgentId: string): void {
+    const now = Date.now();
+    this.db.run(`
+      INSERT INTO cowork_config (key, value, updated_at)
+      VALUES ('agentsConfig', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
+    `, [JSON.stringify(agents), now]);
+    this.db.run(`
+      INSERT INTO cowork_config (key, value, updated_at)
+      VALUES ('activeAgentId', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
+    `, [activeAgentId, now]);
     this.saveDb();
   }
 
@@ -1869,4 +1962,22 @@ export class CoworkStore {
       updatedAt: row.updated_at,
     };
   }
+}
+
+// ── Singleton accessor ─────────────────────────────────────────────────────────
+// Modules that need a reference to the shared CoworkStore without going through
+// the full sqliteStore initialisation chain can call getCoworkStore().
+// The instance is registered here once by sqliteStore during app startup.
+
+let _sharedCoworkStore: CoworkStore | null = null;
+
+export function registerCoworkStore(store: CoworkStore): void {
+  _sharedCoworkStore = store;
+}
+
+export function getCoworkStore(): CoworkStore {
+  if (!_sharedCoworkStore) {
+    throw new Error('CoworkStore has not been initialised yet. Call registerCoworkStore() first.');
+  }
+  return _sharedCoworkStore;
 }

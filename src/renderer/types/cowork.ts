@@ -27,6 +27,8 @@ export interface CoworkMessageMetadata {
   isFinal?: boolean;
   isThinking?: boolean;
   skillIds?: string[];  // Skills used for this message
+  /** Marks this message as an orchestration log card */
+  isOrchLog?: boolean;
   [key: string]: unknown;
 }
 
@@ -54,6 +56,20 @@ export interface CoworkSession {
   messages: CoworkMessage[];
   createdAt: number;
   updatedAt: number;
+  agentId?: string;
+}
+
+// Agent configuration — one entry per named agent
+export interface AgentConfig {
+  id: string;
+  name: string;
+  workingDirectory: string;
+  systemPrompt: string;
+  executionMode: CoworkExecutionMode;
+  identity: string;   // IDENTITY.md content
+  soul: string;       // SOUL.md content
+  user: string;       // USER.md content
+  invocable?: boolean; // whether this agent can be called by other agents (default: true)
 }
 
 // Cowork configuration
@@ -67,6 +83,9 @@ export interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: 'strict' | 'standard' | 'relaxed';
   memoryUserMemoriesMaxItems: number;
+  // Multi-agent support (optional for backward compat with legacy configs)
+  agents?: AgentConfig[];
+  activeAgentId?: string;
 }
 
 export type CoworkConfigUpdate = Partial<Pick<
@@ -79,6 +98,8 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'memoryLlmJudgeEnabled'
   | 'memoryGuardLevel'
   | 'memoryUserMemoriesMaxItems'
+  | 'agents'
+  | 'activeAgentId'
 >>;
 
 export interface CoworkApiConfig {
@@ -156,6 +177,7 @@ export interface CoworkSessionSummary {
   agentId?: string;
   createdAt: number;
   updatedAt: number;
+  agentId?: string;
 }
 
 // Start session options
@@ -167,6 +189,7 @@ export interface CoworkStartOptions {
   activeSkillIds?: string[];
   agentId?: string;
   imageAttachments?: CoworkImageAttachment[];
+  agentId?: string;
 }
 
 // Continue session options

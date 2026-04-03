@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
+import { RootState } from '../../store';
 import type { CoworkSessionSummary, CoworkSessionStatus } from '../../types/cowork';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
@@ -254,6 +256,12 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     });
   }, [isRenaming]);
 
+  const agents = useSelector((state: RootState) => state.cowork.agents);
+  const sessionAgent = session.agentId ? agents.find(a => a.id === session.agentId) : null;
+  const activeAgentId = useSelector((state: RootState) => state.cowork.activeAgentId);
+  // Only show agent badge when there are multiple agents AND the session uses a non-default agent
+  const showAgentBadge = agents.length > 1 && sessionAgent && sessionAgent.id !== activeAgentId;
+
   const pinButtonLabel = session.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession');
   const actionLabel = i18nService.t('coworkSessionActions');
   const renameLabel = i18nService.t('renameConversation');
@@ -359,6 +367,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
             <span className="text-[10px] uppercase tracking-wider whitespace-nowrap">
               {i18nService.t(statusLabels[session.status])}
             </span>
+            {showAgentBadge && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-claude-accent/15 dark:bg-claude-accent/20 text-claude-accent dark:text-claude-accent truncate max-w-[80px]">
+                {sessionAgent!.name}
+              </span>
+            )}
           </div>
         </div>
       </div>
