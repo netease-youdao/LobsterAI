@@ -481,6 +481,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentIMNotConfiguredHint: '请先在 设置 > IM 机器人 中配置',
     agentIMBound: '已绑定',
     agentIMBindHint: '选择此 Agent 响应的 IM 渠道',
+    deleteAgent: '删除',
+    confirmDeleteAgent: '确认删除？',
+    noSkillsInstalled: '暂无已安装的技能',
+    noMatchingSkills: '没有匹配的技能',
     noPresetsAvailable: '所有预设已添加',
     creating: '创建中...',
 
@@ -1669,6 +1673,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentIMNotConfiguredHint: 'Please configure in Settings > IM Bots first',
     agentIMBound: 'Bound',
     agentIMBindHint: 'Select IM channels this Agent responds to',
+    deleteAgent: 'Delete',
+    confirmDeleteAgent: 'Confirm?',
+    noSkillsInstalled: 'No skills installed',
+    noMatchingSkills: 'No matching skills',
     noPresetsAvailable: 'All presets have been added',
     creating: 'Creating...',
 

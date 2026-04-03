@@ -65,7 +65,7 @@ const AgentSkillSelector: React.FC<AgentSkillSelectorProps> = ({ selectedSkillId
       <div className="flex-1 overflow-y-auto">
         {filteredSkills.length === 0 ? (
           <div className="px-3 py-3 text-sm text-secondary/50 text-center">
-            {enabledSkills.length === 0 ? 'No skills installed' : 'No matching skills'}
+            {enabledSkills.length === 0 ? i18nService.t('noSkillsInstalled') : i18nService.t('noMatchingSkills')}
           </div>
         ) : (
           filteredSkills.map((skill) => {
