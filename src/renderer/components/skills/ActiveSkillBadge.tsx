@@ -6,7 +6,11 @@ import { RootState } from '../../store';
 import { toggleActiveSkill, clearActiveSkills } from '../../store/slices/skillSlice';
 import { i18nService } from '../../services/i18n';
 
-const ActiveSkillBadge: React.FC = () => {
+interface ActiveSkillBadgeProps {
+  className?: string;
+}
+
+const ActiveSkillBadge: React.FC<ActiveSkillBadgeProps> = ({ className }) => {
   const dispatch = useDispatch();
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
@@ -28,7 +32,7 @@ const ActiveSkillBadge: React.FC = () => {
   };
 
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className={`flex items-center gap-1.5 flex-wrap${className ? ` ${className}` : ''}`}>
       {activeSkills.map(skill => (
         <div
           key={skill.id}
