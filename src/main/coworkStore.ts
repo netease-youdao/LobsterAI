@@ -528,10 +528,13 @@ interface CoworkUserMemoryRow {
 export class CoworkStore {
   private db: Database;
   private saveDb: () => void;
+  private scheduledSaveDb: () => void;
 
-  constructor(db: Database, saveDb: () => void) {
+  constructor(db: Database, saveDb: () => void, scheduledSaveDb?: () => void) {
     this.db = db;
     this.saveDb = saveDb;
+    // Fall back to immediate save if no debounced variant is provided
+    this.scheduledSaveDb = scheduledSaveDb ?? saveDb;
   }
 
   private getOne<T>(sql: string, params: (string | number | null)[] = []): T | undefined {
@@ -988,7 +991,8 @@ export class CoworkStore {
       WHERE id = ? AND session_id = ?
     `, values);
 
-    this.saveDb();
+    // High-frequency during streaming — use debounced save to avoid blocking the main process
+    this.scheduledSaveDb();
   }
 
   // Config operations

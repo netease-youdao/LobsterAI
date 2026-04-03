@@ -741,7 +741,7 @@ const ensureOpenClawRunningForCowork = async () => {
 const getCoworkStore = () => {
   if (!coworkStore) {
     const sqliteStore = getStore();
-    coworkStore = new CoworkStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction());
+    coworkStore = new CoworkStore(sqliteStore.getDatabase(), sqliteStore.getSaveFunction(), sqliteStore.getScheduledSaveFunction());
     const cleaned = coworkStore.autoDeleteNonPersonalMemories();
     if (cleaned > 0) {
       console.info(`[cowork-memory] Auto-deleted ${cleaned} non-personal/procedural memories`);

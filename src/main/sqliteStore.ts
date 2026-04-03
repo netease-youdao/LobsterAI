@@ -29,11 +29,14 @@ function loadWasmBinary(): ArrayBuffer {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
+const SAVE_DEBOUNCE_MS = 500;
+
 export class SqliteStore {
   private db: Database;
   private dbPath: string;
   private emitter = new EventEmitter();
   private static sqlPromise: Promise<SqlJsStatic> | null = null;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor(db: Database, dbPath: string) {
     this.db = db;
@@ -301,10 +304,26 @@ export class SqliteStore {
     this.save();
   }
 
+  /** 立即同步落盘（用于初始化迁移、应用退出等关键节点）。 */
   save() {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
     const data = this.db.export();
     const buffer = Buffer.from(data);
     fs.writeFileSync(this.dbPath, buffer);
+  }
+
+  /** 防抖落盘：500ms 内多次调用只触发一次写文件，避免高频写阻塞主进程。 */
+  private scheduleSave() {
+    if (this.saveTimer !== null) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      const data = this.db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(this.dbPath, buffer);
+    }, SAVE_DEBOUNCE_MS);
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
@@ -338,14 +357,14 @@ export class SqliteStore {
         value = excluded.value,
         updated_at = excluded.updated_at
     `, [key, JSON.stringify(value), now]);
-    this.save();
+    this.scheduleSave();
     this.emitter.emit('change', { key, newValue: value, oldValue } as ChangePayload<T>);
   }
 
   delete(key: string): void {
     const oldValue = this.get(key);
     this.db.run('DELETE FROM kv WHERE key = ?', [key]);
-    this.save();
+    this.scheduleSave();
     this.emitter.emit('change', { key, newValue: undefined, oldValue } as ChangePayload);
   }
 
@@ -354,9 +373,15 @@ export class SqliteStore {
     return this.db;
   }
 
-  // Expose save method for external use (e.g., CoworkStore)
+  // Expose save methods for external use (e.g., CoworkStore)
+  // Use scheduleSave for high-frequency writes (streaming updates),
+  // and save for critical checkpoints (session create/delete).
   getSaveFunction(): () => void {
     return () => this.save();
+  }
+
+  getScheduledSaveFunction(): () => void {
+    return () => this.scheduleSave();
   }
 
   private tryReadLegacyMemoryText(): string {
