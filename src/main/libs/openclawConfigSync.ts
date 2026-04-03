@@ -914,7 +914,7 @@ export class OpenClawConfigSync {
               const pluginEnabled = (() => {
                 if (id === 'dingtalk') return !!(dingTalkConfig?.enabled && dingTalkConfig.clientId);
                 if (id === 'feishu-openclaw-plugin') return !!(feishuConfig?.enabled && feishuConfig.appId);
-                if (id === 'qqbot') return !!(qqConfig?.enabled && qqConfig.appId);
+                if (id === 'openclaw-qqbot') return !!(qqConfig?.enabled && qqConfig.appId);
                 if (id === 'wecom-openclaw-plugin') return !!(wecomConfig?.enabled && wecomConfig.botId);
                 if (id === 'moltbot-popo') return !!(popoConfig?.enabled && popoConfig.appKey);
                 if (id === 'nim') return !!(nimConfig?.enabled && nimConfig.appKey && nimConfig.account && nimConfig.token);

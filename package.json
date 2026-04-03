@@ -22,7 +22,7 @@
         "version": "2026.3.8"
       },
       {
-        "id": "qqbot",
+        "id": "openclaw-qqbot",
         "npm": "@sliverp/qqbot",
         "version": "1.5.3"
       },
