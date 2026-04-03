@@ -237,7 +237,93 @@ function isRateLimitErrorMessage(message: string): boolean {
     || normalized.includes('concurrency');
 }
 
-async function requestDirectProviderChat(messages: AgentChatRequest['messages']): Promise<{ model: string; content: string }> {
+const ASSISTANT_META_LINE_PATTERNS = [
+  /^用户(?:要求|问|询问|提问)/,
+  /^根据(?:系统提示|角色设定|要求)/,
+  /^角色设定(?:要点)?[:：]?$/,
+  /^关键要点[:：]?$/,
+  /^内容要点[:：]?$/,
+  /^回复策略[:：]?$/,
+  /^结构(?:示例)?[:：]?$/,
+  /^格式要求[:：]?$/,
+  /^检查(?:要求)?[:：]?$/,
+  /^情绪选择[:：]?$/,
+  /^我(?:需要|应该|会|先|要)/,
+  /^让我(?:构建|组织|生成|回答)/,
+  /^必须(?:以|用|从)/,
+  /^可以(?:使用|自由)/,
+  /^保持角色设定[:：]?$/,
+  /^可用情绪[:：]?$/,
+  /^ACT\s*标签格式[:：]?$/,
+  /^所有ACT标签内的内容必须/,
+  /^- /,
+  /^\d+[.)、]\s+/,
+];
+
+function sanitizeAssistantVisibleText(text: string): string {
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  const withoutControlTokens = normalized
+    .replace(/<\|ACT:[\s\S]*?\|>/gi, ' ')
+    .replace(/<\|DELAY:\d+\|>/gi, ' ')
+    .replace(/\|ACT:\s*\{[\s\S]*?\}\|?/gi, ' ')
+    .replace(/\|DELAY:\s*\d+\|?/gi, ' ')
+    .replace(/lACT:\s*\{[\s\S]*?\}\|?/gi, ' ')
+    .trim();
+
+  const lines = withoutControlTokens
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const visibleLines = lines.filter((line) => {
+    return !ASSISTANT_META_LINE_PATTERNS.some(pattern => pattern.test(line));
+  });
+
+  if (visibleLines.length > 0) {
+    return visibleLines.join('\n').trim();
+  }
+
+  return withoutControlTokens;
+}
+
+function stripAssistantControlTokens(text: string): string {
+  return text
+    .replace(/<\|ACT:[\s\S]*?\|>/gi, '')
+    .replace(/<\|DELAY:\d+\|>/gi, '')
+    .replace(/\|ACT:\s*\{[\s\S]*?\}\|?/gi, '')
+    .replace(/\|DELAY:\s*\d+\|?/gi, '')
+    .replace(/lACT:\s*\{[\s\S]*?\}\|?/gi, '')
+    .trimStart();
+}
+
+function parseSSEPacket(packet: string): string {
+  return packet
+    .split(/\r?\n/)
+    .filter(line => line.startsWith('data:'))
+    .map(line => line.slice(5).trimStart())
+    .join('\n');
+}
+
+function findSSEPacketBoundary(buffer: string): { index: number; separatorLength: number } | null {
+  const match = /\r?\n\r?\n/.exec(buffer);
+  if (!match || typeof match.index !== 'number') {
+    return null;
+  }
+
+  return {
+    index: match.index,
+    separatorLength: match[0].length,
+  };
+}
+
+async function requestDirectProviderChat(
+  messages: AgentChatRequest['messages'],
+  onDelta?: (delta: string) => void | Promise<void>,
+): Promise<{ model: string; content: string }> {
   const resolution = resolveRawApiConfig();
   const apiConfig = resolution.config;
   if (!apiConfig?.baseURL || !apiConfig?.apiKey || !apiConfig?.model) {
@@ -252,11 +338,81 @@ async function requestDirectProviderChat(messages: AgentChatRequest['messages'])
     },
     body: JSON.stringify({
       model: apiConfig.model,
-      stream: false,
+      stream: Boolean(onDelta),
       messages,
-      max_tokens: 512,
+      max_tokens: 256,
     }),
   });
+
+  if (onDelta) {
+    if (!response.ok) {
+      const raw = await response.text();
+      throw new Error(`Direct provider fallback failed: ${response.status} ${raw}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Direct provider fallback returned no readable stream.');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let model = apiConfig.model;
+    let fullContent = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const boundary = findSSEPacketBoundary(buffer);
+        if (!boundary) {
+          break;
+        }
+
+        const packet = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.separatorLength);
+        const payload = parseSSEPacket(packet);
+        if (!payload || payload === '[DONE]') {
+          continue;
+        }
+
+        const parsed = JSON.parse(payload) as {
+          model?: string
+          choices?: Array<{
+            delta?: {
+              content?: string
+            }
+          }>
+        };
+
+        model = parsed.model || model;
+        const rawDelta = typeof parsed.choices?.[0]?.delta?.content === 'string'
+          ? parsed.choices[0].delta.content
+          : '';
+        const delta = stripAssistantControlTokens(rawDelta);
+        if (!delta) {
+          continue;
+        }
+
+        fullContent += delta;
+        await onDelta(delta);
+      }
+    }
+
+    const content = sanitizeAssistantVisibleText(fullContent);
+    if (!content.trim()) {
+      throw new Error('Direct provider fallback returned no visible response.');
+    }
+
+    return {
+      model,
+      content,
+    };
+  }
 
   const raw = await response.text();
   if (!response.ok) {
@@ -274,14 +430,12 @@ async function requestDirectProviderChat(messages: AgentChatRequest['messages'])
   };
 
   const choice = parsed.choices?.[0]?.message;
-  const content = typeof choice?.content === 'string' && choice.content.trim()
-    ? choice.content
-    : typeof choice?.reasoning_content === 'string'
-      ? choice.reasoning_content
-      : '';
+  const visibleContent = sanitizeAssistantVisibleText(typeof choice?.content === 'string' ? choice.content : '');
+  const visibleReasoningFallback = sanitizeAssistantVisibleText(typeof choice?.reasoning_content === 'string' ? choice.reasoning_content : '');
+  const content = visibleContent || visibleReasoningFallback;
 
   if (!content.trim()) {
-    throw new Error('Direct provider fallback returned an empty response.');
+    throw new Error('Direct provider fallback returned no visible response.');
   }
 
   return {
@@ -1111,7 +1265,7 @@ export class AgentApiServer {
 
     const airiSessionId = parsed.airiSessionId.trim();
     const turnId = uuidv4();
-    const canUseDirectBridgePath = skillIds.length === 0 && imageAttachments.length === 0 && fileIds.length === 0;
+    const canUseDirectBridgePath = false;
 
     if (canUseDirectBridgePath) {
       res.writeHead(200, {
@@ -1131,10 +1285,14 @@ export class AgentApiServer {
       this.emitBridgeStateChanged(res, airiSessionId, turnId, 'think');
 
       try {
-        const fallbackMessages = systemPrompt
-          ? [{ role: 'system', content: systemPrompt }, ...messages]
-          : messages;
-        const fallback = await requestDirectProviderChat(fallbackMessages);
+        const fallback = await requestDirectProviderChat(messages, async (delta) => {
+          this.writeBridgeEvent(res, this.createBridgeEvent({
+            type: 'assistant.delta',
+            sessionId: airiSessionId,
+            turnId,
+            text: delta,
+          }));
+        });
         this.emitBridgeStateChanged(res, airiSessionId, turnId, 'success');
         this.writeBridgeEvent(res, this.createBridgeEvent({
           type: 'assistant.final',
@@ -1203,14 +1361,6 @@ export class AgentApiServer {
         thinkingMessageIds.add(message.id);
         messageOffsets.set(message.id, content.length);
         fullThinkingText = content;
-        if (content) {
-          this.writeBridgeEvent(res, this.createBridgeEvent({
-            type: 'reasoning.delta',
-            sessionId: airiSessionId,
-            turnId,
-            text: content,
-          }));
-        }
         return;
       }
       if (message.type === 'assistant') {
@@ -1218,15 +1368,16 @@ export class AgentApiServer {
           fallbackRateLimitMessage = content;
           return;
         }
+        const visibleContent = sanitizeAssistantVisibleText(content);
         assistantMessageIds.add(message.id);
-        messageOffsets.set(message.id, content.length);
-        fullAssistantText = content;
-        if (content) {
+        messageOffsets.set(message.id, visibleContent.length);
+        fullAssistantText = visibleContent;
+        if (visibleContent) {
           this.writeBridgeEvent(res, this.createBridgeEvent({
             type: 'assistant.delta',
             sessionId: airiSessionId,
             turnId,
-            text: content,
+            text: visibleContent,
           }));
         }
         return;
@@ -1266,26 +1417,23 @@ export class AgentApiServer {
       if (sid !== lobsterSessionId) return;
       const previousLength = messageOffsets.get(messageId) || 0;
       const normalizedContent = typeof content === 'string' ? content : '';
-      const nextLength = normalizedContent.length;
+      const visibleContent = assistantMessageIds.has(messageId)
+        ? sanitizeAssistantVisibleText(normalizedContent)
+        : normalizedContent;
+      const nextLength = visibleContent.length;
       if (nextLength <= previousLength) {
         messageOffsets.set(messageId, nextLength);
         return;
       }
-      const deltaContent = normalizedContent.slice(previousLength);
+      const deltaContent = visibleContent.slice(previousLength);
       messageOffsets.set(messageId, nextLength);
       if (!deltaContent) return;
       if (thinkingMessageIds.has(messageId)) {
         fullThinkingText = normalizedContent;
-        this.writeBridgeEvent(res, this.createBridgeEvent({
-          type: 'reasoning.delta',
-          sessionId: airiSessionId,
-          turnId,
-          text: deltaContent,
-        }));
         return;
       }
       if (assistantMessageIds.has(messageId)) {
-        fullAssistantText = normalizedContent;
+        fullAssistantText = visibleContent;
         this.writeBridgeEvent(res, this.createBridgeEvent({
           type: 'assistant.delta',
           sessionId: airiSessionId,
@@ -1414,14 +1562,7 @@ export class AgentApiServer {
       if (!hasError) {
         this.emitStateChanged(lobsterSessionId, turnId, 'success');
         this.emitBridgeStateChanged(res, airiSessionId, turnId, 'success');
-        if (fullThinkingText) {
-          this.writeBridgeEvent(res, this.createBridgeEvent({
-            type: 'reasoning.final',
-            sessionId: airiSessionId,
-            turnId,
-            text: fullThinkingText,
-          }));
-        }
+        fullAssistantText = sanitizeAssistantVisibleText(fullAssistantText);
         this.writeBridgeEvent(res, this.createBridgeEvent({
           type: 'assistant.final',
           sessionId: airiSessionId,
