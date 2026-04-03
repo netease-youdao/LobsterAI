@@ -484,6 +484,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const initialThemeIdRef = useRef<string>(themeService.getThemeId());
   const initialLanguageRef = useRef<LanguageType>(i18nService.getLanguage());
   const didSaveRef = useRef(false);
+  const initialProvidersRef = useRef<string>('');
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
 
   // Add state for active provider
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
@@ -496,6 +498,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+
+  // Record initial providers snapshot for dirty detection
+  useEffect(() => {
+    initialProvidersRef.current = JSON.stringify(providers);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isProvidersDirty = () => {
+    return JSON.stringify(providers) !== initialProvidersRef.current;
+  };
+
+  const handleRequestClose = () => {
+    if (!didSaveRef.current && isProvidersDirty()) {
+      setShowLeaveConfirm(true);
+    } else {
+      onClose();
+    }
+  };
 
   const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'minimax' && providers.minimax.authType === 'oauth');
   
@@ -1573,6 +1593,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       await imService.saveAndSyncConfig();
 
       didSaveRef.current = true;
+      initialProvidersRef.current = JSON.stringify(providers);
       onClose();
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to save settings');
@@ -3615,7 +3636,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   return (
     <div
       className="fixed inset-0 z-50 modal-backdrop flex items-center justify-center"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) handleRequestClose(); }}
     >
       <div
         className="relative flex w-[900px] h-[80vh] rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
@@ -3650,7 +3671,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           <div className="flex justify-between items-center px-6 pt-5 pb-3 shrink-0">
             <h3 className="text-lg font-semibold text-foreground">{activeTabLabel}</h3>
             <button
-              onClick={onClose}
+              onClick={handleRequestClose}
               className="text-secondary hover:text-foreground p-1.5 hover:bg-surface-raised rounded-lg transition-colors"
             >
               <XMarkIcon className="h-5 w-5" />
@@ -3689,7 +3710,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
             <div className="flex justify-end space-x-4 p-4 border-border border-t bg-background shrink-0">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={handleRequestClose}
                 className="px-4 py-2 text-foreground hover:bg-surface-raised rounded-xl transition-colors text-sm font-medium border border-border active:scale-[0.98]"
               >
                 {i18nService.t('cancel')}
@@ -3705,6 +3726,44 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           </form>
 
         </div>
+
+        {/* Unsaved changes confirmation overlay */}
+        {showLeaveConfirm && (
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+            onClick={() => setShowLeaveConfirm(false)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-2xl bg-background border-border border shadow-modal p-5"
+            >
+              <h4 className="text-sm font-semibold text-foreground mb-2">
+                {i18nService.t('settingsUnsavedChanges')}
+              </h4>
+              <p className="text-sm text-secondary mb-4">
+                {i18nService.t('settingsLeaveConfirm')}
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowLeaveConfirm(false)}
+                  className="px-4 py-2 text-foreground hover:bg-surface-raised rounded-xl transition-colors text-sm font-medium border border-border active:scale-[0.98]"
+                >
+                  {i18nService.t('settingsStay')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowLeaveConfirm(false); onClose(); }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl transition-colors text-sm font-medium active:scale-[0.98]"
+                >
+                  {i18nService.t('settingsLeave')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isTestResultModalOpen && testResult && (
           <div

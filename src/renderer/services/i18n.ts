@@ -1193,6 +1193,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogReject: '拒绝',
 
     'settings.enterprise.managed': '由企业统一管理',
+
+    // Settings unsaved changes confirmation
+    settingsUnsavedChanges: '有未保存的修改',
+    settingsLeaveConfirm: '离开后修改将丢失，确认离开吗？',
+    settingsLeave: '离开',
+    settingsStay: '继续编辑',
   },
   en: {
     // Common
@@ -2380,6 +2386,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogReject: 'Decline',
 
     'settings.enterprise.managed': 'Managed by enterprise',
+
+    // Settings unsaved changes confirmation
+    settingsUnsavedChanges: 'Unsaved Changes',
+    settingsLeaveConfirm: 'Your changes will be lost if you leave. Are you sure you want to leave?',
+    settingsLeave: 'Leave',
+    settingsStay: 'Keep Editing',
   }
 };
 
