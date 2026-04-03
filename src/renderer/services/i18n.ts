@@ -511,6 +511,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkAddImage: '添加图片',
     coworkInputFileLabel: '输入文件',
     coworkAttachmentRemove: '移除',
+    coworkClearAllAttachments: '清除全部',
+    coworkClearInput: '清空输入',
     coworkShareSession: '分享',
     coworkExportImageInProgress: '正在导出图片...',
     coworkExportImageSuccess: '图片导出成功',
@@ -1207,7 +1209,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     user: 'User',
     login: 'Login',
     inDevelopment: 'In development',
-    
+
     // Settings
     settings: 'Settings',
     general: 'General',
@@ -1234,7 +1236,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     themeColor: 'Color Themes',
     chinese: 'Chinese',
     english: 'English',
-    
+
     // API Settings
     apiKey: 'API Key',
     apiKeyPlaceholder: 'Enter your API Key',
@@ -1247,7 +1249,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     currentModel: 'Current Model',
     availableModels: 'Available Models',
     modelSwitchHint: 'You can switch models in the chat interface',
-    
+
     // Model Provider Settings
     enabled: 'Enabled',
     disabled: 'Disabled',
@@ -1335,7 +1337,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     passwordMismatch: 'Passwords do not match',
     passwordTooShort: 'Password must be at least 4 characters',
     wrongPassword: 'Wrong password, please try again',
-    
+
     // Shortcuts
     keyboardShortcuts: 'Keyboard Shortcuts',
     shortcutNotSet: 'Not set',
@@ -1371,14 +1373,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     planFree: 'Free',
     planAdvanced: 'Advanced',
     planPro: 'Pro',
-    
+
     // Error Messages
     failedToLoadSettings: 'Failed to load settings',
     failedToSaveSettings: 'Failed to save settings',
-    
+
     // Loading State
     loading: 'Loading...',
-    
+
     // Sidebar
     conversations: 'Conversations',
     noConversations: 'No conversations',
@@ -1416,7 +1418,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     folderIconWork: 'Work',
     folderIconCode: 'Code',
     folderIconIdea: 'Ideas',
-    
+
     // Chat Window
     sendMessage: 'Send Message',
     typeMessage: 'Type a message...',
@@ -1445,17 +1447,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imageLimitReached: 'Up to 10 images',
     imageReadError: 'Failed to read image',
     imageInputNotSupported: 'Current model does not support images',
-    
+
     // Model Selection
     selectModel: 'Select Model',
-    
+
     // Error Messages
     errorOccurred: 'An error occurred',
     tryAgain: 'Please try again',
     networkError: 'Network error',
     apiKeyRequired: 'API Key Required',
     configureApiKey: 'Please configure your API key in settings',
-    
+
     // Initialization
     initializationError: 'Failed to initialize application. Please check your configuration.',
     apiKeyNotConfigured: 'API key not configured. Please set up your API key in settings.',
@@ -1699,6 +1701,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkAddImage: 'Add Image',
     coworkInputFileLabel: 'Input file',
     coworkAttachmentRemove: 'Remove',
+    coworkClearAllAttachments: 'Clear all',
+    coworkClearInput: 'Clear input',
     coworkShareSession: 'Share',
     coworkExportImageInProgress: 'Exporting image...',
     coworkExportImageSuccess: 'Image exported successfully',

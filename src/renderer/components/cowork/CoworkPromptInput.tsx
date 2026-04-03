@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
-import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { PhotoIcon, ExclamationTriangleIcon, BackspaceIcon } from '@heroicons/react/24/outline';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
@@ -614,6 +614,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 </button>
               </div>
           ))}
+          {attachments.length >= 2 && !isStreaming && (
+            <button
+              type="button"
+              onClick={() => dispatch(clearDraftAttachments(draftKey))}
+              className="inline-flex items-center rounded-full px-2 py-1 text-xs text-secondary hover:text-foreground transition-colors"
+              title={i18nService.t('coworkClearAllAttachments')}
+              aria-label={i18nService.t('coworkClearAllAttachments')}
+            >
+              {i18nService.t('coworkClearAllAttachments')}
+            </button>
+          )}
         </div>
       )}
       {imageVisionHint && (
@@ -714,6 +725,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {value.trim().length > 0 && !isStreaming && !disabled && (
+                  <button
+                    type="button"
+                    onClick={() => { setValue(''); textareaRef.current?.focus(); }}
+                    className="p-2 rounded-xl text-secondary hover:text-foreground hover:bg-surface-raised transition-all active:scale-95"
+                    title={i18nService.t('coworkClearInput')}
+                    aria-label={i18nService.t('coworkClearInput')}
+                  >
+                    <BackspaceIcon className="h-5 w-5" />
+                  </button>
+                )}
                 {isStreaming ? (
                   <button
                     type="button"
@@ -764,6 +786,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   <PaperClipIcon className="h-4 w-4" />
                 </button>
               </div>
+            )}
+
+            {value.trim().length > 0 && !isStreaming && !disabled && (
+              <button
+                type="button"
+                onClick={() => { setValue(''); textareaRef.current?.focus(); }}
+                className="flex-shrink-0 p-1.5 rounded-lg text-secondary hover:text-foreground hover:bg-surface-raised transition-all active:scale-95"
+                title={i18nService.t('coworkClearInput')}
+                aria-label={i18nService.t('coworkClearInput')}
+              >
+                <BackspaceIcon className="h-4 w-4" />
+              </button>
             )}
 
             {isStreaming ? (
