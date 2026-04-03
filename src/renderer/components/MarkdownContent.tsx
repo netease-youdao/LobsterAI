@@ -12,13 +12,25 @@ import 'katex/contrib/mhchem';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 // @ts-ignore
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon, EyeIcon } from '@heroicons/react/24/outline';
 // @ts-ignore
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../services/i18n';
+import MermaidBlock from './artifacts/MermaidBlock';
+import type { ActiveArtifact } from '../types/artifact';
 
 const CODE_BLOCK_LINE_LIMIT = 200;
 const CODE_BLOCK_CHAR_LIMIT = 20000;
+
+const ARTIFACT_LANG_RE = /^artifact:(html|svg|mermaid|react|code)$/;
+
+const isHtmlArtifact = (content: string): boolean => {
+  const trimmed = content.trimStart().toLowerCase();
+  return trimmed.startsWith('<!doctype html') ||
+    trimmed.startsWith('<html') ||
+    (trimmed.includes('<head') && trimmed.includes('<body'));
+};
+
 const SYNTAX_HIGHLIGHTER_STYLE = {
   margin: 0,
   borderRadius: 0,
@@ -198,7 +210,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
   const normalizedClassName = Array.isArray(className)
     ? className.join(' ')
     : className || '';
-  const match = /language-([\w-]+)/.exec(normalizedClassName);
+  const match = /language-([\w:-]+)/.exec(normalizedClassName);
   const hasPosition = node?.position?.start?.line != null && node?.position?.end?.line != null;
   const isInline = typeof props.inline === 'boolean'
     ? props.inline
@@ -219,6 +231,10 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
     'code[class*="language-"]': { ...(oneLight as Record<string, React.CSSProperties>)['code[class*="language-"]'], background: '#f0f2f5' },
   };
 
+  // Artifact-related props passed through createMarkdownComponents
+  const isStreamingProp = props.isStreaming as boolean | undefined;
+  const onOpenArtifact = props.onOpenArtifact as ((artifact: ActiveArtifact) => void) | undefined;
+
   useEffect(() => () => {
     if (copyTimeoutRef.current != null) {
       window.clearTimeout(copyTimeoutRef.current);
@@ -237,6 +253,139 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
       console.error('Failed to copy code block: ', error);
     }
   }, [trimmedCodeText]);
+
+  if (!isInline && match) {
+    const lang = match[1].toLowerCase();
+
+    // Explicit artifact:xxx marker (highest priority)
+    const artifactMatch = ARTIFACT_LANG_RE.exec(lang);
+    if (artifactMatch) {
+      const artifactType = artifactMatch[1] as 'html' | 'svg' | 'mermaid' | 'react' | 'code';
+      if (artifactType === 'mermaid') {
+        return <MermaidBlock content={trimmedCodeText} isStreaming={isStreamingProp} />;
+      }
+      if (artifactType === 'html' || artifactType === 'react') {
+        return (
+          <div className="my-3 rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border relative shadow-subtle">
+            <div className="dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted px-4 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary font-medium flex items-center justify-between">
+              <span>{lang}</span>
+              <div className="flex items-center gap-1">
+                {onOpenArtifact && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenArtifact({
+                      type: artifactType,
+                      title: i18nService.t(artifactType === 'react' ? 'artifactReactPreview' : 'artifactHtmlPreview'),
+                      content: trimmedCodeText,
+                      sourceMessageId: null,
+                    })}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 dark:bg-claude-darkSurfaceHover/60 bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                    title={i18nService.t('artifactPreview')}
+                    aria-label={i18nService.t('artifactPreview')}
+                  >
+                    <EyeIcon className="h-4 w-4" />
+                    <span>{i18nService.t('artifactPreview')}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className="p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                  title={i18nService.t('copyToClipboard')}
+                  aria-label={i18nService.t('copyToClipboard')}
+                >
+                  {isCopied ? (
+                    <CheckIcon className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <ClipboardDocumentIcon className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+            {shouldHighlight ? (
+                <SyntaxHighlighter
+                  style={oneDark}
+                  language={artifactType === 'react' ? 'jsx' : 'html'}
+                  PreTag="div"
+                  customStyle={SYNTAX_HIGHLIGHTER_STYLE}
+                >
+                {trimmedCodeText}
+              </SyntaxHighlighter>
+            ) : (
+              <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
+                <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+                  {trimmedCodeText}
+                </code>
+              </div>
+            )}
+          </div>
+        );
+      }
+      // code and svg types fall through to normal code block
+    }
+
+    // Heuristic: bare 'mermaid' language tag
+    if (lang === 'mermaid') {
+      return <MermaidBlock content={trimmedCodeText} isStreaming={isStreamingProp} />;
+    }
+
+    // Heuristic: HTML artifact detection
+    if (lang === 'html' && isHtmlArtifact(trimmedCodeText) && onOpenArtifact) {
+      return (
+        <div className="my-3 rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border relative shadow-subtle">
+          <div className="dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted px-4 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary font-medium flex items-center justify-between">
+            <span>{lang}</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onOpenArtifact({
+                  type: 'html',
+                  title: i18nService.t('artifactHtmlPreview'),
+                  content: trimmedCodeText,
+                  sourceMessageId: null,
+                })}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 dark:bg-claude-darkSurfaceHover/60 bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                title={i18nService.t('artifactPreview')}
+                aria-label={i18nService.t('artifactPreview')}
+              >
+                <EyeIcon className="h-4 w-4" />
+                <span>{i18nService.t('artifactPreview')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                title={i18nService.t('copyToClipboard')}
+                aria-label={i18nService.t('copyToClipboard')}
+              >
+                {isCopied ? (
+                  <CheckIcon className="h-4 w-4 text-green-500" />
+                ) : (
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          </div>
+          {shouldHighlight ? (
+            <SyntaxHighlighter
+              style={oneDark}
+              language="html"
+              PreTag="div"
+              customStyle={SYNTAX_HIGHLIGHTER_STYLE}
+            >
+              {trimmedCodeText}
+            </SyntaxHighlighter>
+          ) : (
+            <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
+              <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+                {trimmedCodeText}
+              </code>
+            </div>
+          )}
+        </div>
+      );
+    }
+  }
 
   if (!isInline) {
     // Simple code block without language - minimal styling
@@ -424,6 +573,8 @@ const findFallbackPathFromContext = (
 const createMarkdownComponents = (
   resolveLocalFilePath?: (href: string, text: string) => string | null,
   showRevealInFolderAction = false,
+  isStreaming?: boolean,
+  onOpenArtifact?: (artifact: ActiveArtifact) => void,
 ) => ({
   p: ({ node, className, children, ...props }: any) => (
     <p className="my-1 first:mt-0 last:mb-0 leading-6 text-foreground" {...props}>
@@ -470,7 +621,7 @@ const createMarkdownComponents = (
       {children}
     </blockquote>
   ),
-  code: CodeBlock,
+  code: (props: any) => <CodeBlock {...props} isStreaming={isStreaming} onOpenArtifact={onOpenArtifact} />,
   table: ({ node, className, children, ...props }: any) => (
     <div className="my-4 overflow-x-auto rounded-xl border border-border">
       <table className="border-collapse w-full" {...props}>
@@ -673,6 +824,8 @@ interface MarkdownContentProps {
   content: string;
   className?: string;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
+  isStreaming?: boolean;
+  onOpenArtifact?: (artifact: ActiveArtifact) => void;
   showRevealInFolderAction?: boolean;
 }
 
@@ -680,11 +833,13 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   content,
   className = '',
   resolveLocalFilePath,
+  isStreaming,
+  onOpenArtifact,
   showRevealInFolderAction = false,
 }) => {
   const components = useMemo(
-    () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction),
-    [resolveLocalFilePath, showRevealInFolderAction]
+    () => createMarkdownComponents(resolveLocalFilePath, showRevealInFolderAction, isStreaming, onOpenArtifact),
+    [resolveLocalFilePath, showRevealInFolderAction, isStreaming, onOpenArtifact],
   );
   const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
   return (

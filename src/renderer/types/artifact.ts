@@ -18,3 +18,12 @@ export interface ArtifactMarker {
   language?: string;
   fullMatch: string;
 }
+
+/** Artifact currently displayed in the side panel */
+export interface ActiveArtifact {
+  type: ArtifactType;
+  title: string;
+  content: string;
+  language?: string;
+  sourceMessageId: string | null;
+}
