@@ -28,6 +28,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     aboutVersion: '版本',
     aboutContactEmail: '联系邮箱',
     aboutUserManual: '用户手册',
+    aboutUserCommunity: '用户社群',
     aboutServiceTerms: '服务条款',
     aboutExportLogs: '导出日志',
     aboutExportingLogs: '导出中...',
@@ -41,6 +42,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     light: '浅色',
     dark: '深色',
     system: '跟随系统',
+    themeColor: '主题色',
     chinese: '中文',
     english: 'English',
     
@@ -117,6 +119,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     minimaxOAuthRelogin: '重新登录',
     minimaxOAuthLogout: '退出登录',
     minimaxOAuthHint: '通过 MiniMax Portal 完成 OAuth 授权，无需手动填写 API 密钥',
+    addCustomProvider: '+ 添加自定义',
+    customBadge: '自定义',
+    customDisplayName: '显示名称',
+    customDisplayNamePlaceholder: '输入自定义名称...',
+    deleteCustomProvider: '删除',
+    confirmDeleteCustomProvider: '确定删除此自定义模型配置？',
     import: '导入',
     export: '导出',
     importProvidersFailed: '导入失败',
@@ -141,6 +149,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     
     // 快捷键
     keyboardShortcuts: '键盘快捷键',
+    shortcutNotSet: '未设置',
     newChat: '新建任务',
     search: '搜索任务',
     openSettings: '打开设置',
@@ -453,8 +462,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     customCreate: '自定义创建',
     choosePreset: '选择预设',
     agentSettings: 'Agent 设置',
-    agentName: '名称',
-    agentNamePlaceholder: 'Agent 名称',
+     agentName: '名称',
+     agentNamePlaceholder: 'Agent 名称',
+     emojiPickerTitle: '选择图标',
+     emojiCustomInput: '或者直接输入 Emoji',
     agentDescription: '描述',
     agentDescriptionPlaceholder: '简短描述',
     agentIdentity: '身份',
@@ -661,6 +672,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillBuiltInCannotDelete: '系统内置技能不允许删除',
     skillDownloadFailed: '下载技能失败',
     skillUpdateFailed: '更新技能失败',
+    skillUpgrade: '更新',
+    skillUpgradeAll: '更新全部 ({count})',
+    skillUpgrading: '正在更新技能 ({current}/{total})',
+    skillUpgradingCurrent: '当前：{name} v{version}',
+    skillUpgradeFailed: '更新失败',
+    skillUpgradeAvailable: '有新版本',
+    skillUpgradeCancel: '取消更新',
     activeSkill: '当前技能',
     clearSkill: '清除技能',
     clearAll: '全部清除',
@@ -767,6 +785,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     showInFolder: '在文件夹中显示',
     outputFiles: '输出文件',
     openFileFailed: '打开文件失败',
+    showInFolderFailed: '打开文件所在目录失败',
     fileCreated: '文件已创建',
 
     // IM Bot
@@ -777,7 +796,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     telegram: 'Telegram',
     discord: 'Discord',
     nim: '云信',
-    xiaomifeng: '小蜜蜂',
+    'netease-bee': '小蜜蜂',
     weixin: '微信',
     wecom: '企业微信',
     popo: 'POPO',
@@ -858,7 +877,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimQChatServerIds: '圈组服务器 ID',
     nimQChatServerIdsPlaceholder: '留空自动发现所有已加入的服务器',
     nimQChatServerIdsHint: '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。',
-    xiaomifengClientIdPlaceholder: '小蜜蜂助理Client ID',
+    neteaseBeeChanClientIdPlaceholder: '小蜜蜂助理Client ID',
 
     // IM 设置页面国际化
     imAdvancedSettings: '高级设置',
@@ -1179,6 +1198,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: '网易有道LobsterAI服务协议',
     privacyDialogAccept: '我已阅读并同意',
     privacyDialogReject: '拒绝',
+
+    'settings.enterprise.managed': '由企业统一管理',
   },
   en: {
     // Common
@@ -1203,6 +1224,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     aboutVersion: 'Version',
     aboutContactEmail: 'Contact Email',
     aboutUserManual: 'User Manual',
+    aboutUserCommunity: 'User Community',
     aboutServiceTerms: 'Terms of Service',
     aboutExportLogs: 'Export Logs',
     aboutExportingLogs: 'Exporting...',
@@ -1216,6 +1238,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     light: 'Light',
     dark: 'Dark',
     system: 'System',
+    themeColor: 'Color Themes',
     chinese: 'Chinese',
     english: 'English',
     
@@ -1292,6 +1315,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     minimaxOAuthRelogin: 'Re-login',
     minimaxOAuthLogout: 'Log out',
     minimaxOAuthHint: 'Authorize via MiniMax Portal OAuth, no need to enter API key manually',
+    addCustomProvider: '+ Add Custom',
+    customBadge: 'Custom',
+    customDisplayName: 'Display Name',
+    customDisplayNamePlaceholder: 'Enter custom name...',
+    deleteCustomProvider: 'Delete',
+    confirmDeleteCustomProvider: 'Delete this custom model configuration?',
     import: 'Import',
     export: 'Export',
     importProvidersFailed: 'Failed to import providers',
@@ -1316,6 +1345,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     
     // Shortcuts
     keyboardShortcuts: 'Keyboard Shortcuts',
+    shortcutNotSet: 'Not set',
     newChat: 'New Task',
     search: 'Search Tasks',
     openSettings: 'Open Settings',
@@ -1627,8 +1657,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     customCreate: 'Custom Create',
     choosePreset: 'Choose Preset',
     agentSettings: 'Agent Settings',
-    agentName: 'Name',
-    agentNamePlaceholder: 'Agent name',
+     agentName: 'Name',
+     agentNamePlaceholder: 'Agent name',
+     emojiPickerTitle: 'Choose icon',
+     emojiCustomInput: 'Or type an emoji',
     agentDescription: 'Description',
     agentDescriptionPlaceholder: 'Brief description',
     agentIdentity: 'Identity',
@@ -1835,6 +1867,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillBuiltInCannotDelete: 'Built-in skills cannot be deleted',
     skillDownloadFailed: 'Failed to download skill',
     skillUpdateFailed: 'Failed to update skill',
+    skillUpgrade: 'Update',
+    skillUpgradeAll: 'Update All ({count})',
+    skillUpgrading: 'Updating skills ({current}/{total})',
+    skillUpgradingCurrent: 'Current: {name} v{version}',
+    skillUpgradeFailed: 'Update failed',
+    skillUpgradeAvailable: 'Update available',
+    skillUpgradeCancel: 'Cancel Update',
     activeSkill: 'Active Skill',
     clearSkill: 'Clear Skill',
     clearAll: 'Clear All',
@@ -1941,6 +1980,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     showInFolder: 'Show in Folder',
     outputFiles: 'Output Files',
     openFileFailed: 'Failed to open file',
+    showInFolderFailed: 'Failed to show file in folder',
     fileCreated: 'File created',
 
     // IM Bot
@@ -1951,7 +1991,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     telegram: 'Telegram',
     discord: 'Discord',
     nim: 'NetEase IM',
-    xiaomifeng: 'Netease Bee',
+    'netease-bee': 'Netease Bee',
     weixin: 'WeChat',
     wecom: 'WeCom',    popo: 'POPO',
     connected: 'Connected',
@@ -2031,7 +2071,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimQChatServerIds: 'QChat Server IDs',
     nimQChatServerIdsPlaceholder: 'Leave empty to auto-discover all joined servers',
     nimQChatServerIdsHint: 'Specify server IDs to subscribe, separated by commas. Leave empty to auto-subscribe all joined servers.',
-    xiaomifengClientIdPlaceholder: 'Netease Bee IM Client ID',
+    neteaseBeeChanClientIdPlaceholder: 'Netease Bee IM Client ID',
 
     // IM settings page i18n
     imAdvancedSettings: 'Advanced Settings',
@@ -2352,6 +2392,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
+
+    'settings.enterprise.managed': 'Managed by enterprise',
   }
 };
 

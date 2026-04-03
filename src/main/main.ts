@@ -20,6 +20,7 @@ import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter, setAuthTo
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setProxyTokenRefresher } from './libs/coworkOpenAICompatProxy';
+import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import {
   listPairingRequests,
@@ -45,25 +46,30 @@ import {
   OpenClawChannelSessionSync,
   buildManagedSessionKey,
   DEFAULT_MANAGED_AGENT_ID,
-  CHANNEL_PLATFORM_MAP,
-  PLATFORM_TO_CHANNEL_MAP,
 } from './libs/openclawChannelSessionSync';
-import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
+import { IMGatewayManager, IMGatewayConfig } from './im';
+import type { Platform } from './im/types';
 import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import { setLanguage, t } from './i18n';
 import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
 import { McpStore } from './mcpStore';
-import { CronJobService } from '../scheduled-task/cronJobService';
-import { migrateScheduledTasksToOpenclaw, migrateScheduledTaskRunsToOpenclaw } from '../scheduled-task/migrate';
-import { buildScheduledTaskEnginePrompt } from '../scheduled-task/enginePrompt';
-import { IpcChannel as ScheduledTaskIpc, DeliveryMode as STDeliveryMode, SessionTarget as STSessionTarget, PayloadKind as STPayloadKind } from '../scheduled-task/constants';
+import { migrateScheduledTasksToOpenclaw, migrateScheduledTaskRunsToOpenclaw } from '../scheduledTask/migrate';
+import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
+import { PlatformRegistry } from '../shared/platform';
+import {
+  getCronJobService,
+  initCronJobServiceManager,
+  registerScheduledTaskHandlers,
+  initScheduledTaskHelpers,
+} from './ipcHandlers/scheduledTask';
 import { McpServerManager } from './libs/mcpServerManager';
 import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
+import { resolveEnterpriseConfigPath, syncEnterpriseConfig, mergeEnterpriseOpenclawConfig } from './libs/enterpriseConfigSync';
 import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
@@ -91,18 +97,6 @@ const IPC_MAX_KEYS = 80;
 const IPC_MAX_ITEMS = 40;
 const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const ENGINE_NOT_READY_CODE = 'ENGINE_NOT_READY';
-const SCHEDULED_TASK_CHANNEL_OPTIONS = [
-  { value: 'dingtalk', label: 'DingTalk' },
-  { value: 'feishu', label: 'Feishu' },
-  { value: 'telegram', label: 'Telegram' },
-  { value: 'discord', label: 'Discord' },
-  { value: 'qqbot', label: 'QQ' },
-  { value: 'wecom', label: 'WeCom' },
-  { value: 'popo', label: 'POPO' },
-  { value: 'nim', label: 'NIM' },
-  { value: 'openclaw-weixin', label: 'WeChat' },
-  { value: 'xiaomifeng', label: 'Xiaomifeng' },
-] as const;
 const MIME_EXTENSION_MAP: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
@@ -574,7 +568,6 @@ let mcpBridgeServer: McpBridgeServer | null = null;
 let mcpBridgeSecret: string | null = null;
 let mcpBridgeStartPromise: Promise<McpBridgeConfig | null> | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
-let cronJobService: CronJobService | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
 let openClawEngineManager: OpenClawEngineManager | null = null;
 let openClawConfigSync: OpenClawConfigSync | null = null;
@@ -718,21 +711,11 @@ const ensureOpenClawRunningForCowork = async () => {
   const manager = getOpenClawEngineManager();
   const status = manager.getStatus();
   if (status.phase === 'running') {
-    // If the gateway is already running but a token refresh is in flight,
-    // wait for it and then re-sync secret env vars so the gateway gets
-    // the fresh token on its next restart (or immediately if we detect a change).
+    // Token proxy handles dynamic token injection — no need to restart
+    // the gateway for token changes. Just wait for any in-flight refresh.
     if (pendingTokenRefresh) {
       console.log('[OpenClaw] ensureRunning: awaiting pending token refresh before proceeding');
       await pendingTokenRefresh.catch(() => {});
-      // After refresh, update gateway secret env vars in case the token changed.
-      const nextEnv = getOpenClawConfigSync().collectSecretEnvVars();
-      const prevEnv = getOpenClawEngineManager().getSecretEnvVars();
-      if (JSON.stringify(nextEnv) !== JSON.stringify(prevEnv)) {
-        console.log('[OpenClaw] ensureRunning: token changed during pending refresh, syncing config');
-        getOpenClawEngineManager().setSecretEnvVars(nextEnv);
-        // Gateway env vars are fixed at spawn; must restart to pick up new token.
-        await syncOpenClawConfig({ reason: 'token-refresh:ensureRunning', restartGatewayIfRunning: true });
-      }
     }
     return manager.getStatus();
   }
@@ -793,6 +776,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
     openClawConfigSync = new OpenClawConfigSync({
       engineManager: getOpenClawEngineManager(),
       getCoworkConfig: () => getCoworkStore().getConfig(),
+      isEnterprise: () => !!getStore().get('enterprise_config'),
       getSkillsList: () => getSkillManager().listSkills().map(s => ({ id: s.id, enabled: s.enabled })),
       getTelegramOpenClawConfig: () => {
         try {
@@ -843,6 +827,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           return null;
         }
       },
+      getNeteaseBeeChanConfig: () => {
+        try {
+          return getIMGatewayManager().getConfig()['netease-bee'];
+        } catch {
+          return null;
+        }
+      },
       getWeixinConfig: () => {
         try {
           return getIMGatewayManager().getConfig().weixin;
@@ -882,13 +873,23 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
 };
 
 // Deferred gateway restart: when a config change requires a gateway restart
-// but active cowork sessions exist, we defer the restart until all sessions
-// complete.  A polling interval checks periodically; a hard timeout ensures
-// the restart eventually happens even if a session hangs.
+// but active cowork sessions or cron jobs exist, we defer the restart until
+// all workloads complete.  A polling interval checks periodically; a hard
+// timeout ensures the restart eventually happens even if a session hangs.
 let deferredRestartTimer: ReturnType<typeof setInterval> | null = null;
 let deferredRestartTimeout: ReturnType<typeof setTimeout> | null = null;
 const DEFERRED_RESTART_POLL_MS = 3_000;
 const DEFERRED_RESTART_MAX_WAIT_MS = 5 * 60_000; // 5 minutes hard cap
+
+const hasActiveGatewayWorkloads = (): boolean => {
+  if (openClawRuntimeAdapter?.hasActiveSessions()) return true;
+  try {
+    if (getCronJobService()?.hasRunningJobs()) return true;
+  } catch {
+    // CronJobService may not be initialized yet.
+  }
+  return false;
+};
 
 const clearDeferredRestart = () => {
   if (deferredRestartTimer) { clearInterval(deferredRestartTimer); deferredRestartTimer = null; }
@@ -910,7 +911,7 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   }
 
   deferredRestartTimer = setInterval(() => {
-    if (!openClawRuntimeAdapter?.hasActiveSessions()) {
+    if (!hasActiveGatewayWorkloads()) {
       void executeDeferredGatewayRestart(reason);
     }
   }, DEFERRED_RESTART_POLL_MS);
@@ -925,15 +926,15 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
 const syncOpenClawConfig = async (
   options: { reason: string; restartGatewayIfRunning?: boolean } = { reason: 'unknown' },
 ): Promise<{ success: boolean; changed: boolean; status?: OpenClawEngineStatus; error?: string }> => {
-  // When a restart would be needed and there are active sessions, defer the
-  // entire sync (including the config file write) to avoid triggering
-  // OpenClaw's built-in file-watcher reload (SIGUSR1) which would kill
-  // in-flight conversations even without our explicit gateway restart.
-  if (options.restartGatewayIfRunning && openClawRuntimeAdapter?.hasActiveSessions()) {
+  // When the gateway is running and there are active workloads (cowork
+  // sessions OR running cron jobs), defer the entire sync — including the
+  // config file write — to avoid triggering OpenClaw's built-in file-watcher
+  // reload (SIGUSR1) which would drain in-flight conversations and cron tasks.
+  if (hasActiveGatewayWorkloads()) {
     const manager = getOpenClawEngineManager();
     const status = manager.getStatus();
     if (status.phase === 'running') {
-      console.log(`[OpenClaw] syncOpenClawConfig: deferring entire config sync because active sessions exist (reason: ${options.reason})`);
+      console.log(`[OpenClaw] syncOpenClawConfig: deferring entire config sync because active workloads exist (reason: ${options.reason})`);
       scheduleDeferredGatewayRestart(options.reason);
       return {
         success: true,
@@ -955,6 +956,12 @@ const syncOpenClawConfig = async (
       error: syncResult.error,
     };
   }
+
+  // After every successful config sync, merge enterprise openclaw.json
+  // fields into the generated runtime config. Enterprise values win.
+  try {
+    mergeEnterpriseOpenclawConfig(getOpenClawEngineManager().getConfigPath());
+  } catch { /* non-critical */ }
 
   // Update secret env vars so the gateway process receives the latest
   // plaintext credentials via environment variables (openclaw.json only
@@ -1373,7 +1380,7 @@ const getIMGatewayManager = () => {
           //     sessionId,
           //   );
           // }
-          const channelName = PLATFORM_TO_CHANNEL_MAP[message.platform];
+          const channelName = PlatformRegistry.channelOf(message.platform);
           const hasChannel = !!(channelName && message.conversationId);
           // Strip IM subtype prefix (e.g. "direct:ou_xxx" -> "ou_xxx")
           let deliveryTo = message.conversationId;
@@ -1481,51 +1488,6 @@ const getIMGatewayManager = () => {
   }
   return imGatewayManager;
 };
-
-const getCronJobService = (): CronJobService => {
-  if (!cronJobService) {
-    if (!openClawRuntimeAdapter) {
-      throw new Error('OpenClaw runtime adapter not initialized. CronJobService requires OpenClaw.');
-    }
-    const adapter = openClawRuntimeAdapter;
-    cronJobService = new CronJobService({
-      getGatewayClient: () => adapter.getGatewayClient(),
-      ensureGatewayReady: () => adapter.ensureReady(),
-    });
-  }
-  return cronJobService;
-};
-
-function listScheduledTaskChannels(): Array<{ value: string; label: string }> {
-  const manager = getIMGatewayManager();
-  const config = manager?.getConfig();
-  if (!config) {
-    return [...SCHEDULED_TASK_CHANNEL_OPTIONS];
-  }
-
-  const enabledConfigKeys = new Set<string>();
-  const configEntries: Array<[string, unknown]> = Object.entries(
-    config as unknown as Record<string, unknown>,
-  );
-  for (const [key, value] of configEntries) {
-    if (value && typeof value === 'object' && (value as { enabled?: boolean }).enabled) {
-      enabledConfigKeys.add(key);
-    }
-  }
-
-  return SCHEDULED_TASK_CHANNEL_OPTIONS.filter((option) => {
-    if (option.value === 'dingtalk') {
-      return enabledConfigKeys.has('dingtalk');
-    }
-    if (option.value === 'qqbot') {
-      return enabledConfigKeys.has('qq');
-    }
-    if (option.value === 'openclaw-weixin') {
-      return enabledConfigKeys.has('weixin');
-    }
-    return enabledConfigKeys.has(option.value);
-  });
-}
 
 function mergeCoworkSystemPrompt(
   engine: CoworkAgentEngine,
@@ -1764,6 +1726,14 @@ if (!gotTheLock) {
 
   ipcMain.handle('store:remove', (_event, key) => {
     getStore().delete(key);
+  });
+
+  ipcMain.handle('enterprise:getConfig', async () => {
+    try {
+      return getStore().get('enterprise_config') ?? null;
+    } catch {
+      return null;
+    }
   });
 
   // Network status change handler
@@ -2239,6 +2209,10 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:download', async (_event, source: string) => {
     return getSkillManager().downloadSkill(source);
+  });
+
+  ipcMain.handle('skills:upgrade', async (_event, skillId: string, downloadUrl: string) => {
+    return getSkillManager().upgradeSkill(skillId, downloadUrl);
   });
 
   ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
@@ -3263,248 +3237,16 @@ if (!gotTheLock) {
 
   // ==================== Scheduled Task IPC Handlers (OpenClaw) ====================
 
-  ipcMain.handle(ScheduledTaskIpc.List, async () => {
-    try {
-      // If OpenClaw gateway is not connected yet, return empty list immediately
-      // to avoid blocking the renderer init. Tasks will be loaded later via the
-      // onRefresh listener when the gateway becomes available.
-      if (!openClawRuntimeAdapter?.getGatewayClient()) {
-        return { success: true, tasks: [] };
-      }
-      const tasks = await getCronJobService().listJobs();
-      return { success: true, tasks };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to list tasks' };
-    }
+  initCronJobServiceManager({
+    getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter,
   });
-
-  ipcMain.handle(ScheduledTaskIpc.Get, async (_event, id: string) => {
-    try {
-      const task = await getCronJobService().getJob(id);
-      return { success: true, task };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to get task' };
-    }
+  initScheduledTaskHelpers({
+    getIMGatewayManager: () => getIMGatewayManager() as any,
   });
-
-  ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
-    try {
-      const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.log('[IPC][scheduledTask:create] normalizedInput:', JSON.stringify(normalizedInput, null, 2));
-      console.log('[IPC][scheduledTask:create] delivery:', JSON.stringify(normalizedInput.delivery, null, 2));
-
-      // When an IM conversation is selected as notification target, let OpenClaw
-      // handle delivery natively via its announce mechanism. We keep
-      // sessionTarget='isolated' and delivery.mode='announce' so OpenClaw runs
-      // the agent in an isolated cron session and delivers the result through
-      // its outbound channel adapter (e.g. feishu plugin).
-      //
-      // DingTalk still needs the reply route primed so the outbound adapter
-      // can locate the correct conversation.
-      const delivery = normalizedInput.delivery;
-      if (delivery && delivery.mode === STDeliveryMode.Announce && delivery.channel && delivery.to) {
-        const platform = CHANNEL_PLATFORM_MAP[delivery.channel] as IMPlatform | undefined;
-        if (platform) {
-          console.log('[IPC][scheduledTask:create] IM notification target detected, using OpenClaw native announce delivery.',
-            JSON.stringify({ channel: delivery.channel, to: delivery.to, platform }));
-          normalizedInput.sessionTarget = STSessionTarget.Isolated;
-          if (normalizedInput.payload?.kind === STPayloadKind.SystemEvent) {
-            normalizedInput.payload = {
-              kind: STPayloadKind.AgentTurn,
-              message: normalizedInput.payload.text || '',
-            };
-          }
-          // Strip IM subtype prefix from delivery.to before passing to OpenClaw.
-          // LobsterAI stores conversationIds with subtype prefixes (e.g. "direct:ou_xxx",
-          // "group:oc_xxx") but OpenClaw channel adapters expect raw platform IDs
-          // (e.g. "ou_xxx", "oc_xxx").
-          const rawTo = delivery.to;
-          const colonIdx = rawTo.indexOf(':');
-          if (colonIdx > 0) {
-            delivery.to = rawTo.slice(colonIdx + 1);
-            console.log('[IPC][scheduledTask:create] stripped IM subtype prefix from delivery.to:',
-              rawTo, '->', delivery.to);
-          }
-          if (platform === 'dingtalk') {
-            const imStore = getIMGatewayManager()?.getIMStore();
-            const mapping = imStore?.getSessionMapping(rawTo, platform);
-            if (mapping) {
-              await getIMGatewayManager().primeConversationReplyRoute(
-                platform, rawTo, mapping.coworkSessionId,
-              );
-            }
-          }
-        }
-      }
-
-      const task = await getCronJobService().addJob(normalizedInput);
-      console.log('[IPC][scheduledTask:create] result task id:', task?.id, 'name:', task?.name);
-      return { success: true, task };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to create task' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.Update, async (_event, id: string, input: any) => {
-    try {
-      const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.log('[IPC][scheduledTask:update] id:', id, 'normalizedInput:', JSON.stringify(normalizedInput, null, 2));
-      console.log('[IPC][scheduledTask:update] delivery:', JSON.stringify(normalizedInput.delivery, null, 2));
-
-      // Same OpenClaw native announce delivery logic as create handler.
-      const delivery = normalizedInput.delivery;
-      if (delivery && delivery.mode === STDeliveryMode.Announce && delivery.channel && delivery.to) {
-        const platform = CHANNEL_PLATFORM_MAP[delivery.channel] as IMPlatform | undefined;
-        if (platform) {
-          console.log('[IPC][scheduledTask:update] IM notification target detected, using OpenClaw native announce delivery.',
-            JSON.stringify({ channel: delivery.channel, to: delivery.to, platform }));
-          normalizedInput.sessionTarget = STSessionTarget.Isolated;
-          if (normalizedInput.payload?.kind === STPayloadKind.SystemEvent) {
-            normalizedInput.payload = {
-              kind: STPayloadKind.AgentTurn,
-              message: normalizedInput.payload.text || '',
-            };
-          }
-          // Strip IM subtype prefix (e.g. "direct:ou_xxx" -> "ou_xxx")
-          const rawTo = delivery.to;
-          const colonIdx = rawTo.indexOf(':');
-          if (colonIdx > 0) {
-            delivery.to = rawTo.slice(colonIdx + 1);
-            console.log('[IPC][scheduledTask:update] stripped IM subtype prefix from delivery.to:',
-              rawTo, '->', delivery.to);
-          }
-          if (platform === 'dingtalk') {
-            const imStore = getIMGatewayManager()?.getIMStore();
-            const mapping = imStore?.getSessionMapping(rawTo, platform);
-            if (mapping) {
-              await getIMGatewayManager().primeConversationReplyRoute(
-                platform, rawTo, mapping.coworkSessionId,
-              );
-            }
-          }
-        }
-      }
-
-      const task = await getCronJobService().updateJob(id, normalizedInput);
-      console.log('[IPC][scheduledTask:update] result task id:', task?.id, 'name:', task?.name);
-      return { success: true, task };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to update task' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.Delete, async (_event, id: string) => {
-    try {
-      await getCronJobService().removeJob(id);
-      return { success: true, result: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete task' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.Toggle, async (_event, id: string, enabled: boolean) => {
-    try {
-      const task = await getCronJobService().toggleJob(id, enabled);
-      return { success: true, task };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to toggle task' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.RunManually, async (_event, id: string) => {
-    try {
-      await getCronJobService().runJob(id);
-      return { success: true };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error(`[IPC] Manual run failed for ${id}:`, msg);
-      return { success: false, error: msg };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.Stop, async (_event, id: string) => {
-    try {
-      // OpenClaw doesn't expose a direct stop API for running cron jobs
-      // The job will complete or timeout on its own
-      return { success: true, result: false };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to stop task' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.ListRuns, async (_event, taskId: string, limit?: number, offset?: number) => {
-    try {
-      const runs = await getCronJobService().listRuns(taskId, limit, offset);
-      return { success: true, runs };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to list runs' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.CountRuns, async (_event, taskId: string) => {
-    try {
-      const count = await getCronJobService().countRuns(taskId);
-      return { success: true, count };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to count runs' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.ListAllRuns, async (_event, limit?: number, offset?: number) => {
-    try {
-      const runs = await getCronJobService().listAllRuns(limit, offset);
-      return { success: true, runs };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to list all runs' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.ResolveSession, async (_event, sessionKey: string) => {
-    try {
-      if (!sessionKey) return { success: true, session: null };
-      // Fetch session history from OpenClaw (returns transient session, not persisted)
-      const session = await openClawRuntimeAdapter?.fetchSessionByKey(sessionKey);
-      return { success: true, session: session ?? null };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to resolve session' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.ListChannels, async () => {
-    try {
-      return { success: true, channels: listScheduledTaskChannels() };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to list channels' };
-    }
-  });
-
-  ipcMain.handle(ScheduledTaskIpc.ListChannelConversations, async (_event, channel: string) => {
-    try {
-      console.log('[IPC][listChannelConversations] channel:', channel);
-      const platform = CHANNEL_PLATFORM_MAP[channel] as IMPlatform | undefined;
-      console.log('[IPC][listChannelConversations] resolved platform:', platform);
-      if (!platform) {
-        console.log('[IPC][listChannelConversations] no platform mapping, returning empty');
-        return { success: true, conversations: [] };
-      }
-      const imStore = getIMGatewayManager()?.getIMStore();
-      if (!imStore) {
-        console.log('[IPC][listChannelConversations] no imStore available, returning empty');
-        return { success: true, conversations: [] };
-      }
-      const mappings = imStore.listSessionMappings(platform);
-      console.log('[IPC][listChannelConversations] found', mappings.length, 'session mappings for platform:', platform);
-      const conversations = mappings.map((m) => ({
-        conversationId: m.imConversationId,
-        platform: m.platform,
-        coworkSessionId: m.coworkSessionId,
-        lastActiveAt: m.lastActiveAt,
-      }));
-      console.log('[IPC][listChannelConversations] conversations:', JSON.stringify(conversations, null, 2));
-      return { success: true, conversations };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to list conversations' };
-    }
+  registerScheduledTaskHandlers({
+    getCronJobService,
+    getIMGatewayManager: () => getIMGatewayManager() as any,
+    getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter as any,
   });
 
   // ==================== Permissions IPC Handlers ====================
@@ -3651,7 +3393,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:gateway:start', async (_event, platform: IMPlatform) => {
+  ipcMain.handle('im:gateway:start', async (_event, platform: Platform) => {
     try {
       // Persist enabled state
       const manager = getIMGatewayManager();
@@ -3666,7 +3408,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:gateway:stop', async (_event, platform: IMPlatform) => {
+  ipcMain.handle('im:gateway:stop', async (_event, platform: Platform) => {
     try {
       // Persist disabled state
       const manager = getIMGatewayManager();
@@ -3683,7 +3425,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('im:gateway:test', async (
     _event,
-    platform: IMPlatform,
+    platform: Platform,
     configOverride?: Partial<IMGatewayConfig>
   ) => {
     try {
@@ -4051,6 +3793,11 @@ if (!gotTheLock) {
 
   // App update download & install
   ipcMain.handle('appUpdate:download', async (event, url: string) => {
+    // Block downloads in enterprise mode
+    const enterprise = getStore().get<{ disableUpdate?: boolean }>('enterprise_config');
+    if (enterprise?.disableUpdate) {
+      return { success: false, error: 'Updates are managed by enterprise' };
+    }
     try {
       const filePath = await downloadUpdate(url, (progress) => {
         if (!event.sender.isDestroyed()) {
@@ -4519,6 +4266,8 @@ if (!gotTheLock) {
       console.error('Failed to stop OpenAI compatibility proxy:', error);
     });
 
+    stopOpenClawTokenProxy();
+
     // Stop skill services.
     const skillServices = getSkillServiceManager();
     await skillServices.stopAll();
@@ -4537,8 +4286,10 @@ if (!gotTheLock) {
     }
 
     // Stop the cron job polling
-    if (cronJobService) {
-      cronJobService.stopPolling();
+    try {
+      getCronJobService().stopPolling();
+    } catch {
+      // CronJobService may not have been initialized — safe to ignore.
     }
   };
 
@@ -4652,9 +4403,9 @@ if (!gotTheLock) {
               saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
               console.log(`[Auth] token refresh succeeded (reason: ${reason})`);
               resolvedToken = body.data.accessToken;
-              // Sync the fresh token to the OpenClaw gateway so it doesn't
-              // continue using the expired token from its spawn-time env vars.
-              syncOpenClawConfig({ reason: `token-refresh:${reason}`, restartGatewayIfRunning: true }).catch((err) => {
+              // Token proxy handles fresh tokens dynamically — no need
+              // to restart the gateway on token refresh.
+              syncOpenClawConfig({ reason: `token-refresh:${reason}`, restartGatewayIfRunning: false }).catch((err) => {
                 console.warn('[Auth] post-refresh OpenClaw config sync failed:', err);
               });
             }
@@ -4688,6 +4439,83 @@ if (!gotTheLock) {
     // on 401/403 with a fresh accessToken instead of failing immediately.
     // Delegates to the shared refreshOnce() to avoid concurrent refresh races.
     setProxyTokenRefresher(() => refreshOnce('proxy'));
+
+    // Start the lightweight token proxy before OpenClaw config sync so that
+    // lobsterai-server provider can use the proxy URL in its config.
+    try {
+      await startOpenClawTokenProxy({
+        getAuthTokens,
+        refreshToken: refreshOnce,
+        getServerBaseUrl: getServerApiBaseUrl,
+      });
+      console.log('[Main] OpenClaw token proxy started');
+    } catch (err) {
+      console.warn('[Main] OpenClaw token proxy failed to start (non-fatal):', err);
+    }
+
+    // Enterprise config sync — must run before openclawConfigSync
+    // so enterprise data is in SQLite when the config is generated.
+    const enterpriseConfigPath = resolveEnterpriseConfigPath();
+    if (enterpriseConfigPath) {
+      try {
+        const imStoreInstance = getIMGatewayManager().getIMStore();
+        const mcpStoreInstance = getMcpStore();
+        syncEnterpriseConfig(
+          enterpriseConfigPath,
+          store,
+          imStoreInstance,
+          (server) => {
+            const existing = mcpStoreInstance.listServers().find(s => s.name === server.name);
+            if (existing) {
+              mcpStoreInstance.updateServer(existing.id, {
+                name: server.name,
+                description: server.description,
+                transportType: server.transportType as 'stdio' | 'sse' | 'http',
+                command: server.command,
+                args: server.args,
+                env: server.env,
+              });
+            } else {
+              mcpStoreInstance.createServer({
+                name: server.name,
+                description: server.description,
+                transportType: server.transportType as 'stdio' | 'sse' | 'http',
+                command: server.command,
+                args: server.args,
+                env: server.env,
+              });
+            }
+          },
+          () => {
+            // Clear all MCP servers (for overwrite mode)
+            for (const s of mcpStoreInstance.listServers()) {
+              mcpStoreInstance.deleteServer(s.id);
+            }
+          },
+          (config) => {
+            const cs = getCoworkStore();
+            cs.setConfig(config);
+          },
+          () => {
+            const cs = getCoworkStore();
+            return cs.getConfig().workingDirectory;
+          },
+        );
+      } catch (error) {
+        console.error('[Enterprise] config sync failed:', error);
+      }
+    } else {
+      // No enterprise config package found — clear any previously stored config
+      // so the app exits enterprise mode after the package is removed.
+      const hadEnterprise = store.get('enterprise_config');
+      if (hadEnterprise) {
+        store.delete('enterprise_config');
+        // Reset executionMode to default so sandbox mode reverts to "off".
+        const cs = getCoworkStore();
+        cs.setConfig({ executionMode: 'local' });
+        console.log('[Enterprise] config package removed, cleared enterprise mode and reset executionMode');
+      }
+    }
 
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
@@ -4731,6 +4559,13 @@ if (!gotTheLock) {
       console.log('[Main] initApp: syncBundledSkillsToUserData done');
     } catch (error) {
       console.error('[Main] initApp: syncBundledSkillsToUserData failed:', error);
+    }
+
+    try {
+      manager.recoverInterruptedUpgrades();
+      console.log('[Main] initApp: recoverInterruptedUpgrades done');
+    } catch (error) {
+      console.error('[Main] initApp: recoverInterruptedUpgrades failed:', error);
     }
 
     try {

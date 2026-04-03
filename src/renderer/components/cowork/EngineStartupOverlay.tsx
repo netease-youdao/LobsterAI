@@ -56,24 +56,24 @@ const EngineStartupOverlay: React.FC = () => {
     : null;
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center dark:bg-claude-darkBg/90 bg-claude-bg/90 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface p-6 shadow-card">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-2xl border border-border bg-surface p-6 shadow-card">
         <div className="flex flex-col items-center text-center gap-3">
-          <div className="h-10 w-10 rounded-full bg-claude-accent/15 text-claude-accent flex items-center justify-center animate-pulse">
+          <div className="h-10 w-10 rounded-full bg-primary/15 text-primary flex items-center justify-center animate-pulse">
             <ChatBubbleLeftRightIcon className="h-5 w-5" />
           </div>
-          <div className="text-sm dark:text-claude-darkText text-claude-text">
+          <div className="text-sm text-foreground">
             {resolveEngineStatusText(status)}
           </div>
           {progressPercent !== null && (
             <div className="w-full space-y-1">
-              <div className="h-1.5 w-full rounded-full bg-claude-accent/15 overflow-hidden">
+              <div className="h-1.5 w-full rounded-full bg-primary/15 overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-claude-accent transition-all"
+                  className="h-full rounded-full bg-primary transition-all"
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
-              <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <div className="text-xs text-secondary">
                 {progressPercent}%
               </div>
             </div>

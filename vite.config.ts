@@ -62,6 +62,7 @@ export default defineConfig({
   base: process.env.NODE_ENV === 'development' ? '/' : './',
   resolve: {
     alias: {
+      '@shared': path.resolve(__dirname, './src/shared'),
       '@': path.resolve(__dirname, './src/renderer'),
     },
   },

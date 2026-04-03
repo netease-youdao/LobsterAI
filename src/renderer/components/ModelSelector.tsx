@@ -42,7 +42,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
   // 如果没有可用模型，显示提示
   if (availableModels.length === 0) {
     return (
-      <div className="px-3 py-1.5 rounded-xl dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary text-sm">
+      <div className="px-3 py-1.5 rounded-xl bg-surface text-secondary text-sm">
         {i18nService.t('modelSelectorNoModels')}
       </div>
     );
@@ -60,31 +60,31 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
     <button
       key={getModelIdentityKey(model)}
       onClick={() => handleModelSelect(model)}
-      className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
-        isSameModelIdentity(model, selectedModel) ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+      className={`w-full px-4 py-2.5 text-left text-foreground hover:bg-surface-raised flex items-center justify-between transition-colors ${
+        isSameModelIdentity(model, selectedModel) ? 'bg-surface-raised/50' : ''
       }`}
     >
       <div className="flex flex-col">
         <div className="flex items-center gap-1.5">
           <span className="text-sm">{model.name}</span>
           {model.supportsImage && (
-            <span className="text-[10px] leading-none px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent whitespace-nowrap">
+            <span className="text-[10px] leading-none px-1.5 py-0.5 rounded-md bg-primary/10 text-primary whitespace-nowrap">
               {i18nService.t('imageInput')}
             </span>
           )}
         </div>
         {model.provider && (
-          <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{model.provider}</span>
+          <span className="text-xs text-secondary">{model.provider}</span>
         )}
       </div>
       {isSameModelIdentity(model, selectedModel) && (
-        <CheckIcon className="h-4 w-4 text-claude-accent" />
+        <CheckIcon className="h-4 w-4 text-primary" />
       )}
     </button>
   );
 
   const renderGroupHeader = (label: string) => (
-    <div className="px-4 py-1.5 text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider">
+    <div className="px-4 py-1.5 text-xs font-medium text-secondary uppercase tracking-wider">
       {label}
     </div>
   );
@@ -93,20 +93,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
     <div ref={containerRef} className="relative cursor-pointer">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkText text-claude-text transition-colors cursor-pointer ${isOpen ? 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover' : ''}`}
+        className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-surface-raised text-foreground transition-colors cursor-pointer ${isOpen ? 'bg-surface-raised' : ''}`}
       >
         <span className="font-medium text-sm">{selectedModel.name}</span>
-        <ChevronDownIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+        <ChevronDownIcon className="h-4 w-4 text-secondary" />
       </button>
 
       {isOpen && (
-        <div className={`absolute ${dropdownPositionClass} w-60 dark:bg-claude-darkSurface bg-claude-surface rounded-xl popover-enter shadow-popover z-50 dark:border-claude-darkBorder border-claude-border border overflow-hidden`}>
+        <div className={`absolute ${dropdownPositionClass} w-60 bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}>
           <div className="max-h-64 overflow-y-auto">
             {hasBothGroups ? (
               <>
                 {renderGroupHeader(i18nService.t('modelGroupServer'))}
                 {serverModels.map(renderModelItem)}
-                <div className="my-1 border-t dark:border-claude-darkBorder border-claude-border" />
+                <div className="my-1 border-t border-border" />
                 {renderGroupHeader(i18nService.t('modelGroupUser'))}
                 {userModels.map(renderModelItem)}
               </>

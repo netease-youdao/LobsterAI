@@ -12,9 +12,10 @@
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "paths": {
+      "@shared/*": ["src/shared/*"],
       "*": ["node_modules/*"]
     }
   },
-  "include": ["src/main", "src/common"],
+  "include": ["src/main", "src/common", "src/shared"],
   "exclude": ["src/**/*.test.*", "src/**/*.spec.*"]
 }

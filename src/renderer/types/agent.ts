@@ -20,9 +20,12 @@ export interface Agent {
 export interface PresetAgent {
   id: string;
   name: string;
+  nameEn: string;
   icon: string;
   description: string;
+  descriptionEn: string;
   systemPrompt: string;
+  systemPromptEn: string;
   skillIds: string[];
   installed: boolean;
 }

@@ -4,6 +4,8 @@
  */
 
 import { store } from '../store';
+import { PlatformRegistry } from '@shared/platform';
+import type { Platform } from '@shared/platform';
 import {
   setConfig,
   setStatus,
@@ -13,7 +15,6 @@ import {
 import type {
   IMGatewayConfig,
   IMGatewayStatus,
-  IMPlatform,
   IMConfigResult,
   IMStatusResult,
   IMGatewayResult,
@@ -167,7 +168,7 @@ class IMService {
   /**
    * Start a gateway
    */
-  async startGateway(platform: IMPlatform): Promise<boolean> {
+  async startGateway(platform: Platform): Promise<boolean> {
     try {
       store.dispatch(setLoading(true));
       store.dispatch(setError(null));
@@ -191,7 +192,7 @@ class IMService {
   /**
    * Stop a gateway
    */
-  async stopGateway(platform: IMPlatform): Promise<boolean> {
+  async stopGateway(platform: Platform): Promise<boolean> {
     try {
       store.dispatch(setLoading(true));
       const result: IMGatewayResult = await window.electron.im.stopGateway(platform);
@@ -215,7 +216,7 @@ class IMService {
    * Test gateway connectivity and conversation readiness
    */
   async testGateway(
-    platform: IMPlatform,
+    platform: Platform,
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult | null> {
     try {
@@ -254,7 +255,7 @@ class IMService {
    */
   isAnyConnected(): boolean {
     const status = this.getStatus();
-    return status.dingtalk.connected || status.feishu.connected || status.telegram.connected || status.discord.connected || status.nim.connected || status.xiaomifeng.connected || status.wecom.connected || status.popo.connected;
+    return PlatformRegistry.platforms.some(p => status[p]?.connected);
   }
 
   /**

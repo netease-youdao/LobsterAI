@@ -13,7 +13,7 @@ import type {
   QQOpenClawConfig,
   DiscordOpenClawConfig,
   NimConfig,
-  XiaomifengConfig,
+  NeteaseBeeChanConfig,
   WecomOpenClawConfig,
   PopoOpenClawConfig,
   WeixinOpenClawConfig,
@@ -66,8 +66,8 @@ const imSlice = createSlice({
     setNimConfig: (state, action: PayloadAction<Partial<NimConfig>>) => {
       state.config.nim = { ...state.config.nim, ...action.payload };
     },
-    setXiaomifengConfig: (state, action: PayloadAction<Partial<XiaomifengConfig>>) => {
-      state.config.xiaomifeng = { ...state.config.xiaomifeng, ...action.payload };
+    setNeteaseBeeChanConfig: (state, action: PayloadAction<Partial<NeteaseBeeChanConfig>>) => {
+      state.config['netease-bee'] = { ...state.config['netease-bee'], ...action.payload };
     },
     setWecomConfig: (state, action: PayloadAction<Partial<WecomOpenClawConfig>>) => {
       state.config.wecom = { ...state.config.wecom, ...action.payload };
@@ -104,7 +104,7 @@ export const {
   setQQConfig,
   setDiscordConfig,
   setNimConfig,
-  setXiaomifengConfig,
+  setNeteaseBeeChanConfig,
   setWecomConfig,
   setPopoConfig,
   setWeixinConfig,

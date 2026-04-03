@@ -1,5 +1,5 @@
 /**
- * Centralized constants for the scheduled-task module.
+ * Centralized constants for the scheduledTask module.
  *
  * Every discriminated-union kind value, delivery mode, session target, wake mode,
  * status code, IPC channel name, and magic string lives here as an `as const`

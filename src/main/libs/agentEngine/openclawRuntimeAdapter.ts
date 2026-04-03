@@ -28,6 +28,7 @@ import {
   extractGatewayHistoryEntries,
   extractGatewayMessageText,
 } from '../openclawHistory';
+import { extractOpenClawAssistantStreamText } from '../openclawAssistantText';
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
 import { isDeleteCommand, getCommandDangerLevel } from '../commandSafety';
 import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
@@ -220,6 +221,34 @@ const stripQQBotSystemPrompt = (text: string): string => {
 };
 
 const extractMessageText = extractGatewayMessageText;
+
+const summarizeGatewayMessageShape = (message: unknown): string => {
+  if (!isRecord(message)) {
+    return `non-record:${typeof message}`;
+  }
+
+  const role = typeof message.role === 'string' ? message.role : '?';
+  const content = message.content;
+  if (typeof content === 'string') {
+    return `role=${role} content=string(${content.length}) text="${truncate(content, 120)}"`;
+  }
+  if (Array.isArray(content)) {
+    const parts = content.map((item) => {
+      if (!isRecord(item)) return typeof item;
+      const type = typeof item.type === 'string' ? item.type : 'object';
+      const text = typeof item.text === 'string' ? `:${truncate(item.text, 60)}` : '';
+      return `${type}${text}`;
+    });
+    return `role=${role} content=[${parts.join(', ')}]`;
+  }
+  if (isRecord(content)) {
+    return `role=${role} contentKeys=${Object.keys(content).join(',')}`;
+  }
+  if (typeof message.text === 'string') {
+    return `role=${role} text=${truncate(message.text, 120)}`;
+  }
+  return `role=${role} keys=${Object.keys(message).join(',')}`;
+};
 
 const extractTextBlocksAndSignals = (
   message: unknown,
@@ -489,6 +518,10 @@ const mergeStreamingText = (
   }
 
   return { text: previousText + incomingText, mode: 'delta' };
+};
+
+const sleep = async (ms: number): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 };
 
 const waitWithTimeout = async (promise: Promise<void>, timeoutMs: number): Promise<void> => {
@@ -1078,7 +1111,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       agentId?: string;
     },
   ): Promise<void> {
-    if (!prompt.trim()) {
+    if (!prompt.trim() && (!options.imageAttachments || options.imageAttachments.length === 0)) {
       throw new Error('Prompt is required.');
     }
     if (this.activeTurns.has(sessionId)) {
@@ -1225,7 +1258,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     sections.push(buildOpenClawLocalTimeContextPrompt());
 
     if (this.bridgedSessions.has(sessionId)) {
-      sections.push(`[Current user request]\n${prompt}`);
+      if (prompt.trim()) {
+        sections.push(`[Current user request]\n${prompt}`);
+      }
       return sections.join('\n\n');
     }
 
@@ -1254,7 +1289,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
     }
 
-    sections.push(`[Current user request]\n${prompt}`);
+    if (prompt.trim()) {
+      sections.push(`[Current user request]\n${prompt}`);
+    }
     return sections.join('\n\n');
   }
 
@@ -2236,6 +2273,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const chatPayload = payload as ChatEventPayload;
     const state = chatPayload.state;
     if (!state) return;
+    console.debug(
+      '[OpenClawRuntime] handleChatEvent:',
+      `state=${state}`,
+      `runId=${typeof chatPayload.runId === 'string' ? chatPayload.runId : ''}`,
+      `sessionKey=${typeof chatPayload.sessionKey === 'string' ? chatPayload.sessionKey : ''}`,
+      `message=${summarizeGatewayMessageShape(chatPayload.message)}`
+    );
 
     const chatRunId = typeof chatPayload.runId === 'string' ? chatPayload.runId.trim() : '';
     const chatSessionKey = typeof chatPayload.sessionKey === 'string' ? chatPayload.sessionKey.trim() : '';
@@ -2380,15 +2424,45 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (p.stream !== 'assistant') return;
 
     const dataField = isRecord(p.data) ? p.data as Record<string, unknown> : p;
-    const text = typeof dataField.text === 'string' ? dataField.text : '';
+    const text = extractOpenClawAssistantStreamText(dataField) || extractOpenClawAssistantStreamText(p);
 
     const runId = typeof p.runId === 'string' ? p.runId.trim() : '';
-    const sessionId = runId ? this.sessionIdByRunId.get(runId) : undefined;
+    const sessionKey = typeof p.sessionKey === 'string' ? p.sessionKey.trim() : '';
+    let sessionId = runId ? this.sessionIdByRunId.get(runId) : undefined;
+    if (!sessionId && sessionKey) {
+      sessionId = this.resolveSessionIdBySessionKey(sessionKey) ?? undefined;
+      if (!sessionId && this.channelSessionSync) {
+        sessionId = this.channelSessionSync.resolveOrCreateSession(sessionKey)
+          || (!this.heartbeatSessionKeys.has(sessionKey) && this.channelSessionSync.resolveOrCreateMainAgentSession(sessionKey))
+          || this.channelSessionSync.resolveOrCreateCronSession(sessionKey)
+          || undefined;
+        if (sessionId) {
+          this.rememberSessionKey(sessionId, sessionKey);
+        }
+      }
+      if (sessionId && !this.activeTurns.has(sessionId)) {
+        this.ensureActiveTurn(sessionId, sessionKey, runId);
+      }
+      if (sessionId && runId) {
+        this.bindRunIdToTurn(sessionId, runId);
+      }
+    }
     const turn = sessionId ? this.activeTurns.get(sessionId) : undefined;
 
     if (!text || !turn || !sessionId) {
       if (text) {
-        console.debug('[Debug:processAssistant] skipped: text.len:', text.length, 'runId:', runId.slice(0, 8), 'sid:', !!sessionId, 'turn:', !!turn);
+        console.debug(
+          '[Debug:processAssistant] skipped: text.len:',
+          text.length,
+          'runId:',
+          runId.slice(0, 8),
+          'sessionKey:',
+          sessionKey,
+          'sid:',
+          !!sessionId,
+          'turn:',
+          !!turn
+        );
       }
       return;
     }
@@ -2521,6 +2595,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const previousText = turn.currentText;
     const previousSegmentText = turn.currentAssistantSegmentText;
     const finalText = this.resolveFinalTurnText(turn, payload.message);
+    console.debug(
+      '[OpenClawRuntime] handleChatFinal:',
+      `sessionId=${sessionId}`,
+      `runId=${payload.runId ?? turn.runId}`,
+      `message=${summarizeGatewayMessageShape(payload.message)}`,
+      `previousTextLen=${previousText.length}`,
+      `finalTextLen=${finalText.length}`,
+      `finalText="${truncate(finalText, 200)}"`
+    );
     turn.currentText = finalText;
     if (finalText && turn.currentContentBlocks.length === 0) {
       turn.currentContentText = finalText;
@@ -2568,6 +2651,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         turn.assistantMessageId = assistantMessage.id;
         this.emit('message', sessionId, assistantMessage);
       }
+    }
+
+    if (!finalText.trim()) {
+      console.debug(
+        '[OpenClawRuntime] handleChatFinal: final payload had no text, falling back to chat.history sync',
+        `sessionId=${sessionId}`,
+        `runId=${payload.runId ?? turn.runId}`
+      );
+      await this.syncFinalAssistantWithHistory(sessionId, turn);
     }
 
     const messageRecord = isRecord(payload.message) ? payload.message : null;
@@ -3001,90 +3093,102 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     try {
-      const history = await client.request<{ messages?: unknown[] }>('chat.history', {
-        sessionKey: turn.sessionKey,
-        limit: FINAL_HISTORY_SYNC_LIMIT,
-      });
-      const msgCount = Array.isArray(history?.messages) ? history.messages.length : 0;
-      console.log('[Debug:syncFinal] chat.history returned', msgCount, 'messages');
-      if (!Array.isArray(history?.messages) || history.messages.length === 0) {
-        this.gatewayHistoryCountBySession.set(sessionId, 0);
-        return;
-      }
-      const previousHistoryCountKnown = this.gatewayHistoryCountBySession.has(sessionId);
-      const previousHistoryCount = this.gatewayHistoryCountBySession.get(sessionId) ?? 0;
-      this.syncSystemMessagesFromHistory(sessionId, history.messages, {
-        previousCountKnown: previousHistoryCountKnown,
-        previousCount: previousHistoryCount,
-      });
+      const retryDelaysMs = [0, 120, 250, 500];
+      let historyMessages: unknown[] | null = null;
+      let canonicalText = '';
+      let isChannel = false;
 
-      // Debug: dump all history message roles and content types
-      for (let i = 0; i < history.messages.length; i++) {
-        const m = history.messages[i] as Record<string, unknown>;
-        if (!isRecord(m)) continue;
-        const r = typeof m.role === 'string' ? m.role : '?';
-        let contentSummary: string;
-        if (Array.isArray(m.content)) {
-          const types = (m.content as Array<Record<string, unknown>>).filter(isRecord).map((b) => b.type);
-          contentSummary = `blocks:[${types.join(',')}]`;
-        } else if (typeof m.content === 'string') {
-          contentSummary = `text(${(m.content as string).length})`;
-        } else {
-          contentSummary = String(typeof m.content);
+      for (const delayMs of retryDelaysMs) {
+        if (delayMs > 0) {
+          await sleep(delayMs);
         }
-        console.log(`[Debug:syncFinal:history] [${i}] role=${r} content=${contentSummary}`);
-        // Print non-text blocks for tool/assistant messages
-        if (r !== 'user' && Array.isArray(m.content)) {
-          for (const block of m.content as Array<Record<string, unknown>>) {
-            if (isRecord(block) && typeof block.type === 'string' && block.type !== 'text' && block.type !== 'thinking') {
-              console.log(`[Debug:syncFinal:history] [${i}] block:`, JSON.stringify(block).slice(0, 800));
+
+        const history = await client.request<{ messages?: unknown[] }>('chat.history', {
+          sessionKey: turn.sessionKey,
+          limit: FINAL_HISTORY_SYNC_LIMIT,
+        });
+        const msgCount = Array.isArray(history?.messages) ? history.messages.length : 0;
+        console.log('[Debug:syncFinal] chat.history returned', msgCount, 'messages', `afterDelay=${delayMs}`);
+        if (!Array.isArray(history?.messages) || history.messages.length === 0) {
+          this.gatewayHistoryCountBySession.set(sessionId, 0);
+          continue;
+        }
+
+        historyMessages = history.messages;
+        const previousHistoryCountKnown = this.gatewayHistoryCountBySession.has(sessionId);
+        const previousHistoryCount = this.gatewayHistoryCountBySession.get(sessionId) ?? 0;
+        this.syncSystemMessagesFromHistory(sessionId, history.messages, {
+          previousCountKnown: previousHistoryCountKnown,
+          previousCount: previousHistoryCount,
+        });
+
+        // Debug: dump all history message roles and content types
+        for (let i = 0; i < history.messages.length; i++) {
+          const m = history.messages[i] as Record<string, unknown>;
+          if (!isRecord(m)) continue;
+          const r = typeof m.role === 'string' ? m.role : '?';
+          let contentSummary: string;
+          if (Array.isArray(m.content)) {
+            const types = (m.content as Array<Record<string, unknown>>).filter(isRecord).map((b) => b.type);
+            contentSummary = `blocks:[${types.join(',')}]`;
+          } else if (typeof m.content === 'string') {
+            contentSummary = `text(${(m.content as string).length})`;
+          } else {
+            contentSummary = String(typeof m.content);
+          }
+          console.log(`[Debug:syncFinal:history] [${i}] role=${r} content=${contentSummary}`);
+          if (r !== 'user' && Array.isArray(m.content)) {
+            for (const block of m.content as Array<Record<string, unknown>>) {
+              if (isRecord(block) && typeof block.type === 'string' && block.type !== 'text' && block.type !== 'thinking') {
+                console.log(`[Debug:syncFinal:history] [${i}] block:`, JSON.stringify(block).slice(0, 800));
+              }
             }
           }
         }
-      }
 
-      // For channel sessions, sync user messages that may have been missed during
-      // prefetch (gateway history might not include in-progress run messages).
-      const isChannel = this.channelSessionSync
-        && !isManagedSessionKey(turn.sessionKey)
-        && this.channelSessionSync.isChannelSessionKey(turn.sessionKey);
-      if (isChannel) {
-        const latestOnly = this.reCreatedChannelSessionIds.has(sessionId);
-                this.syncChannelUserMessages(sessionId, history.messages, latestOnly, turn.sessionKey.includes(':discord:'), turn.sessionKey.includes(':qqbot:'), turn.sessionKey.includes(':moltbot-popo:'));
-      }
+        isChannel = Boolean(
+          this.channelSessionSync
+          && !isManagedSessionKey(turn.sessionKey)
+          && this.channelSessionSync.isChannelSessionKey(turn.sessionKey)
+        );
+        if (isChannel) {
+          const latestOnly = this.reCreatedChannelSessionIds.has(sessionId);
+          this.syncChannelUserMessages(sessionId, history.messages, latestOnly, turn.sessionKey.includes(':discord:'), turn.sessionKey.includes(':qqbot:'), turn.sessionKey.includes(':moltbot-popo:'));
+        }
 
-      // Stale turn protection: only skip assistant text alignment (which could overwrite
-      // a newer turn's state). User/system message sync above is idempotent and safe.
-      if (!this.isCurrentTurnToken(sessionId, turn.turnToken)) {
-        console.log('[Debug:syncFinal] stale turn token, skipping assistant text alignment for sessionId:', sessionId, 'turnToken:', turn.turnToken);
-        return;
-      }
+        if (!this.isCurrentTurnToken(sessionId, turn.turnToken)) {
+          console.log('[Debug:syncFinal] stale turn token, skipping assistant text alignment for sessionId:', sessionId, 'turnToken:', turn.turnToken);
+          return;
+        }
 
-      let canonicalText = '';
-      if (isChannel) {
-        // For channel sessions, merge all assistant text from the current turn
-        canonicalText = extractCurrentTurnAssistantText(history.messages);
-      } else {
-        // For non-channel sessions, use the last assistant message with text
-        for (let index = history.messages.length - 1; index >= 0; index -= 1) {
-          const message = history.messages[index];
-          if (!isRecord(message)) continue;
-          const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-          if (role !== 'assistant') continue;
-          canonicalText = extractMessageText(message).trim();
-          if (canonicalText) {
-            break;
+        if (isChannel) {
+          canonicalText = extractCurrentTurnAssistantText(history.messages);
+        } else {
+          for (let index = history.messages.length - 1; index >= 0; index -= 1) {
+            const message = history.messages[index];
+            if (!isRecord(message)) continue;
+            const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+            if (role !== 'assistant') continue;
+            canonicalText = extractMessageText(message).trim();
+            if (canonicalText) {
+              break;
+            }
           }
         }
+
+        if (canonicalText) {
+          break;
+        }
       }
-      if (!canonicalText) {
+
+      if (!historyMessages || !canonicalText) {
         console.log('[Debug:syncFinal] no canonical assistant text found in history');
         return;
       }
 
       // For channel sessions, append file paths from "message" tool calls as clickable links
       if (isChannel) {
-        const sentFilePaths = extractSentFilePathsFromHistory(history.messages);
+        const sentFilePaths = extractSentFilePathsFromHistory(historyMessages);
         if (sentFilePaths.length > 0) {
           console.log('[Debug:syncFinal] found sent file paths:', sentFilePaths);
           const fileLinks = sentFilePaths
