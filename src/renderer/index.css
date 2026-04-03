@@ -240,3 +240,32 @@ select::-ms-expand {
   0% { left: -40%; }
   100% { left: 100%; }
 }
+
+/* In-session search highlight */
+mark.search-match {
+  background-color: rgba(251, 191, 36, 0.4);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.dark mark.search-match {
+  background-color: rgba(251, 191, 36, 0.35);
+}
+mark.search-match-active {
+  background-color: rgba(251, 146, 60, 0.7);
+  color: inherit;
+  outline: 1.5px solid rgba(251, 146, 60, 0.9);
+  border-radius: 2px;
+}
+.dark mark.search-match-active {
+  background-color: rgba(251, 146, 60, 0.55);
+  outline-color: rgba(251, 146, 60, 0.75);
+}
+@keyframes search-bar-enter {
+  from { opacity: 0; transform: scaleX(0.85); }
+  to   { opacity: 1; transform: scaleX(1); }
+}
+.search-bar-enter {
+  transform-origin: right center;
+  animation: search-bar-enter 0.15s ease-out forwards;
+}

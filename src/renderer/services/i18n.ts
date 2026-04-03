@@ -534,6 +534,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noRecentFolders: '暂无最近文件夹',
     folderDriveRootNotAllowed: '不支持使用磁盘根目录作为工作目录，请选择一个子文件夹（例如 D:\\Projects）。',
     coworkOpenFolder: '打开文件夹',
+    coworkSearchPlaceholder: '搜索会话内容...',
+    coworkSearchNoResults: '未找到匹配内容',
+    coworkSearchClose: '关闭搜索',
+    coworkSearchOpenMac: '搜索会话(Command + F)',
+    coworkSearchOpenWin: '搜索会话(Ctrl + F)',
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
@@ -1722,6 +1727,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noRecentFolders: 'No recent folders',
     folderDriveRootNotAllowed: 'Drive root directories are not supported as working directories. Please select a subfolder (e.g. D:\\Projects).',
     coworkOpenFolder: 'Open folder',
+    coworkSearchPlaceholder: 'Search in session...',
+    coworkSearchNoResults: 'No matches found',
+    coworkSearchClose: 'Close search',
+    coworkSearchOpenMac: 'Search session (Command + F)',
+    coworkSearchOpenWin: 'Search session (Ctrl + F)',
 
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check and update your API key in settings.',
