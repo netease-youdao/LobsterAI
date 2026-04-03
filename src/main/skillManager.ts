@@ -872,10 +872,12 @@ const downloadClawhubSkill = async (
   let command: string;
   let args: string[];
   if (npxCliJs) {
+    console.log(`[downloadClawhubSkill] using bundled npx: electron="${electronPath}", npxCliJs="${npxCliJs}"`);
     command = electronPath;
     args = [npxCliJs, 'clawhub@latest', 'install', skillName, '--dir', targetDir, '--no-input', '--force'];
   } else {
     const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    console.log(`[downloadClawhubSkill] bundled npx not found, falling back to system "${npxCommand}"`);
     if (!hasCommand(npxCommand, env)) {
       throw new Error('npx is not available. Please install Node.js from https://nodejs.org/');
     }
