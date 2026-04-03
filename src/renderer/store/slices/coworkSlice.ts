@@ -1,4 +1,4 @@
-import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { createSlice, PayloadAction, createSelector } from '@reduxjs/toolkit';
 import type {
   CoworkSession,
   CoworkSessionSummary,
@@ -7,6 +7,7 @@ import type {
   CoworkPermissionRequest,
   CoworkSessionStatus,
 } from '../../types/cowork';
+import type { Skill } from '../../types/skill';
 
 export interface DraftAttachment {
   path: string;
@@ -366,5 +367,18 @@ export const {
   updateConfig,
   clearCurrentSession,
 } = coworkSlice.actions;
+
+export const selectCoworkSessionDetailState = createSelector(
+  (state: { cowork: CoworkState; skill: { skills: Skill[] } }) => state.cowork.currentSession,
+  (state: { cowork: CoworkState; skill: { skills: Skill[] } }) => state.cowork.isStreaming,
+  (state: { cowork: CoworkState; skill: { skills: Skill[] } }) => state.cowork.remoteManaged,
+  (state: { cowork: CoworkState; skill: { skills: Skill[] } }) => state.skill.skills,
+  (currentSession, isStreaming, remoteManaged, skills) => ({
+    currentSession,
+    isStreaming,
+    remoteManaged,
+    skills,
+  })
+);
 
 export default coworkSlice.reducer;
