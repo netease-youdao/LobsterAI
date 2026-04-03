@@ -1558,6 +1558,36 @@ export class CoworkStore {
     return truncate((row?.content || '').replace(/\s+/g, ' ').trim(), 280);
   }
 
+  private getLatestMessagesBySession(
+    sessionIds: string[]
+  ): Map<string, { human: string; assistant: string }> {
+    const result = new Map<string, { human: string; assistant: string }>();
+    if (sessionIds.length === 0) return result;
+
+    const placeholders = sessionIds.map(() => '?').join(', ');
+    const rows = this.getAll<{ session_id: string; type: string; content: string }>(`
+      SELECT session_id, type, content
+      FROM cowork_messages m
+      WHERE session_id IN (${placeholders})
+        AND type IN ('user', 'assistant')
+        AND (created_at, ROWID) = (
+          SELECT MAX(created_at), MAX(ROWID)
+          FROM cowork_messages
+          WHERE session_id = m.session_id AND type = m.type
+        )
+    `, sessionIds);
+
+    for (const row of rows) {
+      if (!row.session_id) continue;
+      const snippet = truncate((row.content || '').replace(/\s+/g, ' ').trim(), 280);
+      const entry = result.get(row.session_id) ?? { human: '', assistant: '' };
+      if (row.type === 'user') entry.human = snippet;
+      else if (row.type === 'assistant') entry.assistant = snippet;
+      result.set(row.session_id, entry);
+    }
+    return result;
+  }
+
   conversationSearch(options: {
     query: string;
     maxResults?: number;
@@ -1635,12 +1665,21 @@ export class CoworkStore {
 
     const records = Array.from(bySession.values())
       .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, maxResults)
-      .map((entry) => ({
-        ...entry,
-        human: entry.human || this.getLatestMessageByType(entry.sessionId, 'user'),
-        assistant: entry.assistant || this.getLatestMessageByType(entry.sessionId, 'assistant'),
-      }));
+      .slice(0, maxResults);
+
+    const incompleteIds = records
+      .filter((entry) => !entry.human || !entry.assistant)
+      .map((entry) => entry.sessionId);
+
+    if (incompleteIds.length > 0) {
+      const fallbacks = this.getLatestMessagesBySession(incompleteIds);
+      for (const entry of records) {
+        const fb = fallbacks.get(entry.sessionId);
+        if (!fb) continue;
+        if (!entry.human) entry.human = fb.human;
+        if (!entry.assistant) entry.assistant = fb.assistant;
+      }
+    }
 
     return records;
   }
@@ -1682,14 +1721,20 @@ export class CoworkStore {
       LIMIT ?
     `, [...params, n]);
 
-    return rows.map((row) => ({
-      sessionId: row.id,
-      title: row.title || 'Untitled',
-      updatedAt: Number(row.updated_at) || 0,
-      url: `https://claude.ai/chat/${row.id}`,
-      human: this.getLatestMessageByType(row.id, 'user'),
-      assistant: this.getLatestMessageByType(row.id, 'assistant'),
-    }));
+    const sessionIds = rows.map((row) => row.id);
+    const latestMessages = this.getLatestMessagesBySession(sessionIds);
+
+    return rows.map((row) => {
+      const msgs = latestMessages.get(row.id) ?? { human: '', assistant: '' };
+      return {
+        sessionId: row.id,
+        title: row.title || 'Untitled',
+        updatedAt: Number(row.updated_at) || 0,
+        url: `https://claude.ai/chat/${row.id}`,
+        human: msgs.human,
+        assistant: msgs.assistant,
+      };
+    });
   }
 
   // ========== Agent CRUD ==========
