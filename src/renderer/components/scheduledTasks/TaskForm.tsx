@@ -7,7 +7,7 @@ import type {
   ScheduledTaskConversationOption,
   ScheduledTaskInput,
 } from '../../../scheduledTask/types';
-import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
+import { formatScheduleLabel, validateOnceSchedule, type PlanType, scheduleToPlanInfo } from './utils';
 import { PlatformRegistry } from '@shared/platform';
 
 interface TaskFormProps {
@@ -193,9 +193,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     }
 
     if (form.planType === 'once') {
-      const runAt = new Date(form.year, form.month - 1, form.day, form.hour, form.minute, form.second);
-      if (runAt.getTime() <= Date.now()) {
-        nextErrors.schedule = i18nService.t('scheduledTasksFormValidationDatetimeFuture');
+      const scheduleError = validateOnceSchedule(
+        form.year, form.month, form.day, form.hour, form.minute, form.second,
+      );
+      if (scheduleError) {
+        nextErrors.schedule = i18nService.t(scheduleError);
       }
     }
 
@@ -292,7 +294,9 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     );
 
     if (form.planType === 'once') {
-      const dateValue = `${form.year}-${String(form.month).padStart(2, '0')}-${String(form.day).padStart(2, '0')}`;
+      const dateValue = form.year
+        ? `${form.year}-${String(form.month).padStart(2, '0')}-${String(form.day).padStart(2, '0')}`
+        : '';
       const fullTimeValue = `${timeValue}:${String(form.second).padStart(2, '0')}`;
       return (
         <div>
@@ -303,6 +307,12 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               type="date"
               value={dateValue}
               onChange={(e) => {
+                if (!e.target.value) {
+                  // User cleared the date field — use year=0 as a sentinel so
+                  // validate() can detect the missing value and show an error.
+                  updateForm({ year: 0, month: 0, day: 0 });
+                  return;
+                }
                 const [y, mo, d] = e.target.value.split('-').map(Number);
                 if (!Number.isNaN(y)) updateForm({ year: y, month: mo, day: d });
               }}
