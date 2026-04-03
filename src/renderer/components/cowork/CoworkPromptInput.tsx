@@ -9,7 +9,7 @@ import FolderSelectorPopover from './FolderSelectorPopover';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
-import { RootState } from '../../store';
+import { RootState, store } from '../../store';
 import { setDraftPrompt, setDraftAttachments, clearDraftAttachments, type DraftAttachment } from '../../store/slices/coworkSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import { Skill } from '../../types/skill';
@@ -331,7 +331,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
     if (!filePath) return;
-    const current = attachments;
+    const current = (store.getState().cowork.draftAttachments[draftKey] || []) as CoworkAttachment[];
     if (current.some((attachment) => attachment.path === filePath)) return;
     dispatch(setDraftAttachments({
       draftKey,
@@ -342,21 +342,22 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         dataUrl: imageInfo?.dataUrl,
       }],
     }));
-  }, [attachments, dispatch, draftKey]);
+  }, [dispatch, draftKey]);
 
   const addImageAttachmentFromDataUrl = useCallback((name: string, dataUrl: string) => {
     // Use the dataUrl as the unique key (no file path for inline images)
     const pseudoPath = `inline:${name}:${Date.now()}`;
+    const current = (store.getState().cowork.draftAttachments[draftKey] || []) as CoworkAttachment[];
     dispatch(setDraftAttachments({
       draftKey,
-      attachments: [...attachments, {
+      attachments: [...current, {
         path: pseudoPath,
         name,
         isImage: true,
         dataUrl,
       }],
     }));
-  }, [attachments, dispatch, draftKey]);
+  }, [dispatch, draftKey]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
