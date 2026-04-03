@@ -11,13 +11,14 @@ import { applyBundledOpenClawRuntimeHotfixes } from './openclawRuntimeHotfix';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 
-type GatewayProcess = UtilityProcess | ChildProcess;
+export type GatewayProcess = UtilityProcess | ChildProcess;
 
 const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
 const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
 const GATEWAY_RESTART_DELAY_MS = 3000;
+const GATEWAY_MAX_RESTART_ATTEMPTS = 5;
 
 export type OpenClawEnginePhase =
   | 'not_installed'
@@ -114,7 +115,7 @@ const isPortReachable = (host: string, port: number, timeoutMs = 1200): Promise<
   });
 };
 
-const isGatewayProcessAlive = (child: GatewayProcess | null): child is GatewayProcess => {
+export const isGatewayProcessAlive = (child: GatewayProcess | null): child is GatewayProcess => {
   if (!child) return false;
   if ('pid' in child && typeof child.pid === 'number') {
     // For ChildProcess, also check it hasn't already exited.
@@ -123,6 +124,13 @@ const isGatewayProcessAlive = (child: GatewayProcess | null): child is GatewayPr
   }
   return false;
 };
+
+/**
+ * Returns true when the auto-restart attempt counter has exceeded the maximum
+ * allowed consecutive failures.  Exported for unit testing.
+ */
+export const hasExceededRestartLimit = (attempts: number, maxAttempts: number): boolean =>
+  attempts > maxAttempts;
 
 const fetchWithTimeout = async (url: string, timeoutMs: number): Promise<Response> => {
   const controller = new AbortController();
@@ -155,6 +163,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayProcess: GatewayProcess | null = null;
   private readonly expectedGatewayExits = new WeakSet<object>();
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
+  private gatewayRestartAttempts = 0;
   private shutdownRequested = false;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
@@ -303,6 +312,17 @@ export class OpenClawEngineManager extends EventEmitter {
   async startGateway(): Promise<OpenClawEngineStatus> {
     if (this.startGatewayPromise) {
       console.log('[OpenClaw] startGateway: already in progress, reusing existing promise');
+      return this.startGatewayPromise;
+    }
+    // Reset the consecutive-failure counter when the user manually triggers a start
+    // (as opposed to an auto-restart from scheduleGatewayRestart which manages its
+    // own counter before calling startGatewayInternal).
+    this.gatewayRestartAttempts = 0;
+    return this.startGatewayInternal();
+  }
+
+  private startGatewayInternal(): Promise<OpenClawEngineStatus> {
+    if (this.startGatewayPromise) {
       return this.startGatewayPromise;
     }
     this.startGatewayPromise = this.doStartGateway().finally(() => {
@@ -510,11 +530,20 @@ export class OpenClawEngineManager extends EventEmitter {
         message: 'OpenClaw gateway failed to become healthy in time.',
         canRetry: true,
       });
-      this.stopGatewayProcess(child);
+      // Only explicitly kill the process if it is still alive (e.g. boot timeout).
+      // If the process already exited on its own, the exit handler has already
+      // scheduled a restart via scheduleGatewayRestart(). Calling stopGatewayProcess()
+      // on an already-dead process would add it to expectedGatewayExits *after* the
+      // exit event fired, which has no effect and leaves the restart timer running,
+      // causing an infinite restart loop.
+      if (isGatewayProcessAlive(child)) {
+        this.stopGatewayProcess(child);
+      }
       return this.getStatus();
     }
 
     console.log(`[OpenClaw] startGateway: gateway is running, total startup time: ${elapsed()}`);
+    this.gatewayRestartAttempts = 0;
     this.setStatus({
       phase: 'running',
       version: runtime.version,
@@ -528,6 +557,7 @@ export class OpenClawEngineManager extends EventEmitter {
 
   async stopGateway(): Promise<void> {
     this.shutdownRequested = true;
+    this.gatewayRestartAttempts = 0;
 
     if (this.gatewayRestartTimer) {
       clearTimeout(this.gatewayRestartTimer);
@@ -1288,10 +1318,29 @@ export class OpenClawEngineManager extends EventEmitter {
     if (this.shutdownRequested) return;
     if (this.gatewayRestartTimer) return;
 
+    this.gatewayRestartAttempts += 1;
+    if (this.gatewayRestartAttempts > GATEWAY_MAX_RESTART_ATTEMPTS) {
+      console.error(
+        `[OpenClaw] gateway has crashed ${this.gatewayRestartAttempts - 1} times consecutively; ` +
+        `giving up auto-restart to prevent infinite loop. Use manual retry to try again.`,
+      );
+      this.setStatus({
+        phase: 'error',
+        version: this.status.version,
+        message: `OpenClaw gateway failed to start after ${GATEWAY_MAX_RESTART_ATTEMPTS} attempts. Please retry manually.`,
+        canRetry: true,
+      });
+      return;
+    }
+
+    console.log(
+      `[OpenClaw] scheduling gateway restart, attempt ${this.gatewayRestartAttempts}/${GATEWAY_MAX_RESTART_ATTEMPTS} ` +
+      `(delay=${GATEWAY_RESTART_DELAY_MS}ms)`,
+    );
     this.gatewayRestartTimer = setTimeout(() => {
       this.gatewayRestartTimer = null;
       if (this.shutdownRequested) return;
-      void this.startGateway();
+      void this.startGatewayInternal();
     }, GATEWAY_RESTART_DELAY_MS);
   }
 
