@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker, Notification } from 'electron';
 import type { WebContents } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -568,6 +568,16 @@ let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
 
+function sendSessionNotification(titleKey: string, bodyKey: string, sessionTitle: string): void {
+  if (!Notification.isSupported()) return;
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) return;
+  new Notification({
+    title: t(titleKey),
+    body: t(bodyKey, { title: sessionTitle }),
+    silent: false,
+  }).show();
+}
+
 const initStore = async (): Promise<SqliteStore> => {
   if (!storeInitPromise) {
     if (!app.isReady()) {
@@ -1067,6 +1077,12 @@ const bindCoworkRuntimeForwarder = (): void => {
       if (win.isDestroyed()) return;
       win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId });
     });
+    try {
+      const sessionTitle = getCoworkStore().getSession(sessionId)?.title ?? sessionId;
+      sendSessionNotification('sessionNotificationCompleteTitle', 'sessionNotificationCompleteBody', sessionTitle);
+    } catch {
+      // ignore
+    }
     // If session used a server model, notify renderer to refresh quota
     try {
       const apiConfig = resolveCurrentApiConfig();
@@ -1090,6 +1106,12 @@ const bindCoworkRuntimeForwarder = (): void => {
       if (win.isDestroyed()) return;
       win.webContents.send('cowork:stream:error', { sessionId, error });
     });
+    try {
+      const sessionTitle = getCoworkStore().getSession(sessionId)?.title ?? sessionId;
+      sendSessionNotification('sessionNotificationErrorTitle', 'sessionNotificationErrorBody', sessionTitle);
+    } catch {
+      // ignore
+    }
   });
 
   coworkRuntimeForwarderBound = true;
