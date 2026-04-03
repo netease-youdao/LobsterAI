@@ -39,6 +39,17 @@ const buildSrcDoc = (title: string, compiledCode: string): string => `<!DOCTYPE 
     <script>${reactUmdSource}</script>
     <script>${reactDomUmdSource}</script>
     <script>
+      // Shim for esbuild-emitted require() calls when the artifact source
+      // contains ES module imports like "import React from 'react'".
+      // esbuild's transform API converts these to require() without bundling,
+      // so we map the common React packages to the UMD globals loaded above.
+      function require(module) {
+        if (module === 'react') return window.React;
+        if (module === 'react-dom' || module === 'react-dom/client') return window.ReactDOM;
+        throw new Error('Module not available in artifact sandbox: ' + module);
+      }
+    </script>
+    <script>
       try {
         ${compiledCode}
         const component = window.ArtifactModule && (window.ArtifactModule.default || window.ArtifactModule);
@@ -73,7 +84,11 @@ const ReactArtifactRenderer: React.FC<ReactArtifactRendererProps> = ({ content, 
       setCompiledCode(result.code);
     };
 
-    void compile();
+    void compile().catch((err) => {
+      if (!cancelled) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    });
     return () => {
       cancelled = true;
     };

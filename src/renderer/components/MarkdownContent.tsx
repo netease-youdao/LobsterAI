@@ -275,7 +275,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
                     type="button"
                     onClick={() => onOpenArtifact({
                       type: artifactType,
-                      title: i18nService.t('artifactHtmlPreview'),
+                      title: i18nService.t(artifactType === 'react' ? 'artifactReactPreview' : 'artifactHtmlPreview'),
                       content: trimmedCodeText,
                       sourceMessageId: null,
                     })}
@@ -303,12 +303,12 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
               </div>
             </div>
             {shouldHighlight ? (
-              <SyntaxHighlighter
-                style={oneDark}
-                language="html"
-                PreTag="div"
-                customStyle={SYNTAX_HIGHLIGHTER_STYLE}
-              >
+                <SyntaxHighlighter
+                  style={oneDark}
+                  language={artifactType === 'react' ? 'jsx' : 'html'}
+                  PreTag="div"
+                  customStyle={SYNTAX_HIGHLIGHTER_STYLE}
+                >
                 {trimmedCodeText}
               </SyntaxHighlighter>
             ) : (

@@ -3999,7 +3999,7 @@ if (!gotTheLock) {
       const devPort = process.env.ELECTRON_START_URL?.match(/:(\d+)/)?.[1] || '5175';
       const cspDirectives = [
         "default-src 'self'",
-        isDev ? `script-src 'self' 'unsafe-inline' http://localhost:${devPort} ws://localhost:${devPort}` : "script-src 'self'",
+        isDev ? `script-src 'self' 'unsafe-inline' http://localhost:${devPort} ws://localhost:${devPort}` : "script-src 'self' 'unsafe-inline' blob:",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: https: http: localfile:",
         // 允许连接到所有域名，不做限制
