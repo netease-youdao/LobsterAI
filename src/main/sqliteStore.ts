@@ -54,6 +54,21 @@ export class SqliteStore {
     const SQL = await SqliteStore.sqlPromise;
 
     // Load existing database or create new one
+    // Clean up any leftover .tmp-* files from a previous crash that occurred
+    // between writeFileSync(tmpPath) and renameSync(tmpPath, dbPath).
+    const dbDir = path.dirname(dbPath);
+    const dbBasename = path.basename(dbPath);
+    try {
+      const entries = fs.readdirSync(dbDir);
+      for (const entry of entries) {
+        if (entry.startsWith(`${dbBasename}.tmp-`)) {
+          fs.rmSync(path.join(dbDir, entry), { force: true });
+        }
+      }
+    } catch {
+      // Non-fatal: orphaned tmp files are harmless beyond wasting disk space.
+    }
+
     let db: Database;
     if (fs.existsSync(dbPath)) {
       const buffer = fs.readFileSync(dbPath);
@@ -304,7 +319,13 @@ export class SqliteStore {
   save() {
     const data = this.db.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(this.dbPath, buffer);
+    // Write to a temporary file first, then atomically rename it over the
+    // destination. On POSIX this is guaranteed atomic; on NTFS, MoveFileEx
+    // with MOVEFILE_REPLACE_EXISTING is also atomic for same-volume moves.
+    // This prevents a corrupt database file if the process is killed mid-write.
+    const tmpPath = `${this.dbPath}.tmp-${crypto.randomUUID()}`;
+    fs.writeFileSync(tmpPath, buffer);
+    fs.renameSync(tmpPath, this.dbPath);
   }
 
   onDidChange<T = unknown>(key: string, callback: (newValue: T | undefined, oldValue: T | undefined) => void) {
