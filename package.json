@@ -27,6 +27,11 @@
         "version": "1.5.3"
       },
       {
+        "id": "clawtrace",
+        "npm": "clawtrace",
+        "version": "file:vendor/local-plugins/clawtrace-1.0.1-windows.tgz"
+      },
+      {
         "id": "wecom-openclaw-plugin",
         "npm": "@wecom/wecom-openclaw-plugin",
         "version": "1.0.12"
