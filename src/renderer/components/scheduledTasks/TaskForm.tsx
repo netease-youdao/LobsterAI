@@ -10,6 +10,7 @@ import type {
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
 import { PlatformRegistry } from '@shared/platform';
 import CustomSelect from './CustomSelect';
+import DatePicker from './DatePicker';
 import TimePicker from './TimePicker';
 
 interface TaskFormProps {
@@ -287,20 +288,17 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     );
 
     if (form.planType === 'once') {
-      const dateValue = `${form.year}-${String(form.month).padStart(2, '0')}-${String(form.day).padStart(2, '0')}`;
       return (
         <div>
           <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
           <div className="flex items-center gap-3">
             {planSelect}
-            <input
-              type="date"
-              value={dateValue}
-              onChange={(e) => {
-                const [y, mo, d] = e.target.value.split('-').map(Number);
-                if (!Number.isNaN(y)) updateForm({ year: y, month: mo, day: d });
-              }}
-              className={`${inputClass} flex-1 min-w-0`}
+            <DatePicker
+              year={form.year}
+              month={form.month}
+              day={form.day}
+              onChange={(v) => updateForm({ year: v.year, month: v.month, day: v.day })}
+              className="flex-1 min-w-0"
             />
             <TimePicker
               hour={form.hour}

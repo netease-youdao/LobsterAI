@@ -1,24 +1,27 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ChevronDownIcon } from '@heroicons/react/24/outline';
 
-interface TimePickerProps {
-  hour: number;
-  minute: number;
-  second?: number;
-  showSeconds?: boolean;
-  onChange: (values: { hour: number; minute: number; second?: number }) => void;
+interface DatePickerProps {
+  year: number;
+  month: number;
+  day: number;
+  onChange: (values: { year: number; month: number; day: number }) => void;
   className?: string;
 }
 
-interface SegmentProps {
+interface DateSegmentProps {
   value: number;
+  min: number;
   max: number;
+  width: string;
+  padLength: number;
+  options?: { value: number; label: string }[];
   onChange: (value: number) => void;
 }
 
-const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
+const DateSegment: React.FC<DateSegmentProps> = ({ value, min, max, width, padLength, options, onChange }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [inputValue, setInputValue] = useState(String(value).padStart(2, '0'));
+  const [inputValue, setInputValue] = useState(String(value).padStart(padLength, '0'));
   const [isFocused, setIsFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -26,9 +29,9 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
 
   useEffect(() => {
     if (!isFocused) {
-      setInputValue(String(value).padStart(2, '0'));
+      setInputValue(String(value).padStart(padLength, '0'));
     }
-  }, [value, isFocused]);
+  }, [value, isFocused, padLength]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -52,20 +55,20 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
   const commitValue = useCallback((raw: string) => {
     const parsed = parseInt(raw, 10);
     if (!Number.isNaN(parsed)) {
-      const clamped = Math.max(0, Math.min(max, parsed));
+      const clamped = Math.max(min, Math.min(max, parsed));
       onChange(clamped);
-      setInputValue(String(clamped).padStart(2, '0'));
+      setInputValue(String(clamped).padStart(padLength, '0'));
     } else {
-      setInputValue(String(value).padStart(2, '0'));
+      setInputValue(String(value).padStart(padLength, '0'));
     }
-  }, [max, onChange, value]);
+  }, [min, max, onChange, value, padLength]);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value.replace(/\D/g, '');
-    if (raw.length <= 2) {
+    if (raw.length <= padLength) {
       setInputValue(raw);
     }
-  }, []);
+  }, [padLength]);
 
   const handleFocus = useCallback(() => {
     setIsFocused(true);
@@ -80,37 +83,23 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      const next = value >= max ? 0 : value + 1;
+      const next = value >= max ? min : value + 1;
       onChange(next);
-      setInputValue(String(next).padStart(2, '0'));
+      setInputValue(String(next).padStart(padLength, '0'));
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
-      const next = value <= 0 ? max : value - 1;
+      const next = value <= min ? max : value - 1;
       onChange(next);
-      setInputValue(String(next).padStart(2, '0'));
+      setInputValue(String(next).padStart(padLength, '0'));
     } else if (e.key === 'Enter') {
       e.preventDefault();
       commitValue(inputValue);
       setIsOpen((prev) => !prev);
     } else if (e.key === 'Escape') {
       setIsOpen(false);
-      setInputValue(String(value).padStart(2, '0'));
+      setInputValue(String(value).padStart(padLength, '0'));
     }
-  }, [value, max, onChange, inputValue, commitValue]);
-
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (isOpen) return;
-    e.preventDefault();
-    if (e.deltaY < 0) {
-      const next = value >= max ? 0 : value + 1;
-      onChange(next);
-      setInputValue(String(next).padStart(2, '0'));
-    } else {
-      const next = value <= 0 ? max : value - 1;
-      onChange(next);
-      setInputValue(String(next).padStart(2, '0'));
-    }
-  }, [isOpen, value, max, onChange]);
+  }, [value, min, max, onChange, padLength, inputValue, commitValue]);
 
   const handleToggleDropdown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -121,14 +110,15 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
 
   const handleSelectValue = useCallback((v: number) => {
     onChange(v);
-    setInputValue(String(v).padStart(2, '0'));
+    setInputValue(String(v).padStart(padLength, '0'));
     setIsOpen(false);
     inputRef.current?.focus();
-  }, [onChange]);
+  }, [onChange, padLength]);
 
-  const handleListWheel = useCallback((e: React.WheelEvent) => {
-    e.stopPropagation();
-  }, []);
+  const items = options || Array.from({ length: max - min + 1 }, (_, i) => ({
+    value: min + i,
+    label: String(min + i).padStart(padLength, '0'),
+  }));
 
   return (
     <div ref={containerRef} className="relative">
@@ -136,14 +126,13 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
         <input
           ref={inputRef}
           type="text"
-          maxLength={2}
+          maxLength={padLength}
           value={inputValue}
           onChange={handleInputChange}
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          onWheel={handleWheel}
-          className="w-9 bg-transparent px-1 py-2 text-sm text-foreground text-center focus:outline-none"
+          className={`${width} bg-transparent px-1 py-2 text-sm text-foreground text-center focus:outline-none`}
         />
         <button
           type="button"
@@ -157,24 +146,23 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
       {isOpen && (
         <div
           ref={listRef}
-          onWheel={handleListWheel}
           className="absolute z-50 mt-1 w-full max-h-[200px] overflow-y-auto rounded-lg border border-border bg-surface shadow-popover popover-enter"
         >
-          {Array.from({ length: max + 1 }, (_, i) => (
+          {items.map((item) => (
             <div
-              key={i}
-              data-selected={i === value ? 'true' : undefined}
+              key={item.value}
+              data-selected={item.value === value ? 'true' : undefined}
               onMouseDown={(e) => {
                 e.preventDefault();
-                handleSelectValue(i);
+                handleSelectValue(item.value);
               }}
               className={`px-2 py-1.5 text-sm text-center cursor-pointer select-none ${
-                i === value
+                item.value === value
                   ? 'bg-primary/10 text-primary font-medium'
                   : 'text-foreground hover:bg-surface-raised'
               }`}
             >
-              {String(i).padStart(2, '0')}
+              {item.label}
             </div>
           ))}
         </div>
@@ -183,39 +171,83 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
   );
 };
 
-const TimePicker: React.FC<TimePickerProps> = ({
-  hour,
-  minute,
-  second = 0,
-  showSeconds = false,
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
+  value: i + 1,
+  label: String(i + 1).padStart(2, '0'),
+}));
+
+const DatePicker: React.FC<DatePickerProps> = ({
+  year,
+  month,
+  day,
   onChange,
   className,
 }) => {
-  const handleHourChange = useCallback((newHour: number) => {
-    onChange({ hour: newHour, minute, ...(showSeconds ? { second } : {}) });
-  }, [minute, second, showSeconds, onChange]);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const maxDay = daysInMonth(year, month);
 
-  const handleMinuteChange = useCallback((newMinute: number) => {
-    onChange({ hour, minute: newMinute, ...(showSeconds ? { second } : {}) });
-  }, [hour, second, showSeconds, onChange]);
+  const yearOptions = Array.from({ length: 10 }, (_, i) => ({
+    value: currentYear + i,
+    label: String(currentYear + i),
+  }));
 
-  const handleSecondChange = useCallback((newSecond: number) => {
-    onChange({ hour, minute, second: newSecond });
-  }, [hour, minute, onChange]);
+  const dayOptions = Array.from({ length: maxDay }, (_, i) => ({
+    value: i + 1,
+    label: String(i + 1).padStart(2, '0'),
+  }));
+
+  const handleYearChange = useCallback((newYear: number) => {
+    const newMaxDay = daysInMonth(newYear, month);
+    onChange({ year: newYear, month, day: Math.min(day, newMaxDay) });
+  }, [month, day, onChange]);
+
+  const handleMonthChange = useCallback((newMonth: number) => {
+    const newMaxDay = daysInMonth(year, newMonth);
+    onChange({ year, month: newMonth, day: Math.min(day, newMaxDay) });
+  }, [year, day, onChange]);
+
+  const handleDayChange = useCallback((newDay: number) => {
+    onChange({ year, month, day: newDay });
+  }, [year, month, onChange]);
 
   return (
     <div className={`flex items-center gap-1 ${className ?? ''}`}>
-      <TimeSegment value={hour} max={23} onChange={handleHourChange} />
-      <span className="text-sm text-secondary font-medium">:</span>
-      <TimeSegment value={minute} max={59} onChange={handleMinuteChange} />
-      {showSeconds && (
-        <>
-          <span className="text-sm text-secondary font-medium">:</span>
-          <TimeSegment value={second} max={59} onChange={handleSecondChange} />
-        </>
-      )}
+      <DateSegment
+        value={year}
+        min={currentYear}
+        max={currentYear + 9}
+        width="w-12"
+        padLength={4}
+        options={yearOptions}
+        onChange={handleYearChange}
+      />
+      <span className="text-sm text-secondary font-medium">/</span>
+      <DateSegment
+        value={month}
+        min={1}
+        max={12}
+        width="w-9"
+        padLength={2}
+        options={MONTH_OPTIONS}
+        onChange={handleMonthChange}
+      />
+      <span className="text-sm text-secondary font-medium">/</span>
+      <DateSegment
+        value={day}
+        min={1}
+        max={maxDay}
+        width="w-9"
+        padLength={2}
+        options={dayOptions}
+        onChange={handleDayChange}
+      />
     </div>
   );
 };
 
-export default TimePicker;
+export default DatePicker;
