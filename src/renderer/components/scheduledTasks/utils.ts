@@ -314,6 +314,8 @@ export function getTaskPromptText(task: ScheduledTask): string {
   return task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message;
 }
 
+export { validateOnceSchedule } from './taskFormValidation';
+
 export function getStatusTone(status: TaskLastStatus): string {
   if (status === 'success') return 'text-green-500';
   if (status === 'error') return 'text-red-500';
