@@ -1,0 +1,25 @@
+src/main/libs/openclawConfigSync.ts
+  47b870de02faa82a 13,925
+src/main/libs/openclawLocalExtensions.ts
+  47b870de02faa82a 120-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "176598533e6ba4a149e50aec4620ebb31c7ce806",
+  "prompts": {
+    "47b870de02faa82a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "98bac315-ed02-46f8-b444-f53f146562a6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang",
+      "messages": [],
+      "total_additions": 25,
+      "total_deletions": 2,
+      "accepted_lines": 25,
+      "overriden_lines": 0
+    }
+  }
+}
