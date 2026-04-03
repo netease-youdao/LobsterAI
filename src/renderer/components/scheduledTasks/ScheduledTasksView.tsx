@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
-import { setViewMode, selectTask } from '../../store/slices/scheduledTaskSlice';
+import { setViewMode, selectTask, setError } from '../../store/slices/scheduledTaskSlice';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import TaskList from './TaskList';
@@ -35,8 +35,15 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const selectedTaskId = useSelector((state: RootState) => state.scheduledTask.selectedTaskId);
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null;
+  const error = useSelector((state: RootState) => state.scheduledTask.error);
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
+
+  useEffect(() => {
+    if (!error) return;
+    window.dispatchEvent(new CustomEvent('app:showToast', { detail: error }));
+    dispatch(setError(null));
+  }, [error, dispatch]);
 
   const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
     setDeleteTaskInfo({ id: taskId, name: taskName });
