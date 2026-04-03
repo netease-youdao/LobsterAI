@@ -47,7 +47,7 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
     if (selectedItem) {
       selectedItem.scrollIntoView({ block: 'center' });
     }
-  }, [isOpen]);
+  }, [isOpen, value]);
 
   const commitValue = useCallback((raw: string) => {
     const parsed = parseInt(raw, 10);
@@ -64,8 +64,12 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
     const raw = e.target.value.replace(/\D/g, '');
     if (raw.length <= 2) {
       setInputValue(raw);
+      const parsed = parseInt(raw, 10);
+      if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= max) {
+        onChange(parsed);
+      }
     }
-  }, []);
+  }, [max, onChange]);
 
   const handleFocus = useCallback(() => {
     setIsFocused(true);

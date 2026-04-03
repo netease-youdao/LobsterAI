@@ -50,7 +50,7 @@ const DateSegment: React.FC<DateSegmentProps> = ({ value, min, max, width, padLe
     if (selectedItem) {
       selectedItem.scrollIntoView({ block: 'center' });
     }
-  }, [isOpen]);
+  }, [isOpen, value]);
 
   const commitValue = useCallback((raw: string) => {
     const parsed = parseInt(raw, 10);
@@ -67,8 +67,12 @@ const DateSegment: React.FC<DateSegmentProps> = ({ value, min, max, width, padLe
     const raw = e.target.value.replace(/\D/g, '');
     if (raw.length <= padLength) {
       setInputValue(raw);
+      const parsed = parseInt(raw, 10);
+      if (!Number.isNaN(parsed) && parsed >= min && parsed <= max) {
+        onChange(parsed);
+      }
     }
-  }, [padLength]);
+  }, [padLength, min, max, onChange]);
 
   const handleFocus = useCallback(() => {
     setIsFocused(true);
