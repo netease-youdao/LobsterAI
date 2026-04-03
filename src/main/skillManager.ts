@@ -1556,14 +1556,19 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
+      // Check for duplicate skill IDs before installing
+      const existingSkills = this.listSkills();
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(root, `${folderName}-${suffix}`);
-          suffix += 1;
+        const conflict = existingSkills.find(s => s.id === folderName);
+        if (conflict) {
+          cleanupPath && cleanupPathSafely(cleanupPath);
+          return { success: false, error: t('skillErrAlreadyExists', { name: folderName }) };
         }
+      }
+      for (const skillDir of skillDirs) {
+        const folderName = normalizeFolderName(path.basename(skillDir));
+        const targetDir = resolveWithin(root, folderName);
         cpRecursiveSync(skillDir, targetDir);
       }
 
@@ -1804,15 +1809,20 @@ export class SkillManager {
         installedIds.push(path.basename(pending.existingSkillDir));
       }
     } else {
-      // Fresh install path: find unique directory name
+      // Fresh install path: check for duplicates then install
+      const existingSkills = this.listSkills();
       for (const skillDir of pending.skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(pending.root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
-          suffix += 1;
+        const conflict = existingSkills.find(s => s.id === folderName);
+        if (conflict) {
+          cleanupPathSafely(pending.cleanupPath);
+          this.pendingInstalls.delete(pendingId);
+          return { success: false, error: t('skillErrAlreadyExists', { name: folderName }) };
         }
+      }
+      for (const skillDir of pending.skillDirs) {
+        const folderName = normalizeFolderName(path.basename(skillDir));
+        const targetDir = resolveWithin(pending.root, folderName);
         cpRecursiveSync(skillDir, targetDir);
         installedIds.push(path.basename(targetDir));
       }
