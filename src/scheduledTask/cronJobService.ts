@@ -395,6 +395,7 @@ export class CronJobService {
   private lastKnownStates: Map<string, string> = new Map();
   private lastKnownRunAtMs: Map<string, number> = new Map();
   private polling = false;
+  private pollRunning = false;
   private firstPollDone = false;
   /** Synchronous jobId → name cache, populated during polling. */
   private jobNameCache: Map<string, string> = new Map();
@@ -625,9 +626,18 @@ export class CronJobService {
 
   private async pollOnce(): Promise<void> {
     if (!this.polling) return;
+    // Reentrance guard: skip this tick if a previous poll is still in flight.
+    // This prevents concurrent writes to shared Maps when the gateway is slow
+    // and the 15 s interval fires before the previous call has finished.
+    if (this.pollRunning) return;
+    this.pollRunning = true;
 
     try {
       await this.ensureGatewayReady();
+      // Check sentinel after every await: stopPolling() may have been called
+      // while we were waiting, and the shared Maps have already been cleared.
+      if (!this.polling) return;
+
       const client = this.getGatewayClient();
       if (!client) return;
 
@@ -635,6 +645,8 @@ export class CronJobService {
         includeDisabled: true,
         limit: 200,
       });
+      if (!this.polling) return;
+
       const jobs = Array.isArray(result.jobs) ? result.jobs : [];
 
       // Refresh jobId → name cache for synchronous lookups (used by session naming).
@@ -663,6 +675,9 @@ export class CronJobService {
         if (lastRunAtMs > previousRunAtMs && previousRunAtMs > 0) {
           try {
             const runs = await this.listRuns(job.id, 1, 0);
+            // Guard again after the inner await: if polling stopped mid-loop,
+            // don't emit events against cleared state.
+            if (!this.polling) return;
             if (runs[0]) {
               const task = mapGatewayJob(job);
               this.emitRunUpdate({ ...runs[0], taskName: task.name });
@@ -688,6 +703,8 @@ export class CronJobService {
       }
     } catch (error) {
       console.warn('[CronJobService] Polling error:', error);
+    } finally {
+      this.pollRunning = false;
     }
   }
 
