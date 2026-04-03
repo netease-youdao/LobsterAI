@@ -238,6 +238,21 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - 已修正 Moonshot 429 导致 Claude/Cowork 聊天直接失败的问题；在无技能、无图片、无文件附件的普通聊天下，Agent API 与 Bridge 会自动回退到当前 provider 直连
   - 当前动作与口型尚未做单独观察记录，因此展示链路已验证，表现层联动仍建议后续补记
 
+## 本轮已执行验证（2026-04-03）
+
+- Airi 前端聊天链路修正
+  - 已修正 `lobster-bridge.ts` 对 Bridge SSE 的事件归一化，`text -> payload.delta/content` 兼容链路生效
+  - 已修正 `ChatArea.vue` 默认把所有已启用技能都带入 `skillIds` 的问题；当前仅显式勾选技能时才走技能链路
+  - 已修正 `chat.ts` 在仅收到 `assistant.final` 时的最终文本对账逻辑
+  - 已修正 `chat.ts` 助手消息持久化过严的问题；当前只要存在正文、tool result 或 reasoning，就会落入历史
+  - 已修正 `history.vue` 标签渲染的容错；当 i18n 运行时状态异常时不再导致聊天区整体崩溃
+- Airi 前端显示验证
+  - 浏览器中重新发送 `你是谁`，已确认请求命中 `POST /api/agent/bridge/chat`
+  - 当前最新 5173 页面可稳定看到用户消息与助手回复，不再出现“请求已发出但聊天区空白”
+  - `packages/i18n/src/locales/zh-Hans/stage.yaml` 当前结构已与 `en / zh-Hant` 对齐，`stage.chat.message.character-name.*` 读取正常
+- 类型检查
+  - `pnpm -F @proj-airi/stage-ui typecheck`：通过
+
 ---
 
 ## 已知限制
@@ -246,7 +261,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
 2. **文件清理测试**：需要检查 LobsterAI 服务端日志确认文件回收
 3. **多轮会话测试**：需要 LobsterAI 端正确维护 session 上下文
 4. **表现层待补记**：动作、口型与等待态切换尚未单独留存观察记录
-5. **当前仍阻塞项**：权限请求与回退模式的服务端/逻辑链路已通过，但 Airi 浏览器自动化页面当前未稳定显示 DOM，界面层仍待补手测；图片前端附件操作也仍待手测
+5. **图片前端附件操作**：图片前端附件上传与界面层手测仍待补记
 
 ---
 
@@ -254,7 +269,7 @@ pnpm -F @proj-airi/stage-layouts typecheck
 
 | 测试项 | 状态 | 备注 |
 |---|---|---|
-| T035 文本单轮 | ✅ 通过 | 服务端 Bridge SSE、Airi 首页发送、`/api/agent/bridge/chat` 请求与消息展示均已验证；动作/口型未单独留档 |
+| T035 文本单轮 | ✅ 通过 | 服务端 Bridge SSE、Airi 首页发送、`/api/agent/bridge/chat` 请求、消息展示与“你是谁”界面回显均已验证；动作/口型未单独留档 |
 | T036 多轮会话 | ⏳ 部分通过 | 同一 `airiSessionId` 成功复用同一 `lobsterSessionId`，上下文记忆验证通过；Airi 前端侧仍待联调 |
 | T037 图片附件 | ⏳ 部分通过 | `image/png -> fileId -> /api/agent/bridge/chat` 已返回图片描述；前端附件操作仍待手测 |
 | T038 普通文件 | ⏳ 部分通过 | `fileId` 上传、引用、读取已通过；文件清理与 Airi 前端展示仍待验证 |

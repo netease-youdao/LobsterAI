@@ -1109,16 +1109,69 @@ export class AgentApiServer {
       return;
     }
 
+    const airiSessionId = parsed.airiSessionId.trim();
+    const turnId = uuidv4();
+    const canUseDirectBridgePath = skillIds.length === 0 && imageAttachments.length === 0 && fileIds.length === 0;
+
+    if (canUseDirectBridgePath) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
+        'Connection': 'keep-alive',
+      });
+
+      this.writeBridgeEvent(res, this.createBridgeEvent({
+        type: 'session.bound',
+        sessionId: airiSessionId,
+        turnId,
+        lobsterSessionId: `direct:${airiSessionId}`,
+      }));
+      this.emitBridgeStateChanged(res, airiSessionId, turnId, 'think');
+
+      try {
+        const fallbackMessages = systemPrompt
+          ? [{ role: 'system', content: systemPrompt }, ...messages]
+          : messages;
+        const fallback = await requestDirectProviderChat(fallbackMessages);
+        this.emitBridgeStateChanged(res, airiSessionId, turnId, 'success');
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'assistant.final',
+          sessionId: airiSessionId,
+          turnId,
+          text: fallback.content,
+        }));
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'done',
+          sessionId: airiSessionId,
+          turnId,
+        }));
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      } catch (error) {
+        const message = String(error);
+        this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: message });
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'error',
+          sessionId: airiSessionId,
+          turnId,
+          message,
+        }));
+        res.end();
+        return;
+      }
+    }
+
     const runner = this.getCoworkRunner();
     if (!runner) {
       sendError(res, 503, 'CoworkRunner not available');
       return;
     }
 
-    const airiSessionId = parsed.airiSessionId.trim();
     const binding = this.getOrCreateBridgeBinding(runner, airiSessionId);
     const lobsterSessionId = binding.lobsterSessionId;
-    const turnId = uuidv4();
     const assistantMessageIds = new Set<string>();
     const thinkingMessageIds = new Set<string>();
     const messageOffsets = new Map<string, number>();

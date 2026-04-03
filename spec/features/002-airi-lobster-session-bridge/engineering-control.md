@@ -129,3 +129,17 @@
 - 将底部子组件继续配套抽出 composable / adapter，减少 `ChatArea.vue` 状态协调压力
 - 补一轮 Airi / LobsterAI 桥接事件兼容性的专项验证
 - 为 bridge 会话增加显式 reset/rebind 能力，降低失效 binding 的恢复成本
+
+## 2026-04-03 补充记录
+
+- Airi 前端已继续完成聊天显示止血：
+  - `lobster-bridge.ts` 已补 Bridge 扁平事件到 `payload` 的归一化兼容
+  - `ChatArea.vue` 已收敛为仅传显式勾选的 `skillIds`，避免普通消息误走 Cowork 链路
+  - `chat.ts` 已补 `assistant.final` 对账与助手消息持久化兜底
+  - `history.vue` 已补标签读取回退，避免 i18n 运行时异常导致聊天区整体崩溃
+- 已在浏览器中重新验证 `你是谁`：
+  - 请求正常命中 `/api/agent/bridge/chat`
+  - 最新前端页面已可正常显示回复
+- 当前工程判断：
+  - “消息发出但没有信息返回”的主要阻塞已收口
+  - 下一优先级转为 Airi 发声/测试页无声问题
