@@ -338,6 +338,13 @@ const coworkSlice = createSlice({
     clearDraftAttachments(state, action: PayloadAction<string>) {
       delete state.draftAttachments[action.payload];
     },
+
+    markSessionUnreadManually(state, action: PayloadAction<string>) {
+      const sessionId = action.payload;
+      if (!sessionId) return;
+      if (state.unreadSessionIds.includes(sessionId)) return;
+      state.unreadSessionIds.push(sessionId);
+    },
   },
 });
 
@@ -365,6 +372,7 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  markSessionUnreadManually,
 } = coworkSlice.actions;
 
 export default coworkSlice.reducer;

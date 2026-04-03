@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
+import { markSessionUnreadManually } from '../../store/slices/coworkSlice';
 import { i18nService } from '../../services/i18n';
 import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
@@ -100,6 +101,13 @@ const PushPinIcon: React.FC<React.SVGProps<SVGSVGElement> & { slashed?: boolean 
     </g>
     {slashed && <path d="M5 5L19 19" />}
   </svg>
+);
+
+// UnreadDotIcon component for marking session as unread
+const UnreadDotIcon: React.FC = () => (
+  <div className="w-4 h-4 flex items-center justify-center">
+    <span className="w-2 h-2 rounded-full bg-claude-accent block" />
+  </div>
 );
 
 const formatUnknown = (value: unknown): string => {
@@ -1335,6 +1343,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
   const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
   const skills = useSelector((state: RootState) => state.skill.skills);
+  const dispatch = useDispatch();
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
@@ -1526,6 +1535,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       return;
     }
     handleRenameSave(event);
+  };
+
+  // Mark as unread handler
+  const handleMarkUnreadClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentSession) return;
+    dispatch(markSessionUnreadManually(currentSession.id));
+    closeMenu();
   };
 
   // Pin/unpin handler
@@ -2080,6 +2097,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           >
             <PencilSquareIcon className="h-4 w-4 text-secondary" />
             {i18nService.t('renameConversation')}
+          </button>
+          <button
+            type="button"
+            onClick={handleMarkUnreadClick}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            aria-label={i18nService.t('markSessionUnread')}
+          >
+            <UnreadDotIcon />
+            {i18nService.t('markSessionUnread')}
           </button>
           <button
             type="button"
