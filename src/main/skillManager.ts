@@ -1816,7 +1816,7 @@ export class SkillManager {
         const conflict = existingSkills.find(s => s.id === folderName);
         if (conflict) {
           cleanupPathSafely(pending.cleanupPath);
-          this.pendingInstalls.delete(pendingInstallId);
+          this.pendingInstalls.delete(pendingId);
           return { success: false, error: t('skillErrAlreadyExists', { name: folderName }) };
         }
       }
