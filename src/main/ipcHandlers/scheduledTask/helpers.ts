@@ -29,7 +29,7 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
     }
   }
 
-  return PlatformRegistry.channelOptions().filter((option) => {
+  const filtered = PlatformRegistry.channelOptions().filter((option) => {
     if (option.value === 'dingtalk') {
       return enabledConfigKeys.has('dingtalk');
     }
@@ -41,4 +41,11 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
     }
     return enabledConfigKeys.has(option.value);
   });
+
+  // When IM config exists but nothing is enabled yet, filtering yields an empty list
+  // and the scheduled-task form only showed "do not notify" (#1329).
+  if (filtered.length === 0) {
+    return [...PlatformRegistry.channelOptions()];
+  }
+  return filtered;
 }
