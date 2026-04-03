@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
 import type {
@@ -15,6 +15,7 @@ interface TaskFormProps {
   task?: ScheduledTask;
   onCancel: () => void;
   onSaved: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface FormState {
@@ -114,8 +115,9 @@ const WEEKDAY_KEYS = [
   'scheduledTasksFormWeekSat',
 ] as const;
 
-const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
+const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDirtyChange }) => {
   const [form, setForm] = useState<FormState>(() => createFormState(task));
+  const initialFormRef = useRef<FormState>(form);
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
     const savedChannel = task?.delivery.channel;
@@ -129,12 +131,22 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  const dirty = useMemo(() => {
+    const initial = initialFormRef.current;
+    const keys = Object.keys(initial) as (keyof FormState)[];
+    return keys.some((k) => form[k] !== initial[k]);
+  }, [form]);
+
+  const prevDirtyRef = useRef(false);
+  useEffect(() => {
+    if (dirty !== prevDirtyRef.current) {
+      prevDirtyRef.current = dirty;
+      onDirtyChange?.(dirty);
+    }
+  }, [dirty, onDirtyChange]);
+
   const isAdvanced = form.planType === 'advanced';
   const showConversationSelector = isIMChannel(form.notifyChannel);
-
-  useEffect(() => {
-    setForm(createFormState(task));
-  }, [task]);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,6 +182,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
       if (result.length > 0 && !form.notifyTo) {
         setForm((current) => ({ ...current, notifyTo: result[0].conversationId }));
+        initialFormRef.current = { ...initialFormRef.current, notifyTo: result[0].conversationId };
       }
     });
 
