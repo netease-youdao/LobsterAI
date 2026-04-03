@@ -136,7 +136,8 @@ const DateSegment: React.FC<DateSegmentProps> = ({ value, min, max, width, padLe
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          className={`${width} bg-transparent px-1 py-2 text-sm text-foreground text-center focus:outline-none`}
+          onClick={() => setIsOpen(true)}
+          className={`${width} bg-transparent px-1 py-2 text-sm text-foreground text-center focus:outline-none cursor-pointer`}
         />
         <button
           type="button"

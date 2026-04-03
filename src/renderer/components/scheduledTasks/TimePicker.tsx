@@ -147,7 +147,8 @@ const TimeSegment: React.FC<SegmentProps> = ({ value, max, onChange }) => {
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           onWheel={handleWheel}
-          className="w-9 bg-transparent px-1 py-2 text-sm text-foreground text-center focus:outline-none"
+          onClick={() => setIsOpen(true)}
+          className="w-9 bg-transparent px-1 py-2 text-sm text-foreground text-center focus:outline-none cursor-pointer"
         />
         <button
           type="button"
