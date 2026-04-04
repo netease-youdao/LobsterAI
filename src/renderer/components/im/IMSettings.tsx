@@ -1353,6 +1353,17 @@ const IMSettings: React.FC = () => {
               }}
               onSave={async (override) => {
                 const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
+                // Validate Client ID uniqueness before saving
+                const clientIdToCheck = (override?.clientId ?? selectedInstance.clientId) || '';
+                if (clientIdToCheck) {
+                  const duplicateClientId = config.dingtalk.instances.find(
+                    i => i.instanceId !== activeDingTalkInstanceId && i.clientId === clientIdToCheck
+                  );
+                  if (duplicateClientId) {
+                    alert(i18nService.t('imInstanceClientIdDuplicate').replace('{name}', duplicateClientId.instanceName));
+                    return;
+                  }
+                }
                 if (selectedInstance.enabled) {
                   await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
                 } else {
@@ -1360,6 +1371,14 @@ const IMSettings: React.FC = () => {
                 }
               }}
               onRename={async (newName) => {
+                // Validate instance name uniqueness
+                const duplicateName = config.dingtalk.instances.find(
+                  i => i.instanceId !== activeDingTalkInstanceId && i.instanceName === newName
+                );
+                if (duplicateName) {
+                  alert(i18nService.t('imInstanceNameDuplicate').replace('{name}', newName));
+                  return;
+                }
                 dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { instanceName: newName } as any }));
                 await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, { instanceName: newName } as any);
               }}
@@ -1424,6 +1443,17 @@ const IMSettings: React.FC = () => {
               }}
               onSave={async (override) => {
                 const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
+                // Validate App ID uniqueness before saving
+                const appIdToCheck = (override?.appId ?? selectedInstance.appId) || '';
+                if (appIdToCheck) {
+                  const duplicateAppId = config.feishu.instances.find(
+                    i => i.instanceId !== activeFeishuInstanceId && i.appId === appIdToCheck
+                  );
+                  if (duplicateAppId) {
+                    alert(i18nService.t('imInstanceAppIdDuplicate').replace('{name}', duplicateAppId.instanceName));
+                    return;
+                  }
+                }
                 if (selectedInstance.enabled) {
                   await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
                 } else {
@@ -1431,6 +1461,14 @@ const IMSettings: React.FC = () => {
                 }
               }}
               onRename={async (newName) => {
+                // Validate instance name uniqueness
+                const duplicateName = config.feishu.instances.find(
+                  i => i.instanceId !== activeFeishuInstanceId && i.instanceName === newName
+                );
+                if (duplicateName) {
+                  alert(i18nService.t('imInstanceNameDuplicate').replace('{name}', newName));
+                  return;
+                }
                 dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { instanceName: newName } as any }));
                 await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, { instanceName: newName } as any);
               }}
@@ -1495,6 +1533,17 @@ const IMSettings: React.FC = () => {
               }}
               onSave={async (override) => {
                 const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
+                // Validate App ID uniqueness before saving
+                const appIdToCheck = (override?.appId ?? selectedInstance.appId) || '';
+                if (appIdToCheck) {
+                  const duplicateAppId = config.qq.instances.find(
+                    i => i.instanceId !== activeQQInstanceId && i.appId === appIdToCheck
+                  );
+                  if (duplicateAppId) {
+                    alert(i18nService.t('imInstanceAppIdDuplicate').replace('{name}', duplicateAppId.instanceName));
+                    return;
+                  }
+                }
                 if (selectedInstance.enabled) {
                   await imService.updateQQInstanceConfig(activeQQInstanceId, configToSave);
                 } else {
@@ -1502,6 +1551,14 @@ const IMSettings: React.FC = () => {
                 }
               }}
               onRename={async (newName) => {
+                // Validate instance name uniqueness
+                const duplicateName = config.qq.instances.find(
+                  i => i.instanceId !== activeQQInstanceId && i.instanceName === newName
+                );
+                if (duplicateName) {
+                  alert(i18nService.t('imInstanceNameDuplicate').replace('{name}', newName));
+                  return;
+                }
                 dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { instanceName: newName } as any }));
                 await imService.persistQQInstanceConfig(activeQQInstanceId, { instanceName: newName } as any);
               }}
