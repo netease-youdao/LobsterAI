@@ -48,7 +48,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
   React.useEffect(() => {
     setNameValue(instance.instanceName);
     setEditingName(false);
-  }, [instance.instanceId]);
+  }, [instance.instanceId, instance.instanceName]);
 
   const handleNameBlur = async () => {
     setEditingName(false);
