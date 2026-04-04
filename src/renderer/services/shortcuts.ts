@@ -124,3 +124,19 @@ export const matchesShortcut = (event: KeyboardEvent, shortcut?: string): boolea
 
   return true;
 };
+
+/**
+ * Format a shortcut string for display, applying platform-specific modifier
+ * symbols.  On macOS `Cmd` is rendered as `⌘`, `Ctrl` as `⌃`, `Alt` as `⌥`,
+ * and `Shift` as `⇧`.  On other platforms the string is returned unchanged.
+ */
+export const formatShortcutForDisplay = (shortcut: string | undefined): string => {
+  if (!shortcut) return '';
+  const isMac = typeof window !== 'undefined' && window.electron?.platform === 'darwin';
+  if (!isMac) return shortcut;
+  return shortcut
+    .replace(/\bCmd\b/g, '⌘')
+    .replace(/\bCtrl\b/g, '⌃')
+    .replace(/\bAlt\b/g, '⌥')
+    .replace(/\bShift\b/g, '⇧');
+};
