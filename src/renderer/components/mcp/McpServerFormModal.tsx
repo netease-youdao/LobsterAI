@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { XMarkIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
 import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
 import Modal from '../common/Modal';
@@ -43,22 +44,22 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setCommand(server.command || '');
       setArgsText((server.args || []).join('\n'));
       setEnvRows(
-        server.env
-          ? Object.entries(server.env).map(([key, value]) => ({ key, value }))
-          : []
+        server.env ? Object.entries(server.env).map(([key, value]) => ({ key, value })) : [],
       );
       setUrl(server.url || '');
       setHeaderRows(
         server.headers
           ? Object.entries(server.headers).map(([key, value]) => ({ key, value }))
-          : []
+          : [],
       );
     } else if (registryEntry) {
       // Registry install mode — pre-fill from template
       setName(registryEntry.name);
       const registryDescription =
-        (i18nService.getLanguage() === 'zh' ? registryEntry.description_zh : registryEntry.description_en)
-        || (registryEntry.descriptionKey ? i18nService.t(registryEntry.descriptionKey) : '');
+        (i18nService.getLanguage() === 'zh'
+          ? registryEntry.description_zh
+          : registryEntry.description_en) ||
+        (registryEntry.descriptionKey ? i18nService.t(registryEntry.descriptionKey) : '');
       setDescription(registryDescription);
       setTransportType(registryEntry.transportType);
       setCommand(registryEntry.command);
@@ -201,10 +202,12 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
 
   if (!isOpen) return null;
 
-  const inputClass = 'w-full px-3 py-2 text-sm rounded-xl bg-background text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary';
+  const inputClass =
+    'w-full px-3 py-2 text-sm rounded-xl bg-background text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary';
   const readOnlyInputClass = inputClass + ' opacity-60 cursor-not-allowed';
   const labelClass = 'text-xs font-semibold tracking-wide text-secondary';
-  const kvInputClass = 'flex-1 px-2 py-1.5 text-sm rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-1 focus:ring-primary';
+  const kvInputClass =
+    'flex-1 px-2 py-1.5 text-sm rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-1 focus:ring-primary';
 
   // Title
   const modalTitle = isEdit
@@ -214,18 +217,29 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       : i18nService.t('addMcpServer');
 
   // Save button text
-  const saveText = isRegistry && !isEdit
-    ? i18nService.t('mcpInstall')
-    : i18nService.t('saveMcpServer');
+  const saveText =
+    isRegistry && !isEdit ? i18nService.t('mcpInstall') : i18nService.t('saveMcpServer');
 
   return (
-    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-lg mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-semibold text-foreground">
-            {modalTitle}
-          </div>
-        </div>
+    <Modal
+      onClose={onClose}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="w-full max-w-lg mx-4 rounded-2xl bg-surface border border-border shadow-2xl max-h-[80vh] flex flex-col"
+    >
+      {/* Header: pinned at top, never scrolls */}
+      <div className="flex items-center justify-between px-6 pt-6 pb-4">
+        <div className="text-lg font-semibold text-foreground">{modalTitle}</div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="p-1 rounded-lg hover:bg-surface-raised transition-colors"
+        >
+          <XMarkIcon className="h-5 w-5 text-secondary" />
+        </button>
+      </div>
 
+      {/* Scrollable content area */}
+      <div className="px-6 overflow-y-auto flex-1 min-h-0">
         <div className="space-y-4">
           {/* Name */}
           <div className="space-y-1.5">
@@ -233,7 +247,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={e => setName(e.target.value)}
               placeholder={i18nService.t('mcpServerNamePlaceholder')}
               className={isRegistry ? readOnlyInputClass : inputClass}
               readOnly={isRegistry}
@@ -247,7 +261,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             <input
               type="text"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={e => setDescription(e.target.value)}
               placeholder={i18nService.t('mcpServerDescriptionPlaceholder')}
               className={inputClass}
             />
@@ -258,7 +272,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             <label className={labelClass}>{i18nService.t('mcpTransportType')}</label>
             <select
               value={transportType}
-              onChange={(e) => setTransportType(e.target.value as 'stdio' | 'sse' | 'http')}
+              onChange={e => setTransportType(e.target.value as 'stdio' | 'sse' | 'http')}
               className={isRegistry ? readOnlyInputClass : inputClass}
               disabled={isRegistry}
             >
@@ -276,7 +290,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                 <input
                   type="text"
                   value={command}
-                  onChange={(e) => setCommand(e.target.value)}
+                  onChange={e => setCommand(e.target.value)}
                   placeholder={i18nService.t('mcpCommandPlaceholder')}
                   className={isRegistry ? readOnlyInputClass : inputClass}
                   readOnly={isRegistry}
@@ -287,7 +301,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                 <label className={labelClass}>{i18nService.t('mcpArgs')}</label>
                 <textarea
                   value={argsText}
-                  onChange={(e) => setArgsText(e.target.value)}
+                  onChange={e => setArgsText(e.target.value)}
                   placeholder={i18nService.t('mcpArgsPlaceholder')}
                   rows={3}
                   className={inputClass + ' resize-none'}
@@ -318,15 +332,19 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                     <input
                       type="text"
                       value={row.key}
-                      onChange={(e) => handleUpdateEnvRow(index, 'key', e.target.value)}
+                      onChange={e => handleUpdateEnvRow(index, 'key', e.target.value)}
                       placeholder={i18nService.t('mcpHeaderKey')}
-                      className={row.required ? kvInputClass + ' opacity-60 cursor-not-allowed' : kvInputClass}
+                      className={
+                        row.required
+                          ? kvInputClass + ' opacity-60 cursor-not-allowed'
+                          : kvInputClass
+                      }
                       readOnly={!!row.required}
                     />
                     <input
                       type="text"
                       value={row.value}
-                      onChange={(e) => handleUpdateEnvRow(index, 'value', e.target.value)}
+                      onChange={e => handleUpdateEnvRow(index, 'value', e.target.value)}
                       placeholder={row.required ? `${row.key} *` : i18nService.t('mcpHeaderValue')}
                       className={kvInputClass}
                       autoFocus={isRegistry && index === 0 && !!row.required}
@@ -337,7 +355,12 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                         onClick={() => handleRemoveEnvRow(index)}
                         className="p-1 text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                          className="w-4 h-4"
+                        >
                           <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
                         </svg>
                       </button>
@@ -359,7 +382,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                 <input
                   type="text"
                   value={url}
-                  onChange={(e) => setUrl(e.target.value)}
+                  onChange={e => setUrl(e.target.value)}
                   placeholder={i18nService.t('mcpUrlPlaceholder')}
                   className={inputClass}
                 />
@@ -381,14 +404,14 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                     <input
                       type="text"
                       value={row.key}
-                      onChange={(e) => handleUpdateHeaderRow(index, 'key', e.target.value)}
+                      onChange={e => handleUpdateHeaderRow(index, 'key', e.target.value)}
                       placeholder={i18nService.t('mcpHeaderKey')}
                       className={kvInputClass}
                     />
                     <input
                       type="text"
                       value={row.value}
-                      onChange={(e) => handleUpdateHeaderRow(index, 'value', e.target.value)}
+                      onChange={e => handleUpdateHeaderRow(index, 'value', e.target.value)}
                       placeholder={i18nService.t('mcpHeaderValue')}
                       className={kvInputClass}
                     />
@@ -397,7 +420,12 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                       onClick={() => handleRemoveHeaderRow(index)}
                       className="p-1 text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        className="w-4 h-4"
+                      >
                         <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
                       </svg>
                     </button>
@@ -407,27 +435,27 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             </>
           )}
 
-          {error && (
-            <div className="text-xs text-red-500">{error}</div>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
-            >
-              {i18nService.t('cancel')}
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              className="px-3 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
-            >
-              {saveText}
-            </button>
-          </div>
+          {error && <div className="text-xs text-red-500">{error}</div>}
         </div>
+      </div>
+
+      {/* Footer: pinned at bottom, never scrolls */}
+      <div className="flex items-center justify-end gap-2 px-6 py-4">
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-3 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
+        >
+          {i18nService.t('cancel')}
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          className="px-3 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+        >
+          {saveText}
+        </button>
+      </div>
     </Modal>
   );
 };
