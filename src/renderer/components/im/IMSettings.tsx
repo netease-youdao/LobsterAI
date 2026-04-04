@@ -248,7 +248,7 @@ const IMSettings: React.FC = () => {
           }
         } catch { /* keep retrying */ }
       }, intervalMs);
-    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
       if (!isMountedRef.current) return;
       setFeishuQrStatus('error');
       setFeishuQrError(err?.message || '获取二维码失败');
@@ -303,7 +303,7 @@ const IMSettings: React.FC = () => {
     const { schema, uiHints } = openclawSchema;
 
     // Find the NIM channel key — could be 'nim' or 'openclaw-nim'
-    const channelsProps = (schema as any)?.properties?.channels?.properties ?? {}; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const channelsProps = (schema as any)?.properties?.channels?.properties ?? {};
     const channelKey = channelsProps['openclaw-nim'] ? 'openclaw-nim' : channelsProps['nim'] ? 'nim' : null;
     if (!channelKey) return null;
 
@@ -986,7 +986,7 @@ const IMSettings: React.FC = () => {
 
   // Toggle gateway on/off - map platform to Redux action
   const getSetConfigAction = (platform: Platform) => {
-    const actionMap: Record<Platform, any> = { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const actionMap: Record<Platform, any> = {
       dingtalk: setDingTalkConfig,
       feishu: setFeishuConfig,
       telegram: setTelegramOpenClawConfig,
@@ -2272,7 +2272,7 @@ const IMSettings: React.FC = () => {
                 value={config.nim as unknown as Record<string, unknown>}
                 onChange={(path, value) => {
                   const updated = deepSet({ ...config.nim } as unknown as Record<string, unknown>, path, value);
-                  dispatch(setNimConfig(updated as any)); // eslint-disable-line @typescript-eslint/no-explicit-any
+                  dispatch(setNimConfig(updated as any));
                 }}
                 onBlur={handleSaveConfig}
                 showSecrets={showSecrets}

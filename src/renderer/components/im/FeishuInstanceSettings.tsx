@@ -175,7 +175,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
       if (!isMountedRef.current) return;
       setQrUrl(result.url);
       qrDeviceCodeRef.current = result.deviceCode;
-      const expireIn = (result as any).expireIn ?? 300; // eslint-disable-line @typescript-eslint/no-explicit-any
+      const expireIn = (result as any).expireIn ?? 300;
       setQrTimeLeft(expireIn);
       setQrStatus('showing');
 
@@ -193,7 +193,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
         });
       }, 1000);
 
-      const intervalMs = Math.max((result as any).interval ?? 5, 3) * 1000; // eslint-disable-line @typescript-eslint/no-explicit-any
+      const intervalMs = Math.max((result as any).interval ?? 5, 3) * 1000;
       qrPollTimerRef.current = setInterval(async () => {
         try {
           const pollResult = await window.electron.feishu.install.poll(qrDeviceCodeRef.current);
@@ -212,7 +212,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
           }
         } catch { /* keep retrying */ }
       }, intervalMs);
-    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
       if (!isMountedRef.current) return;
       setQrStatus('error');
       setQrError(err?.message || '获取二维码失败');
