@@ -3,13 +3,14 @@
  * Configuration form for a single DingTalk bot instance in multi-instance mode
  */
 
-import React, { useState } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { SignalIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import TrashIcon from '../icons/TrashIcon';
-import type { DingTalkInstanceConfig, DingTalkInstanceStatus, DingTalkOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
-import { i18nService } from '../../services/i18n';
 import { PlatformRegistry } from '@shared/platform';
+import React, { useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { DingTalkInstanceConfig, DingTalkInstanceStatus, DingTalkOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
+import TrashIcon from '../icons/TrashIcon';
 
 interface DingTalkInstanceSettingsProps {
   instance: DingTalkInstanceConfig;
