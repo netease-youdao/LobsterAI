@@ -28,11 +28,11 @@ const ActiveSkillBadge: React.FC = () => {
   };
 
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="flex max-w-full min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:thin]">
       {activeSkills.map(skill => (
         <div
           key={skill.id}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-primary-muted border border-primary"
+          className="inline-flex shrink-0 items-center gap-1 px-2 py-0.5 rounded-lg bg-primary-muted border border-primary"
         >
           <PuzzleIcon className="h-3.5 w-3.5 text-primary" />
           <span className="text-xs font-medium text-primary max-w-[80px] truncate">
@@ -52,7 +52,7 @@ const ActiveSkillBadge: React.FC = () => {
         <button
           type="button"
           onClick={handleClearAll}
-          className="text-xs text-primary hover:text-primary-hover transition-colors"
+          className="shrink-0 text-xs text-primary hover:text-primary-hover transition-colors"
           title={i18nService.t('clearAllSkills')}
         >
           {i18nService.t('clearAll')}

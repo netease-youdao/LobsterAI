@@ -659,8 +659,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               className={textareaClass}
               style={{ minHeight: `${minHeight}px` }}
             />
-            <div className="flex items-center justify-between px-4 pb-2 pt-1.5">
-              <div className="flex items-center gap-2 relative">
+            <div className="flex min-w-0 items-center justify-between gap-2 px-4 pb-2 pt-1.5">
+              <div className="relative flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [scrollbar-width:thin]">
                 {showFolderSelector && (
                   <>
                     <div className="relative group">
@@ -706,6 +706,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 {!remoteManaged && (
                   <>
                     <SkillsButton
+                      className="shrink-0"
                       onSelectSkill={handleSelectSkill}
                       onManageSkills={handleManageSkills}
                     />
@@ -713,7 +714,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2">
                 {isStreaming ? (
                   <button
                     type="button"
