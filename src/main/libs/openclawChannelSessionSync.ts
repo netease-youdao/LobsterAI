@@ -544,4 +544,25 @@ export class OpenClawChannelSessionSync {
       }
     }
   }
+
+  /**
+   * Delete all local cowork sessions that were created for the given cron job.
+   * This must be called when a scheduled task is deleted, so that the orphaned
+   * sessions do not reappear as ghost entries after an app restart.
+   *
+   * Returns the IDs of deleted sessions.
+   */
+  deleteCronSessionsByJobId(jobId: string): string[] {
+    const suffix = `cron:${jobId}`;
+    const deletedIds: string[] = [];
+    for (const [key, sessionId] of this.syncedSessionKeys.entries()) {
+      if (key === suffix || key.endsWith(`:${suffix}`)) {
+        this.coworkStore.deleteSession(sessionId);
+        this.syncedSessionKeys.delete(key);
+        this.rejectedKeys.delete(key);
+        deletedIds.push(sessionId);
+      }
+    }
+    return deletedIds;
+  }
 }

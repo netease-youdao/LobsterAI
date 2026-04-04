@@ -644,6 +644,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.channelSessionSync = sync;
   }
 
+  getChannelSessionSync(): OpenClawChannelSessionSync | null {
+    return this.channelSessionSync;
+  }
+
   /**
    * Fetch session history from OpenClaw by sessionKey and return a transient
    * CoworkSession object (not persisted to local database).
