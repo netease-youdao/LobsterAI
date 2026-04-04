@@ -67,6 +67,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
+    skillErrAlreadyInstalled: '技能「{name}」已存在，请勿重复安装',
 
     // Auth quota
     authPlanFree: '免费',
@@ -228,6 +229,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
+    skillErrAlreadyInstalled: 'Skill "{name}" is already installed',
 
     // Auth quota
     authPlanFree: 'Free',

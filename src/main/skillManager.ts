@@ -1106,6 +1106,18 @@ export class SkillManager {
     return root;
   }
 
+  /** Returns a localized error if any target folder already exists under skills root. */
+  private checkSkillFolderConflicts(skillsRoot: string, skillDirs: string[]): string | null {
+    for (const skillDir of skillDirs) {
+      const folderName = normalizeFolderName(path.basename(skillDir));
+      const targetDir = resolveWithin(skillsRoot, folderName);
+      if (fs.existsSync(targetDir)) {
+        return t('skillErrAlreadyInstalled', { name: folderName });
+      }
+    }
+    return null;
+  }
+
   recoverInterruptedUpgrades(): void {
     const root = this.getSkillsRoot();
     if (!fs.existsSync(root)) return;
@@ -1510,6 +1522,13 @@ export class SkillManager {
         return { success: false, error: t('skillErrNoSkillMd') };
       }
 
+      const duplicateErr = this.checkSkillFolderConflicts(root, skillDirs);
+      if (duplicateErr) {
+        cleanupPathSafely(cleanupPath);
+        cleanupPath = null;
+        return { success: false, error: duplicateErr };
+      }
+
       // Security scan before installation
       let auditReport: SkillSecurityReport | null = null;
       try {
@@ -1558,12 +1577,7 @@ export class SkillManager {
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
+        const targetDir = resolveWithin(root, folderName);
         cpRecursiveSync(skillDir, targetDir);
       }
 
@@ -1787,12 +1801,23 @@ export class SkillManager {
     }
 
     clearTimeout(pending.timer);
-    this.pendingInstalls.delete(pendingId);
 
     if (action === 'cancel') {
+      this.pendingInstalls.delete(pendingId);
       cleanupPathSafely(pending.cleanupPath);
       return { success: true };
     }
+
+    if (!(pending.isUpgrade && pending.existingSkillDir)) {
+      const duplicateErr = this.checkSkillFolderConflicts(pending.root, pending.skillDirs);
+      if (duplicateErr) {
+        this.pendingInstalls.delete(pendingId);
+        cleanupPathSafely(pending.cleanupPath);
+        return { success: false, error: duplicateErr };
+      }
+    }
+
+    this.pendingInstalls.delete(pendingId);
 
     // Install the skill(s)
     const installedIds: string[] = [];
@@ -1804,17 +1829,11 @@ export class SkillManager {
         installedIds.push(path.basename(pending.existingSkillDir));
       }
     } else {
-      // Fresh install path: find unique directory name
       for (const skillDir of pending.skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = resolveWithin(pending.root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
+        const targetDir = resolveWithin(pending.root, folderName);
         cpRecursiveSync(skillDir, targetDir);
-        installedIds.push(path.basename(targetDir));
+        installedIds.push(folderName);
       }
     }
 
