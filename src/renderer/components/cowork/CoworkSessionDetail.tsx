@@ -6,16 +6,20 @@ import {
   PhotoIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
-import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useDispatch,useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
 import { setActiveSkillIds } from '../../store/slices/skillSlice';
-import type { CoworkImageAttachment,CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import type {
+  CoworkImageAttachment,
+  CoworkMessage,
+  CoworkMessageMetadata,
+} from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
 import Modal from '../common/Modal';
@@ -35,7 +39,11 @@ import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
-  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
+  onContinue: (
+    prompt: string,
+    skillPrompt?: string,
+    imageAttachments?: CoworkImageAttachment[],
+  ) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
   onDeleteSession?: (sessionId: string) => Promise<void>;
   onNavigateHome?: () => void;
@@ -66,7 +74,7 @@ const MAX_EXPORT_CANVAS_HEIGHT = 32760;
 const MAX_EXPORT_SEGMENTS = 240;
 
 const waitForNextFrame = (): Promise<void> =>
-  new Promise((resolve) => {
+  new Promise(resolve => {
     window.requestAnimationFrame(() => resolve());
   });
 
@@ -120,7 +128,7 @@ const formatUnknown = (value: unknown): string => {
 
 const getStringArray = (value: unknown): string | null => {
   if (!Array.isArray(value)) return null;
-  const lines = value.filter((item) => typeof item === 'string') as string[];
+  const lines = value.filter(item => typeof item === 'string') as string[];
   return lines.length > 0 ? lines.join('\n') : null;
 };
 
@@ -171,10 +179,7 @@ const isBashLikeToolName = (toolName: string | undefined): boolean => {
   return normalized === 'bash' || normalized === 'exec' || normalized === 'shell';
 };
 
-const getToolInputString = (
-  input: Record<string, unknown>,
-  keys: string[],
-): string | null => {
+const getToolInputString = (input: Record<string, unknown>, keys: string[]): string | null => {
   for (const key of keys) {
     const value = input[key];
     if (typeof value === 'string' && value.trim()) {
@@ -207,14 +212,11 @@ const getCronToolSummary = (input: Record<string, unknown>): string | null => {
   const action = getToolInputString(input, ['action']);
   if (!action) return null;
 
-  const job = input.job && typeof input.job === 'object'
-    ? input.job as Record<string, unknown>
-    : null;
-  const jobName = job
-    ? getToolInputString(job, ['name', 'id'])
-    : null;
-  const jobId = getToolInputString(input, ['jobId', 'id'])
-    ?? (job ? getToolInputString(job, ['id']) : null);
+  const job =
+    input.job && typeof input.job === 'object' ? (input.job as Record<string, unknown>) : null;
+  const jobName = job ? getToolInputString(job, ['name', 'id']) : null;
+  const jobId =
+    getToolInputString(input, ['jobId', 'id']) ?? (job ? getToolInputString(job, ['id']) : null);
   const wakeText = getToolInputString(input, ['text']);
 
   switch (action) {
@@ -245,14 +247,11 @@ const formatStructuredText = (value: string): string => {
   }
 };
 
-const toTrimmedString = (value: unknown): string | null => (
-  typeof value === 'string' && value.trim() ? value.trim() : null
-);
+const toTrimmedString = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value.trim() : null;
 
 const normalizeTodoStatus = (value: unknown): TodoStatus => {
-  const normalized = typeof value === 'string'
-    ? value.trim().toLowerCase().replace(/-/g, '_')
-    : '';
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase().replace(/-/g, '_') : '';
 
   if (normalized === 'completed') return 'completed';
   if (normalized === 'in_progress' || normalized === 'running') return 'in_progress';
@@ -266,7 +265,7 @@ const parseTodoWriteItems = (input: unknown): ParsedTodoItem[] | null => {
   if (!Array.isArray(record.todos)) return null;
 
   const parsedItems = record.todos
-    .map((rawTodo) => {
+    .map(rawTodo => {
       if (!rawTodo || typeof rawTodo !== 'object') {
         return null;
       }
@@ -289,8 +288,8 @@ const parseTodoWriteItems = (input: unknown): ParsedTodoItem[] | null => {
 };
 
 const getTodoWriteSummary = (items: ParsedTodoItem[]): string => {
-  const completedCount = items.filter((item) => item.status === 'completed').length;
-  const inProgressCount = items.filter((item) => item.status === 'in_progress').length;
+  const completedCount = items.filter(item => item.status === 'completed').length;
+  const inProgressCount = items.filter(item => item.status === 'in_progress').length;
   const pendingCount = items.length - completedCount - inProgressCount;
 
   const summary = [
@@ -300,7 +299,7 @@ const getTodoWriteSummary = (items: ParsedTodoItem[]): string => {
     `${pendingCount} ${i18nService.t('coworkTodoPending')}`,
   ];
 
-  const activeItem = items.find((item) => item.status === 'in_progress');
+  const activeItem = items.find(item => item.status === 'in_progress');
   if (activeItem) {
     summary.push(activeItem.primaryText);
   }
@@ -310,7 +309,7 @@ const getTodoWriteSummary = (items: ParsedTodoItem[]): string => {
 
 const getToolInputSummary = (
   toolName: string | undefined,
-  toolInput?: Record<string, unknown>
+  toolInput?: Record<string, unknown>,
 ): string | null => {
   if (!toolName || !toolInput) return null;
   const input = toolInput as Record<string, unknown>;
@@ -327,8 +326,9 @@ const getToolInputSummary = (
     case 'bash':
     case 'exec':
     case 'shell':
-      return getToolInputString(input, ['command', 'cmd', 'script'])
-        ?? getStringArray(input.commands);
+      return (
+        getToolInputString(input, ['command', 'cmd', 'script']) ?? getStringArray(input.commands)
+      );
     case 'read':
     case 'readfile':
     case 'write':
@@ -336,12 +336,12 @@ const getToolInputSummary = (
     case 'edit':
     case 'editfile':
     case 'multiedit':
-      return getToolInputString(input, ['file_path', 'path', 'filePath', 'target_file', 'targetFile'])
-        ?? (
-          typeof input.content === 'string' && input.content.trim()
-            ? truncatePreview(input.content.split('\n')[0].trim())
-            : null
-        );
+      return (
+        getToolInputString(input, ['file_path', 'path', 'filePath', 'target_file', 'targetFile']) ??
+        (typeof input.content === 'string' && input.content.trim()
+          ? truncatePreview(input.content.split('\n')[0].trim())
+          : null)
+      );
     case 'glob':
     case 'grep':
       return getToolInputString(input, ['pattern', 'query']);
@@ -362,7 +362,7 @@ const getToolInputSummary = (
 
 const formatToolInput = (
   toolName: string | undefined,
-  toolInput?: Record<string, unknown>
+  toolInput?: Record<string, unknown>,
 ): string | null => {
   if (!toolInput) return null;
   const summary = getToolInputSummary(toolName, toolInput);
@@ -408,9 +408,8 @@ const stripFileProtocol = (value: string): string => {
 
 const hasScheme = (value: string): boolean => /^[a-z][a-z0-9+.-]*:/i.test(value);
 
-const isAbsolutePath = (value: string): boolean => (
-  value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value)
-);
+const isAbsolutePath = (value: string): boolean =>
+  value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value);
 
 const isRelativePath = (value: string): boolean => !isAbsolutePath(value) && !hasScheme(value);
 
@@ -436,7 +435,7 @@ const parseRootRelativePath = (value: string): string | null => {
 };
 
 const normalizeLocalPath = (
-  value: string
+  value: string,
 ): { path: string; isRelative: boolean; isAbsolute: boolean } | null => {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -472,9 +471,7 @@ export type ToolGroupItem = {
   toolResult?: CoworkMessage | null;
 };
 
-export type DisplayItem =
-  | { type: 'message'; message: CoworkMessage }
-  | ToolGroupItem;
+export type DisplayItem = { type: 'message'; message: CoworkMessage } | ToolGroupItem;
 
 export type AssistantTurnItem =
   | { type: 'assistant'; message: CoworkMessage }
@@ -621,9 +618,8 @@ const isVisibleAssistantTurnItem = (item: AssistantTurnItem): boolean => {
 const getVisibleAssistantItems = (assistantItems: AssistantTurnItem[]): AssistantTurnItem[] =>
   assistantItems.filter(isVisibleAssistantTurnItem);
 
-export const hasRenderableAssistantContent = (turn: ConversationTurn): boolean => (
-  getVisibleAssistantItems(turn.assistantItems).length > 0
-);
+export const hasRenderableAssistantContent = (turn: ConversationTurn): boolean =>
+  getVisibleAssistantItems(turn.assistantItems).length > 0;
 
 const getToolResultLineCount = (result: string): number => {
   if (!result) return 0;
@@ -647,19 +643,18 @@ const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) =>
   return (
     <div className="space-y-2">
       {items.map((item, index) => (
-        <div
-          key={`todo-item-${index}`}
-          className="flex items-start gap-2"
-        >
-          <span className={`mt-0.5 h-4 w-4 rounded-[4px] border flex-shrink-0 inline-flex items-center justify-center ${getStatusCheckboxClass(item.status)}`}>
+        <div key={`todo-item-${index}`} className="flex items-start gap-2">
+          <span
+            className={`mt-0.5 h-4 w-4 rounded-[4px] border flex-shrink-0 inline-flex items-center justify-center ${getStatusCheckboxClass(item.status)}`}
+          >
             {item.status === 'completed' && <CheckIcon className="h-3 w-3 stroke-[2.5]" />}
           </span>
           <div className="min-w-0 flex-1">
-            <div className={`text-xs whitespace-pre-wrap break-words leading-5 ${
-              item.status === 'completed'
-                ? 'text-muted'
-                : 'text-foreground'
-            }`}>
+            <div
+              className={`text-xs whitespace-pre-wrap break-words leading-5 ${
+                item.status === 'completed' ? 'text-muted' : 'text-foreground'
+              }`}
+            >
               {item.primaryText}
             </div>
           </div>
@@ -673,13 +668,10 @@ const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
-}> = ({
-  group,
-  isLastInSequence = true,
-  mapDisplayText,
-}) => {
+}> = ({ group, isLastInSequence = true, mapDisplayText }) => {
   const { toolUse, toolResult } = group;
-  const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
+  const rawToolName =
+    typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
   const toolName = getToolDisplayName(rawToolName);
   const toolInput = toolUse.metadata?.toolInput;
   const isCronTool = isCronToolName(rawToolName);
@@ -699,9 +691,10 @@ const ToolCallGroup: React.FC<{
   const displayToolResult = hasToolResultText ? toolResultDisplay : toolResultFallback;
   const [isExpanded, setIsExpanded] = useState(false);
   const resultLineCount = hasToolResultText ? getToolResultLineCount(toolResultDisplay) : 0;
-  const toolResultSummary = isCronTool && hasToolResultText
-    ? truncatePreview(toolResultDisplay.replace(/\s+/g, ' '))
-    : null;
+  const toolResultSummary =
+    isCronTool && hasToolResultText
+      ? truncatePreview(toolResultDisplay.replace(/\s+/g, ' '))
+      : null;
 
   // Check if this is a Bash-like tool that should show terminal style
   const isBashTool = isBashLikeToolName(rawToolName);
@@ -723,18 +716,14 @@ const ToolCallGroup: React.FC<{
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-start gap-2 text-left group relative z-10"
       >
-        <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-          !toolResult
-            ? 'bg-blue-500 animate-pulse'
-            : isToolError
-              ? 'bg-red-500'
-              : 'bg-green-500'
-        }`} />
+        <span
+          className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
+            !toolResult ? 'bg-blue-500 animate-pulse' : isToolError ? 'bg-red-500' : 'bg-green-500'
+          }`}
+        />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-secondary">
-              {toolName}
-            </span>
+            <span className="text-sm font-medium text-secondary">{toolName}</span>
             {toolInputSummary && (
               <code className="text-xs text-muted font-mono truncate max-w-[400px]">
                 {toolInputSummary}
@@ -742,22 +731,23 @@ const ToolCallGroup: React.FC<{
             )}
           </div>
           {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
-            <div className={`text-xs mt-0.5 ${
-              hasToolResultText
-                ? 'text-muted'
-                : showNoDetailError
-                  ? 'text-red-500/80'
-                  : 'text-muted'
-            }`}>
+            <div
+              className={`text-xs mt-0.5 ${
+                hasToolResultText
+                  ? 'text-muted'
+                  : showNoDetailError
+                    ? 'text-red-500/80'
+                    : 'text-muted'
+              }`}
+            >
               {hasToolResultText
-                ? (toolResultSummary ?? `${resultLineCount} ${resultLineCount === 1 ? 'line' : 'lines'} of output`)
+                ? (toolResultSummary ??
+                  `${resultLineCount} ${resultLineCount === 1 ? 'line' : 'lines'} of output`)
                 : toolResultFallback}
             </div>
           )}
           {!toolResult && (
-            <div className="text-xs text-muted mt-0.5">
-              {i18nService.t('coworkToolRunning')}
-            </div>
+            <div className="text-xs text-muted mt-0.5">{i18nService.t('coworkToolRunning')}</div>
           )}
         </div>
       </button>
@@ -782,13 +772,15 @@ const ToolCallGroup: React.FC<{
                   </div>
                 )}
                 {toolResult && (hasToolResultText || showNoDetailError) && (
-                  <div className={`mt-1.5 whitespace-pre-wrap break-words ${
-                    isToolError
-                      ? 'text-red-400'
-                      : hasToolResultText
-                        ? 'text-secondary'
-                        : 'text-muted italic'
-                  }`}>
+                  <div
+                    className={`mt-1.5 whitespace-pre-wrap break-words ${
+                      isToolError
+                        ? 'text-red-400'
+                        : hasToolResultText
+                          ? 'text-secondary'
+                          : 'text-muted italic'
+                    }`}
+                  >
                     {displayToolResult}
                   </div>
                 )}
@@ -818,13 +810,15 @@ const ToolCallGroup: React.FC<{
                     {i18nService.t('coworkToolResult')}
                   </div>
                   <div className="max-h-32 overflow-y-auto">
-                    <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                      isToolError
-                        ? 'text-red-500'
-                        : hasToolResultText
-                          ? 'dark:text-claude-darkText text-claude-text'
-                          : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
-                    }`}>
+                    <pre
+                      className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                        isToolError
+                          ? 'text-red-500'
+                          : hasToolResultText
+                            ? 'dark:text-claude-darkText text-claude-text'
+                            : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
+                      }`}
+                    >
                       {displayToolResult}
                     </pre>
                   </div>
@@ -852,13 +846,15 @@ const ToolCallGroup: React.FC<{
                     {i18nService.t('coworkToolResult')}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
-                    <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                      isToolError
-                        ? 'text-red-500'
-                        : hasToolResultText
-                          ? 'text-foreground'
-                          : 'text-secondary italic'
-                    }`}>
+                    <pre
+                      className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                        isToolError
+                          ? 'text-red-500'
+                          : hasToolResultText
+                            ? 'text-foreground'
+                            : 'text-secondary italic'
+                      }`}
+                    >
                       {displayToolResult}
                     </pre>
                   </div>
@@ -878,13 +874,21 @@ const CopyButton: React.FC<{
   visible: boolean;
 }> = ({ content, visible }) => {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
     }
@@ -943,7 +947,7 @@ const ReEditButton: React.FC<{
 }> = ({ visible, onClick }) => {
   return (
     <button
-      onClick={(e) => {
+      onClick={e => {
         e.stopPropagation();
         onClick();
       }}
@@ -987,7 +991,8 @@ export const UserMessageItem: React.FC<{
     .filter((s): s is NonNullable<typeof s> => s !== undefined);
 
   // Get image attachments from metadata
-  const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
+  const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ??
+    []) as CoworkImageAttachment[];
 
   return (
     <div
@@ -1015,7 +1020,9 @@ export const UserMessageItem: React.FC<{
                           alt={img.name}
                           className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border border-border hover:border-primary transition-colors"
                           title={img.name}
-                          onClick={() => setExpandedImage(`data:${img.mimeType};base64,${img.base64Data}`)}
+                          onClick={() =>
+                            setExpandedImage(`data:${img.mimeType};base64,${img.base64Data}`)
+                          }
                         />
                         <div className="absolute bottom-1 left-1 right-1 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/50 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity truncate pointer-events-none">
                           <PhotoIcon className="h-3 w-3 flex-shrink-0" />
@@ -1027,16 +1034,8 @@ export const UserMessageItem: React.FC<{
                 )}
               </div>
               <div className="flex items-center justify-end gap-1.5 mt-1">
-                {onReEdit && (
-                  <ReEditButton
-                    visible={isHovered}
-                    onClick={() => onReEdit(message)}
-                  />
-                )}
-                <CopyButton
-                  content={message.content}
-                  visible={isHovered}
-                />
+                {onReEdit && <ReEditButton visible={isHovered} onClick={() => onReEdit(message)} />}
+                <CopyButton content={message.content} visible={isHovered} />
                 {messageSkills.length > 0 && (
                   <div className="flex items-center gap-1.5 mr-1.5">
                     {messageSkills.map(skill => (
@@ -1068,7 +1067,7 @@ export const UserMessageItem: React.FC<{
             src={expandedImage}
             alt="Preview"
             className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
           />
         </div>
       )}
@@ -1081,12 +1080,7 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
-}> = ({
-  message,
-  resolveLocalFilePath,
-  mapDisplayText,
-  showCopyButton = false,
-}) => {
+}> = ({ message, resolveLocalFilePath, mapDisplayText, showCopyButton = false }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
 
@@ -1106,10 +1100,7 @@ const AssistantMessageItem: React.FC<{
       </div>
       {showCopyButton && (
         <div className="flex items-center gap-1.5 mt-1">
-          <CopyButton
-            content={displayContent}
-            visible={isHovered}
-          />
+          <CopyButton content={displayContent} visible={isHovered} />
         </div>
       )}
     </div>
@@ -1135,7 +1126,8 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
       if (msg.type === 'tool_use') {
         const id = msg.metadata?.toolUseId;
         if (typeof id === 'string' && !toolResultIds.has(id)) {
-          const toolName = typeof msg.metadata?.toolName === 'string' ? msg.metadata.toolName : null;
+          const toolName =
+            typeof msg.metadata?.toolName === 'string' ? msg.metadata.toolName : null;
           if (toolName) {
             return `${i18nService.t('coworkToolRunning')} ${toolName}...`;
           }
@@ -1150,9 +1142,7 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
       <div className="max-w-3xl mx-auto">
         <div className="streaming-bar" />
         <div className="py-1">
-          <span className="text-xs text-secondary">
-            {getStatusText()}
-          </span>
+          <span className="text-xs text-secondary">{getStatusText()}</span>
         </div>
       </div>
     </div>
@@ -1161,9 +1151,18 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
 
 const TypingDots: React.FC = () => (
   <div className="flex items-center space-x-1.5 py-1">
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0ms' }} />
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '150ms' }} />
-    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '300ms' }} />
+    <div
+      className="w-2 h-2 rounded-full bg-primary animate-bounce"
+      style={{ animationDelay: '0ms' }}
+    />
+    <div
+      className="w-2 h-2 rounded-full bg-primary animate-bounce"
+      style={{ animationDelay: '150ms' }}
+    />
+    <div
+      className="w-2 h-2 rounded-full bg-primary animate-bounce"
+      style={{ animationDelay: '300ms' }}
+    />
   </div>
 );
 
@@ -1195,9 +1194,7 @@ const ThinkingBlock: React.FC<{
             isExpanded ? 'rotate-90' : ''
           }`}
         />
-        <span className="text-xs font-medium text-secondary">
-          {i18nService.t('reasoning')}
-        </span>
+        <span className="text-xs font-medium text-secondary">{i18nService.t('reasoning')}</span>
         {isCurrentlyStreaming && (
           <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
         )}
@@ -1232,7 +1229,9 @@ export const AssistantTurnBlock: React.FC<{
     const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
     const rawContent = hasText(message.content)
       ? message.content
-      : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');
+      : typeof message.metadata?.error === 'string'
+        ? message.metadata.error
+        : '';
     const normalizedContent = getScheduledReminderDisplayText(rawContent) ?? rawContent;
     const content = mapDisplayText ? mapDisplayText(normalizedContent) : normalizedContent;
     if (!content.trim()) return null;
@@ -1240,13 +1239,12 @@ export const AssistantTurnBlock: React.FC<{
     return (
       <div className="rounded-lg border border-border bg-background px-3 py-2">
         <div className="flex items-center gap-2">
-          {isError
-            ? <ExclamationTriangleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
-            : <InformationCircleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
-          }
-          <div className="text-xs whitespace-pre-wrap text-secondary">
-            {content}
-          </div>
+          {isError ? (
+            <ExclamationTriangleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
+          ) : (
+            <InformationCircleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
+          )}
+          <div className="text-xs whitespace-pre-wrap text-secondary">{content}</div>
         </div>
       </div>
     );
@@ -1254,7 +1252,9 @@ export const AssistantTurnBlock: React.FC<{
 
   const renderOrphanToolResult = (message: CoworkMessage) => {
     const toolResultDisplayRaw = getToolResultDisplay(message);
-    const toolResultDisplay = mapDisplayText ? mapDisplayText(toolResultDisplayRaw) : toolResultDisplayRaw;
+    const toolResultDisplay = mapDisplayText
+      ? mapDisplayText(toolResultDisplayRaw)
+      : toolResultDisplayRaw;
     const isToolError = Boolean(message.metadata?.isError || message.metadata?.error);
     const hasToolResultText = hasText(toolResultDisplay);
     const resultLineCount = hasToolResultText ? getToolResultLineCount(toolResultDisplay) : 0;
@@ -1264,9 +1264,11 @@ export const AssistantTurnBlock: React.FC<{
     return (
       <div className="py-1">
         <div className="flex items-start gap-2">
-          <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-            isToolError ? 'bg-red-500' : 'bg-surface-raised'
-          }`} />
+          <span
+            className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
+              isToolError ? 'bg-red-500' : 'bg-surface-raised'
+            }`}
+          />
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium text-secondary">
               {i18nService.t('coworkToolResult')}
@@ -1277,23 +1279,21 @@ export const AssistantTurnBlock: React.FC<{
               </div>
             )}
             {resultLineCount === 0 && showNoDetailError && (
-              <div className={`text-xs mt-0.5 ${
-                isToolError
-                  ? 'text-red-500/80'
-                  : 'text-muted'
-              }`}>
+              <div className={`text-xs mt-0.5 ${isToolError ? 'text-red-500/80' : 'text-muted'}`}>
                 {fallbackText}
               </div>
             )}
             {(hasToolResultText || showNoDetailError) && (
               <div className="mt-2 px-3 py-2 rounded-lg bg-surface-raised max-h-64 overflow-y-auto">
-                <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                  isToolError
-                    ? 'text-red-500'
-                    : hasToolResultText
-                      ? 'text-foreground'
-                      : 'text-secondary italic'
-                }`}>
+                <pre
+                  className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                    isToolError
+                      ? 'text-red-500'
+                      : hasToolResultText
+                        ? 'text-foreground'
+                        : 'text-secondary italic'
+                  }`}
+                >
                   {displayText}
                 </pre>
               </div>
@@ -1354,18 +1354,10 @@ export const AssistantTurnBlock: React.FC<{
                 if (!systemMessage) {
                   return null;
                 }
-                return (
-                  <div key={item.message.id}>
-                    {systemMessage}
-                  </div>
-                );
+                return <div key={item.message.id}>{systemMessage}</div>;
               }
 
-              return (
-                <div key={item.message.id}>
-                  {renderOrphanToolResult(item.message)}
-                </div>
-              );
+              return <div key={item.message.id}>{renderOrphanToolResult(item.message)}</div>;
             })}
             {showTypingIndicator && <TypingDots />}
           </div>
@@ -1416,7 +1408,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [isScrollable, setIsScrollable] = useState(false);
   const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
   const [isRailHovered, setIsRailHovered] = useState(false);
-  const [railTooltip, setRailTooltip] = useState<{ label: string; top: number; right: number; isUser: boolean } | null>(null);
+  const [railTooltip, setRailTooltip] = useState<{
+    label: string;
+    top: number;
+    right: number;
+    isUser: boolean;
+  } | null>(null);
 
   // Menu and action states
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -1512,7 +1509,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const padding = 8;
     const x = Math.min(
       Math.max(padding, rect.right - menuWidth),
-      window.innerWidth - menuWidth - padding
+      window.innerWidth - menuWidth - padding,
     );
     const y = Math.min(rect.bottom + 8, window.innerHeight - height - padding);
     return { x, y };
@@ -1607,7 +1604,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const lines: string[] = [];
     lines.push(`# ${currentSession.title}`);
     lines.push('');
-    lines.push(`> ${i18nService.t('coworkExportCreatedAt')}: ${new Date(currentSession.createdAt).toLocaleString()}`);
+    lines.push(
+      `> ${i18nService.t('coworkExportCreatedAt')}: ${new Date(currentSession.createdAt).toLocaleString()}`,
+    );
     lines.push('');
     lines.push('---');
     lines.push('');
@@ -1635,7 +1634,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         lines.push('#### Tool Result');
         lines.push('');
         lines.push('```');
-        lines.push(msg.content.slice(0, 2000) + (msg.content.length > 2000 ? '\n... (truncated)' : ''));
+        lines.push(
+          msg.content.slice(0, 2000) + (msg.content.length > 2000 ? '\n... (truncated)' : ''),
+        );
         lines.push('```');
         lines.push('');
       }
@@ -1645,47 +1646,58 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   const sessionToJSON = useCallback((): string => {
     if (!currentSession) return '{}';
-    return JSON.stringify({
-      title: currentSession.title,
-      createdAt: new Date(currentSession.createdAt).toISOString(),
-      updatedAt: new Date(currentSession.updatedAt).toISOString(),
-      status: currentSession.status,
-      messages: currentSession.messages.map(msg => ({
-        type: msg.type,
-        content: msg.content,
-        timestamp: new Date(msg.timestamp).toISOString(),
-        ...(msg.metadata?.toolName ? { toolName: msg.metadata.toolName } : {}),
-        ...(msg.metadata?.toolInput ? { toolInput: msg.metadata.toolInput } : {}),
-      })),
-    }, null, 2);
+    return JSON.stringify(
+      {
+        title: currentSession.title,
+        createdAt: new Date(currentSession.createdAt).toISOString(),
+        updatedAt: new Date(currentSession.updatedAt).toISOString(),
+        status: currentSession.status,
+        messages: currentSession.messages.map(msg => ({
+          type: msg.type,
+          content: msg.content,
+          timestamp: new Date(msg.timestamp).toISOString(),
+          ...(msg.metadata?.toolName ? { toolName: msg.metadata.toolName } : {}),
+          ...(msg.metadata?.toolInput ? { toolInput: msg.metadata.toolInput } : {}),
+        })),
+      },
+      null,
+      2,
+    );
   }, [currentSession]);
 
-  const handleExportText = useCallback(async (format: 'md' | 'json') => {
-    if (!currentSession) return;
-    closeMenu();
-    const content = format === 'md' ? sessionToMarkdown() : sessionToJSON();
-    const timestamp = new Date().toISOString().slice(0, 10);
-    const fileName = sanitizeExportFileName(`${currentSession.title}-${timestamp}.${format}`);
-    try {
-      const result = await window.electron.cowork.exportSessionText({
-        content,
-        defaultFileName: fileName,
-        fileExtension: format,
-      });
-      if (result.success && !result.canceled) {
-        window.dispatchEvent(new CustomEvent('app:showToast', {
-          detail: i18nService.t('coworkExportTextSuccess'),
-        }));
-      } else if (!result.success) {
-        throw new Error(result.error || 'Export failed');
+  const handleExportText = useCallback(
+    async (format: 'md' | 'json') => {
+      if (!currentSession) return;
+      closeMenu();
+      const content = format === 'md' ? sessionToMarkdown() : sessionToJSON();
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const fileName = sanitizeExportFileName(`${currentSession.title}-${timestamp}.${format}`);
+      try {
+        const result = await window.electron.cowork.exportSessionText({
+          content,
+          defaultFileName: fileName,
+          fileExtension: format,
+        });
+        if (result.success && !result.canceled) {
+          window.dispatchEvent(
+            new CustomEvent('app:showToast', {
+              detail: i18nService.t('coworkExportTextSuccess'),
+            }),
+          );
+        } else if (!result.success) {
+          throw new Error(result.error || 'Export failed');
+        }
+      } catch (error) {
+        console.error('Failed to export session text:', error);
+        window.dispatchEvent(
+          new CustomEvent('app:showToast', {
+            detail: i18nService.t('coworkExportTextFailed'),
+          }),
+        );
       }
-    } catch (error) {
-      console.error('Failed to export session text:', error);
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: i18nService.t('coworkExportTextFailed'),
-      }));
-    }
-  }, [currentSession, closeMenu, sessionToMarkdown, sessionToJSON]);
+    },
+    [currentSession, closeMenu, sessionToMarkdown, sessionToJSON],
+  );
 
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1707,7 +1719,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               throw new Error('Invalid capture area');
             }
 
-            const scrollContentHeight = Math.max(scrollContainer.scrollHeight, scrollContainer.clientHeight);
+            const scrollContentHeight = Math.max(
+              scrollContainer.scrollHeight,
+              scrollContainer.clientHeight,
+            );
             if (scrollContentHeight <= 0) {
               throw new Error('Invalid content height');
             }
@@ -1717,8 +1732,12 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               return Math.max(0, Math.min(scrollContentHeight, y));
             };
 
-            const userAnchors = scrollContainer.querySelectorAll<HTMLElement>('[data-export-role="user-message"]');
-            const assistantAnchors = scrollContainer.querySelectorAll<HTMLElement>('[data-export-role="assistant-block"]');
+            const userAnchors = scrollContainer.querySelectorAll<HTMLElement>(
+              '[data-export-role="user-message"]',
+            );
+            const assistantAnchors = scrollContainer.querySelectorAll<HTMLElement>(
+              '[data-export-role="assistant-block"]',
+            );
 
             let contentStart = 0;
             let contentEnd = scrollContentHeight;
@@ -1739,7 +1758,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
             const maxStart = Math.max(0, scrollContentHeight - 1);
             contentStart = Math.max(0, Math.min(maxStart, Math.round(contentStart)));
-            contentEnd = Math.max(contentStart + 1, Math.min(scrollContentHeight, Math.round(contentEnd)));
+            contentEnd = Math.max(
+              contentStart + 1,
+              Math.min(scrollContentHeight, Math.round(contentEnd)),
+            );
 
             const outputHeight = contentEnd - contentStart;
 
@@ -1768,11 +1790,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               return loadImageFromBase64(chunk.pngBase64);
             };
 
-            scrollContainer.scrollTop = Math.min(contentStart, Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight));
+            scrollContainer.scrollTop = Math.min(
+              contentStart,
+              Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight),
+            );
             await waitForNextFrame();
             await waitForNextFrame();
 
-            const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+            const maxScrollTop = Math.max(
+              0,
+              scrollContainer.scrollHeight - scrollContainer.clientHeight,
+            );
             let contentOffset = contentStart;
             while (contentOffset < contentEnd) {
               const targetScrollTop = Math.min(contentOffset, maxScrollTop);
@@ -1782,16 +1810,22 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
               const chunkImage = await captureAndLoad(scrollRect);
               const sourceYOffset = Math.max(0, contentOffset - targetScrollTop);
-              const drawableHeight = Math.min(scrollRect.height - sourceYOffset, contentEnd - contentOffset);
+              const drawableHeight = Math.min(
+                scrollRect.height - sourceYOffset,
+                contentEnd - contentOffset,
+              );
               if (drawableHeight <= 0) {
                 throw new Error('Failed to stitch export image');
               }
               const scaleY = chunkImage.naturalHeight / scrollRect.height;
               const sourceYInImage = Math.max(0, Math.round(sourceYOffset * scaleY));
-              const sourceHeightInImage = Math.max(1, Math.min(
-                chunkImage.naturalHeight - sourceYInImage,
-                Math.round(drawableHeight * scaleY),
-              ));
+              const sourceHeightInImage = Math.max(
+                1,
+                Math.min(
+                  chunkImage.naturalHeight - sourceYInImage,
+                  Math.round(drawableHeight * scaleY),
+                ),
+              );
 
               context.drawImage(
                 chunkImage,
@@ -1820,9 +1854,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               defaultFileName: sanitizeExportFileName(`${currentSession.title}-${timestamp}.png`),
             });
             if (saveResult.success && !saveResult.canceled) {
-              window.dispatchEvent(new CustomEvent('app:showToast', {
-                detail: i18nService.t('coworkExportImageSuccess'),
-              }));
+              window.dispatchEvent(
+                new CustomEvent('app:showToast', {
+                  detail: i18nService.t('coworkExportImageSuccess'),
+                }),
+              );
               return;
             }
             if (!saveResult.success) {
@@ -1833,9 +1869,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           }
         } catch (error) {
           console.error('Failed to export session image:', error);
-          window.dispatchEvent(new CustomEvent('app:showToast', {
-            detail: i18nService.t('coworkExportImageFailed'),
-          }));
+          window.dispatchEvent(
+            new CustomEvent('app:showToast', {
+              detail: i18nService.t('coworkExportImageFailed'),
+            }),
+          );
         } finally {
           setIsExportingImage(false);
         }
@@ -1866,11 +1904,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (!container) return;
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const isNearBottom = distanceToBottom <= AUTO_SCROLL_THRESHOLD;
-    setShouldAutoScroll((prev) => (prev === isNearBottom ? prev : isNearBottom));
+    setShouldAutoScroll(prev => (prev === isNearBottom ? prev : isNearBottom));
 
     // Check if content overflows the container (use functional updater to avoid redundant re-renders)
     const scrollable = container.scrollHeight > container.clientHeight;
-    setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
+    setIsScrollable(prev => (prev === scrollable ? prev : scrollable));
     if (!scrollable) return;
 
     // Skip index recalculation during programmatic navigation
@@ -1909,9 +1947,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     let railIdx = range.first;
     if (range.first !== range.last) {
       const turnEl = turnEls[currentTurn];
-      const nextTurnTop = currentTurn + 1 < turnEls.length
-        ? turnEls[currentTurn + 1].offsetTop
-        : container.scrollHeight;
+      const nextTurnTop =
+        currentTurn + 1 < turnEls.length
+          ? turnEls[currentTurn + 1].offsetTop
+          : container.scrollHeight;
       const turnMid = turnEl.offsetTop + (nextTurnTop - turnEl.offsetTop) / 2;
       if (scrollTop + 80 >= turnMid) {
         railIdx = range.last;
@@ -1939,7 +1978,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
     isNavigatingRef.current = true;
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
-    navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
+    navigatingTimerRef.current = setTimeout(() => {
+      isNavigatingRef.current = false;
+    }, NAV_SCROLL_LOCK_DURATION);
 
     // Try to scroll to the exact data-rail-index element if it's in the DOM
     const container = scrollContainerRef.current;
@@ -1962,77 +2003,87 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const lastMessage = currentSession?.messages?.[currentSession.messages.length - 1];
   const lastMessageContent = lastMessage?.content;
 
-  const resolveLocalFilePath = useCallback((href: string, text: string) => {
-    const hrefValue = typeof href === 'string' ? href.trim() : '';
-    const textValue = typeof text === 'string' ? text.trim() : '';
-    if (!hrefValue && !textValue) return null;
+  const resolveLocalFilePath = useCallback(
+    (href: string, text: string) => {
+      const hrefValue = typeof href === 'string' ? href.trim() : '';
+      const textValue = typeof text === 'string' ? text.trim() : '';
+      if (!hrefValue && !textValue) return null;
 
-    const hrefRootRelative = hrefValue ? parseRootRelativePath(hrefValue) : null;
-    if (hrefRootRelative) {
-      return hrefRootRelative;
-    }
-
-    const hrefPath = hrefValue ? normalizeLocalPath(hrefValue) : null;
-    if (hrefPath) {
-      if (hrefPath.isRelative && currentSession?.cwd) {
-        return toAbsolutePathFromCwd(hrefPath.path, currentSession.cwd);
+      const hrefRootRelative = hrefValue ? parseRootRelativePath(hrefValue) : null;
+      if (hrefRootRelative) {
+        return hrefRootRelative;
       }
-      if (hrefPath.isAbsolute) {
-        return hrefPath.path;
-      }
-    }
 
-    const textRootRelative = textValue ? parseRootRelativePath(textValue) : null;
-    if (textRootRelative) {
-      return textRootRelative;
-    }
-
-    const textPath = textValue ? normalizeLocalPath(textValue) : null;
-    if (textPath) {
-      if (textPath.isRelative && currentSession?.cwd) {
-        return toAbsolutePathFromCwd(textPath.path, currentSession.cwd);
+      const hrefPath = hrefValue ? normalizeLocalPath(hrefValue) : null;
+      if (hrefPath) {
+        if (hrefPath.isRelative && currentSession?.cwd) {
+          return toAbsolutePathFromCwd(hrefPath.path, currentSession.cwd);
+        }
+        if (hrefPath.isAbsolute) {
+          return hrefPath.path;
+        }
       }
-      if (textPath.isAbsolute) {
-        return textPath.path;
-      }
-    }
 
-    return null;
-  }, [currentSession?.cwd]);
+      const textRootRelative = textValue ? parseRootRelativePath(textValue) : null;
+      if (textRootRelative) {
+        return textRootRelative;
+      }
+
+      const textPath = textValue ? normalizeLocalPath(textValue) : null;
+      if (textPath) {
+        if (textPath.isRelative && currentSession?.cwd) {
+          return toAbsolutePathFromCwd(textPath.path, currentSession.cwd);
+        }
+        if (textPath.isAbsolute) {
+          return textPath.path;
+        }
+      }
+
+      return null;
+    },
+    [currentSession?.cwd],
+  );
 
   const mapDisplayText = useCallback((value: string): string => {
     return value;
   }, []);
 
-  const handleReEdit = useCallback((message: CoworkMessage) => {
-    const ref = promptInputRef.current;
-    if (!ref) return;
-    // Set text content
-    if (message.content?.trim()) {
-      ref.setValue(message.content);
-    }
-    // Restore image attachments (always call to clear previous attachments)
-    const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
-    ref.setImageAttachments(imageAttachments);
-    // Restore active skills
-    const skillIds = (message.metadata as CoworkMessageMetadata)?.skillIds;
-    if (skillIds && skillIds.length > 0) {
-      dispatch(setActiveSkillIds(skillIds));
-    }
-    // Focus the input
-    ref.focus();
-  }, [dispatch]);
+  const handleReEdit = useCallback(
+    (message: CoworkMessage) => {
+      const ref = promptInputRef.current;
+      if (!ref) return;
+      // Set text content
+      if (message.content?.trim()) {
+        ref.setValue(message.content);
+      }
+      // Restore image attachments (always call to clear previous attachments)
+      const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ??
+        []) as CoworkImageAttachment[];
+      ref.setImageAttachments(imageAttachments);
+      // Restore active skills
+      const skillIds = (message.metadata as CoworkMessageMetadata)?.skillIds;
+      if (skillIds && skillIds.length > 0) {
+        dispatch(setActiveSkillIds(skillIds));
+      }
+      // Focus the input
+      ref.focus();
+    },
+    [dispatch],
+  );
 
   const messages = currentSession?.messages;
-  const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
+  const displayItems = useMemo(() => (messages ? buildDisplayItems(messages) : []), [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
   // Cache turn-level DOM elements (data-turn-index, always in DOM even for lazy turns)
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container) { turnElsCacheRef.current = []; return; }
+    if (!container) {
+      turnElsCacheRef.current = [];
+      return;
+    }
     turnElsCacheRef.current = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-turn-index]')
+      container.querySelectorAll<HTMLElement>('[data-turn-index]'),
     );
   }, [turns]);
 
@@ -2087,8 +2138,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       currentRailIndexRef.current = lastRail;
       setCurrentRailIndex(lastRail);
     }
-  }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
-
+  }, [
+    currentSession?.messages?.length,
+    lastMessageContent,
+    isStreaming,
+    shouldAutoScroll,
+    turns.length,
+  ]);
 
   if (!currentSession) {
     return null;
@@ -2132,14 +2188,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const asstRailIdx = asstContent ? railCounter++ : -1;
 
       return (
-        <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
+        <LazyRenderTurn
+          key={turn.id}
+          turnId={turn.id}
+          alwaysRender={alwaysRender}
+          data-turn-index={index}
+        >
           {turn.userMessage && (
-            <div data-export-role="user-message" {...(userRailIdx >= 0 ? { 'data-rail-index': userRailIdx } : undefined)}>
-              <UserMessageItem message={turn.userMessage} skills={skills} onReEdit={remoteManaged ? undefined : handleReEdit} />
+            <div
+              data-export-role="user-message"
+              {...(userRailIdx >= 0 ? { 'data-rail-index': userRailIdx } : undefined)}
+            >
+              <UserMessageItem
+                message={turn.userMessage}
+                skills={skills}
+                onReEdit={remoteManaged ? undefined : handleReEdit}
+              />
             </div>
           )}
           {showAssistantBlock && (
-            <div data-export-role="assistant-block" {...(asstRailIdx >= 0 ? { 'data-rail-index': asstRailIdx } : undefined)}>
+            <div
+              data-export-role="assistant-block"
+              {...(asstRailIdx >= 0 ? { 'data-rail-index': asstRailIdx } : undefined)}
+            >
               <AssistantTurnBlock
                 turn={turn}
                 resolveLocalFilePath={resolveLocalFilePath}
@@ -2183,9 +2254,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <input
               ref={renameInputRef}
               value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
+              onChange={e => setRenameValue(e.target.value)}
+              onClick={e => e.stopPropagation()}
+              onKeyDown={e => {
                 if (e.key === 'Enter') {
                   handleRenameSave(e);
                 }
@@ -2257,11 +2328,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               slashed={currentSession.pinned}
               className={`h-[18px] w-[18px] text-secondary ${currentSession.pinned ? 'opacity-60' : ''}`}
             />
-            {currentSession.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession')}
+            {currentSession.pinned
+              ? i18nService.t('coworkUnpinSession')
+              : i18nService.t('coworkPinSession')}
           </button>
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); closeMenu(); setShowExportOptions(true); }}
+            onClick={e => {
+              e.stopPropagation();
+              closeMenu();
+              setShowExportOptions(true);
+            }}
             disabled={isExportingImage}
             className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
           >
@@ -2287,7 +2364,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         >
           <div
             className="w-full max-w-xs mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
-            onClick={(e) => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
           >
             <div className="px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
               <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
@@ -2297,36 +2374,51 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <div className="py-1">
               <button
                 type="button"
-                onClick={(e) => { setShowExportOptions(false); handleShareClick(e); }}
+                onClick={e => {
+                  setShowExportOptions(false);
+                  handleShareClick(e);
+                }}
                 disabled={isExportingImage}
                 className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
               >
                 <PhotoIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 <div>
                   <div className="font-medium">{i18nService.t('coworkExportImage')}</div>
-                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportImageDesc')}</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('coworkExportImageDesc')}
+                  </div>
                 </div>
               </button>
               <button
                 type="button"
-                onClick={() => { setShowExportOptions(false); handleExportText('md'); }}
+                onClick={() => {
+                  setShowExportOptions(false);
+                  handleExportText('md');
+                }}
                 className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
               >
                 <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 <div>
                   <div className="font-medium">Markdown</div>
-                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportMarkdownDesc')}</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('coworkExportMarkdownDesc')}
+                  </div>
                 </div>
               </button>
               <button
                 type="button"
-                onClick={() => { setShowExportOptions(false); handleExportText('json'); }}
+                onClick={() => {
+                  setShowExportOptions(false);
+                  handleExportText('json');
+                }}
                 className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
               >
                 <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
                 <div>
                   <div className="font-medium">JSON</div>
-                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportJSONDesc')}</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('coworkExportJSONDesc')}
+                  </div>
                 </div>
               </button>
             </div>
@@ -2336,39 +2428,41 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
       {/* Delete Confirmation Modal */}
       {showConfirmDelete && (
-        <Modal onClose={handleCancelDelete} overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop" className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden modal-content">
-            {/* Header */}
-            <div className="flex items-center gap-3 px-5 py-4">
-              <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
-                <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
-              </div>
-              <h2 className="text-base font-semibold text-foreground">
-                {i18nService.t('deleteTaskConfirmTitle')}
-              </h2>
+        <Modal
+          onClose={handleCancelDelete}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
+          className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden modal-content"
+        >
+          {/* Header */}
+          <div className="flex items-center gap-3 px-5 py-4">
+            <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
+              <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
             </div>
+            <h2 className="text-base font-semibold text-foreground">
+              {i18nService.t('deleteTaskConfirmTitle')}
+            </h2>
+          </div>
 
-            {/* Content */}
-            <div className="px-5 pb-4">
-              <p className="text-sm text-secondary">
-                {i18nService.t('deleteTaskConfirmMessage')}
-              </p>
-            </div>
+          {/* Content */}
+          <div className="px-5 pb-4">
+            <p className="text-sm text-secondary">{i18nService.t('deleteTaskConfirmMessage')}</p>
+          </div>
 
-            {/* Footer */}
-            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-border">
-              <button
-                onClick={handleCancelDelete}
-                className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-              >
-                {i18nService.t('cancel')}
-              </button>
-              <button
-                onClick={handleConfirmDelete}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
-              >
-                {i18nService.t('deleteSession')}
-              </button>
-            </div>
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-border">
+            <button
+              onClick={handleCancelDelete}
+              className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+            >
+              {i18nService.t('cancel')}
+            </button>
+            <button
+              onClick={handleConfirmDelete}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
+            >
+              {i18nService.t('deleteSession')}
+            </button>
+          </div>
         </Modal>
       )}
       <div className="relative flex-1 min-h-0">
@@ -2397,19 +2491,31 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <button
               type="button"
               onClick={() => {
-                const resolvedRail = currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex;
+                const resolvedRail =
+                  currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex;
                 if (resolvedRail <= 0) return;
                 navigateToRailItem(resolvedRail - 1);
               }}
-              onMouseEnter={() => { setHoveredRailIndex(null); }}
+              onMouseEnter={() => {
+                setHoveredRailIndex(null);
+              }}
               className={`shrink-0 flex items-center justify-center w-5 h-5 mb-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
-                ${!isRailHovered
-                  ? 'opacity-0 pointer-events-none'
-                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) <= 0
-                    ? 'opacity-30 cursor-default'
-                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
+                ${
+                  !isRailHovered
+                    ? 'opacity-0 pointer-events-none'
+                    : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) <= 0
+                      ? 'opacity-30 cursor-default'
+                      : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'
+                }`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2.5}
+                stroke="currentColor"
+                className="w-3.5 h-3.5"
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
               </svg>
             </button>
@@ -2420,112 +2526,123 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               className="overflow-y-auto min-h-0 flex-1"
               style={{ scrollbarWidth: 'none' }}
             >
-            {(() => {
-              // Build flat list of messages with their content length and turn index
-              const MIN_W = 6;  // px
-              const MAX_W = 16; // px
-              // Strip common markdown syntax for tooltip display
-              const stripMd = (s: string) => s
-                .replace(/^#+\s+/gm, '')
-                .replace(/```[\s\S]*?```/g, ' ')
-                .replace(/`[^`]*`/g, ' ')
-                .replace(/[*_~>]/g, '')
-                .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-                .replace(/\s+/g, ' ')
-                .trim();
-              // Get first meaningful text snippet from content
-              const getLabel = (content: string, fallback: string) => {
-                const stripped = stripMd(content);
-                return stripped.slice(0, 50) || fallback;
-              };
-              type RailItem = { key: string; turnIndex: number; label: string; contentLen: number; isUser: boolean };
-              const items: RailItem[] = [];
-              for (let i = 0; i < turns.length; i++) {
-                const turn = turns[i];
-                if (turn.userMessage) {
-                  const content = turn.userMessage.content ?? '';
-                  items.push({
-                    key: `${turn.id}-user`,
-                    turnIndex: i,
-                    label: getLabel(content, `Turn ${i + 1}`),
-                    contentLen: content.length,
-                    isUser: true,
-                  });
-                }
-                // Aggregate all assistant content into one line per turn
-                let asstContent = '';
-                for (const item of turn.assistantItems) {
-                  if (item.type === 'assistant' && item.message?.content) {
-                    asstContent += item.message.content;
+              {(() => {
+                // Build flat list of messages with their content length and turn index
+                const MIN_W = 6; // px
+                const MAX_W = 16; // px
+                // Strip common markdown syntax for tooltip display
+                const stripMd = (s: string) =>
+                  s
+                    .replace(/^#+\s+/gm, '')
+                    .replace(/```[\s\S]*?```/g, ' ')
+                    .replace(/`[^`]*`/g, ' ')
+                    .replace(/[*_~>]/g, '')
+                    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                // Get first meaningful text snippet from content
+                const getLabel = (content: string, fallback: string) => {
+                  const stripped = stripMd(content);
+                  return stripped.slice(0, 50) || fallback;
+                };
+                type RailItem = {
+                  key: string;
+                  turnIndex: number;
+                  label: string;
+                  contentLen: number;
+                  isUser: boolean;
+                };
+                const items: RailItem[] = [];
+                for (let i = 0; i < turns.length; i++) {
+                  const turn = turns[i];
+                  if (turn.userMessage) {
+                    const content = turn.userMessage.content ?? '';
+                    items.push({
+                      key: `${turn.id}-user`,
+                      turnIndex: i,
+                      label: getLabel(content, `Turn ${i + 1}`),
+                      contentLen: content.length,
+                      isUser: true,
+                    });
+                  }
+                  // Aggregate all assistant content into one line per turn
+                  let asstContent = '';
+                  for (const item of turn.assistantItems) {
+                    if (item.type === 'assistant' && item.message?.content) {
+                      asstContent += item.message.content;
+                    }
+                  }
+                  if (asstContent) {
+                    items.push({
+                      key: `${turn.id}-asst`,
+                      turnIndex: i,
+                      label: getLabel(asstContent, 'LobsterAI'),
+                      contentLen: asstContent.length,
+                      isUser: false,
+                    });
                   }
                 }
-                if (asstContent) {
-                  items.push({
-                    key: `${turn.id}-asst`,
-                    turnIndex: i,
-                    label: getLabel(asstContent, 'LobsterAI'),
-                    contentLen: asstContent.length,
-                    isUser: false,
-                  });
+                const maxLen = items.reduce((acc, m) => Math.max(acc, m.contentLen), 1);
+                // Sync rail item count and turn-to-rail mapping
+                railItemCountRef.current = items.length;
+                const rangeMap: { first: number; last: number }[] = [];
+                for (let ri = 0; ri < items.length; ri++) {
+                  const ti = items[ri].turnIndex;
+                  if (!rangeMap[ti]) {
+                    rangeMap[ti] = { first: ri, last: ri };
+                  } else {
+                    rangeMap[ti].last = ri;
+                  }
                 }
-              }
-              const maxLen = items.reduce((acc, m) => Math.max(acc, m.contentLen), 1);
-              // Sync rail item count and turn-to-rail mapping
-              railItemCountRef.current = items.length;
-              const rangeMap: { first: number; last: number }[] = [];
-              for (let ri = 0; ri < items.length; ri++) {
-                const ti = items[ri].turnIndex;
-                if (!rangeMap[ti]) {
-                  rangeMap[ti] = { first: ri, last: ri };
-                } else {
-                  rangeMap[ti].last = ri;
-                }
-              }
-              turnToRailRangeRef.current = rangeMap;
+                turnToRailRangeRef.current = rangeMap;
 
-              // Clamp rail index to valid range
-              const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= items.length
-                ? items.length - 1
-                : currentRailIndex;
+                // Clamp rail index to valid range
+                const resolvedRailIndex =
+                  currentRailIndex < 0 || currentRailIndex >= items.length
+                    ? items.length - 1
+                    : currentRailIndex;
 
-              return items.map((msg, idx) => {
-                const isActive = idx === resolvedRailIndex;
-                const isHovered = idx === hoveredRailIndex;
-                const ratio = msg.contentLen / maxLen;
-                const lineW = Math.round(MIN_W + ratio * (MAX_W - MIN_W));
-                return (
-                  <button
-                    key={msg.key}
-                    type="button"
-                    onClick={() => {
-                      navigateToRailItem(idx);
-                    }}
-                    onMouseEnter={(e) => {
-                      setHoveredRailIndex(idx);
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const top = Math.max(8, Math.min(rect.top + rect.height / 2, window.innerHeight - 8));
-                      setRailTooltip({
-                        label: msg.label,
-                        top,
-                        right: window.innerWidth - rect.left + 8,
-                        isUser: msg.isUser,
-                      });
-                    }}
-                    onMouseLeave={() => setRailTooltip(null)}
-                    className="flex items-center justify-end cursor-pointer w-5 py-[5px]"
-                  >
-                    <div
-                      className={`h-[2px] rounded-full transition-all ${
-                        isActive || isHovered
-                          ? 'bg-neutral-800 dark:bg-neutral-200'
-                          : 'bg-neutral-300 dark:bg-neutral-600'
-                      }`}
-                      style={{ width: isActive || isHovered ? MAX_W : lineW }}
-                    />
-                  </button>
-                );
-              });
-            })()}
+                return items.map((msg, idx) => {
+                  const isActive = idx === resolvedRailIndex;
+                  const isHovered = idx === hoveredRailIndex;
+                  const ratio = msg.contentLen / maxLen;
+                  const lineW = Math.round(MIN_W + ratio * (MAX_W - MIN_W));
+                  return (
+                    <button
+                      key={msg.key}
+                      type="button"
+                      onClick={() => {
+                        navigateToRailItem(idx);
+                      }}
+                      onMouseEnter={e => {
+                        setHoveredRailIndex(idx);
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const top = Math.max(
+                          8,
+                          Math.min(rect.top + rect.height / 2, window.innerHeight - 8),
+                        );
+                        setRailTooltip({
+                          label: msg.label,
+                          top,
+                          right: window.innerWidth - rect.left + 8,
+                          isUser: msg.isUser,
+                        });
+                      }}
+                      onMouseLeave={() => setRailTooltip(null)}
+                      className="flex items-center justify-end cursor-pointer w-5 py-[5px]"
+                    >
+                      <div
+                        className={`h-[2px] rounded-full transition-all ${
+                          isActive || isHovered
+                            ? 'bg-neutral-800 dark:bg-neutral-200'
+                            : 'bg-neutral-300 dark:bg-neutral-600'
+                        }`}
+                        style={{ width: isActive || isHovered ? MAX_W : lineW }}
+                      />
+                    </button>
+                  );
+                });
+              })()}
             </div>
 
             {/* Down Arrow */}
@@ -2537,56 +2654,74 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 if (resolvedRail >= maxRail) return;
                 navigateToRailItem(resolvedRail + 1);
               }}
-              onMouseEnter={() => { setHoveredRailIndex(null); }}
+              onMouseEnter={() => {
+                setHoveredRailIndex(null);
+              }}
               className={`shrink-0 flex items-center justify-center w-5 h-5 mt-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
-                ${!isRailHovered
-                  ? 'opacity-0 pointer-events-none'
-                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) >= railItemCountRef.current - 1
-                    ? 'opacity-30 cursor-default'
-                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
+                ${
+                  !isRailHovered
+                    ? 'opacity-0 pointer-events-none'
+                    : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) >=
+                        railItemCountRef.current - 1
+                      ? 'opacity-30 cursor-default'
+                      : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'
+                }`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2.5}
+                stroke="currentColor"
+                className="w-3.5 h-3.5"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M19.5 8.25l-7.5 7.5-7.5-7.5"
+                />
               </svg>
             </button>
           </div>
         )}
 
-        {railTooltip && createPortal(
-          <div
-            className={`fixed z-[100] px-3.5 py-2 text-[13px] leading-snug pointer-events-none overflow-hidden
+        {railTooltip &&
+          createPortal(
+            <div
+              className={`fixed z-[100] px-3.5 py-2 text-[13px] leading-snug pointer-events-none overflow-hidden
               max-w-[240px] shadow-[0_2px_12px_rgba(0,0,0,0.12)]
               border dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)]
-              ${railTooltip.isUser
-                ? 'rounded-[12px_12px_4px_12px] bg-white border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
-                : 'rounded-xl bg-neutral-50 border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
+              ${
+                railTooltip.isUser
+                  ? 'rounded-[12px_12px_4px_12px] bg-white border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
+                  : 'rounded-xl bg-neutral-50 border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
               }`}
-            style={{
-              top: railTooltip.top,
-              right: railTooltip.right,
-              transform: 'translateY(-50%)',
-            }}
-          >
-            {!railTooltip.isUser && (
-              <div className="text-[12px] font-medium mb-0.5 text-neutral-800 dark:text-neutral-200">
-                LobsterAI:
-              </div>
-            )}
-            <div
-              className="text-neutral-600 dark:text-neutral-300"
               style={{
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                wordBreak: 'break-all',
+                top: railTooltip.top,
+                right: railTooltip.right,
+                transform: 'translateY(-50%)',
               }}
             >
-              {railTooltip.label}
-            </div>
-          </div>,
-          document.body
-        )}
+              {!railTooltip.isUser && (
+                <div className="text-[12px] font-medium mb-0.5 text-neutral-800 dark:text-neutral-200">
+                  LobsterAI:
+                </div>
+              )}
+              <div
+                className="text-neutral-600 dark:text-neutral-300"
+                style={{
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                  wordBreak: 'break-all',
+                }}
+              >
+                {railTooltip.label}
+              </div>
+            </div>,
+            document.body,
+          )}
       </div>
 
       {/* Streaming Activity Bar */}
@@ -2600,7 +2735,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             onSubmit={onContinue}
             onStop={onStop}
             isStreaming={isStreaming}
-            placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
+            placeholder={i18nService.t(
+              remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder',
+            )}
             disabled={remoteManaged}
             size="large"
             remoteManaged={remoteManaged}
