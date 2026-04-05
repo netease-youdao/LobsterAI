@@ -108,6 +108,12 @@ const coworkSlice = createSlice({
       state.unreadSessionIds = state.unreadSessionIds.filter((id) => {
         return validSessionIds.has(id) && id !== state.currentSessionId;
       });
+      if (state.currentSessionId && !validSessionIds.has(state.currentSessionId)) {
+        state.currentSessionId = null;
+        state.currentSession = null;
+        state.isStreaming = false;
+        state.remoteManaged = false;
+      }
     },
 
     setCurrentSessionId(state, action: PayloadAction<string | null>) {

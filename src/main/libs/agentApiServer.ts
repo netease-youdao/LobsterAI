@@ -1,16 +1,25 @@
 import http from 'http';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { session } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
+import type { AgentBridgeBinding, AgentBridgeFileBinding, AgentBridgeSessionMode } from './agentBridgeSessionStore';
 import { AgentBridgeSessionStore } from './agentBridgeSessionStore';
 import { resolveRawApiConfig } from './claudeSettings';
 
 const AGENT_API_PORT = 19888;
 const AGENT_API_HOST = '127.0.0.1';
 const BRIDGE_PERMISSION_TTL_MS = 60_000;
+const BRIDGE_UPLOADS_DIRNAME = '.lobster-bridge-files';
+type AgentBridgeRequestMode = 'auto' | 'agent' | 'text-fast';
+type AgentBridgeInputFile = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: number;
+  path: string;
+};
 
 type AgentChatContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url?: { url?: string } | string };
 
@@ -28,7 +37,9 @@ interface AgentBridgeBindRequest {
 interface AgentBridgeChatRequest extends AgentChatRequest {
   airiSessionId: string;
   fileIds?: string[];
+  clientTurnId?: string;
   systemPrompt?: string;
+  sessionMode?: AgentBridgeRequestMode;
 }
 
 interface AgentBridgePermissionRequest {
@@ -52,6 +63,13 @@ interface AgentUploadFileRequest {
   name: string;
   mimeType?: string;
   base64Data: string;
+  clientTurnId?: string;
+}
+
+interface AgentReattachFilesRequest {
+  airiSessionId: string;
+  clientTurnId?: string;
+  historyFileIds: string[];
 }
 
 interface AgentChatResponse {
@@ -93,6 +111,7 @@ type AgentBridgeEvent =
       seq: number;
       createdAt: number;
       lobsterSessionId: string;
+      sessionMode?: AgentBridgeSessionMode;
     }
   | {
       type: 'state.changed';
@@ -340,7 +359,6 @@ async function requestDirectProviderChat(
       model: apiConfig.model,
       stream: Boolean(onDelta),
       messages,
-      max_tokens: 256,
     }),
   });
 
@@ -460,13 +478,23 @@ function parseAuthHeader(req: http.IncomingMessage): string | null {
   return null;
 }
 
-function sendError(res: http.ServerResponse, code: number, message: string): void {
+function sendError(res: http.ServerResponse, code: number, message: string, errorCode?: string): void {
   res.writeHead(code, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': '*',
   });
-  res.end(JSON.stringify({ error: { message, type: 'invalid_request_error' } }));
+  res.end(JSON.stringify({ error: { message, type: 'invalid_request_error', code: errorCode } }));
+}
+
+function writeSSEHeaders(res: http.ServerResponse): void {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': '*',
+    'Connection': 'keep-alive',
+  });
 }
 
 function sendSSEDone(res: http.ServerResponse): void {
@@ -480,13 +508,10 @@ export class AgentApiServer {
   private getCoworkRunner: () => any | null = () => null;
   private getSkillManager: () => any | null = () => null;
   private publishStateChanged: (event: AgentStateChangedEvent) => void = () => {};
-  private uploadRoot: string;
   private bridgeSessions = new AgentBridgeSessionStore();
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
-    this.uploadRoot = path.join(os.tmpdir(), 'lobster-agent-uploads');
-    fs.mkdirSync(this.uploadRoot, { recursive: true });
   }
 
   setCoworkRunnerGetter(getter: () => any | null): void {
@@ -710,6 +735,11 @@ export class AgentApiServer {
       return;
     }
 
+    if (pathname === '/api/agent/files/reattach' && req.method === 'POST') {
+      await this.handleReattachFiles(req, res);
+      return;
+    }
+
     sendError(res, 404, 'Not found');
   }
 
@@ -745,6 +775,7 @@ export class AgentApiServer {
     imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [],
     skillIds: string[] = [],
     systemPrompt?: string,
+    inputFiles: AgentBridgeInputFile[] = [],
   ): Promise<void> {
     const normalizedSystemPrompt = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
     const store = runner?.store;
@@ -752,11 +783,11 @@ export class AgentApiServer {
       store.updateSession(sessionId, { systemPrompt: normalizedSystemPrompt });
     }
     if (typeof runner?.startCoworkSession === 'function') {
-      await runner.startCoworkSession(sessionId, prompt, { imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined });
+      await runner.startCoworkSession(sessionId, prompt, { imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined, inputFiles });
       return;
     }
     if (typeof runner?.startSession === 'function') {
-      await runner.startSession(sessionId, prompt, { confirmationMode: 'text', imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined });
+      await runner.startSession(sessionId, prompt, { confirmationMode: 'text', imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined, inputFiles });
       return;
     }
     throw new Error('CoworkRunner start method not available');
@@ -769,6 +800,7 @@ export class AgentApiServer {
     imageAttachments: Array<{ name: string; mimeType: string; base64Data: string }> = [],
     skillIds: string[] = [],
     systemPrompt?: string,
+    inputFiles: AgentBridgeInputFile[] = [],
   ): Promise<void> {
     const normalizedSystemPrompt = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
     const store = runner?.store;
@@ -776,10 +808,10 @@ export class AgentApiServer {
       store.updateSession(sessionId, { systemPrompt: normalizedSystemPrompt });
     }
     if (typeof runner?.continueSession === 'function') {
-      await runner.continueSession(sessionId, prompt, { imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined });
+      await runner.continueSession(sessionId, prompt, { imageAttachments, skillIds, systemPrompt: normalizedSystemPrompt || undefined, inputFiles });
       return;
     }
-    await this.startRunnerSession(runner, sessionId, prompt, imageAttachments, skillIds, normalizedSystemPrompt || undefined);
+    await this.startRunnerSession(runner, sessionId, prompt, imageAttachments, skillIds, normalizedSystemPrompt || undefined, inputFiles);
   }
 
   private async readRequestBody(req: http.IncomingMessage): Promise<any | null> {
@@ -844,33 +876,286 @@ export class AgentApiServer {
     }));
   }
 
-  private getOrCreateBridgeBinding(runner: any, airiSessionId: string): { lobsterSessionId: string; isNew: boolean } {
+  private logBridgeMetrics(options: {
+    airiSessionId: string;
+    turnId: string;
+    mode: AgentBridgeSessionMode;
+    startedAt: number;
+    firstStateAt?: number | null;
+    firstAssistantDeltaAt?: number | null;
+    completedAt?: number;
+    outcome: 'success' | 'error';
+    assistantChars: number;
+    skillCount: number;
+    fileCount: number;
+    imageCount: number;
+    errorCode?: string;
+  }): void {
+    const completedAt = options.completedAt ?? Date.now();
+    console.info('[AgentApiServer][bridge-metrics]', JSON.stringify({
+      airiSessionId: options.airiSessionId,
+      turnId: options.turnId,
+      mode: options.mode,
+      outcome: options.outcome,
+      totalMs: completedAt - options.startedAt,
+      firstStateMs: typeof options.firstStateAt === 'number' ? options.firstStateAt - options.startedAt : null,
+      ttftMs: typeof options.firstAssistantDeltaAt === 'number' ? options.firstAssistantDeltaAt - options.startedAt : null,
+      assistantChars: options.assistantChars,
+      skillCount: options.skillCount,
+      fileCount: options.fileCount,
+      imageCount: options.imageCount,
+      errorCode: options.errorCode,
+    }));
+  }
+
+  private redactSensitiveBridgeString(value: string): string {
+    return value
+      .replace(/[A-Za-z]:\\[^\s"'`]+/g, '[redacted-path]')
+      .replace(/\/(?:[^/\s"'`]+\/)*[^/\s"'`]+/g, (match) => {
+        if (match.startsWith('//')) {
+          return match;
+        }
+        return '[redacted-path]';
+      });
+  }
+
+  private sanitizeBridgePayload(value: unknown, contextKey?: string): unknown {
+    if (typeof value === 'string') {
+      if (contextKey && ['cwd', 'path', 'filePath', 'resolvedPath', 'sessionKey'].includes(contextKey)) {
+        return '[redacted]';
+      }
+      return this.redactSensitiveBridgeString(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map(item => this.sanitizeBridgePayload(item, contextKey));
+    }
+    if (value && typeof value === 'object') {
+      const sanitizedEntries = Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => {
+        if (['cwd', 'path', 'filePath', 'resolvedPath', 'sessionKey'].includes(key)) {
+          return [key, '[redacted]'];
+        }
+        return [key, this.sanitizeBridgePayload(entryValue, key)];
+      });
+      return Object.fromEntries(sanitizedEntries);
+    }
+    return value;
+  }
+
+  private sanitizeBridgePayloadString(value: unknown): string {
+    try {
+      return JSON.stringify(this.sanitizeBridgePayload(value), null, 2);
+    } catch {
+      return '';
+    }
+  }
+
+  private getEffectiveBridgeSessionMode(binding: AgentBridgeBinding | null): AgentBridgeSessionMode | null {
+    if (!binding) {
+      return null;
+    }
+    if (binding.sessionMode) {
+      return binding.sessionMode;
+    }
+    return binding.lobsterSessionId.startsWith('text-fast:')
+      ? 'text-fast'
+      : 'agent';
+  }
+
+  private resolveBridgeMode(
+    airiSessionId: string,
+    options: {
+      requestedMode?: AgentBridgeRequestMode;
+      skillIds?: string[];
+      fileIds?: string[];
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    },
+  ): { mode?: AgentBridgeSessionMode; error?: { status: number; message: string; code: string } } {
+    const requestedMode = options.requestedMode ?? 'auto';
+    const binding = this.bridgeSessions.get(airiSessionId);
+    const lockedMode = this.getEffectiveBridgeSessionMode(binding);
+    const hasAdvancedCapabilities = Boolean(
+      options.skillIds?.length
+      || options.fileIds?.length
+      || options.imageAttachments?.length
+      || this.listPendingPermissions(airiSessionId).length,
+    );
+
+    const desiredMode: AgentBridgeSessionMode = requestedMode === 'auto'
+      ? (hasAdvancedCapabilities ? 'agent' : 'text-fast')
+      : requestedMode;
+
+    if (desiredMode === 'text-fast' && hasAdvancedCapabilities) {
+      return {
+        error: {
+          status: 409,
+          message: 'Current request requires bridge agent mode because it uses files, images, skills, or pending permissions.',
+          code: 'bridge_capability_required',
+        },
+      };
+    }
+
+    if (lockedMode === 'text-fast' && desiredMode === 'agent') {
+      return { mode: 'agent' };
+    }
+
+    if (lockedMode && lockedMode !== desiredMode) {
+      return {
+        error: {
+          status: 409,
+          message: `Bridge session is locked to ${lockedMode} mode. Start a new chat session to switch modes.`,
+          code: 'bridge_mode_locked',
+        },
+      };
+    }
+
+    return { mode: lockedMode ?? desiredMode };
+  }
+
+  private buildAgentUpgradePrompt(airiSessionId: string, userPrompt: string): string {
+    const transcript = this.bridgeSessions.listTextMessages(airiSessionId);
+    if (transcript.length === 0) {
+      return userPrompt;
+    }
+    const history = transcript
+      .map(message => `${message.role === 'assistant' ? '助手' : '用户'}: ${message.content}`)
+      .join('\n');
+    return [
+      '以下是当前会话在纯文本快速模式下的历史对话，请将这些内容视为同一会话上下文继续处理。',
+      '<conversation_history>',
+      history,
+      '</conversation_history>',
+      '',
+      '当前用户请求：',
+      userPrompt,
+    ].join('\n');
+  }
+
+  private getOrCreateTextFastBinding(airiSessionId: string): AgentBridgeBinding {
+    const existing = this.bridgeSessions.get(airiSessionId);
+    if (existing) {
+      this.bridgeSessions.bind(airiSessionId, existing.lobsterSessionId, 'text-fast');
+      this.bridgeSessions.touch(airiSessionId);
+      return this.bridgeSessions.get(airiSessionId)!;
+    }
+    return this.bridgeSessions.bind(airiSessionId, `text-fast:${airiSessionId}`, 'text-fast');
+  }
+
+  private getBridgeRunnerSessionCwd(lobsterSessionId: string): string {
+    const runner = this.getCoworkRunner();
+    const store = runner?.store;
+    if (store && typeof store.getSession === 'function') {
+      const session = store.getSession(lobsterSessionId);
+      if (session?.cwd && typeof session.cwd === 'string') {
+        return path.resolve(session.cwd);
+      }
+    }
+    return path.resolve(process.cwd());
+  }
+
+  private getBridgeUploadTargetPath(airiSessionId: string, fileId: string, safeName: string, lobsterSessionId: string): string {
+    const sessionCwd = this.getBridgeRunnerSessionCwd(lobsterSessionId);
+    const uploadDir = path.join(sessionCwd, BRIDGE_UPLOADS_DIRNAME, airiSessionId, fileId);
+    fs.mkdirSync(uploadDir, { recursive: true });
+    return path.join(uploadDir, safeName);
+  }
+
+  private serializeBridgeFile(file: AgentBridgeInputFile, sourceFileId?: string): Record<string, unknown> {
+    return {
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size ?? 0,
+      sourceFileId,
+    };
+  }
+
+  private issueReattachedBridgeFile(sourceFile: AgentBridgeFileBinding, clientTurnId: string): AgentBridgeInputFile {
+    const reattachedFileId = uuidv4();
+    this.bridgeSessions.bindFile({
+      ...sourceFile,
+      id: reattachedFileId,
+      clientTurnId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    return {
+      id: reattachedFileId,
+      name: sourceFile.name,
+      mimeType: sourceFile.mimeType,
+      size: sourceFile.size,
+      path: sourceFile.path,
+    };
+  }
+
+  private resolveBridgeInputFiles(
+    airiSessionId: string,
+    lobsterSessionId: string,
+    clientTurnId: string | undefined,
+    fileIds: string[] = [],
+  ): { files: AgentBridgeInputFile[]; missingFileIds: string[] } {
+    const files: AgentBridgeInputFile[] = [];
+    const missingFileIds: string[] = [];
+
+    for (const fileId of fileIds) {
+      const file = this.bridgeSessions.getFile(fileId);
+      if (
+        !file
+        || file.airiSessionId !== airiSessionId
+        || file.lobsterSessionId !== lobsterSessionId
+        || (clientTurnId && file.clientTurnId && file.clientTurnId !== clientTurnId)
+        || !fs.existsSync(file.path)
+      ) {
+        missingFileIds.push(fileId);
+        continue;
+      }
+      files.push({
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+        path: file.path,
+      });
+    }
+
+    return { files, missingFileIds };
+  }
+
+  private buildTextFastMessages(
+    airiSessionId: string,
+    userPrompt: string,
+    systemPrompt?: string,
+  ): AgentChatRequest['messages'] {
+    const messages: AgentChatRequest['messages'] = [];
+    const normalizedSystemPrompt = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
+    if (normalizedSystemPrompt) {
+      messages.push({ role: 'system', content: normalizedSystemPrompt });
+    }
+    for (const message of this.bridgeSessions.listTextMessages(airiSessionId)) {
+      messages.push({
+        role: message.role,
+        content: message.content,
+      });
+    }
+    messages.push({ role: 'user', content: userPrompt });
+    return messages;
+  }
+
+  private getOrCreateBridgeBinding(runner: any, airiSessionId: string): { lobsterSessionId: string; isNew: boolean; upgradedFromTextFast: boolean } {
     const existing = this.bridgeSessions.get(airiSessionId);
     if (existing) {
       if (!this.hasRunnerSession(runner, existing.lobsterSessionId)) {
-        this.bridgeSessions.delete(airiSessionId);
         const lobsterSessionId = this.createRunnerSession(runner);
-        this.bridgeSessions.bind(airiSessionId, lobsterSessionId);
-        return { lobsterSessionId, isNew: true };
+        const upgradedFromTextFast = existing.sessionMode === 'text-fast';
+        this.bridgeSessions.bind(airiSessionId, lobsterSessionId, 'agent', { replaceSessionMode: upgradedFromTextFast });
+        return { lobsterSessionId, isNew: true, upgradedFromTextFast };
       }
+      this.bridgeSessions.bind(airiSessionId, existing.lobsterSessionId, 'agent');
       this.bridgeSessions.touch(airiSessionId);
-      return { lobsterSessionId: existing.lobsterSessionId, isNew: false };
+      return { lobsterSessionId: existing.lobsterSessionId, isNew: false, upgradedFromTextFast: false };
     }
     const lobsterSessionId = this.createRunnerSession(runner);
-    this.bridgeSessions.bind(airiSessionId, lobsterSessionId);
-    return { lobsterSessionId, isNew: true };
-  }
-
-  private resolveBridgeFilePaths(airiSessionId: string, fileIds: string[] = []): string[] {
-    const resolved: string[] = [];
-    for (const fileId of fileIds) {
-      const file = this.bridgeSessions.getFile(fileId);
-      if (!file || file.airiSessionId !== airiSessionId) {
-        continue;
-      }
-      resolved.push(file.path);
-    }
-    return resolved;
+    this.bridgeSessions.bind(airiSessionId, lobsterSessionId, 'agent');
+    return { lobsterSessionId, isNew: true, upgradedFromTextFast: false };
   }
 
   private resolvePermissionStatus(airiSessionId: string, requestId: string): { status: 'pending' | 'expired' | 'not_found'; capabilityToken?: string; expiresAt?: number } {
@@ -916,7 +1201,7 @@ export class AgentApiServer {
         requestId: permission.requestId,
         capabilityToken: permission.capabilityToken,
         toolName: permission.toolName,
-        toolInput: permission.toolInput,
+        toolInput: this.sanitizeBridgePayload(permission.toolInput) as Record<string, unknown>,
         createdAt: permission.createdAt,
         expiresAt,
         turnId: permission.turnId,
@@ -950,6 +1235,7 @@ export class AgentApiServer {
       session: {
         airiSessionId: parsed.airiSessionId.trim(),
         lobsterSessionId: binding.lobsterSessionId,
+        sessionMode: this.getEffectiveBridgeSessionMode(this.bridgeSessions.get(parsed.airiSessionId.trim())),
       },
     }));
   }
@@ -1114,10 +1400,23 @@ export class AgentApiServer {
       return;
     }
     const airiSessionId = parsed.airiSessionId.trim();
-    const binding = this.bridgeSessions.get(airiSessionId);
+    let binding = this.bridgeSessions.get(airiSessionId);
     if (!airiSessionId || !binding) {
       sendError(res, 400, 'Unknown bridge session');
       return;
+    }
+    if (this.getEffectiveBridgeSessionMode(binding) === 'text-fast') {
+      const runner = this.getCoworkRunner();
+      if (!runner) {
+        sendError(res, 503, 'CoworkRunner not available');
+        return;
+      }
+      const upgradedBinding = this.getOrCreateBridgeBinding(runner, airiSessionId);
+      binding = this.bridgeSessions.get(airiSessionId);
+      if (!binding || upgradedBinding.lobsterSessionId !== binding.lobsterSessionId) {
+        sendError(res, 500, 'Failed to upgrade bridge session for file upload');
+        return;
+      }
     }
     const safeName = path.basename(parsed.name).replace(/[^a-zA-Z0-9._-]/g, '_') || 'file.bin';
     const base64Data = parsed.base64Data.trim();
@@ -1135,12 +1434,13 @@ export class AgentApiServer {
       return;
     }
     const fileId = uuidv4();
-    const fullPath = path.join(this.uploadRoot, `${fileId}-${safeName}`);
+    const fullPath = this.getBridgeUploadTargetPath(airiSessionId, fileId, safeName, binding.lobsterSessionId);
     fs.writeFileSync(fullPath, buffer);
     this.bridgeSessions.bindFile({
       id: fileId,
       airiSessionId,
       lobsterSessionId: binding.lobsterSessionId,
+      clientTurnId: typeof parsed.clientTurnId === 'string' && parsed.clientTurnId.trim() ? parsed.clientTurnId.trim() : undefined,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       name: safeName,
@@ -1160,6 +1460,62 @@ export class AgentApiServer {
         mimeType: typeof parsed.mimeType === 'string' ? parsed.mimeType : 'application/octet-stream',
         size: buffer.length,
       },
+    }));
+  }
+
+  private async handleReattachFiles(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (!this.verifyAuth(req)) {
+      sendError(res, 401, 'Invalid or missing API key');
+      return;
+    }
+    const parsed = await this.readRequestBody(req) as AgentReattachFilesRequest | null;
+    if (!parsed || typeof parsed.airiSessionId !== 'string' || !Array.isArray(parsed.historyFileIds) || parsed.historyFileIds.length === 0) {
+      sendError(res, 400, 'Invalid payload');
+      return;
+    }
+    const airiSessionId = parsed.airiSessionId.trim();
+    const clientTurnId = typeof parsed.clientTurnId === 'string' && parsed.clientTurnId.trim()
+      ? parsed.clientTurnId.trim()
+      : '';
+    let binding = this.bridgeSessions.get(airiSessionId);
+    if (!airiSessionId || !binding) {
+      sendError(res, 400, 'Unknown bridge session');
+      return;
+    }
+    if (!clientTurnId) {
+      sendError(res, 400, 'Missing clientTurnId');
+      return;
+    }
+    if (this.getEffectiveBridgeSessionMode(binding) === 'text-fast') {
+      const runner = this.getCoworkRunner();
+      if (!runner) {
+        sendError(res, 503, 'CoworkRunner not available');
+        return;
+      }
+      const upgradedBinding = this.getOrCreateBridgeBinding(runner, airiSessionId);
+      binding = this.bridgeSessions.get(airiSessionId);
+      if (!binding || upgradedBinding.lobsterSessionId !== binding.lobsterSessionId) {
+        sendError(res, 500, 'Failed to upgrade bridge session for file reattach');
+        return;
+      }
+    }
+    const reattachedFiles: AgentBridgeInputFile[] = [];
+    for (const rawHistoryFileId of parsed.historyFileIds) {
+      const historyFileId = typeof rawHistoryFileId === 'string' ? rawHistoryFileId.trim() : '';
+      const sourceFile = this.bridgeSessions.getFile(historyFileId);
+      if (!historyFileId || !sourceFile || sourceFile.airiSessionId !== airiSessionId || sourceFile.lobsterSessionId !== binding.lobsterSessionId || !fs.existsSync(sourceFile.path)) {
+        sendError(res, 409, `Missing or invalid bridge file references: ${historyFileId || rawHistoryFileId}`, 'bridge_file_missing');
+        return;
+      }
+      reattachedFiles.push(this.issueReattachedBridgeFile(sourceFile, clientTurnId));
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+    });
+    res.end(JSON.stringify({
+      files: reattachedFiles.map((file, index) => this.serializeBridgeFile(file, parsed.historyFileIds[index])),
     }));
   }
 
@@ -1248,44 +1604,53 @@ export class AgentApiServer {
       sendError(res, 400, 'Missing airiSessionId');
       return;
     }
-    const { messages, skillIds = [], fileIds = [], systemPrompt } = parsed;
+    const { messages, skillIds = [], fileIds = [], systemPrompt, sessionMode, clientTurnId } = parsed;
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       sendError(res, 400, 'Missing messages');
       return;
     }
     const { prompt: rawUserPrompt, imageAttachments } = parsePromptAndAttachments(messages);
-    const bridgeFilePaths = this.resolveBridgeFilePaths(parsed.airiSessionId.trim(), fileIds);
-    const userPrompt = bridgeFilePaths.length > 0
-      ? `${rawUserPrompt || '请先查看我上传的文件并回答问题。'}\n${bridgeFilePaths.map(filePath => `input file: ${filePath}`).join('\n')}`
-      : rawUserPrompt;
-    if (!userPrompt && imageAttachments.length === 0) {
+    if (!rawUserPrompt && imageAttachments.length === 0 && fileIds.length === 0) {
       sendError(res, 400, 'Missing message content');
       return;
     }
 
     const airiSessionId = parsed.airiSessionId.trim();
     const turnId = uuidv4();
-    const canUseDirectBridgePath = false;
+    const requestStartedAt = Date.now();
+    const resolvedMode = this.resolveBridgeMode(airiSessionId, {
+      requestedMode: sessionMode,
+      skillIds,
+      fileIds,
+      imageAttachments,
+    });
+    if (resolvedMode.error) {
+      sendError(res, resolvedMode.error.status, resolvedMode.error.message, resolvedMode.error.code);
+      return;
+    }
 
-    if (canUseDirectBridgePath) {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': '*',
-        'Connection': 'keep-alive',
-      });
+    if (resolvedMode.mode === 'text-fast') {
+      writeSSEHeaders(res);
+      const binding = this.getOrCreateTextFastBinding(airiSessionId);
+      let firstStateAt: number | null = null;
+      let firstAssistantDeltaAt: number | null = null;
 
       this.writeBridgeEvent(res, this.createBridgeEvent({
         type: 'session.bound',
         sessionId: airiSessionId,
         turnId,
-        lobsterSessionId: `direct:${airiSessionId}`,
+        lobsterSessionId: binding.lobsterSessionId,
+        sessionMode: 'text-fast',
       }));
       this.emitBridgeStateChanged(res, airiSessionId, turnId, 'think');
+      firstStateAt = Date.now();
 
       try {
-        const fallback = await requestDirectProviderChat(messages, async (delta) => {
+        const directMessages = this.buildTextFastMessages(airiSessionId, rawUserPrompt, systemPrompt);
+        const response = await requestDirectProviderChat(directMessages, async (delta) => {
+          if (firstAssistantDeltaAt === null) {
+            firstAssistantDeltaAt = Date.now();
+          }
           this.writeBridgeEvent(res, this.createBridgeEvent({
             type: 'assistant.delta',
             sessionId: airiSessionId,
@@ -1293,20 +1658,43 @@ export class AgentApiServer {
             text: delta,
           }));
         });
+
+        this.bridgeSessions.appendTextMessage(airiSessionId, {
+          role: 'user',
+          content: rawUserPrompt,
+        });
+        this.bridgeSessions.appendTextMessage(airiSessionId, {
+          role: 'assistant',
+          content: response.content,
+        });
+
         this.emitBridgeStateChanged(res, airiSessionId, turnId, 'success');
         this.writeBridgeEvent(res, this.createBridgeEvent({
           type: 'assistant.final',
           sessionId: airiSessionId,
           turnId,
-          text: fallback.content,
+          text: response.content,
         }));
         this.writeBridgeEvent(res, this.createBridgeEvent({
           type: 'done',
           sessionId: airiSessionId,
           turnId,
         }));
-        res.write('data: [DONE]\n\n');
-        res.end();
+        this.logBridgeMetrics({
+          airiSessionId,
+          turnId,
+          mode: 'text-fast',
+          startedAt: requestStartedAt,
+          firstStateAt,
+          firstAssistantDeltaAt: firstAssistantDeltaAt ?? Date.now(),
+          completedAt: Date.now(),
+          outcome: 'success',
+          assistantChars: response.content.length,
+          skillCount: skillIds.length,
+          fileCount: fileIds.length,
+          imageCount: imageAttachments.length,
+        });
+        sendSSEDone(res);
         return;
       } catch (error) {
         const message = String(error);
@@ -1316,8 +1704,24 @@ export class AgentApiServer {
           sessionId: airiSessionId,
           turnId,
           message,
+          code: 'bridge_text_fast_failed',
         }));
-        res.end();
+        this.logBridgeMetrics({
+          airiSessionId,
+          turnId,
+          mode: 'text-fast',
+          startedAt: requestStartedAt,
+          firstStateAt,
+          firstAssistantDeltaAt,
+          completedAt: Date.now(),
+          outcome: 'error',
+          assistantChars: 0,
+          skillCount: skillIds.length,
+          fileCount: fileIds.length,
+          imageCount: imageAttachments.length,
+          errorCode: 'bridge_text_fast_failed',
+        });
+        sendSSEDone(res);
         return;
       }
     }
@@ -1330,6 +1734,16 @@ export class AgentApiServer {
 
     const binding = this.getOrCreateBridgeBinding(runner, airiSessionId);
     const lobsterSessionId = binding.lobsterSessionId;
+    const normalizedClientTurnId = typeof clientTurnId === 'string' && clientTurnId.trim() ? clientTurnId.trim() : undefined;
+    const resolvedBridgeFiles = this.resolveBridgeInputFiles(airiSessionId, lobsterSessionId, normalizedClientTurnId, fileIds);
+    if (resolvedBridgeFiles.missingFileIds.length > 0) {
+      sendError(res, 409, `Missing or invalid bridge file references: ${resolvedBridgeFiles.missingFileIds.join(', ')}`, 'bridge_file_missing');
+      return;
+    }
+    const userPrompt = rawUserPrompt || (resolvedBridgeFiles.files.length > 0 ? '请先查看我上传的输入文件并回答问题。' : rawUserPrompt);
+    const effectiveUserPrompt = binding.upgradedFromTextFast
+      ? this.buildAgentUpgradePrompt(airiSessionId, userPrompt)
+      : userPrompt;
     const assistantMessageIds = new Set<string>();
     const thinkingMessageIds = new Set<string>();
     const messageOffsets = new Map<string, number>();
@@ -1337,21 +1751,17 @@ export class AgentApiServer {
     let fullThinkingText = '';
     let hasError = false;
     let isCompleted = false;
-    let fallbackRateLimitMessage = '';
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': '*',
-      'Connection': 'keep-alive',
-    });
+    let firstStateAt: number | null = null;
+    let firstAssistantDeltaAt: number | null = null;
+    let bridgeErrorCode: string | undefined;
+    writeSSEHeaders(res);
 
     this.writeBridgeEvent(res, this.createBridgeEvent({
       type: 'session.bound',
       sessionId: airiSessionId,
       turnId,
       lobsterSessionId,
+      sessionMode: this.getEffectiveBridgeSessionMode(this.bridgeSessions.get(airiSessionId)) ?? 'agent',
     }));
 
     const onMessage = (sid: string, message: CoworkMessage) => {
@@ -1364,15 +1774,14 @@ export class AgentApiServer {
         return;
       }
       if (message.type === 'assistant') {
-        if (skillIds.length === 0 && imageAttachments.length === 0 && fileIds.length === 0 && isRateLimitErrorMessage(content)) {
-          fallbackRateLimitMessage = content;
-          return;
-        }
         const visibleContent = sanitizeAssistantVisibleText(content);
         assistantMessageIds.add(message.id);
         messageOffsets.set(message.id, visibleContent.length);
         fullAssistantText = visibleContent;
         if (visibleContent) {
+          if (firstAssistantDeltaAt === null) {
+            firstAssistantDeltaAt = Date.now();
+          }
           this.writeBridgeEvent(res, this.createBridgeEvent({
             type: 'assistant.delta',
             sessionId: airiSessionId,
@@ -1383,9 +1792,10 @@ export class AgentApiServer {
         return;
       }
       if (message.type === 'tool_use') {
-        let toolArguments = content;
+        const sanitizedToolInput = this.sanitizeBridgePayload(message.metadata?.toolInput || {});
+        let toolArguments = this.redactSensitiveBridgeString(content);
         try {
-          toolArguments = JSON.stringify(message.metadata?.toolInput || {}, null, 2);
+          toolArguments = JSON.stringify(sanitizedToolInput, null, 2);
         } catch {}
         this.emitBridgeStateChanged(res, airiSessionId, turnId, 'tool_use', {
           toolName: message.metadata?.toolName || undefined,
@@ -1407,7 +1817,7 @@ export class AgentApiServer {
           sessionId: airiSessionId,
           turnId,
           toolCallId: message.metadata?.toolUseId || `call_${message.id}`,
-          result: content,
+          result: this.redactSensitiveBridgeString(content),
           isError: !!message.metadata?.isError,
         }));
       }
@@ -1434,6 +1844,9 @@ export class AgentApiServer {
       }
       if (assistantMessageIds.has(messageId)) {
         fullAssistantText = visibleContent;
+        if (firstAssistantDeltaAt === null) {
+          firstAssistantDeltaAt = Date.now();
+        }
         this.writeBridgeEvent(res, this.createBridgeEvent({
           type: 'assistant.delta',
           sessionId: airiSessionId,
@@ -1460,6 +1873,7 @@ export class AgentApiServer {
       this.emitBridgeStateChanged(res, airiSessionId, turnId, 'ask_user', {
         toolName: request.toolName,
       });
+      const sanitizedToolInput = this.sanitizeBridgePayload(request.toolInput || {}) as Record<string, unknown>;
       this.writeBridgeEvent(res, this.createBridgeEvent({
         type: 'permission.request',
         sessionId: airiSessionId,
@@ -1467,7 +1881,7 @@ export class AgentApiServer {
         requestId: request.requestId,
         capabilityToken,
         toolName: request.toolName,
-        toolInput: request.toolInput || {},
+        toolInput: sanitizedToolInput,
         expiresAt: Date.now() + BRIDGE_PERMISSION_TTL_MS,
       }));
     };
@@ -1485,11 +1899,12 @@ export class AgentApiServer {
     try {
       this.emitStateChanged(lobsterSessionId, turnId, 'think');
       this.emitBridgeStateChanged(res, airiSessionId, turnId, 'think');
+      firstStateAt = Date.now();
       if (binding.isNew) {
-        await this.startRunnerSession(runner, lobsterSessionId, userPrompt, imageAttachments, skillIds, systemPrompt);
+        await this.startRunnerSession(runner, lobsterSessionId, effectiveUserPrompt, imageAttachments, skillIds, systemPrompt, resolvedBridgeFiles.files);
       }
       else {
-        await this.continueRunnerSession(runner, lobsterSessionId, userPrompt, imageAttachments, skillIds, systemPrompt);
+        await this.continueRunnerSession(runner, lobsterSessionId, effectiveUserPrompt, imageAttachments, skillIds, systemPrompt, resolvedBridgeFiles.files);
       }
 
       await new Promise<void>((resolve) => {
@@ -1511,48 +1926,21 @@ export class AgentApiServer {
           resolve();
         }, 60000);
       });
-      if (fallbackRateLimitMessage) {
-        const fallbackMessages = systemPrompt
-          ? [{ role: 'system', content: systemPrompt }, ...messages]
-          : messages;
-        const fallback = await requestDirectProviderChat(fallbackMessages);
-        fullAssistantText = fallback.content;
-      }
     }
     catch (error) {
       const message = String(error);
-      if (skillIds.length === 0 && imageAttachments.length === 0 && fileIds.length === 0 && isRateLimitErrorMessage(message)) {
-        try {
-          const fallbackMessages = systemPrompt
-            ? [{ role: 'system', content: systemPrompt }, ...messages]
-            : messages;
-          const fallback = await requestDirectProviderChat(fallbackMessages);
-          fullAssistantText = fallback.content;
-        } catch (fallbackError) {
-          hasError = true;
-          console.error('[AgentApiServer] Bridge cowork error:', error);
-          console.error('[AgentApiServer] Bridge direct provider fallback error:', fallbackError);
-          this.emitStateChanged(lobsterSessionId, turnId, 'error', { reason: String(fallbackError) });
-          this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: String(fallbackError) });
-          this.writeBridgeEvent(res, this.createBridgeEvent({
-            type: 'error',
-            sessionId: airiSessionId,
-            turnId,
-            message: String(fallbackError),
-          }));
-        }
-      } else {
-        hasError = true;
-        console.error('[AgentApiServer] Bridge cowork error:', error);
-        this.emitStateChanged(lobsterSessionId, turnId, 'error', { reason: message });
-        this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: message });
-        this.writeBridgeEvent(res, this.createBridgeEvent({
-          type: 'error',
-          sessionId: airiSessionId,
-          turnId,
-          message,
-        }));
-      }
+      hasError = true;
+      console.error('[AgentApiServer] Bridge cowork error:', error);
+      this.emitStateChanged(lobsterSessionId, turnId, 'error', { reason: message });
+      this.emitBridgeStateChanged(res, airiSessionId, turnId, 'error', { reason: message });
+      bridgeErrorCode = isRateLimitErrorMessage(message) ? 'bridge_agent_rate_limited' : 'bridge_agent_failed';
+      this.writeBridgeEvent(res, this.createBridgeEvent({
+        type: 'error',
+        sessionId: airiSessionId,
+        turnId,
+        message,
+        code: bridgeErrorCode,
+      }));
     }
     finally {
       runner.off('message', onMessage);
@@ -1575,6 +1963,21 @@ export class AgentApiServer {
         sessionId: airiSessionId,
         turnId,
       }));
+      this.logBridgeMetrics({
+        airiSessionId,
+        turnId,
+        mode: 'agent',
+        startedAt: requestStartedAt,
+        firstStateAt,
+        firstAssistantDeltaAt,
+        completedAt: Date.now(),
+        outcome: hasError ? 'error' : 'success',
+        assistantChars: fullAssistantText.length,
+        skillCount: skillIds.length,
+        fileCount: fileIds.length,
+        imageCount: imageAttachments.length,
+        errorCode: bridgeErrorCode,
+      });
       sendSSEDone(res);
     }
   }

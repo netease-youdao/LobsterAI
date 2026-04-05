@@ -49,3 +49,57 @@ describe('AgentBridgeSessionStore permission capability guard', () => {
     ]);
   });
 });
+
+describe('AgentBridgeSessionStore mode lock state', () => {
+  it('keeps the first session mode once bound', () => {
+    const store = new AgentBridgeSessionStore();
+
+    const first = store.bind('airi-1', 'lobster-1', 'text-fast');
+    const second = store.bind('airi-1', 'lobster-2', 'agent');
+
+    expect(first.sessionMode).toBe('text-fast');
+    expect(second.sessionMode).toBe('text-fast');
+  });
+
+  it('allows explicit mode replacement when upgrading bindings', () => {
+    const store = new AgentBridgeSessionStore();
+    store.bind('airi-1', 'lobster-1', 'text-fast');
+
+    const upgraded = store.bind('airi-1', 'lobster-2', 'agent', { replaceSessionMode: true });
+
+    expect(upgraded.sessionMode).toBe('agent');
+    expect(upgraded.lobsterSessionId).toBe('lobster-2');
+  });
+
+  it('persists text transcript per session', () => {
+    const store = new AgentBridgeSessionStore();
+    store.bind('airi-1', 'lobster-1', 'text-fast');
+    store.appendTextMessage('airi-1', { role: 'user', content: 'hello' });
+    store.appendTextMessage('airi-1', { role: 'assistant', content: 'hi' });
+
+    expect(store.listTextMessages('airi-1')).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+    ]);
+  });
+});
+
+describe('AgentBridgeSessionStore file binding scope', () => {
+  it('preserves client turn binding for uploaded files', () => {
+    const store = new AgentBridgeSessionStore();
+    store.bindFile({
+      id: 'file-1',
+      airiSessionId: 'airi-1',
+      lobsterSessionId: 'lobster-1',
+      clientTurnId: 'turn-client-1',
+      createdAt: 1,
+      updatedAt: 1,
+      name: 'demo.txt',
+      mimeType: 'text/plain',
+      path: '/tmp/demo.txt',
+      size: 4,
+    });
+
+    expect(store.getFile('file-1')?.clientTurnId).toBe('turn-client-1');
+  });
+});

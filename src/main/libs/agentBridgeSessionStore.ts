@@ -1,15 +1,26 @@
+export type AgentBridgeSessionMode = 'agent' | 'text-fast';
+const TEXT_FAST_TRANSCRIPT_LIMIT = 40;
+
+export interface AgentBridgeTextMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
 export interface AgentBridgeBinding {
   airiSessionId: string;
   lobsterSessionId: string;
+  sessionMode?: AgentBridgeSessionMode;
   createdAt: number;
   updatedAt: number;
   seq: number;
+  textTranscript: AgentBridgeTextMessage[];
 }
 
 export interface AgentBridgeFileBinding {
   id: string;
   airiSessionId: string;
   lobsterSessionId: string;
+  clientTurnId?: string;
   createdAt: number;
   updatedAt: number;
   name: string;
@@ -39,21 +50,29 @@ export class AgentBridgeSessionStore {
     return this.bindings.get(airiSessionId) ?? null;
   }
 
-  bind(airiSessionId: string, lobsterSessionId: string): AgentBridgeBinding {
+  bind(
+    airiSessionId: string,
+    lobsterSessionId: string,
+    sessionMode?: AgentBridgeSessionMode,
+    options: { replaceSessionMode?: boolean } = {},
+  ): AgentBridgeBinding {
     const now = Date.now();
     const existing = this.bindings.get(airiSessionId);
     const next: AgentBridgeBinding = existing
       ? {
           ...existing,
           lobsterSessionId,
+          sessionMode: options.replaceSessionMode ? sessionMode : (existing.sessionMode ?? sessionMode),
           updatedAt: now,
         }
       : {
           airiSessionId,
           lobsterSessionId,
+          sessionMode,
           createdAt: now,
           updatedAt: now,
           seq: 0,
+          textTranscript: [],
         };
     this.bindings.set(airiSessionId, next);
     return next;
@@ -82,6 +101,23 @@ export class AgentBridgeSessionStore {
     };
     this.bindings.set(airiSessionId, next);
     return next.seq;
+  }
+
+  appendTextMessage(airiSessionId: string, message: AgentBridgeTextMessage): AgentBridgeBinding | null {
+    const existing = this.bindings.get(airiSessionId);
+    if (!existing)
+      return null;
+    const next = {
+      ...existing,
+      updatedAt: Date.now(),
+      textTranscript: [...existing.textTranscript, message].slice(-TEXT_FAST_TRANSCRIPT_LIMIT),
+    };
+    this.bindings.set(airiSessionId, next);
+    return next;
+  }
+
+  listTextMessages(airiSessionId: string): AgentBridgeTextMessage[] {
+    return this.bindings.get(airiSessionId)?.textTranscript ?? [];
   }
 
   delete(airiSessionId: string): void {

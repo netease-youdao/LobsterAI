@@ -2595,6 +2595,12 @@ if (!gotTheLock) {
   ipcMain.handle('cowork:session:get', async (_event, sessionId: string) => {
     try {
       const session = getCoworkStore().getSession(sessionId);
+      if (!session) {
+        return {
+          success: false,
+          error: 'Session not found',
+        };
+      }
       return { success: true, session };
     } catch (error) {
       return {

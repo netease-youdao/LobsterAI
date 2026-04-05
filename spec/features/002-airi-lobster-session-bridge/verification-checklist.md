@@ -252,6 +252,19 @@ pnpm -F @proj-airi/stage-layouts typecheck
   - `packages/i18n/src/locales/zh-Hans/stage.yaml` 当前结构已与 `en / zh-Hant` 对齐，`stage.chat.message.character-name.*` 读取正常
 - 类型检查
   - `pnpm -F @proj-airi/stage-ui typecheck`：通过
+  - `pnpm -F @proj-airi/pipelines-audio typecheck`：通过
+
+- 提示词与默认链路回退
+  - 已停止 Airi 向 Bridge 透传角色卡 `systemPrompt`，当前普通聊天恢复为 LobsterAI 默认提示词链路
+  - 已继续收口用户可见文本中的 `ACT / DELAY / 检查要求 / 格式应该是` 等控制标记与草稿内容
+  - 已确认 Bridge 聊天重新以 `assistant.delta` 为主链路输出，而不再依赖单包 `assistant.final`
+
+- 聊天超时与语音连续性修正
+  - 已将 Airi 聊天流空闲超时从 25 秒放宽到 180 秒，避免首包慢时误判 `Stream timeout`
+  - 已禁用普通文本 direct bridge path，恢复 LobsterAI 默认会话流，优先保证逐步输出与聊天发声前置条件
+  - 已将 Stage TTS 分段参数从 `8~24` 收紧到 `3~12`，并启用更积极的早段产出
+  - 已将语音流水线改为小并发预取后按顺序调度播放，减少“上一段播完才开始下一段合成”造成的停顿
+  - 当前结论：Airi / LobsterAI 现阶段不支持真正的音频 chunk 级流式播放；当前实现是“文本流式 + 分段 TTS + 预取播放”，可明显改善断续感，但仍不等同于底层音频真流式
 
 ---
 

@@ -121,6 +121,7 @@
 
 ## 下一步建议
 
+- 将“真流式语音输出”拆成独立开发计划，优先完成 Airi 播放层流式化、speech provider streaming 能力声明与 pipeline 会话化设计
 - 收紧默认 key 与 CORS
 - 增加按 session 的服务端 pending permission 持久化
 - 抽离 `ChatArea.vue` 的技能/权限逻辑
@@ -143,3 +144,18 @@
 - 当前工程判断：
   - “消息发出但没有信息返回”的主要阻塞已收口
   - 下一优先级转为 Airi 发声/测试页无声问题
+
+## 2026-04-03 二次补充记录
+
+- 提示词链路调整
+  - 已按当前联调决策停止 Airi 向 Bridge 透传角色卡 `systemPrompt`
+  - Bridge 普通聊天已恢复使用 LobsterAI 默认提示词与默认会话链路，优先保证速度与稳定性
+  - 服务端继续保留用户可见文本清洗，防止 `ACT / DELAY / 元提示草稿` 混入最终回复
+- 流式与发声链路调整
+  - 已禁用普通文本 direct bridge path，避免长时间只等单包 `assistant.final` 导致的 `Stream timeout`
+  - 当前 Bridge 已重新回到 `assistant.delta -> assistant.final` 的逐步输出模式
+  - Airi 聊天超时已放宽到 180 秒，用于覆盖首包较慢与工具前置等待场景
+  - Stage TTS 已改为更小分段 + 小并发预取播放，目标是减少聊天播报的断续感
+- 当前工程判断
+  - 当前 Airi / LobsterAI 聊天框不支持真正的音频 chunk 级流式播放
+  - 现阶段可落地的最优方案是“文本流式 + 分段 TTS + 预取播放”

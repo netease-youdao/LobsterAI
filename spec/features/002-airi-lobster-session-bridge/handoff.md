@@ -39,8 +39,8 @@
 - 工具参数与工具结果已可在聊天消息中显示
 - 工具结果已支持长输出展开、复制与错误态高亮
 - 技能安装已支持成功 / 取消 / 错误反馈提示
-- Airi 当前激活角色卡中的 `systemPrompt + description + personality` 已会透传到 Lobster Bridge 的 `systemPrompt`，LobsterAI runtime 不再固定回落到默认 Claude 风格提示词
-- 用户可继续直接在 Airi `settings/airi-card` 中编辑角色卡的人设、系统提示词与描述，无需再到 LobsterAI 侧单独维护一份人格配置
+- Airi 已停止向 Bridge 透传角色卡 `systemPrompt`，当前普通聊天恢复为 LobsterAI 默认提示词链路，优先保证响应速度、发声稳定性与回复自然度
+- 用户仍可继续在 Airi `settings/airi-card` 中维护角色卡配置，但当前 Bridge 普通聊天不再直接消费这份提示词
 
 ## 计划进度
 
@@ -82,8 +82,8 @@
 - Bridge 收尾已监听 Lobster `complete` 事件，减少“原生完成但 Airi 超时”的问题
 - 工具调用参数来自 `message.metadata.toolInput`
 - 工具结果默认走纯文本 / JSON 展示，不走 Markdown 富文本渲染，并优先根据 `isError` 做错误态高亮
-- 思考过程复用 Airi 现有 `categorization.reasoning` 展示链路
-- Bridge 路径当前会复用 Airi 会话中的首条 system message 作为 `systemPrompt` 透传，因此角色卡里配置的人设、描述与系统提示词会随会话一起生效
+- 思考过程默认不再面向终端用户展示，前端仅保留调试开关
+- Bridge 路径当前不再透传 Airi 角色卡 `systemPrompt`，普通聊天优先回到 LobsterAI 默认提示词链路
 - 权限确认面板的待处理状态保存在 `ChatSessionMeta.bridgeState.pendingPermission`
 - `/api/agent/bridge/permission/status` 可用于前端恢复时校验 requestId 仍然有效
 - `/api/agent/bridge/permission/status` 与 `/api/agent/bridge/permission/list` 会在 pending 状态返回 capabilityToken，供刷新恢复后的确认卡片继续回包
@@ -97,6 +97,42 @@
 - 聊天桥接消费层现在会兼容部分旧事件别名，减少 Airi / LobsterAI 版本漂移导致的空白回复问题
 - `ChatArea.vue` 聊天区当前只保留技能统计，不再直接展示完整技能 chip 列表
 - Claude runtime 与 store 的 session 删除清理链路现在已对齐 OpenClaw，减少“store 已删但 runtime 仍引用旧 session”的情况
+- 当前聊天发声链路依赖 `assistant.delta` 驱动 Stage token hooks；若重新回到单包 `assistant.final` 或首包过慢，聊天 TTS 很容易再次失效
+- 当前语音体验为“文本流式 + 分段 TTS + 预取播放”，不是音频 chunk 级真流式
+
+## 真流式语音开发计划
+
+- Phase A：Airi 播放层流式化
+  - 新增可持续消费音频帧的播放器能力，替代当前以完整 `AudioBuffer` 为单位的播放方式
+  - 目标是支持边接收边播放，而不是每段完整生成后再播放
+- Phase B：Speech provider 能力扩展
+  - 为 speech provider 增加 stream output 能力声明
+  - 在 Airi speech store 新增 streaming TTS 接口，并保留当前整段 TTS 作为 fallback
+- Phase C：Speech pipeline 会话化
+  - 将当前“文本分段 -> 每段一次 TTS 请求”升级为“单次会话持续喂文本 -> 持续产出音频”
+  - 让文本 token、音频输出、打断/flush 语义统一到一个 streaming session
+- Phase D：舞台联动与体验打磨
+  - 将口型、说话状态、打断、恢复统一到 streaming 播放链路
+  - 增加首帧时间、段间 gap、打断耗时等专项验证指标
+- 当前阶段结论
+  - 这项工作已正式纳入后续开发计划
+  - 当前优先级高于继续扩展人格提示词接入
+
+## 交接时需要特别注意的遗漏项
+
+- 文档一致性
+  - 旧记录里仍有“透传 Airi systemPrompt”的描述，交接时应以本文件和最新 `verification-checklist.md` 为准
+- 系统化验证缺口
+  - 多轮会话、图片前端附件、普通文件前端展示与回收、技能设置页生效、权限 allow/deny、Bridge 开关回退模式仍需继续补完整 UI 联调记录
+- 安全与工程风险
+  - 默认 API key 仍在
+  - `Access-Control-Allow-Origin: *` 仍未收紧
+  - pending permission 仍是内存态
+  - temp 文件物理回收仍未完成
+- 前端结构风险
+  - `ChatArea.vue` 仍承载较多 Bridge、权限、技能状态协调逻辑，后续仍需继续拆分
+- 语音能力边界
+  - 当前体验已可接受，但仍不是真正音频流式；后续接手者不要把当前“分段 TTS 预取播放”误判为最终形态
 
 ## 当前可运行测试节点
 
@@ -115,6 +151,7 @@
 
 ## 下一步建议
 
+- 将“真流式语音输出”按 Phase A-D 拆成独立 backlog，并先完成播放器与 provider 能力设计
 - 技能设置页继续补技能市场与更细的风险报告展示
 - 技能配置表单继续补字段 schema 映射与更友好的输入组件
 - 技能共享状态继续补跨页刷新提示

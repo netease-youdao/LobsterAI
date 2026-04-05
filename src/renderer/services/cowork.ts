@@ -475,7 +475,19 @@ class CoworkService {
       return result.session;
     }
 
-    console.error('Failed to load session:', result.error);
+    if ((result.error || '').includes('Session not found')) {
+      const state = store.getState().cowork;
+      if (state.currentSessionId === sessionId || state.currentSession?.id === sessionId) {
+        store.dispatch(clearCurrentSession());
+        store.dispatch(setStreaming(false));
+        store.dispatch(setRemoteManaged(false));
+      }
+      await this.loadSessions();
+      console.warn('Failed to load session:', result.error || 'Session not found');
+      return null;
+    }
+
+    console.error('Failed to load session:', result.error || 'Session not found');
     return null;
   }
 
