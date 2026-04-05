@@ -55,7 +55,9 @@ export function setStoreGetter(getter: () => SqliteStore | null): void {
 // Auth token getter injected from main.ts for server model provider
 let authTokensGetter: (() => { accessToken: string; refreshToken: string } | null) | null = null;
 
-export function setAuthTokensGetter(getter: () => { accessToken: string; refreshToken: string } | null): void {
+export function setAuthTokensGetter(
+  getter: () => { accessToken: string; refreshToken: string } | null,
+): void {
   authTokensGetter = getter;
 }
 
@@ -70,8 +72,12 @@ export function setServerBaseUrlGetter(getter: () => string): void {
 // Keyed by modelId → { supportsImage }
 let serverModelMetadataCache: Map<string, { supportsImage?: boolean }> = new Map();
 
-export function updateServerModelMetadata(models: Array<{ modelId: string; supportsImage?: boolean }>): void {
-  serverModelMetadataCache = new Map(models.map(m => [m.modelId, { supportsImage: m.supportsImage }]));
+export function updateServerModelMetadata(
+  models: Array<{ modelId: string; supportsImage?: boolean }>,
+): void {
+  serverModelMetadataCache = new Map(
+    models.map(m => [m.modelId, { supportsImage: m.supportsImage }]),
+  );
 }
 
 export function clearServerModelMetadata(): void {
@@ -96,7 +102,7 @@ export function getClaudeCodePath(): string {
   if (app.isPackaged) {
     return join(
       process.resourcesPath,
-      'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/cli.js'
+      'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/cli.js',
     );
   }
 
@@ -105,9 +111,7 @@ export function getClaudeCodePath(): string {
   // We need to look in the project root
   const appPath = app.getAppPath();
   // If appPath ends with dist-electron, go up one level
-  const rootDir = appPath.endsWith('dist-electron') 
-    ? join(appPath, '..') 
-    : appPath;
+  const rootDir = appPath.endsWith('dist-electron') ? join(appPath, '..') : appPath;
 
   return join(rootDir, 'node_modules/@anthropic-ai/claude-agent-sdk/cli.js');
 }
@@ -122,8 +126,17 @@ type MatchedProvider = {
   modelName?: string;
 };
 
-function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
-  if (providerName === ProviderName.OpenAI || providerName === ProviderName.Gemini || providerName === ProviderName.StepFun || providerName === ProviderName.Youdaozhiyun || providerName === ProviderName.Copilot) {
+function getEffectiveProviderApiFormat(
+  providerName: string,
+  apiFormat: unknown,
+): AnthropicApiFormat {
+  if (
+    providerName === ProviderName.OpenAI ||
+    providerName === ProviderName.Gemini ||
+    providerName === ProviderName.StepFun ||
+    providerName === ProviderName.Youdaozhiyun ||
+    providerName === ProviderName.Copilot
+  ) {
     return 'openai';
   }
   if (providerName === ProviderName.Anthropic) {
@@ -144,10 +157,20 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
   if (!effectiveModelId) return null;
   const baseURL = `${serverBaseUrl}/api/proxy/v1`;
   const cachedMeta = serverModelMetadataCache.get(effectiveModelId);
-  console.log('[ClaudeSettings] lobsterai-server fallback activated:', { baseURL, modelId: effectiveModelId, supportsImage: cachedMeta?.supportsImage });
+  console.log('[ClaudeSettings] lobsterai-server fallback activated:', {
+    baseURL,
+    modelId: effectiveModelId,
+    supportsImage: cachedMeta?.supportsImage,
+  });
   return {
     providerName: ProviderName.LobsteraiServer,
-    providerConfig: { enabled: true, apiKey: tokens.accessToken, baseUrl: baseURL, apiFormat: 'openai', models: [{ id: effectiveModelId, supportsImage: cachedMeta?.supportsImage }] },
+    providerConfig: {
+      enabled: true,
+      apiKey: tokens.accessToken,
+      baseUrl: baseURL,
+      apiFormat: 'openai',
+      models: [{ id: effectiveModelId, supportsImage: cachedMeta?.supportsImage }],
+    },
     modelId: effectiveModelId,
     apiFormat: 'openai',
     baseURL,
@@ -155,7 +178,10 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
   };
 }
 
-function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvider | null; error?: string } {
+function resolveMatchedProvider(appConfig: AppConfig): {
+  matched: MatchedProvider | null;
+  error?: string;
+} {
   const providers = appConfig.providers ?? {};
 
   const resolveFallbackModel = (): {
@@ -164,10 +190,14 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     modelId: string;
   } | null => {
     for (const [providerName, providerConfig] of Object.entries(providers)) {
-      if (!providerConfig?.enabled || !providerConfig.models || providerConfig.models.length === 0) {
+      if (
+        !providerConfig?.enabled ||
+        !providerConfig.models ||
+        providerConfig.models.length === 0
+      ) {
         continue;
       }
-      const fallbackModel = providerConfig.models.find((model) => model.id?.trim());
+      const fallbackModel = providerConfig.models.find(model => model.id?.trim());
       if (!fallbackModel) {
         continue;
       }
@@ -206,8 +236,8 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   if (preferredProviderName) {
     const preferredProvider = providers[preferredProviderName];
     if (
-      preferredProvider?.enabled
-      && preferredProvider.models?.some((model) => model.id === modelId)
+      preferredProvider?.enabled &&
+      preferredProvider.models?.some(model => model.id === modelId)
     ) {
       providerEntry = [preferredProviderName, preferredProvider];
     }
@@ -218,7 +248,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       if (!provider?.enabled || !provider.models) {
         return false;
       }
-      return provider.models.some((model) => model.id === modelId);
+      return provider.models.some(model => model.id === modelId);
     });
   }
 
@@ -250,16 +280,25 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
   }
 
-   // Check for API key or OAuth credentials
+  // Check for API key or OAuth credentials
   const hasApiKey = providerConfig.apiKey?.trim();
   const hasOAuthCreds = providerName === 'qwen' && (providerConfig as any).oauthCredentials;
-  if (apiFormat === 'anthropic' && providerRequiresApiKey(providerName) && !providerConfig.apiKey?.trim() && !hasApiKey && !hasOAuthCreds) {
+  if (
+    apiFormat === 'anthropic' &&
+    providerRequiresApiKey(providerName) &&
+    !providerConfig.apiKey?.trim() &&
+    !hasApiKey &&
+    !hasOAuthCreds
+  ) {
     const serverFallback = tryLobsteraiServerFallback(modelId);
     if (serverFallback) return { matched: serverFallback };
-    return { matched: null, error: `Provider ${providerName} requires API key for Anthropic-compatible mode.` };
+    return {
+      matched: null,
+      error: `Provider ${providerName} requires API key for Anthropic-compatible mode.`,
+    };
   }
 
-  const matchedModel = providerConfig.models?.find((m) => m.id === modelId);
+  const matchedModel = providerConfig.models?.find(m => m.id === modelId);
 
   return {
     matched: {
@@ -274,7 +313,9 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   };
 }
 
-export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): ApiConfigResolution {
+export function resolveCurrentApiConfig(
+  target: OpenAICompatProxyTarget = 'local',
+): ApiConfigResolution {
   const sqliteStore = getStore();
   if (!sqliteStore) {
     return {
@@ -301,13 +342,17 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
 
   const resolvedBaseURL = matched.baseURL;
   let resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
-  
+
   // Handle Qwen OAuth credentials
-  if (matched.providerName === 'qwen' && !resolvedApiKey && (matched.providerConfig as any).oauthCredentials) {
+  if (
+    matched.providerName === 'qwen' &&
+    !resolvedApiKey &&
+    (matched.providerConfig as any).oauthCredentials
+  ) {
     const oauthCreds = (matched.providerConfig as any).oauthCredentials;
     // Check if token is still valid (with 5 minute buffer)
     const expiryBuffer = 5 * 60 * 1000;
-    if (Date.now() < (oauthCreds.expires - expiryBuffer)) {
+    if (Date.now() < oauthCreds.expires - expiryBuffer) {
       resolvedApiKey = oauthCreds.access; // Use access token as API key
     } else {
       // Token expired, should refresh in background
@@ -315,12 +360,12 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
       resolvedApiKey = oauthCreds.access; // Still try to use it, server might refresh
     }
   }
-  
+
   // Providers that don't require auth (e.g. Ollama) still need a non-empty
   // placeholder so downstream components (OpenClaw gateway, compat proxy)
   // don't reject the request with "No API key found for provider".
-  const effectiveApiKey = resolvedApiKey
-    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
+  const effectiveApiKey =
+    resolvedApiKey || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
 
   if (matched.apiFormat === 'anthropic') {
     return {
@@ -375,8 +420,86 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
   };
 }
 
-export function getCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): CoworkApiConfig | null {
+export function getCurrentApiConfig(
+  target: OpenAICompatProxyTarget = 'local',
+): CoworkApiConfig | null {
   return resolveCurrentApiConfig(target).config;
+}
+
+/**
+ * Resolve the failover model's API config from the app config.
+ * Returns null if no failover model is configured.
+ * Used when the primary model fails with a retriable error.
+ */
+export function resolveFailoverApiConfig(
+  target: OpenAICompatProxyTarget = 'local',
+): ApiConfigResolution {
+  const sqliteStore = getStore();
+  if (!sqliteStore) {
+    return { config: null, error: 'Store is not initialized.' };
+  }
+  const appConfig = sqliteStore.get<AppConfig>('app_config');
+  if (!appConfig) {
+    return { config: null, error: 'Application config not found.' };
+  }
+  const failoverModelId = (appConfig.model as any)?.failoverModel?.trim();
+  const failoverProviderKey = (appConfig.model as any)?.failoverModelProvider?.trim();
+  if (!failoverModelId) {
+    return { config: null, error: 'No failover model configured.' };
+  }
+  // Build a temporary appConfig that uses the failover model as the default
+  const failoverAppConfig: AppConfig = {
+    ...appConfig,
+    model: {
+      ...appConfig.model,
+      defaultModel: failoverModelId,
+      defaultModelProvider: failoverProviderKey || undefined,
+    },
+  };
+  const { matched, error } = resolveMatchedProvider(failoverAppConfig);
+  if (!matched) {
+    return {
+      config: null,
+      error: error || `Failover model ${failoverModelId} could not be resolved.`,
+    };
+  }
+
+  const apiKey = matched.providerConfig.apiKey?.trim() || '';
+  const effectiveApiFormat = matched.apiFormat;
+  const effectiveBaseURL = matched.baseURL;
+
+  if (effectiveApiFormat === 'anthropic') {
+    return {
+      config: {
+        apiKey,
+        baseURL: effectiveBaseURL,
+        model: matched.modelId,
+        apiType: 'anthropic',
+      },
+      providerMetadata: {
+        providerName: matched.providerName,
+        codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+        supportsImage: matched.supportsImage,
+        modelName: matched.modelName,
+      },
+    };
+  }
+
+  // OpenAI-compatible or Gemini format: return the raw config.
+  // The caller (coworkRunner) will need to configure the proxy accordingly.
+  return {
+    config: {
+      apiKey,
+      baseURL: effectiveBaseURL,
+      model: matched.modelId,
+    },
+    providerMetadata: {
+      providerName: matched.providerName,
+      codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
+      supportsImage: matched.supportsImage,
+      modelName: matched.modelName,
+    },
+  };
 }
 
 /**
@@ -400,20 +523,24 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   let apiKey = matched.providerConfig.apiKey?.trim() || '';
   let effectiveBaseURL = matched.baseURL;
   let effectiveApiFormat = matched.apiFormat;
-  
+
   // Handle Qwen OAuth credentials for OpenClaw gateway
-  if (matched.providerName === 'qwen' && !apiKey && (matched.providerConfig as any).oauthCredentials) {
+  if (
+    matched.providerName === 'qwen' &&
+    !apiKey &&
+    (matched.providerConfig as any).oauthCredentials
+  ) {
     const oauthCreds = (matched.providerConfig as any).oauthCredentials;
     // Check if token is still valid (with 5 minute buffer)
     const expiryBuffer = 5 * 60 * 1000;
-    if (Date.now() < (oauthCreds.expires - expiryBuffer)) {
+    if (Date.now() < oauthCreds.expires - expiryBuffer) {
       apiKey = oauthCreds.access; // Use access token as API key
-      
+
       // Use OAuth resourceUrl as baseURL if available
       if (oauthCreds.resourceUrl) {
         effectiveBaseURL = normalizeQwenBaseUrl(oauthCreds.resourceUrl);
         effectiveApiFormat = 'openai'; // OAuth endpoints use OpenAI format
-        
+
         // Map specific model IDs to OAuth endpoint model names
         matched.modelId = mapQwenModelToOAuthModel(matched.modelId, matched.supportsImage);
       }
@@ -421,27 +548,30 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       // Token expired, should refresh in background
       console.warn('Qwen OAuth token expired for OpenClaw gateway, please refresh credentials');
       apiKey = oauthCreds.access; // Still try to use it, server might refresh
-      
+
       if (oauthCreds.resourceUrl) {
         effectiveBaseURL = normalizeQwenBaseUrl(oauthCreds.resourceUrl);
         effectiveApiFormat = 'openai';
-        
+
         // Map specific model IDs to OAuth endpoint model names
         matched.modelId = mapQwenModelToOAuthModel(matched.modelId, matched.supportsImage);
       }
     }
   }
-  
-  console.log('[ClaudeSettings] resolved raw API config:', JSON.stringify({
-    ...matched,
-    providerConfig: { ...matched.providerConfig, apiKey: apiKey ? '***' : '' },
-  }));
+
+  console.log(
+    '[ClaudeSettings] resolved raw API config:',
+    JSON.stringify({
+      ...matched,
+      providerConfig: { ...matched.providerConfig, apiKey: apiKey ? '***' : '' },
+    }),
+  );
   // OpenClaw's gateway requires a non-empty apiKey for every provider — even
   // local servers (Ollama, vLLM, etc.) that don't enforce auth.  When the user
   // leaves the key blank we supply a placeholder so the gateway doesn't reject
   // the request with "No API key found for provider".
-  const effectiveApiKey = apiKey
-    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
+  const effectiveApiKey =
+    apiKey || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
   return {
     config: {
       apiKey: effectiveApiKey,
@@ -459,10 +589,10 @@ export function resolveRawApiConfig(): ApiConfigResolution {
 }
 
 function normalizeQwenBaseUrl(value: string | undefined): string {
-  const DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
+  const DEFAULT_BASE_URL = 'https://portal.qwen.ai/v1';
   const raw = value?.trim() || DEFAULT_BASE_URL;
-  const withProtocol = raw.startsWith("http") ? raw : `https://${raw}`;
-  return withProtocol.endsWith("/v1") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/v1`;
+  const withProtocol = raw.startsWith('http') ? raw : `https://${raw}`;
+  return withProtocol.endsWith('/v1') ? withProtocol : `${withProtocol.replace(/\/+$/, '')}/v1`;
 }
 
 /**
@@ -474,47 +604,46 @@ function mapQwenModelToOAuthModel(modelId: string, supportsImage?: boolean): str
   if (supportsImage) {
     return 'vision-model';
   }
-  
+
   // For all other models (including qwen3.5-plus, qwen3-coder-plus), use coder-model
   return 'coder-model';
 }
-  /**
-   * Collect apiKeys for ALL configured providers (not just the currently selected one).
-   * Used by OpenClaw config sync to pre-register all apiKeys as env vars at gateway
-   * startup, so switching between providers doesn't require a process restart.
-   *
-   * Returns a map of env-var-safe provider name → apiKey.
-   */
+/**
+ * Collect apiKeys for ALL configured providers (not just the currently selected one).
+ * Used by OpenClaw config sync to pre-register all apiKeys as env vars at gateway
+ * startup, so switching between providers doesn't require a process restart.
+ *
+ * Returns a map of env-var-safe provider name → apiKey.
+ */
 export function resolveAllProviderApiKeys(): Record<string, string> {
   const result: Record<string, string> = {};
 
   // lobsterai-server token is now managed by the token proxy
   // (openclawTokenProxy.ts) — no longer injected as an env var.
 
-    // lobsterai-server: uses auth accessToken
-    const tokens = authTokensGetter?.();
-    const serverBaseUrl = serverBaseUrlGetter?.();
-    if (tokens?.accessToken && serverBaseUrl) {
-      result.SERVER = tokens.accessToken;
-    }
-
-    // All configured custom providers
-    const sqliteStore = getStore();
-    if (!sqliteStore) return result;
-    const appConfig = sqliteStore.get<AppConfig>('app_config');
-    if (!appConfig?.providers) return result;
-
-    for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
-      if (!providerConfig?.enabled) continue;
-      const apiKey = providerConfig.apiKey?.trim();
-      if (!apiKey && providerRequiresApiKey(providerName)) continue;
-      const envName = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      result[envName] = apiKey || 'sk-lobsterai-local';
-    }
-
-    return result;
+  // lobsterai-server: uses auth accessToken
+  const tokens = authTokensGetter?.();
+  const serverBaseUrl = serverBaseUrlGetter?.();
+  if (tokens?.accessToken && serverBaseUrl) {
+    result.SERVER = tokens.accessToken;
   }
-  
+
+  // All configured custom providers
+  const sqliteStore = getStore();
+  if (!sqliteStore) return result;
+  const appConfig = sqliteStore.get<AppConfig>('app_config');
+  if (!appConfig?.providers) return result;
+
+  for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
+    if (!providerConfig?.enabled) continue;
+    const apiKey = providerConfig.apiKey?.trim();
+    if (!apiKey && providerRequiresApiKey(providerName)) continue;
+    const envName = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+    result[envName] = apiKey || 'sk-lobsterai-local';
+  }
+
+  return result;
+}
 
 export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {
   const baseEnv = { ...process.env } as Record<string, string>;
@@ -556,14 +685,19 @@ export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
     let effectiveApiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
 
     if (providerConfig.codingPlanEnabled) {
-      const resolved = resolveCodingPlanBaseUrl(providerName, true, effectiveApiFormat, effectiveBaseURL);
+      const resolved = resolveCodingPlanBaseUrl(
+        providerName,
+        true,
+        effectiveApiFormat,
+        effectiveBaseURL,
+      );
       effectiveBaseURL = resolved.baseUrl;
       effectiveApiFormat = resolved.effectiveFormat;
     }
 
     if (!effectiveBaseURL) continue;
 
-    const models = (providerConfig.models ?? []).filter((m) => m.id?.trim());
+    const models = (providerConfig.models ?? []).filter(m => m.id?.trim());
     if (models.length === 0) continue;
 
     result.push({

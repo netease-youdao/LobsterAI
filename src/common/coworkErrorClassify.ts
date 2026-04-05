@@ -5,14 +5,26 @@
 
 const ERROR_RULES: Array<[RegExp, string]> = [
   // Auth: Anthropic, DeepSeek, OpenAI, Gemini, HTTP 401
-  [/authentication[_ ](error|fails?)|api[_ ]key.*(invalid|expired|not[_ ]valid)|invalid.*api.*key|incorrect.*api.*key|unauthorized|PERMISSION_DENIED|\b401\b/i, 'coworkErrorAuthInvalid'],
+  [
+    /authentication[_ ](error|fails?)|api[_ ]key.*(invalid|expired|not[_ ]valid)|invalid.*api.*key|incorrect.*api.*key|unauthorized|PERMISSION_DENIED|\b401\b/i,
+    'coworkErrorAuthInvalid',
+  ],
   // Rate limit: HTTP 429, Anthropic/DeepSeek overloaded, Gemini RESOURCE_EXHAUSTED
   // (must precede billing so "RESOURCE_EXHAUSTED: quota exceeded" maps to rate-limit)
-  [/\b429\b|rate[_ ]limit|too many requests|overloaded|RESOURCE_EXHAUSTED/i, 'coworkErrorRateLimit'],
+  [
+    /\b429\b|rate[_ ]limit|too many requests|overloaded|RESOURCE_EXHAUSTED/i,
+    'coworkErrorRateLimit',
+  ],
   // Billing: DeepSeek 402, OpenAI, OpenRouter, Qwen, StepFun
-  [/insufficient.*(balance|quota|credits)|billing|quota[_ ]exceeded|Arrearage|account.*not.*in.*good.*standing|余额不足|\b402\b/i, 'coworkErrorInsufficientBalance'],
+  [
+    /insufficient.*(balance|quota|credits)|billing|quota[_ ]exceeded|Arrearage|account.*not.*in.*good.*standing|余额不足|\b402\b/i,
+    'coworkErrorInsufficientBalance',
+  ],
   // Input too long: context length, HTTP 413, Qwen, payload too large
-  [/input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
+  [
+    /input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i,
+    'coworkErrorInputTooLong',
+  ],
   // PDF processing failure
   [/could not process pdf/i, 'coworkErrorCouldNotProcessPdf'],
   // Model not found: standard, Qwen, Ollama
@@ -22,9 +34,15 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [/service restart/i, 'coworkErrorServiceRestart'],
   [/gateway.*draining|draining.*restart/i, 'coworkErrorGatewayDraining'],
   // Content moderation: Qwen, StepFun 451, generic
-  [/DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i, 'coworkErrorContentFiltered'],
+  [
+    /DataInspectionFailed|content.*(review|filter)|审核未通过|未通过.*审核|inappropriate.*content|\b451\b|flagged.*input/i,
+    'coworkErrorContentFiltered',
+  ],
   // Network errors
-  [/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|could not connect|connection.*refused|network.*error/i, 'coworkErrorNetworkError'],
+  [
+    /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|could not connect|connection.*refused|network.*error/i,
+    'coworkErrorNetworkError',
+  ],
   // Server errors: HTTP 500/502/503
   [/internal.server.error|bad.gateway|service.unavailable|\b50[023]\b/i, 'coworkErrorServerError'],
   // Unknown / unclassified errors from upstream (OpenClaw wraps unrecognized errors)
@@ -40,4 +58,38 @@ export function classifyErrorKey(error: string): string | null {
     if (pattern.test(error)) return key;
   }
   return null;
+}
+
+/**
+ * Error categories that are eligible for automatic model failover.
+ * These represent transient or provider-side issues where retrying with
+ * an alternative model/provider has a reasonable chance of succeeding.
+ *
+ * NOT eligible: auth errors (wrong API key won't fix itself), billing
+ * (insufficient balance is account-wide), input too long (same prompt
+ * will fail again), content filtered (same content will be rejected).
+ */
+const FAILOVER_ELIGIBLE_KEYS = new Set([
+  'coworkErrorRateLimit',
+  'coworkErrorServerError',
+  'coworkErrorNetworkError',
+  'coworkErrorModelNotFound',
+  'coworkErrorGatewayDisconnected',
+  'coworkErrorServiceRestart',
+  'coworkErrorGatewayDraining',
+  'coworkErrorUnknown',
+]);
+
+/**
+ * Determine whether an error message is eligible for model failover.
+ * Returns true if the error is transient / provider-side and retrying
+ * with a different model has a reasonable chance of success.
+ */
+export function isFailoverEligibleError(error: string): boolean {
+  const key = classifyErrorKey(error);
+  if (key && FAILOVER_ELIGIBLE_KEYS.has(key)) return true;
+  // Unclassified errors are also eligible — they are likely transient
+  // server issues that didn't match a known pattern.
+  if (!key) return true;
+  return false;
 }
