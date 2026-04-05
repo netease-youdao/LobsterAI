@@ -27,6 +27,7 @@ interface TaskFormProps {
   task?: ScheduledTask;
   onCancel: () => void;
   onSaved: () => void;
+  onSaveAndRun?: (taskId: string, runTrigger: Promise<void>) => void;
 }
 
 interface FormState {
@@ -127,7 +128,7 @@ function buildScheduleInput(form: FormState): ScheduledTaskInput['schedule'] {
   return { kind: 'cron', expr: `${min} ${hr} ${form.monthDay} * *` };
 }
 
-const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
+const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onSaveAndRun }) => {
   const [form, setForm] = useState<FormState>(() => createFormState(task));
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
@@ -231,44 +232,62 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     return Object.keys(nextErrors).length === 0;
   };
 
+  const buildInput = (): ScheduledTaskInput => {
+    const schedule = isAdvanced && task ? task.schedule : buildScheduleInput(form);
+    return {
+      name: form.name.trim(),
+      description: '',
+      enabled: true,
+      schedule,
+      sessionTarget: 'isolated',
+      wakeMode: 'now',
+      payload: {
+        kind: 'agentTurn',
+        message: form.payloadText.trim(),
+        ...(form.modelId ? { model: form.modelId } : {}),
+      },
+      delivery: form.notifyChannel === 'none'
+        ? { mode: 'none' }
+        : {
+            mode: 'announce',
+            channel: form.notifyChannel,
+            ...(form.notifyTo ? { to: form.notifyTo } : {}),
+            ...(form.notifyAccountId ? { accountId: form.notifyAccountId } : {}),
+          },
+    };
+  };
+
   const handleSubmit = async () => {
     if (!validate()) return;
 
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const schedule = isAdvanced && task
-        ? task.schedule
-        : buildScheduleInput(form);
-
-      const input: ScheduledTaskInput = {
-        name: form.name.trim(),
-        description: '',
-        enabled: true,
-        schedule,
-        sessionTarget: 'isolated',
-        wakeMode: 'now',
-        payload: {
-          kind: 'agentTurn',
-          message: form.payloadText.trim(),
-          ...(form.modelId ? { model: form.modelId } : {}),
-        },
-        delivery: form.notifyChannel === 'none'
-          ? { mode: 'none' }
-          : {
-              mode: 'announce',
-              channel: form.notifyChannel,
-              ...(form.notifyTo ? { to: form.notifyTo } : {}),
-              ...(form.notifyAccountId ? { accountId: form.notifyAccountId } : {}),
-            },
-      };
-
+      const input = buildInput();
       if (mode === 'create') {
         await scheduledTaskService.createTask(input);
       } else if (task) {
         await scheduledTaskService.updateTaskById(task.id, input);
       }
       onSaved();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSubmitError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleTestRun = async () => {
+    if (!validate()) return;
+
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const input = buildInput();
+      const created = await scheduledTaskService.createTask(input);
+      const runTrigger = scheduledTaskService.runManually(created.id);
+      onSaveAndRun?.(created.id, runTrigger);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setSubmitError(msg);
@@ -681,9 +700,21 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       </div>
 
       <div>
-        <label className={labelClass}>
-          {i18nService.t('scheduledTasksFormPayloadTextAgent')}
-        </label>
+        <div className="flex items-center justify-between mb-1">
+          <span className={labelClass} style={{ marginBottom: 0 }}>
+            {i18nService.t('scheduledTasksFormPayloadTextAgent')}
+          </span>
+          {mode === 'create' && onSaveAndRun && (
+            <button
+              type="button"
+              onClick={() => void handleTestRun()}
+              disabled={submitting || !form.payloadText.trim()}
+              className="text-sm font-medium text-primary hover:text-primary-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {i18nService.t('scheduledTasksTestRun')}
+            </button>
+          )}
+        </div>
         <div className="rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white focus-within:ring-1 focus-within:ring-claude-accent/40 focus-within:border-claude-accent">
           <textarea
             value={form.payloadText}
