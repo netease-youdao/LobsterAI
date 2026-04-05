@@ -1,18 +1,19 @@
+import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useState } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from '../../store';
-import { setViewMode, selectTask } from '../../store/slices/scheduledTaskSlice';
-import { scheduledTaskService } from '../../services/scheduledTask';
+import { useDispatch,useSelector } from 'react-redux';
+
 import { i18nService } from '../../services/i18n';
-import TaskList from './TaskList';
-import TaskForm from './TaskForm';
-import TaskDetail from './TaskDetail';
+import { scheduledTaskService } from '../../services/scheduledTask';
+import { RootState } from '../../store';
+import { selectTask,setViewMode } from '../../store/slices/scheduledTaskSlice';
+import ComposeIcon from '../icons/ComposeIcon';
+import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import WindowTitleBar from '../window/WindowTitleBar';
 import AllRunsHistory from './AllRunsHistory';
 import DeleteConfirmModal from './DeleteConfirmModal';
-import { ArrowLeftIcon } from '@heroicons/react/24/outline';
-import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import ComposeIcon from '../icons/ComposeIcon';
-import WindowTitleBar from '../window/WindowTitleBar';
+import TaskDetail from './TaskDetail';
+import TaskForm from './TaskForm';
+import TaskList from './TaskList';
 
 interface ScheduledTasksViewProps {
   isSidebarCollapsed?: boolean;
@@ -151,25 +152,22 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
               )}
             </button>
           </div>
-          {activeTab === 'tasks' && (
-            <button
-              type="button"
-              onClick={() => dispatch(setViewMode('create'))}
-              className="px-3 py-1 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
-            >
-              {i18nService.t('scheduledTasksNewTask')}
-            </button>
-          )}
         </div>
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+        <div className="max-w-3xl mx-auto px-4 py-6">
         {showTabs && activeTab === 'history' ? (
           <AllRunsHistory />
         ) : (
           <>
-            {viewMode === 'list' && <TaskList onRequestDelete={handleRequestDelete} />}
+            {viewMode === 'list' && (
+              <TaskList
+                onRequestDelete={handleRequestDelete}
+                onNewTask={() => dispatch(setViewMode('create'))}
+              />
+            )}
             {viewMode === 'create' && (
               <TaskForm
                 mode="create"
@@ -190,6 +188,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
             )}
           </>
         )}
+        </div>
       </div>
 
       {/* Delete confirmation modal */}

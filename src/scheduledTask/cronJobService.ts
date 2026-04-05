@@ -1,4 +1,23 @@
 import { BrowserWindow } from 'electron';
+
+import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
+import { PlatformRegistry } from '../shared/platform';
+import type {
+  DeliveryMode as DeliveryModeType,
+  GatewayStatus as GatewayStatusType,
+  SessionTarget as SessionTargetType,
+  WakeMode as WakeModeType,
+} from './constants';
+import {
+  DeliveryMode,
+  GatewayStatus,
+  IpcChannel,
+  PayloadKind,
+  ScheduleKind,
+  SessionTarget,
+  TaskStatus,
+  WakeMode,
+} from './constants';
 import type {
   Schedule,
   ScheduledTask,
@@ -9,24 +28,6 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
 } from './types';
-import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
-import { PlatformRegistry } from '../shared/platform';
-import {
-  ScheduleKind,
-  PayloadKind,
-  DeliveryMode,
-  SessionTarget,
-  WakeMode,
-  TaskStatus,
-  GatewayStatus,
-  IpcChannel,
-} from './constants';
-import type {
-  SessionTarget as SessionTargetType,
-  WakeMode as WakeModeType,
-  DeliveryMode as DeliveryModeType,
-  GatewayStatus as GatewayStatusType,
-} from './constants';
 
 type GatewayClientLike = {
   request: <T = Record<string, unknown>>(
@@ -568,6 +569,9 @@ export class CronJobService {
   async runJob(id: string): Promise<void> {
     const client = await this.client();
     await client.request('cron.run', { id });
+    // Trigger an immediate poll so the UI reflects the new running state
+    // without waiting up to POLL_INTERVAL_MS (15s) for the next scheduled tick.
+    setTimeout(() => { void this.pollOnce(); }, 800);
   }
 
   async listRuns(jobId: string, limit = 20, offset = 0): Promise<ScheduledTaskRun[]> {
@@ -602,31 +606,38 @@ export class CronJobService {
     });
     if (!Array.isArray(result.entries) || result.entries.length === 0) return [];
 
-    // Build a jobId→name map for entries missing jobName
-    const missingIds = new Set(
-      result.entries.filter((e) => !e.jobName && !e.summary).map((e) => e.jobId),
-    );
-    const nameMap = new Map<string, string>();
-    if (missingIds.size > 0) {
-      try {
-        const jobs = await this.listJobs();
-        for (const job of jobs) {
-          if (missingIds.has(job.id)) {
-            nameMap.set(job.id, job.name);
-          }
-        }
-      } catch {
-        // fall through
+    // Build jobId→{name, agentId, agentMessage} map by fetching all jobs
+    const jobInfoMap = new Map<string, { name: string; agentId: string | null; agentMessage: string }>();
+    try {
+      const jobs = await this.listJobs();
+      for (const job of jobs) {
+        const msg = job.payload.kind === 'agentTurn'
+          ? job.payload.message
+          : job.payload.kind === 'systemEvent'
+            ? job.payload.text
+            : '';
+        jobInfoMap.set(job.id, {
+          name: job.name,
+          agentId: job.agentId ?? null,
+          agentMessage: msg,
+        });
       }
+    } catch {
+      // fall through — agent info will be empty for all entries
     }
 
-    return result.entries.map((entry) => ({
-      ...mapGatewayRun(entry),
-      taskName: entry.jobName
-        || nameMap.get(entry.jobId)
-        || extractRunTitle(entry.summary)
-        || entry.jobId,
-    }));
+    return result.entries.map((entry) => {
+      const jobInfo = jobInfoMap.get(entry.jobId);
+      return {
+        ...mapGatewayRun(entry),
+        taskName: entry.jobName
+          || jobInfo?.name
+          || extractRunTitle(entry.summary)
+          || entry.jobId,
+        agentId: jobInfo?.agentId ?? null,
+        agentMessage: jobInfo?.agentMessage ?? '',
+      };
+    });
   }
 
   startPolling(): void {
@@ -651,7 +662,7 @@ export class CronJobService {
     this.firstPollDone = false;
   }
 
-  private async pollOnce(): Promise<void> {
+  async pollOnce(): Promise<void> {
     if (!this.polling) return;
 
     try {
@@ -693,7 +704,17 @@ export class CronJobService {
             const runs = await this.listRuns(job.id, 1, 0);
             if (runs[0]) {
               const task = mapGatewayJob(job);
-              this.emitRunUpdate({ ...runs[0], taskName: task.name });
+              const agentMsg = task.payload.kind === 'agentTurn'
+                ? task.payload.message
+                : task.payload.kind === 'systemEvent'
+                  ? task.payload.text
+                  : '';
+              this.emitRunUpdate({
+                ...runs[0],
+                taskName: task.name,
+                agentId: task.agentId ?? null,
+                agentMessage: agentMsg,
+              });
             }
           } catch {
             // Ignore run fetch failures during polling.

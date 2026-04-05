@@ -1,13 +1,24 @@
 import React from 'react';
-import { XMarkIcon } from '@heroicons/react/24/outline';
-import { InformationCircleIcon } from '@heroicons/react/20/solid';
+import { XMarkIcon, InformationCircleIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 
 interface ToastProps {
   message: string;
+  variant?: 'info' | 'success';
   onClose?: () => void;
 }
 
-const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
+const Toast: React.FC<ToastProps> = ({ message, variant = 'info', onClose }) => {
+  if (variant === 'success') {
+    return (
+      <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+        <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-claude-accent text-white text-sm font-medium shadow-lg animate-scale-in">
+          <CheckCircleIcon className="h-4 w-4 shrink-0" />
+          <span>{message}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
       <div className="w-full max-w-md mx-4 rounded-2xl border border-border-subtle bg-surface text-foreground px-5 py-3.5 shadow-xl backdrop-blur-md animate-scale-in">
