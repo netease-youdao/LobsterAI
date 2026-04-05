@@ -66,7 +66,7 @@ class ScheduledTaskService {
   }
 
   destroy(): void {
-    this.cleanupFns.forEach((fn) => fn());
+    this.cleanupFns.forEach(fn => fn());
     this.cleanupFns = [];
     this.initialized = false;
   }
@@ -75,23 +75,19 @@ class ScheduledTaskService {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
-    const cleanupStatus = api.onStatusUpdate(
-      (event: ScheduledTaskStatusEvent) => {
-        store.dispatch(
-          updateTaskState({
-            taskId: event.taskId,
-            taskState: event.state,
-          })
-        );
-      }
-    );
+    const cleanupStatus = api.onStatusUpdate((event: ScheduledTaskStatusEvent) => {
+      store.dispatch(
+        updateTaskState({
+          taskId: event.taskId,
+          taskState: event.state,
+        }),
+      );
+    });
     this.cleanupFns.push(cleanupStatus);
 
-    const cleanupRun = api.onRunUpdate(
-      (event: ScheduledTaskRunEvent) => {
-        store.dispatch(addOrUpdateRun(event.run));
-      }
-    );
+    const cleanupRun = api.onRunUpdate((event: ScheduledTaskRunEvent) => {
+      store.dispatch(addOrUpdateRun(event.run));
+    });
     this.cleanupFns.push(cleanupRun);
 
     // Listen for full refresh events (e.g., after first poll or migration)
@@ -127,7 +123,9 @@ class ScheduledTaskService {
       const result = await api.create(input);
       if (result.success && result.task) {
         if (hasTaskDataAnomaly(result.task)) {
-          const msg = i18nService.t('scheduledTasksDataAnomalyWarning').replace('{name}', result.task.name);
+          const msg = i18nService
+            .t('scheduledTasksDataAnomalyWarning')
+            .replace('{name}', result.task.name);
           showToast(msg);
         }
         store.dispatch(addTask(result.task));
@@ -140,10 +138,7 @@ class ScheduledTaskService {
     }
   }
 
-  async updateTaskById(
-    id: string,
-    input: Partial<ScheduledTaskInput>
-  ): Promise<void> {
+  async updateTaskById(id: string, input: Partial<ScheduledTaskInput>): Promise<void> {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
@@ -155,6 +150,10 @@ class ScheduledTaskService {
         const errorMsg = result.error || 'Failed to update task';
         store.dispatch(setError(errorMsg));
         throw new Error(errorMsg);
+      } else if (result.success && !result.task) {
+        // Server acknowledged the update but didn't return the task object.
+        // Force a full reload so the UI reflects the latest state.
+        await this.loadTasks();
       }
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
@@ -267,7 +266,10 @@ class ScheduledTaskService {
     }
   }
 
-  async listChannelConversations(channel: string, accountId?: string): Promise<ScheduledTaskConversationOption[]> {
+  async listChannelConversations(
+    channel: string,
+    accountId?: string,
+  ): Promise<ScheduledTaskConversationOption[]> {
     const api = window.electron?.scheduledTasks;
     if (!api?.listChannelConversations) return [];
 
