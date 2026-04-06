@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { session } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
+import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkMessage, CoworkSession } from '../coworkStore';
 import type { AgentBridgeBinding, AgentBridgeFileBinding, AgentBridgeSessionMode } from './agentBridgeSessionStore';
 import { AgentBridgeSessionStore } from './agentBridgeSessionStore';
@@ -48,6 +49,16 @@ interface AgentBridgePermissionRequest {
   capabilityToken: string;
   decision: 'allow' | 'deny';
 }
+
+type BridgeQuestionOption = {
+  label?: string;
+};
+
+type BridgeQuestion = {
+  question?: string;
+  header?: string;
+  options?: BridgeQuestionOption[];
+};
 
 interface AgentBridgePermissionStatusRequest {
   airiSessionId: string;
@@ -161,6 +172,8 @@ type AgentBridgeEvent =
       requestId: string;
       toolName: string;
       toolInput: Record<string, unknown>;
+      capabilityToken: string;
+      expiresAt: number;
     }
   | {
       type: 'done';
@@ -998,6 +1011,10 @@ export class AgentApiServer {
       return { mode: 'agent' };
     }
 
+    if (lockedMode === 'agent' && desiredMode === 'text-fast') {
+      return { mode: 'agent' };
+    }
+
     if (lockedMode && lockedMode !== desiredMode) {
       return {
         error: {
@@ -1028,6 +1045,58 @@ export class AgentApiServer {
       '当前用户请求：',
       userPrompt,
     ].join('\n');
+  }
+
+  private buildPermissionResult(
+    permission: {
+      toolName: string;
+      toolInput: Record<string, unknown>;
+    },
+    decision: 'allow' | 'deny',
+  ): PermissionResult {
+    if (decision === 'deny') {
+      return {
+        behavior: 'deny',
+        message: 'Permission denied by user',
+      };
+    }
+
+    if (permission.toolName !== 'AskUserQuestion') {
+      return {
+        behavior: 'allow',
+        updatedInput: permission.toolInput,
+      };
+    }
+
+    const rawQuestions = Array.isArray(permission.toolInput?.questions)
+      ? permission.toolInput.questions as BridgeQuestion[]
+      : [];
+    const answers: Record<string, string> = {};
+
+    for (const question of rawQuestions) {
+      const questionKey = typeof question?.question === 'string' && question.question.trim()
+        ? question.question.trim()
+        : typeof question?.header === 'string' && question.header.trim()
+          ? question.header.trim()
+          : '';
+      if (!questionKey) {
+        continue;
+      }
+      const options = Array.isArray(question?.options) ? question.options : [];
+      const preferredOption = options.find(option => option?.label === '允许本次操作')
+        || options[0];
+      if (typeof preferredOption?.label === 'string' && preferredOption.label.trim()) {
+        answers[questionKey] = preferredOption.label.trim();
+      }
+    }
+
+    return {
+      behavior: 'allow',
+      updatedInput: {
+        ...(permission.toolInput || {}),
+        answers,
+      },
+    };
   }
 
   private getOrCreateTextFastBinding(airiSessionId: string): AgentBridgeBinding {
@@ -1546,7 +1615,7 @@ export class AgentApiServer {
       sendError(res, 503, 'CoworkRunner not available');
       return;
     }
-    runner.respondToPermission(requestId, parsed.decision === 'allow' ? 'allow' : 'deny');
+    runner.respondToPermission(requestId, this.buildPermissionResult(permission, parsed.decision === 'allow' ? 'allow' : 'deny'));
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
@@ -1771,6 +1840,15 @@ export class AgentApiServer {
         thinkingMessageIds.add(message.id);
         messageOffsets.set(message.id, content.length);
         fullThinkingText = content;
+        const initialThinking = this.redactSensitiveBridgeString(content).trim();
+        if (initialThinking) {
+          this.writeBridgeEvent(res, this.createBridgeEvent({
+            type: 'reasoning.delta',
+            sessionId: airiSessionId,
+            turnId,
+            text: initialThinking,
+          }));
+        }
         return;
       }
       if (message.type === 'assistant') {
@@ -1840,6 +1918,12 @@ export class AgentApiServer {
       if (!deltaContent) return;
       if (thinkingMessageIds.has(messageId)) {
         fullThinkingText = normalizedContent;
+        this.writeBridgeEvent(res, this.createBridgeEvent({
+          type: 'reasoning.delta',
+          sessionId: airiSessionId,
+          turnId,
+          text: this.redactSensitiveBridgeString(deltaContent),
+        }));
         return;
       }
       if (assistantMessageIds.has(messageId)) {
@@ -1950,6 +2034,14 @@ export class AgentApiServer {
       if (!hasError) {
         this.emitStateChanged(lobsterSessionId, turnId, 'success');
         this.emitBridgeStateChanged(res, airiSessionId, turnId, 'success');
+        if (fullThinkingText.trim()) {
+          this.writeBridgeEvent(res, this.createBridgeEvent({
+            type: 'reasoning.final',
+            sessionId: airiSessionId,
+            turnId,
+            text: this.redactSensitiveBridgeString(fullThinkingText.trim()),
+          }));
+        }
         fullAssistantText = sanitizeAssistantVisibleText(fullAssistantText);
         this.writeBridgeEvent(res, this.createBridgeEvent({
           type: 'assistant.final',

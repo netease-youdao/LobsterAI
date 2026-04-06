@@ -48,6 +48,12 @@ const sanitizeExportFileName = (value: string): string => {
   return sanitized || 'cowork-session';
 };
 
+const stripAssistantControlTokens = (value: string): string =>
+  value
+    .replace(/<\|ACT:[\s\S]*?\|>/g, '')
+    .replace(/<\|\/?ACT[\s\S]*?\|>/g, '')
+    .trim();
+
 const formatExportTimestamp = (value: Date): string => {
   const pad = (num: number): string => String(num).padStart(2, '0');
   return `${value.getFullYear()}${pad(value.getMonth() + 1)}${pad(value.getDate())}-${pad(value.getHours())}${pad(value.getMinutes())}${pad(value.getSeconds())}`;
@@ -1783,7 +1789,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   }, [currentSession?.cwd]);
 
   const mapDisplayText = useCallback((value: string): string => {
-    return value;
+    return stripAssistantControlTokens(value);
   }, []);
 
   const messages = currentSession?.messages;
@@ -1899,7 +1905,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return turns.map((turn, index) => {
       const isLastTurn = index === turns.length - 1;
       const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
-      const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+      const showAssistantBlock = getVisibleAssistantItems(turn.assistantItems).length > 0 || showTypingIndicator;
 
       return (
         <div key={turn.id} data-turn-index={index}>

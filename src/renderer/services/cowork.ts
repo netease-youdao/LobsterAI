@@ -100,6 +100,11 @@ class CoworkService {
         console.log('[CoworkService] onStreamMessage: after loadSessions, sessionExists=', nowExists, 'totalSessions=', newState.sessions.length);
       }
 
+      const latestState = store.getState().cowork;
+      if (latestState.currentSessionId === sessionId) {
+        await this.loadSession(sessionId);
+      }
+
       // A new user turn means this session is actively running again
       // (especially important for IM-triggered turns that do not call continueSession from renderer).
       if (message.type === 'user') {
@@ -157,10 +162,14 @@ class CoworkService {
     // Sessions changed listener (new channel sessions discovered by polling)
     const sessionsChangedCleanup = cowork.onSessionsChanged(() => {
       const beforeState = store.getState().cowork;
+      const currentSessionId = beforeState.currentSessionId;
       console.log('[CoworkService] onSessionsChanged: received IPC event, before sessions:', beforeState.sessions.length, 'sessionIds:', beforeState.sessions.map(s => s.id).slice(0, 5));
       void this.loadSessions().then(() => {
         const state = store.getState().cowork;
         console.log('[CoworkService] onSessionsChanged: loadSessions complete, total sessions:', state.sessions.length, 'sessionIds:', state.sessions.map(s => s.id).slice(0, 5));
+        if (currentSessionId) {
+          void this.loadSession(currentSessionId);
+        }
       }).catch((err) => {
         console.error('[CoworkService] onSessionsChanged: loadSessions FAILED:', err);
       });

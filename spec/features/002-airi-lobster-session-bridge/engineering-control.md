@@ -81,6 +81,8 @@
 - P1
   - 服务端 pending permissions 仍为内存态，进程重启后丢失
   - temp 上传文件仍缺物理回收
+  - 历史会话仍以服务端 session 为准，客户端尚未具备 authoritative session snapshot 拉取与对账
+  - `reasoning.delta / reasoning.final` 已进入主链，但默认展示策略仍待最终产品收口
 - P2
   - `ChatArea.vue` 继续承载较多技能/权限 UI 逻辑
   - `ChatArea.vue` 当前仍同时承担 Bridge 协议解析与状态协调，后续仍需继续拆分
@@ -92,6 +94,7 @@
   - 目前仍依赖删除事件驱动清理，后续可补更强的会话一致性自检
   - `lobster-bridge.ts` 请求样板仍可抽象
   - `hooks.ts` 与 bridge adapter 仍有进一步收口空间
+  - 技能选择与待处理权限虽已下沉到 `lobster-bridge-session` store，但还未完全抽象成统一 adapter
 
 ## 代码质量判断
 
@@ -159,3 +162,22 @@
 - 当前工程判断
   - 当前 Airi / LobsterAI 聊天框不支持真正的音频 chunk 级流式播放
   - 现阶段可落地的最优方案是“文本流式 + 分段 TTS + 预取播放”
+
+## 2026-04-05 现状快照
+
+- 当前工程状态已从“模式锁导致主链不可用”切换为“主链可用，但验证证据和请求语义完整性不足”
+- 已完成：
+  - `bridgeState` 快照持久化
+  - 显式 `sessionMode`
+  - `text-fast -> agent` 单向升级
+  - 历史文件 `stale` 标记与弱校验
+  - 当前轮用户输入、图片与模块上下文已进入 Bridge 主请求
+  - 已补多模态 smoke 脚本，用于覆盖“纯文本 -> 文件上传 -> 图片+文件同轮 -> reattach”主链
+  - `package.json` 已补 `npm run bridge:smoke`，便于后续真实运行态回归
+  - 已在本地真实运行态跑通图片+文件同轮与 reattach smoke
+  - 已在本地真实运行态验证 `skillIds + file` 组合可进入主链
+  - 已补稳定可复现的删除文件权限 smoke，可收到 `permission.request`
+- 当前最高优先级不再是继续加功能，而是：
+  - 验证服务端 session 是否足以承担历史上下文的权威来源
+  - 验证 `reasoning.*` 是否需要进入 UI
+  - 核对 `permission.request` 在 `allow / deny` 后的最终语义，并继续完善手工测试矩阵

@@ -118,6 +118,40 @@
   - 历史文件不会在 binding 失效后假装仍可用
   - `session.bound` 与本地 bridgeState 快照能够对齐
 
+## 2026-04-05 进度快照
+
+- 当前阶段定位：
+  - 已从“主链不可用”进入“主链可用但需系统验证”
+- 当前真正的 P0 不再是模式锁，而是：
+  - Bridge 请求是否完整携带历史上下文
+  - 图片链路是否真正进入主请求语义
+  - `reasoning.*` 是否需要进入可见 UI
+- 已完成的 P0 收口：
+  - 当前轮用户输入已通过 Bridge helper 统一构造成主请求内容
+  - 图片附件已进入 Bridge 主请求，而不再只参与模式推断
+  - 模块上下文已作为“仅供参考”的文本前缀并入当前轮请求
+- 当前任务颗粒度已统一为 4 类：
+  - `Contract` 协议契约
+  - `Correctness` 行为正确性
+  - `UX/State` 交互与状态
+  - `Verification` 联调与证据
+- 当前建议执行顺序：
+  - 先做会话正确性与请求语义
+  - 再做多模态正确性与过程态
+  - 最后继续拆 `ChatArea.vue` 与 adapter
+- 已完成的 P1 起步：
+  - 新增 `scripts/bridge-smoke-test.cjs` 的多模态 smoke 覆盖，纳入“纯文本 -> 文件上传 -> 图片+文件同轮 -> reattach”主链检查
+  - 已补 `lobster-bridge.test.ts`，对当前轮文本、图片与上下文拼装做工程测试
+  - 已补 `npm run bridge:smoke` 作为统一入口，便于后续真实运行态回归
+  - 已在本地真实运行态完成一次 smoke 通过，确认图片+文件同轮与 reattach 主链可工作
+  - 已用 `github-deep-research` 验证 `skillIds + file` 组合进入主链
+  - 已补稳定可复现的权限 smoke 场景：先创建 `permission-smoke.txt`，再请求删除，能够收到 `permission.request`
+  - 已在本地真实运行态完成 `permission.request` 的 `allow / deny` 双路径核对
+  - 已将权限状态与技能选择下沉到 `lobster-bridge-session` store，并打通 `reasoning.*` 主链事件
+  - 已修复 Airi -> Bridge 的 `systemPrompt` 透传，角色卡提示词重新在 text-fast 与 agent 模式生效
+  - 已修复图片回复“LobsterAI 有答案但 Airi 不显示”的主链兜底，assistant.final 现会回填可见正文
+  - 已修复 Cowork / Airi 侧 ACT 指令直出问题，当前会消费 ACT 驱动动作，并从可见文本中剥离控制 token
+
 ## 待你手测的检查点
 
 - 同一会话：
