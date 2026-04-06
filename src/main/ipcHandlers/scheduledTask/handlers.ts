@@ -126,6 +126,15 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
       console.debug('[ScheduledTask] update input id:', id, JSON.stringify(normalizedInput, null, 2));
+
+      // When an explicit delivery config is provided but no sessionKey is specified,
+      // clear the task's sessionKey so that IM-bot-initiated tasks (which carry a
+      // sessionKey pointing to the original channel session) switch to using the
+      // delivery object rather than routing via the stale sessionKey.
+      if ('delivery' in normalizedInput && !('sessionKey' in normalizedInput)) {
+        normalizedInput.sessionKey = null;
+      }
+
       await applyAnnounceDeliveryNormalization(normalizedInput, getIMGatewayManager);
 
       const task = await getCronJobService().updateJob(id, normalizedInput);
