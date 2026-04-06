@@ -1,14 +1,20 @@
 import React from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import XMarkIcon from '../icons/XMarkIcon';
-import PuzzleIcon from '../icons/PuzzleIcon';
-import { RootState } from '../../store';
-import { toggleActiveSkill, clearActiveSkills } from '../../store/slices/skillSlice';
-import { i18nService } from '../../services/i18n';
+import { useDispatch,useSelector } from 'react-redux';
 
-const ActiveSkillBadge: React.FC = () => {
+import { i18nService } from '../../services/i18n';
+import { RootState } from '../../store';
+import { clearDraftActiveSkillIds,toggleDraftActiveSkill } from '../../store/slices/coworkSlice';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import XMarkIcon from '../icons/XMarkIcon';
+
+interface ActiveSkillBadgeProps {
+  draftKey: string;
+  className?: string;
+}
+
+const ActiveSkillBadge: React.FC<ActiveSkillBadgeProps> = ({ draftKey, className }) => {
   const dispatch = useDispatch();
-  const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
+  const activeSkillIds = useSelector((state: RootState) => state.cowork.draftActiveSkillIds[draftKey] || []);
   const skills = useSelector((state: RootState) => state.skill.skills);
 
   const activeSkills = activeSkillIds
@@ -19,16 +25,16 @@ const ActiveSkillBadge: React.FC = () => {
 
   const handleRemoveSkill = (e: React.MouseEvent, skillId: string) => {
     e.stopPropagation();
-    dispatch(toggleActiveSkill(skillId));
+    dispatch(toggleDraftActiveSkill({ draftKey, skillId }));
   };
 
   const handleClearAll = (e: React.MouseEvent) => {
     e.stopPropagation();
-    dispatch(clearActiveSkills());
+    dispatch(clearDraftActiveSkillIds(draftKey));
   };
 
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className={`flex items-center gap-1.5 flex-wrap${className ? ` ${className}` : ''}`}>
       {activeSkills.map(skill => (
         <div
           key={skill.id}
