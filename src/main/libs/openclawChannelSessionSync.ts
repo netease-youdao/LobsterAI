@@ -5,12 +5,13 @@
  * to local Cowork sessions so that conversations are visible in the LobsterAI UI.
  */
 
+import { session } from '@electron/remote';
+
+import { PlatformRegistry } from '../../shared/platform';
 import type { CoworkStore } from '../coworkStore';
+import { t } from '../i18n';
 import type { IMStore } from '../im/imStore';
 import type { Platform } from '../im/types';
-import { PlatformRegistry } from '../../shared/platform';
-import { t } from '../i18n';
-import { session } from '@electron/remote';
 
 
 const LOBSTERAI_SESSION_PREFIX = 'lobsterai:';
@@ -287,6 +288,12 @@ export class OpenClawChannelSessionSync {
   /** Keys that have been tried and are not recognized — avoids repeated log noise. */
   private readonly rejectedKeys = new Set<string>();
 
+  /** Local sessionIds that were created for scheduled-task (cron) execution. */
+  private readonly cronSessionIds = new Set<string>();
+
+  /** Maps cron sessionId → gateway jobId, so completion handlers can look up delivery config. */
+  private readonly cronSessionToJobId = new Map<string, string>();
+
   /**
    * Sessions created because the agent binding changed.
    * These should skip syncFullChannelHistory to avoid pulling old gateway messages
@@ -523,8 +530,21 @@ export class OpenClawChannelSessionSync {
     console.log('[ChannelSessionSync] created cron session:', session.id);
 
     this.syncedSessionKeys.set(sessionKey, session.id);
+    this.cronSessionIds.add(session.id);
+    this.cronSessionToJobId.set(session.id, jobId);
     return session.id;
   }
+
+  /** Returns true if the given sessionId was created for a scheduled-task (cron) run. */
+  isCronSessionId(sessionId: string): boolean {
+    return this.cronSessionIds.has(sessionId);
+  }
+
+  /** Returns the gateway jobId for a cron session, or null if not found. */
+  getCronJobId(sessionId: string): string | null {
+    return this.cronSessionToJobId.get(sessionId) ?? null;
+  }
+
   clearCache(): void {
     this.syncedSessionKeys.clear();
     this.rejectedKeys.clear();

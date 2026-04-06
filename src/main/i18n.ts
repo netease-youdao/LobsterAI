@@ -188,6 +188,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoOpenClawHint: 'POPO 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imPopoConfigReadyOpenClaw: 'POPO 配置已就绪，通过 OpenClaw 运行。',
 
+    // Native notifications
+    notifyTitle: 'LobsterAI',
+    notifyCoworkCompleteSubtitle: '对话任务完成',
+    notifyScheduledTaskCompleteSubtitle: '定时任务执行完成',
+    notifyChannelLocal: '本地通知',
+
     'enterprise.updateBlocked': '版本更新由企业统一管理',
   },
   en: {
@@ -362,6 +368,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoConfigReady: 'POPO configuration is ready.',
     imPopoOpenClawHint: 'POPO runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imPopoConfigReadyOpenClaw: 'POPO configuration is ready, running via OpenClaw.',
+
+    // Native notifications
+    notifyTitle: 'LobsterAI',
+    notifyCoworkCompleteSubtitle: 'Task completed',
+    notifyScheduledTaskCompleteSubtitle: 'Scheduled task finished',
+    notifyChannelLocal: 'Local Notification',
 
     'enterprise.updateBlocked': 'Updates are managed by enterprise',
   },
