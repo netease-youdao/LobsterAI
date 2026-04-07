@@ -48,7 +48,7 @@ import {
 } from './libs/openclawChannelSessionSync';
 import { IMGatewayManager, IMGatewayConfig } from './im';
 import type { Platform } from './im/types';
-import { APP_NAME } from './appConstants';
+import { APP_NAME, CloseButtonAction, CloseButtonIpc, KvKey } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 import { setLanguage, t } from './i18n';
@@ -1513,6 +1513,12 @@ let mainWindow: BrowserWindow | null = null;
 
 let isQuitting = false;
 
+/** Unified quit entry point. Sets the quitting flag then delegates to app.quit(). */
+const requestAppQuit = (): void => {
+  isQuitting = true;
+  app.quit();
+};
+
 // 存储活跃的流式请求控制器
 const activeStreamControllers = new Map<string, AbortController>();
 let lastReloadAt = 0;
@@ -1848,6 +1854,33 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set prevent-sleep',
+      };
+    }
+  });
+
+  // Close button action IPC handlers (Windows only)
+  ipcMain.handle(CloseButtonIpc.GetAction, () => {
+    const store = getStore();
+    return {
+      action: store.get<string>(KvKey.CloseButtonAction) ?? CloseButtonAction.MinimizeToTaskbar,
+      promptShown: store.get<boolean>(KvKey.CloseButtonActionPromptShown) ?? false,
+    };
+  });
+
+  ipcMain.handle(CloseButtonIpc.SetAction, (_event, action: unknown) => {
+    if (
+      action !== CloseButtonAction.MinimizeToTaskbar &&
+      action !== CloseButtonAction.QuitApp
+    ) {
+      return { success: false, error: 'Invalid close button action value' };
+    }
+    try {
+      getStore().set(KvKey.CloseButtonAction, action);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to set close button action',
       };
     }
   });
@@ -4102,9 +4135,49 @@ if (!gotTheLock) {
     mainWindow.on('close', (e) => {
       // In development, close should actually quit so `npm run electron:dev`
       // restarts from a clean process. In production we keep tray behavior.
-      if (mainWindow && !isQuitting && !isDev) {
+      if (isDev || isQuitting) {
+        return;
+      }
+      // macOS: always hide/minimize, never quit via the close button.
+      if (isMac) {
         e.preventDefault();
-        mainWindow.hide();
+        mainWindow?.hide();
+        return;
+      }
+      // Windows / Linux: check configured close-button action.
+      e.preventDefault();
+      const store = getStore();
+      const promptShown = store.get<boolean>(KvKey.CloseButtonActionPromptShown) ?? false;
+      if (!promptShown) {
+        // First time: show a native dialog asking the user what they prefer.
+        const btnMinimize = 0;
+        const btnQuit = 1;
+        dialog.showMessageBox({
+          type: 'question',
+          title: t('closeActionDialogTitle'),
+          message: t('closeActionDialogMessage'),
+          buttons: [t('closeActionMinimize'), t('closeActionQuit')],
+          defaultId: btnMinimize,
+          cancelId: btnMinimize,
+        }).then(({ response }) => {
+          const action = response === btnQuit
+            ? CloseButtonAction.QuitApp
+            : CloseButtonAction.MinimizeToTaskbar;
+          store.set(KvKey.CloseButtonAction, action);
+          store.set(KvKey.CloseButtonActionPromptShown, true);
+          if (action === CloseButtonAction.QuitApp) {
+            requestAppQuit();
+          } else {
+            mainWindow?.hide();
+          }
+        });
+        return;
+      }
+      const action = store.get<string>(KvKey.CloseButtonAction) ?? CloseButtonAction.MinimizeToTaskbar;
+      if (action === CloseButtonAction.QuitApp) {
+        requestAppQuit();
+      } else {
+        mainWindow?.hide();
       }
     });
 
@@ -4180,7 +4253,7 @@ if (!gotTheLock) {
       const initLang = getStore().get<{ language?: string }>('app_config')?.language;
       setLanguage(initLang === 'en' ? 'en' : 'zh');
       // 窗口就绪后创建系统托盘
-      createTray(() => mainWindow);
+      createTray(() => mainWindow, requestAppQuit);
 
       // Start cron polling after the window is ready.
       (async () => {

@@ -471,6 +471,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [preventSleep, setPreventSleepState] = useState(false);
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
+  const [closeButtonActionValue, setCloseButtonActionValue] = useState<'minimize_to_taskbar' | 'quit_app'>('minimize_to_taskbar');
+  const [isUpdatingCloseButtonAction, setIsUpdatingCloseButtonAction] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(notice ?? null);
@@ -709,6 +711,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       }).catch(err => {
         console.error('Failed to load prevent-sleep setting:', err);
       });
+
+      // Load close-button action setting (Windows only)
+      if (window.electron.platform === 'win32') {
+        window.electron.closeButtonAction.get().then(({ action }) => {
+          setCloseButtonActionValue(action as 'minimize_to_taskbar' | 'quit_app');
+        }).catch(err => {
+          console.error('Failed to load close-button-action setting:', err);
+        });
+      }
 
       // Set up providers based on saved config
       if (config.api) {
@@ -2282,6 +2293,42 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </button>
               </label>
             </div>
+
+            {/* Close button action Section (Windows only) */}
+            {window.electron.platform === 'win32' && (
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium text-foreground">
+                  {i18nService.t('closeButtonAction')}
+                </h4>
+                <div className="w-[140px] shrink-0">
+                  <ThemedSelect
+                    id="closeButtonAction"
+                    value={closeButtonActionValue}
+                    onChange={async (value) => {
+                      if (isUpdatingCloseButtonAction) return;
+                      setIsUpdatingCloseButtonAction(true);
+                      try {
+                        const result = await window.electron.closeButtonAction.set(value);
+                        if (result.success) {
+                          setCloseButtonActionValue(value as 'minimize_to_taskbar' | 'quit_app');
+                        } else {
+                          setError(result.error || 'Failed to update close button action');
+                        }
+                      } catch (err) {
+                        console.error('Failed to set close-button action:', err);
+                        setError('Failed to update close button action');
+                      } finally {
+                        setIsUpdatingCloseButtonAction(false);
+                      }
+                    }}
+                    options={[
+                      { value: 'minimize_to_taskbar', label: i18nService.t('closeButtonActionMinimize') },
+                      { value: 'quit_app', label: i18nService.t('closeButtonActionQuit') },
+                    ]}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* System proxy Section */}
             <div>

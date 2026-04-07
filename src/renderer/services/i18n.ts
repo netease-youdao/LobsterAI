@@ -990,6 +990,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     useSystemProxyDescription: '开启后网络请求将跟随系统代理（保存后生效）',
     preventSleep: '防止休眠',
     preventSleepDescription: '防止系统在应用运行时进入睡眠模式',
+    closeButtonAction: '关闭主面板时',
+    closeButtonActionMinimize: '最小化',
+    closeButtonActionQuit: '退出',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -2177,6 +2180,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     useSystemProxyDescription: 'When enabled, network requests follow system proxy settings (applies after Save)',
     preventSleep: 'Prevent Sleep',
     preventSleepDescription: 'Prevent the system from sleeping while the app is running',
+    closeButtonAction: 'When closing the window',
+    closeButtonActionMinimize: 'Minimize',
+    closeButtonActionQuit: 'Quit',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',

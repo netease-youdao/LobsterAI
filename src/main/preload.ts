@@ -303,6 +303,10 @@ contextBridge.exposeInMainWorld('electron', {
     get: () => ipcRenderer.invoke('app:getAutoLaunch'),
     set: (enabled: boolean) => ipcRenderer.invoke('app:setAutoLaunch', enabled),
   },
+  closeButtonAction: {
+    get: () => ipcRenderer.invoke('app:getCloseButtonAction'),
+    set: (action: string) => ipcRenderer.invoke('app:setCloseButtonAction', action),
+  },
   preventSleep: {
     get: () => ipcRenderer.invoke('app:getPreventSleep'),
     set: (enabled: boolean) => ipcRenderer.invoke('app:setPreventSleep', enabled),
