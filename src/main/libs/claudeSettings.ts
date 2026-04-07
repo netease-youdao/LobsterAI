@@ -1,37 +1,25 @@
-import { join } from 'path';
 import { app } from 'electron';
+import { join } from 'path';
+
+import { type ApiFormat,type ProviderConfig, ProviderName, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import type { SqliteStore } from '../sqliteStore';
 import type { CoworkApiConfig } from './coworkConfigStore';
+import { type AnthropicApiFormat,normalizeProviderApiFormat } from './coworkFormatTransform';
 import {
   configureCoworkOpenAICompatProxy,
-  type OpenAICompatProxyTarget,
   getCoworkOpenAICompatProxyBaseURL,
   getCoworkOpenAICompatProxyStatus,
+  type OpenAICompatProxyTarget,
 } from './coworkOpenAICompatProxy';
-import { normalizeProviderApiFormat, type AnthropicApiFormat } from './coworkFormatTransform';
-import { ProviderName, resolveCodingPlanBaseUrl } from '../../shared/providers';
 
-type ProviderModel = {
-  id: string;
-  name?: string;
-  supportsImage?: boolean;
-};
-
-type ProviderConfig = {
-  enabled: boolean;
-  apiKey: string;
-  baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai' | 'native';
-  codingPlanEnabled?: boolean;
-  models?: ProviderModel[];
-};
+type LocalProviderConfig = Omit<ProviderConfig, 'apiFormat'> & { apiFormat?: ApiFormat | 'native' };
 
 type AppConfig = {
   model?: {
     defaultModel?: string;
     defaultModelProvider?: string;
   };
-  providers?: Record<string, ProviderConfig>;
+  providers?: Record<string, LocalProviderConfig>;
 };
 
 export type ApiConfigResolution = {
@@ -114,7 +102,7 @@ export function getClaudeCodePath(): string {
 
 type MatchedProvider = {
   providerName: string;
-  providerConfig: ProviderConfig;
+  providerConfig: LocalProviderConfig;
   modelId: string;
   apiFormat: AnthropicApiFormat;
   baseURL: string;
@@ -147,7 +135,7 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
   console.log('[ClaudeSettings] lobsterai-server fallback activated:', { baseURL, modelId: effectiveModelId, supportsImage: cachedMeta?.supportsImage });
   return {
     providerName: ProviderName.LobsteraiServer,
-    providerConfig: { enabled: true, apiKey: tokens.accessToken, baseUrl: baseURL, apiFormat: 'openai', models: [{ id: effectiveModelId, supportsImage: cachedMeta?.supportsImage }] },
+    providerConfig: { enabled: true, apiKey: tokens.accessToken, baseUrl: baseURL, apiFormat: 'openai', models: [{ id: effectiveModelId, name: effectiveModelId, supportsImage: cachedMeta?.supportsImage }] },
     modelId: effectiveModelId,
     apiFormat: 'openai',
     baseURL,
@@ -160,7 +148,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
 
   const resolveFallbackModel = (): {
     providerName: string;
-    providerConfig: ProviderConfig;
+    providerConfig: LocalProviderConfig;
     modelId: string;
   } | null => {
     for (const [providerName, providerConfig] of Object.entries(providers)) {
@@ -192,7 +180,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     modelId = fallback.modelId;
   }
 
-  let providerEntry: [string, ProviderConfig] | undefined;
+  let providerEntry: [string, LocalProviderConfig] | undefined;
   const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
 
   // Handle lobsterai-server provider: dynamically construct from auth tokens

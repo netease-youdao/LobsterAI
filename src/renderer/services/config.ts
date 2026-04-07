@@ -1,15 +1,12 @@
+import { type ApiFormat,ProviderRegistry } from '@shared/providers';
+
 import { AppConfig, CONFIG_KEYS, defaultConfig, isCustomProvider } from '../config';
 import { localStore } from './store';
 
-const getFixedProviderApiFormat = (providerKey: string): 'anthropic' | 'openai' | 'gemini' | null => {
-  if (providerKey === 'openai' || providerKey === 'stepfun' || providerKey === 'youdaozhiyun' || providerKey === 'github-copilot') {
-    return 'openai';
-  }
-  if (providerKey === 'anthropic') {
-    return 'anthropic';
-  }
-  if (providerKey === 'gemini') {
-    return 'gemini';
+const getFixedProviderApiFormat = (providerKey: string): ApiFormat | null => {
+  const def = ProviderRegistry.get(providerKey);
+  if (def && !def.switchableBaseUrls) {
+    return def.defaultApiFormat;
   }
   return null;
 };
