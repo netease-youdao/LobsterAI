@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useSelector } from 'react-redux';
 import { CheckIcon } from '@heroicons/react/24/outline';
-import SearchIcon from '../icons/SearchIcon';
-import PuzzleIcon from '../icons/PuzzleIcon';
-import Cog6ToothIcon from '../icons/Cog6ToothIcon';
+import React, { useEffect, useRef,useState } from 'react';
+import { useSelector } from 'react-redux';
+
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { Skill } from '../../types/skill';
+import Cog6ToothIcon from '../icons/Cog6ToothIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import SearchIcon from '../icons/SearchIcon';
 
 interface SkillsPopoverProps {
+  draftKey: string;
   isOpen: boolean;
   onClose: () => void;
   onSelectSkill: (skill: Skill) => void;
@@ -18,6 +20,7 @@ interface SkillsPopoverProps {
 }
 
 const SkillsPopover: React.FC<SkillsPopoverProps> = ({
+  draftKey,
   isOpen,
   onClose,
   onSelectSkill,
@@ -29,7 +32,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   const popoverRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const skills = useSelector((state: RootState) => state.skill.skills);
-  const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
+  const activeSkillIds = useSelector((state: RootState) => state.cowork.draftActiveSkillIds[draftKey] || []);
 
   // Filter enabled skills based on search query
   const filteredSkills = skills

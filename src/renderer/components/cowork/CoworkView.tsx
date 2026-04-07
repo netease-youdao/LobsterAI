@@ -1,23 +1,23 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from '../../store';
-import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
-import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
-import { setActions, selectAction, clearSelection } from '../../store/slices/quickActionSlice';
+import { ShieldCheckIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useRef,useState } from 'react';
+import { useDispatch,useSelector } from 'react-redux';
+
 import { coworkService } from '../../services/cowork';
-import { skillService } from '../../services/skill';
-import { quickActionService } from '../../services/quickAction';
 import { i18nService } from '../../services/i18n';
+import { quickActionService } from '../../services/quickAction';
+import { skillService } from '../../services/skill';
+import { RootState } from '../../store';
+import { addMessage, clearCurrentSession, clearDraftActiveSkillIds,setCurrentSession, setDraftActiveSkillIds, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
+import { clearSelection,selectAction, setActions } from '../../store/slices/quickActionSlice';
+import type { CoworkImageAttachment, CoworkSession, OpenClawEngineStatus } from '../../types/cowork';
+import ComposeIcon from '../icons/ComposeIcon';
+import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import ModelSelector from '../ModelSelector';
+import { PromptPanel,QuickActionBar } from '../quick-actions';
+import type { SettingsOpenOptions } from '../Settings';
+import WindowTitleBar from '../window/WindowTitleBar';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import CoworkSessionDetail from './CoworkSessionDetail';
-import ModelSelector from '../ModelSelector';
-import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import ComposeIcon from '../icons/ComposeIcon';
-import { ShieldCheckIcon } from '@heroicons/react/24/outline';
-import WindowTitleBar from '../window/WindowTitleBar';
-import { QuickActionBar, PromptPanel } from '../quick-actions';
-import type { SettingsOpenOptions } from '../Settings';
-import type { CoworkSession, CoworkImageAttachment, OpenClawEngineStatus } from '../../types/cowork';
 
 export interface CoworkViewProps {
   onRequestAppSettings?: (options?: SettingsOpenOptions) => void;
@@ -54,7 +54,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   } = useSelector((state: RootState) => state.cowork);
   const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
 
-  const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
+  const draftActiveSkillIds = useSelector((state: RootState) => state.cowork.draftActiveSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const quickActions = useSelector((state: RootState) => state.quickAction.actions);
   const selectedActionId = useSelector((state: RootState) => state.quickAction.selectedActionId);
@@ -203,7 +203,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       const now = Date.now();
 
       // Capture active skill IDs before clearing them
-      const sessionSkillIds = [...activeSkillIds];
+      const homeDraftKey = '__home__';
+      const sessionSkillIds = [...(draftActiveSkillIds[homeDraftKey] || [])];
 
       const tempSession: CoworkSession = {
         id: tempSessionId,
@@ -240,7 +241,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
       // Clear active skills and quick action selection after starting session
       // so they don't persist to next session
-      dispatch(clearActiveSkills());
+      dispatch(clearDraftActiveSkillIds(homeDraftKey));
       dispatch(clearSelection());
 
       // Combine skill prompt with system prompt.
@@ -328,11 +329,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       });
 
       // Capture active skill IDs before clearing
-      const sessionSkillIds = [...activeSkillIds];
+      const sessionDraftKey = currentSession.id;
+      const sessionSkillIds = [...(draftActiveSkillIds[sessionDraftKey] || [])];
 
       // Clear active skills after capturing so they don't persist to next message
       if (sessionSkillIds.length > 0) {
-        dispatch(clearActiveSkills());
+        dispatch(clearDraftActiveSkillIds(sessionDraftKey));
       }
 
       // Combine skill prompt with system prompt for continuation.
@@ -386,12 +388,16 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     if (action) {
       const targetSkill = skills.find(s => s.id === action.skillMapping);
       if (targetSkill) {
-        dispatch(setActiveSkillIds([targetSkill.id]));
+        const actionDraftKey = currentSession?.id || '__home__';
+        dispatch(setDraftActiveSkillIds({ draftKey: actionDraftKey, skillIds: [targetSkill.id] }));
       }
     }
   };
 
   // When the mapped skill is deactivated from input area, restore the QuickActionBar
+  const currentDraftKey = currentSession?.id || '__home__';
+  const activeSkillIds = draftActiveSkillIds[currentDraftKey] || [];
+
   useEffect(() => {
     if (!selectedActionId) return;
     const action = quickActions.find(a => a.id === selectedActionId);

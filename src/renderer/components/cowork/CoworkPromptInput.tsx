@@ -6,8 +6,8 @@ import { useDispatch,useSelector } from 'react-redux';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
-import { addDraftAttachment, clearDraftAttachments, type DraftAttachment,setDraftAttachments, setDraftPrompt } from '../../store/slices/coworkSlice';
-import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
+import { addDraftAttachment, clearDraftAttachments, type DraftAttachment, setDraftAttachments, setDraftPrompt, toggleDraftActiveSkill } from '../../store/slices/coworkSlice';
+import { setSkills } from '../../store/slices/skillSlice';
 import { CoworkImageAttachment } from '../../types/cowork';
 import { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
@@ -154,7 +154,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     },
   }));
 
-  const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
+  const activeSkillIds = useSelector((state: RootState) => state.cowork.draftActiveSkillIds[draftKey] || []);
   const skills = useSelector((state: RootState) => state.skill.skills);
 
   const isLarge = size === 'large';
@@ -168,7 +168,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       dispatch(setSkills(loadedSkills));
     };
     loadSkills();
-  }, [dispatch]);
+  }, [dispatch, draftKey]);
 
   useEffect(() => {
     const unsubscribe = skillService.onSkillsChanged(async () => {
@@ -291,11 +291,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
     dispatch(clearDraftAttachments(draftKey));
     setImageVisionHint(false);
-  }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);
+  }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch, draftKey]);
 
   const handleSelectSkill = useCallback((skill: Skill) => {
-    dispatch(toggleActiveSkill(skill.id));
-  }, [dispatch]);
+    dispatch(toggleDraftActiveSkill({ draftKey, skillId: skill.id }));
+  }, [dispatch, draftKey]);
 
   const handleManageSkills = useCallback(() => {
     if (onManageSkills) {
@@ -736,10 +736,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 {!remoteManaged && (
                   <>
                     <SkillsButton
+                      draftKey={draftKey}
                       onSelectSkill={handleSelectSkill}
                       onManageSkills={handleManageSkills}
                     />
-                    <ActiveSkillBadge />
+                    <ActiveSkillBadge draftKey={draftKey} />
                   </>
                 )}
               </div>

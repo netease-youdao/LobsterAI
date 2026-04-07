@@ -1,11 +1,12 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import type {
-  CoworkSession,
-  CoworkSessionSummary,
-  CoworkMessage,
   CoworkConfig,
+  CoworkMessage,
   CoworkPermissionRequest,
+  CoworkSession,
   CoworkSessionStatus,
+  CoworkSessionSummary,
 } from '../../types/cowork';
 import { removeSessionFromState, removeSessionsFromState } from './coworkDeleteState';
 
@@ -23,6 +24,8 @@ interface CoworkState {
   draftPrompts: Record<string, string>;
   /** Keyed by draftKey (sessionId or '__home__'), stores pending attachments */
   draftAttachments: Record<string, DraftAttachment[]>;
+  /** Keyed by draftKey (sessionId or '__home__'), stores per-session active skill selections */
+  draftActiveSkillIds: Record<string, string[]>;
   unreadSessionIds: string[];
   isCoworkActive: boolean;
   isStreaming: boolean;
@@ -37,6 +40,7 @@ const initialState: CoworkState = {
   currentSession: null,
   draftPrompts: {},
   draftAttachments: {},
+  draftActiveSkillIds: {},
   unreadSessionIds: [],
   isCoworkActive: false,
   isStreaming: false,
@@ -199,10 +203,14 @@ const coworkSlice = createSlice({
 
     deleteSession(state, action: PayloadAction<string>) {
       removeSessionFromState(state, action.payload);
+      delete state.draftActiveSkillIds[action.payload];
     },
 
     deleteSessions(state, action: PayloadAction<string[]>) {
       removeSessionsFromState(state, action.payload);
+      for (const id of action.payload) {
+        delete state.draftActiveSkillIds[id];
+      }
     },
 
     addMessage(state, action: PayloadAction<{ sessionId: string; message: CoworkMessage }>) {
@@ -332,6 +340,35 @@ const coworkSlice = createSlice({
     clearDraftAttachments(state, action: PayloadAction<string>) {
       delete state.draftAttachments[action.payload];
     },
+
+    setDraftActiveSkillIds(state, action: PayloadAction<{ draftKey: string; skillIds: string[] }>) {
+      const { draftKey, skillIds } = action.payload;
+      if (skillIds.length === 0) {
+        delete state.draftActiveSkillIds[draftKey];
+      } else {
+        state.draftActiveSkillIds[draftKey] = skillIds;
+      }
+    },
+
+    toggleDraftActiveSkill(state, action: PayloadAction<{ draftKey: string; skillId: string }>) {
+      const { draftKey, skillId } = action.payload;
+      const current = state.draftActiveSkillIds[draftKey] || [];
+      const index = current.indexOf(skillId);
+      if (index === -1) {
+        state.draftActiveSkillIds[draftKey] = [...current, skillId];
+      } else {
+        const updated = current.filter((_, i) => i !== index);
+        if (updated.length === 0) {
+          delete state.draftActiveSkillIds[draftKey];
+        } else {
+          state.draftActiveSkillIds[draftKey] = updated;
+        }
+      }
+    },
+
+    clearDraftActiveSkillIds(state, action: PayloadAction<string>) {
+      delete state.draftActiveSkillIds[action.payload];
+    },
   },
 });
 
@@ -344,6 +381,9 @@ export const {
   setDraftAttachments,
   addDraftAttachment,
   clearDraftAttachments,
+  setDraftActiveSkillIds,
+  toggleDraftActiveSkill,
+  clearDraftActiveSkillIds,
   addSession,
   updateSessionStatus,
   deleteSession,

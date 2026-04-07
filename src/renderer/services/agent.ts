@@ -1,14 +1,13 @@
 import { store } from '../store';
 import {
+  addAgent,
+  removeAgent,
   setAgents,
   setCurrentAgentId,
   setLoading,
-  addAgent,
   updateAgent as updateAgentAction,
-  removeAgent,
 } from '../store/slices/agentSlice';
-import { setActiveSkillIds, clearActiveSkills } from '../store/slices/skillSlice';
-import { clearCurrentSession } from '../store/slices/coworkSlice';
+import { clearCurrentSession,clearDraftActiveSkillIds, setDraftActiveSkillIds } from '../store/slices/coworkSlice';
 import type { Agent, PresetAgent } from '../types/agent';
 
 class AgentService {
@@ -152,10 +151,11 @@ class AgentService {
     store.dispatch(setCurrentAgentId(agentId));
     store.dispatch(clearCurrentSession());
     const agent = store.getState().agent.agents.find((a) => a.id === agentId);
+    const homeDraftKey = '__home__';
     if (agent?.skillIds?.length) {
-      store.dispatch(setActiveSkillIds(agent.skillIds));
+      store.dispatch(setDraftActiveSkillIds({ draftKey: homeDraftKey, skillIds: agent.skillIds }));
     } else {
-      store.dispatch(clearActiveSkills());
+      store.dispatch(clearDraftActiveSkillIds(homeDraftKey));
     }
   }
 }

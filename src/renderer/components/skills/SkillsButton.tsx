@@ -1,15 +1,18 @@
 import React, { useRef, useState } from 'react';
+
+import { Skill } from '../../types/skill';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import SkillsPopover from './SkillsPopover';
-import { Skill } from '../../types/skill';
 
 interface SkillsButtonProps {
+  draftKey: string;
   onSelectSkill: (skill: Skill) => void;
   onManageSkills: () => void;
   className?: string;
 }
 
 const SkillsButton: React.FC<SkillsButtonProps> = ({
+  draftKey,
   onSelectSkill,
   onManageSkills,
   className = '',
@@ -37,6 +40,7 @@ const SkillsButton: React.FC<SkillsButtonProps> = ({
         <PuzzleIcon className="h-5 w-5" />
       </button>
       <SkillsPopover
+        draftKey={draftKey}
         isOpen={isPopoverOpen}
         onClose={handleClosePopover}
         onSelectSkill={onSelectSkill}

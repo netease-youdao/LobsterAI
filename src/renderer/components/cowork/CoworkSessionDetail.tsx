@@ -14,7 +14,7 @@ import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminder
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
-import { setActiveSkillIds } from '../../store/slices/skillSlice';
+import { setDraftActiveSkillIds } from '../../store/slices/coworkSlice';
 import type { CoworkImageAttachment,CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
@@ -2014,14 +2014,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     // Restore image attachments (always call to clear previous attachments)
     const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
     ref.setImageAttachments(imageAttachments);
-    // Restore active skills
+    // Restore active skills for the current session
     const skillIds = (message.metadata as CoworkMessageMetadata)?.skillIds;
-    if (skillIds && skillIds.length > 0) {
-      dispatch(setActiveSkillIds(skillIds));
+    if (skillIds && skillIds.length > 0 && currentSession) {
+      dispatch(setDraftActiveSkillIds({ draftKey: currentSession.id, skillIds }));
     }
     // Focus the input
     ref.focus();
-  }, [dispatch]);
+  }, [dispatch, currentSession]);
 
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
