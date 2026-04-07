@@ -518,8 +518,11 @@ export class OpenClawChannelSessionSync {
     const cronLabel = t('cronSessionPrefix');
     const title = jobName ? `[${cronLabel}] ${jobName}` : `[${cronLabel}] ${jobId.length > 8 ? jobId.slice(0, 8) : jobId}`;
     const cwd = this.getDefaultCwd();
-    console.log('[ChannelSessionSync] creating cron session: key=', sessionKey, 'title=', title, 'cwd=', cwd);
-    const session = this.coworkStore.createSession(title, cwd, '', 'local');
+    // Extract agentId from the session key (format: "agent:{agentId}:cron:{jobId}").
+    // Fall back to the default agent if the key uses the legacy "cron:{jobId}" format.
+    const agentId = extractAgentIdFromKey(sessionKey) ?? DEFAULT_MANAGED_AGENT_ID;
+    console.log('[ChannelSessionSync] creating cron session: key=', sessionKey, 'title=', title, 'cwd=', cwd, 'agentId=', agentId);
+    const session = this.coworkStore.createSession(title, cwd, '', 'local', [], agentId);
     console.log('[ChannelSessionSync] created cron session:', session.id);
 
     this.syncedSessionKeys.set(sessionKey, session.id);

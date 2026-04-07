@@ -243,6 +243,35 @@ export function formatDuration(ms: number | null): string {
   return `${Math.round(ms / 60_000)}m`;
 }
 
+/**
+ * Format a future timestamp as a relative "time until" string.
+ * e.g. "5 分钟后" / "2 小时后" / "3 天后" (zh) or "in 5 min" / "in 2 h" / "in 3 d" (en)
+ * Returns null if nextRunAtMs is null or in the past.
+ */
+export function formatNextRunRelative(nextRunAtMs: number | null): string | null {
+  if (nextRunAtMs === null) return null;
+  const diffMs = nextRunAtMs - Date.now();
+  if (diffMs <= 0) return null;
+
+  const lang = i18nService.getLanguage();
+  const isChinese = lang === 'zh';
+
+  const minutes = Math.round(diffMs / 60_000);
+  const hours = Math.round(diffMs / 3_600_000);
+  const days = Math.round(diffMs / 86_400_000);
+
+  if (diffMs < 60_000) {
+    return isChinese ? '不到 1 分钟后' : 'in < 1 min';
+  }
+  if (diffMs < 3_600_000) {
+    return isChinese ? `${minutes} 分钟后` : `in ${minutes} min`;
+  }
+  if (diffMs < 86_400_000) {
+    return isChinese ? `${hours} 小时后` : `in ${hours} h`;
+  }
+  return isChinese ? `${days} 天后` : `in ${days} d`;
+}
+
 export function formatPayloadLabel(payload: ScheduledTaskPayload): string {
   if (payload.kind === 'systemEvent') {
     return `${i18nService.t('scheduledTasksFormPayloadKindSystemEvent')} · ${payload.text}`;
@@ -287,7 +316,7 @@ export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
   return `${i18nService.t('scheduledTasksFormDeliveryModeAnnounce')} · ${channelName}${toLabel}`;
 }
 
-export type PlanType = 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'advanced';
+export type PlanType = 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'cron' | 'advanced';
 
 export interface PlanInfo {
   planType: PlanType;
@@ -300,6 +329,8 @@ export interface PlanInfo {
   year: number;
   month: number;
   day: number;
+  cronExpr?: string;
+  cronTz?: string;
 }
 
 const DEFAULT_PLAN_INFO: PlanInfo = {
@@ -388,7 +419,7 @@ export function scheduleToPlanInfo(schedule: Schedule): PlanInfo {
     return { ...base, planType: 'monthly', monthDay: dom.value };
   }
 
-  return { ...DEFAULT_PLAN_INFO, planType: 'advanced' };
+  return { ...DEFAULT_PLAN_INFO, planType: 'cron', cronExpr: schedule.expr, cronTz: schedule.tz };
 }
 
 export function getTaskPromptText(task: ScheduledTask): string {

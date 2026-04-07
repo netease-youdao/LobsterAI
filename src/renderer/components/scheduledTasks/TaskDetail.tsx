@@ -1,11 +1,14 @@
+import { PlayIcon } from '@heroicons/react/24/outline';
 import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { PlayIcon } from '@heroicons/react/24/outline';
+
+import type { ScheduledTask } from '../../../scheduledTask/types';
+import { i18nService } from '../../services/i18n';
+import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import { setViewMode } from '../../store/slices/scheduledTaskSlice';
-import { scheduledTaskService } from '../../services/scheduledTask';
-import { i18nService } from '../../services/i18n';
-import type { ScheduledTask } from '../../../scheduledTask/types';
+import PencilIcon from '../icons/PencilIcon';
+import TrashIcon from '../icons/TrashIcon';
 import TaskRunHistory from './TaskRunHistory';
 import {
   formatDateTime,
@@ -15,8 +18,6 @@ import {
   getStatusLabelKey,
   getStatusTone,
 } from './utils';
-import PencilIcon from '../icons/PencilIcon';
-import TrashIcon from '../icons/TrashIcon';
 
 interface TaskDetailProps {
   task: ScheduledTask;
@@ -26,6 +27,11 @@ interface TaskDetailProps {
 const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const dispatch = useDispatch();
   const runs = useSelector((state: RootState) => state.scheduledTask.runs[task.id] ?? []);
+  const agentName = useSelector((state: RootState) => {
+    if (!task.agentId) return null;
+    const agent = state.agent.agents.find((a) => a.id === task.agentId);
+    return agent?.name ?? task.agentId;
+  });
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
 
   useEffect(() => {
@@ -108,6 +114,12 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             <div className={labelClass}>{i18nService.t('scheduledTasksDetailNotify')}</div>
             <div className={valueClass}>{formatDeliveryLabel(task.delivery)}</div>
           </div>
+          {agentName && (
+            <div>
+              <div className={labelClass}>{i18nService.t('scheduledTasksDetailAgent' as Parameters<typeof i18nService.t>[0])}</div>
+              <div className={valueClass}>{agentName}</div>
+            </div>
+          )}
           {taskModelLabel && (
             <div>
               <div className={labelClass}>{i18nService.t('scheduledTasksDetailModel')}</div>
