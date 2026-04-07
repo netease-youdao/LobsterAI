@@ -85,6 +85,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { hasOpenClawRuntimeAppConfigChanges } from './libs/openclawRuntimeConfigChange';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -1732,12 +1733,14 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('store:set', async (_event, key, value) => {
+    const previousValue = key === 'app_config' ? getStore().get(key) : undefined;
     getStore().set(key, value);
     if (key === 'app_config') {
       refreshEndpointsTestMode(getStore());
+      const restartGatewayIfRunning = hasOpenClawRuntimeAppConfigChanges(previousValue, value);
       const syncResult = await syncOpenClawConfig({
         reason: 'app-config-change',
-        restartGatewayIfRunning: false,
+        restartGatewayIfRunning,
       });
       if (!syncResult.success) {
         console.error('[OpenClaw] Failed to sync config after app_config update:', syncResult.error);

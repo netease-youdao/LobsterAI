@@ -1553,89 +1553,104 @@ export class OpenClawConfigSync {
     const shouldMigrateManagedModelRefs = !(
       selection.providerId === 'lobster' && selection.sessionModelId === selection.legacyModelId
     );
+    let changedAnyStore = false;
 
-    const sessionStorePath = path.join(
-      this.engineManager.getStateDir(),
-      'agents',
-      'main',
-      'sessions',
-      'sessions.json',
-    );
+    for (const sessionStorePath of this.collectManagedSessionStorePaths()) {
+      let storeContent = '';
+      try {
+        storeContent = fs.readFileSync(sessionStorePath, 'utf8');
+      } catch {
+        continue;
+      }
 
-    let storeContent = '';
+      let sessionStore: Record<string, unknown>;
+      try {
+        sessionStore = JSON.parse(storeContent) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      let changed = false;
+      for (const [sessionKey, rawEntry] of Object.entries(sessionStore)) {
+        if (!rawEntry || typeof rawEntry !== 'object') {
+          continue;
+        }
+
+        const entry = rawEntry as Record<string, unknown>;
+        if (parseChannelSessionKey(sessionKey) !== null) {
+          // Channel (IM) sessions: set execSecurity to 'full' as a safety net
+          // so the gateway skips any approval flow for IM commands.
+          const execSecurity = typeof entry.execSecurity === 'string' ? entry.execSecurity.trim() : '';
+          if (execSecurity !== 'full') {
+            entry.execSecurity = 'full';
+            changed = true;
+          }
+          if (sessionSnapshotContainsDisabledManagedSkill(entry)) {
+            delete entry.skillsSnapshot;
+            changed = true;
+          }
+        }
+
+        if (!shouldMigrateManagedModelRefs || !(/^agent:[^:]+:lobsterai:/.test(sessionKey))) {
+          continue;
+        }
+
+        const entryProvider = typeof entry.modelProvider === 'string' ? entry.modelProvider.trim() : '';
+        const entryModel = typeof entry.model === 'string' ? entry.model.trim() : '';
+        if (entryProvider !== 'lobster' || entryModel !== selection.legacyModelId) {
+          continue;
+        }
+
+        entry.modelProvider = selection.providerId;
+        entry.model = selection.sessionModelId;
+        const systemPromptReport = entry.systemPromptReport;
+        if (systemPromptReport && typeof systemPromptReport === 'object') {
+          const report = systemPromptReport as Record<string, unknown>;
+          if (typeof report.provider === 'string' && report.provider.trim() === 'lobster') {
+            report.provider = selection.providerId;
+          }
+          if (typeof report.model === 'string' && report.model.trim() === selection.legacyModelId) {
+            report.model = selection.sessionModelId;
+          }
+        }
+        changed = true;
+      }
+
+      if (!changed) {
+        continue;
+      }
+
+      try {
+        this.atomicWriteFile(sessionStorePath, `${JSON.stringify(sessionStore, null, 2)}\n`);
+        changedAnyStore = true;
+      } catch (error) {
+        console.warn(
+          '[OpenClawConfigSync] Failed to update managed session store:',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+
+    return changedAnyStore;
+  }
+
+  private collectManagedSessionStorePaths(): string[] {
+    const agentsDir = path.join(this.engineManager.getStateDir(), 'agents');
+    const discovered = new Set<string>([
+      path.join(agentsDir, 'main', 'sessions', 'sessions.json'),
+    ]);
+
     try {
-      storeContent = fs.readFileSync(sessionStorePath, 'utf8');
+      const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        discovered.add(path.join(agentsDir, entry.name, 'sessions', 'sessions.json'));
+      }
     } catch {
-      return false;
+      // Fresh installs may not have any agent session stores yet.
     }
 
-    let sessionStore: Record<string, unknown>;
-    try {
-      sessionStore = JSON.parse(storeContent) as Record<string, unknown>;
-    } catch {
-      return false;
-    }
-
-    let changed = false;
-    for (const [sessionKey, rawEntry] of Object.entries(sessionStore)) {
-      if (!rawEntry || typeof rawEntry !== 'object') {
-        continue;
-      }
-
-      const entry = rawEntry as Record<string, unknown>;
-      if (parseChannelSessionKey(sessionKey) !== null) {
-        // Channel (IM) sessions: set execSecurity to 'full' as a safety net
-        // so the gateway skips any approval flow for IM commands.
-        const execSecurity = typeof entry.execSecurity === 'string' ? entry.execSecurity.trim() : '';
-        if (execSecurity !== 'full') {
-          entry.execSecurity = 'full';
-          changed = true;
-        }
-        if (sessionSnapshotContainsDisabledManagedSkill(entry)) {
-          delete entry.skillsSnapshot;
-          changed = true;
-        }
-      }
-
-      if (!shouldMigrateManagedModelRefs || !(/^agent:[^:]+:lobsterai:/.test(sessionKey))) {
-        continue;
-      }
-
-      const entryProvider = typeof entry.modelProvider === 'string' ? entry.modelProvider.trim() : '';
-      const entryModel = typeof entry.model === 'string' ? entry.model.trim() : '';
-      if (entryProvider !== 'lobster' || entryModel !== selection.legacyModelId) {
-        continue;
-      }
-
-      entry.modelProvider = selection.providerId;
-      entry.model = selection.sessionModelId;
-      const systemPromptReport = entry.systemPromptReport;
-      if (systemPromptReport && typeof systemPromptReport === 'object') {
-        const report = systemPromptReport as Record<string, unknown>;
-        if (typeof report.provider === 'string' && report.provider.trim() === 'lobster') {
-          report.provider = selection.providerId;
-        }
-        if (typeof report.model === 'string' && report.model.trim() === selection.legacyModelId) {
-          report.model = selection.sessionModelId;
-        }
-      }
-      changed = true;
-    }
-
-    if (!changed) {
-      return false;
-    }
-
-    try {
-      this.atomicWriteFile(sessionStorePath, `${JSON.stringify(sessionStore, null, 2)}\n`);
-      return true;
-    } catch (error) {
-      console.warn(
-        '[OpenClawConfigSync] Failed to update managed session store:',
-        error instanceof Error ? error.message : String(error),
-      );
-      return false;
-    }
+    return Array.from(discovered);
   }
 
   /**
@@ -1783,6 +1798,11 @@ export class OpenClawConfigSync {
     for (const agent of agents) {
       if (agent.id === 'main' || !agent.enabled) continue;
 
+      const modelSelection = this.resolveAgentModelSelection(agent.model);
+      if (agent.model.trim() && !modelSelection) {
+        console.warn(`[OpenClawConfigSync] agent ${agent.id} has unresolved model "${agent.model.trim()}", falling back to defaults`);
+      }
+
       list.push({
         id: agent.id,
         // Omit `workspace` — OpenClaw defaults to {STATE_DIR}/workspace-{agentId}/
@@ -1796,10 +1816,51 @@ export class OpenClawConfigSync {
         // Per-agent skill whitelist: only when skillIds is non-empty.
         // OpenClaw's resolveAgentSkillsFilter() uses this to filter available skills.
         ...(agent.skillIds && agent.skillIds.length > 0 ? { skills: agent.skillIds } : {}),
+        ...(modelSelection ? {
+          model: {
+            primary: modelSelection.primaryModel,
+          },
+        } : {}),
       });
     }
 
     return list.length > 0 ? { list } : {};
+  }
+
+  private resolveAgentModelSelection(modelId: string): OpenClawProviderSelection | null {
+    const trimmedModelId = modelId.trim();
+    if (!trimmedModelId) return null;
+
+    const currentResolution = resolveRawApiConfig();
+    if (currentResolution.config?.model.trim() === trimmedModelId) {
+      return buildProviderSelection({
+        apiKey: currentResolution.config.apiKey,
+        baseURL: currentResolution.config.baseURL,
+        modelId: trimmedModelId,
+        apiType: currentResolution.config.apiType,
+        providerName: currentResolution.providerMetadata?.providerName,
+        codingPlanEnabled: currentResolution.providerMetadata?.codingPlanEnabled,
+        supportsImage: currentResolution.providerMetadata?.supportsImage,
+        modelName: currentResolution.providerMetadata?.modelName,
+      });
+    }
+
+    for (const providerConfig of resolveAllEnabledProviderConfigs()) {
+      const matchedModel = providerConfig.models.find((candidate) => candidate.id.trim() === trimmedModelId);
+      if (!matchedModel) continue;
+      return buildProviderSelection({
+        apiKey: providerConfig.apiKey,
+        baseURL: providerConfig.baseURL,
+        modelId: trimmedModelId,
+        apiType: providerConfig.apiType,
+        providerName: providerConfig.providerName,
+        codingPlanEnabled: providerConfig.codingPlanEnabled,
+        supportsImage: matchedModel.supportsImage,
+        modelName: matchedModel.name,
+      });
+    }
+
+    return null;
   }
 
   /**
