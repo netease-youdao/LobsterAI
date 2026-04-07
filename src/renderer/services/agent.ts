@@ -89,6 +89,16 @@ class AgentService {
             skillIds: agent.skillIds ?? [],
           },
         }));
+        // Sync activeSkillIds for the current agent so changes take effect immediately
+        // without requiring the user to switch away and back
+        const currentAgentId = store.getState().agent.currentAgentId;
+        if (agent.id === currentAgentId) {
+          if (agent.skillIds?.length) {
+            store.dispatch(setActiveSkillIds(agent.skillIds));
+          } else {
+            store.dispatch(clearActiveSkills());
+          }
+        }
         return agent;
       }
       return null;
