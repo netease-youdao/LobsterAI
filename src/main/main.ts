@@ -2750,6 +2750,24 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:setTags', async (_event, options: { sessionId: string; tags: string[] }) => {
+    try {
+      getCoworkStore().setSessionTags(options.sessionId, options.tags);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set session tags' };
+    }
+  });
+
+  ipcMain.handle('cowork:session:allTags', async () => {
+    try {
+      const tags = getCoworkStore().getAllTags();
+      return { success: true, tags };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get all tags' };
+    }
+  });
+
   // ========== Agent IPC Handlers ==========
 
   ipcMain.handle('agents:list', async () => {

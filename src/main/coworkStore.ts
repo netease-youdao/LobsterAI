@@ -719,6 +719,7 @@ export class CoworkStore {
       title: string;
       status: string;
       pinned: number | null;
+      tags: string | null;
       agent_id: string | null;
       created_at: number;
       updated_at: number;
@@ -728,7 +729,7 @@ export class CoworkStore {
     if (agentId) {
       rows = this.getAll<SessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, agent_id, created_at, updated_at
+        SELECT id, title, status, pinned, tags, agent_id, created_at, updated_at
         FROM cowork_sessions
         WHERE agent_id = ?
         ORDER BY pinned DESC, updated_at DESC
@@ -737,21 +738,49 @@ export class CoworkStore {
       );
     } else {
       rows = this.getAll<SessionSummaryRow>(`
-        SELECT id, title, status, pinned, agent_id, created_at, updated_at
+        SELECT id, title, status, pinned, tags, agent_id, created_at, updated_at
         FROM cowork_sessions
         ORDER BY pinned DESC, updated_at DESC
       `);
     }
 
-    return rows.map(row => ({
-      id: row.id,
-      title: row.title,
-      status: row.status as CoworkSessionStatus,
-      pinned: Boolean(row.pinned),
-      agentId: row.agent_id || 'main',
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return rows.map(row => {
+      let parsedTags: string[] = [];
+      if (row.tags) {
+        try { parsedTags = JSON.parse(row.tags); } catch { /* ignore */ }
+      }
+      return {
+        id: row.id,
+        title: row.title,
+        status: row.status as CoworkSessionStatus,
+        pinned: Boolean(row.pinned),
+        tags: parsedTags,
+        agentId: row.agent_id || 'main',
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
+  }
+
+  setSessionTags(id: string, tags: string[]): void {
+    const uniqueTags = [...new Set(tags.map(t => t.trim()).filter(Boolean))];
+    this.db.prepare('UPDATE cowork_sessions SET tags = ? WHERE id = ?')
+      .run(uniqueTags.length > 0 ? JSON.stringify(uniqueTags) : null, id);
+  }
+
+  getAllTags(): string[] {
+    const rows = this.getAll<{ tags: string | null }>(
+      'SELECT DISTINCT tags FROM cowork_sessions WHERE tags IS NOT NULL'
+    );
+    const tagSet = new Set<string>();
+    for (const row of rows) {
+      if (!row.tags) continue;
+      try {
+        const parsed = JSON.parse(row.tags) as string[];
+        for (const t of parsed) tagSet.add(t);
+      } catch { /* ignore */ }
+    }
+    return [...tagSet].sort();
   }
 
   resetRunningSessions(): number {

@@ -218,7 +218,7 @@ export class SqliteStore {
       // Column might not exist yet.
     }
 
-    // Migration: Add agent_id column to cowork_sessions
+    // Migration: Add agent_id and tags columns to cowork_sessions
     try {
       const sessionCols = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
       const sessionColNames = sessionCols.map(c => c.name);
@@ -226,6 +226,9 @@ export class SqliteStore {
         this.db.exec(
           "ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'main';",
         );
+      }
+      if (!sessionColNames.includes('tags')) {
+        this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN tags TEXT;');
       }
     } catch {
       // Column already exists or migration not needed.

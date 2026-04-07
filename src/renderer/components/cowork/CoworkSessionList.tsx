@@ -13,10 +13,12 @@ interface CoworkSessionListProps {
   isBatchMode: boolean;
   selectedIds: Set<string>;
   showBatchOption?: boolean;
+  allTags?: string[];
   onSelectSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onTogglePin: (sessionId: string, pinned: boolean) => void;
   onRenameSession: (sessionId: string, title: string) => void;
+  onSetTags: (sessionId: string, tags: string[]) => void;
   onToggleSelection: (sessionId: string) => void;
   onEnterBatchMode: (sessionId: string) => void;
 }
@@ -28,10 +30,12 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
   isBatchMode,
   selectedIds,
   showBatchOption = true,
+  allTags = [],
   onSelectSession,
   onDeleteSession,
   onTogglePin,
   onRenameSession,
+  onSetTags,
   onToggleSelection,
   onEnterBatchMode,
 }) => {
@@ -90,10 +94,12 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           isBatchMode={isBatchMode}
           isSelected={selectedIds.has(session.id)}
           showBatchOption={showBatchOption}
+          allTags={allTags}
           onSelect={() => onSelectSession(session.id)}
           onDelete={() => onDeleteSession(session.id)}
           onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
           onRename={(title) => onRenameSession(session.id, title)}
+          onSetTags={(tags) => onSetTags(session.id, tags)}
           onToggleSelection={() => onToggleSelection(session.id)}
           onEnterBatchMode={() => onEnterBatchMode(session.id)}
         />

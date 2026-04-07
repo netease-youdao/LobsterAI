@@ -195,6 +195,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:pin', options),
     renameSession: (options: { sessionId: string; title: string }) =>
       ipcRenderer.invoke('cowork:session:rename', options),
+    setSessionTags: (options: { sessionId: string; tags: string[] }) =>
+      ipcRenderer.invoke('cowork:session:setTags', options),
+    getAllTags: () =>
+      ipcRenderer.invoke('cowork:session:allTags'),
     getSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:get', sessionId),
     remoteManaged: (sessionId: string) =>

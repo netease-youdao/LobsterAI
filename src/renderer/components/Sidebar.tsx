@@ -50,13 +50,19 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const sessions = useSelector((state: RootState) => state.cowork.sessions);
-  const filteredSessions = sessions.filter((s) => !s.agentId || s.agentId === currentAgentId);
+  const filteredSessions = sessions.filter((s) => {
+    if (s.agentId && s.agentId !== currentAgentId) return false;
+    if (filterTag && !(s.tags ?? []).includes(filterTag)) return false;
+    return true;
+  });
   const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [allTags, setAllTags] = useState<string[]>([]);
+  const [filterTag, setFilterTag] = useState<string | null>(null);
   const isMac = window.electron.platform === 'darwin';
 
   useEffect(() => {
@@ -94,6 +100,18 @@ const Sidebar: React.FC<SidebarProps> = ({
   const handleRenameSession = async (sessionId: string, title: string) => {
     await coworkService.renameSession(sessionId, title);
   };
+
+  const handleSetTags = async (sessionId: string, tags: string[]) => {
+    await coworkService.setSessionTags(sessionId, tags);
+    // Refresh the global tag list
+    const tags2 = await coworkService.getAllTags();
+    setAllTags(tags2);
+  };
+
+  // Load all tags on mount and when sessions change
+  useEffect(() => {
+    coworkService.getAllTags().then(setAllTags);
+  }, [sessions]);
 
   const handleEnterBatchMode = useCallback((sessionId: string) => {
     setIsBatchMode(true);
@@ -253,16 +271,49 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div className="px-3 pb-2 text-sm font-medium text-secondary">
           {i18nService.t('coworkHistory')}
         </div>
+        {/* Tag filter bar */}
+        {allTags.length > 0 && (
+          <div className="px-3 pb-2 flex flex-wrap gap-1">
+            <button
+              type="button"
+              onClick={() => setFilterTag(null)}
+              className={`px-1.5 py-0.5 text-[10px] rounded-md transition-colors ${
+                filterTag === null
+                  ? 'bg-primary text-white'
+                  : 'bg-surface-raised text-secondary hover:text-foreground'
+              }`}
+            >
+              {i18nService.t('coworkTagFilterAll')}
+            </button>
+            {allTags.map(tag => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => setFilterTag(filterTag === tag ? null : tag)}
+                className={`px-1.5 py-0.5 text-[10px] rounded-md transition-colors truncate max-w-[70px] ${
+                  filterTag === tag
+                    ? 'bg-primary text-white'
+                    : 'bg-surface-raised text-secondary hover:text-foreground'
+                }`}
+                title={tag}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
         <CoworkSessionList
           sessions={filteredSessions}
           isLoading={sessionsLoading}
           currentSessionId={currentSessionId}
           isBatchMode={isBatchMode}
           selectedIds={selectedIds}
+          allTags={allTags}
           onSelectSession={handleSelectSession}
           onDeleteSession={handleDeleteSession}
           onTogglePin={handleTogglePin}
           onRenameSession={handleRenameSession}
+          onSetTags={handleSetTags}
           onToggleSelection={handleToggleSelection}
           onEnterBatchMode={handleEnterBatchMode}
         />
@@ -276,6 +327,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onDeleteSession={handleDeleteSession}
         onTogglePin={handleTogglePin}
         onRenameSession={handleRenameSession}
+        onSetTags={handleSetTags}
       />
       {isBatchMode ? (
         <div className="px-3 pb-3 pt-1 flex items-center justify-between">
