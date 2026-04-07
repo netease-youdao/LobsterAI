@@ -76,6 +76,11 @@ import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
 import { resolveEnterpriseConfigPath, syncEnterpriseConfig, mergeEnterpriseOpenclawConfig } from './libs/enterpriseConfigSync';
 import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
+import {
+  logApiProxyRequestDebug,
+  logApiProxyResponseDebug,
+  sanitizeUrlForApiProxyLog,
+} from './libs/apiProxyLog';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
@@ -4085,7 +4090,7 @@ if (!gotTheLock) {
     headers: Record<string, string>;
     body?: string;
   }) => {
-    console.log(`[api:fetch] ${options.method} ${options.url}, headers: ${JSON.stringify(options.headers)}, body: ${options.body}`);
+    logApiProxyRequestDebug(options.method, options.url, options.headers, options.body);
 
     const doFetch = async (headers: Record<string, string>) => {
       const response = await session.defaultSession.fetch(options.url, {
@@ -4116,21 +4121,42 @@ if (!gotTheLock) {
 
     try {
       let result = await doFetch(options.headers);
-      console.log(`[api:fetch] ${options.method} ${options.url} -> ${result.status} ${result.statusText}`, typeof result.data === 'object' ? JSON.stringify(result.data) : result.data);
+      logApiProxyResponseDebug(
+        options.method,
+        options.url,
+        result.status,
+        result.statusText,
+        result.data,
+      );
+      console.log(
+        `[ApiProxy] Finished ${options.method} request to ${sanitizeUrlForApiProxyLog(options.url)} with HTTP status ${result.status}`,
+      );
 
       // Auto-retry once for Copilot 401/403
       if (!result.ok && (result.status === 401 || result.status === 403) && isCopilotUrl(options.url)) {
-        console.log('[api:fetch] Copilot auth error, attempting token refresh and retry');
+        console.log('[ApiProxy] Copilot rejected credentials; refreshing token and retrying');
         const { headers: refreshedHeaders, retried } = await retryCopilotWithRefreshedToken(options);
         if (retried) {
           result = await doFetch(refreshedHeaders);
-          console.log(`[api:fetch] retry -> ${result.status} ${result.statusText}`);
+          logApiProxyResponseDebug(
+            options.method,
+            options.url,
+            result.status,
+            result.statusText,
+            result.data,
+          );
+          console.log(
+            `[ApiProxy] After token refresh, finished ${options.method} request to ${sanitizeUrlForApiProxyLog(options.url)} with HTTP status ${result.status}`,
+          );
         }
       }
 
       return result;
     } catch (error) {
-      console.error(`[api:fetch] ${options.method} ${options.url} -> ERROR:`, error instanceof Error ? error.message : error);
+      console.error(
+        `[ApiProxy] Outbound request failed for ${sanitizeUrlForApiProxyLog(options.url)}:`,
+        error,
+      );
       return {
         ok: false,
         status: 0,
@@ -4165,7 +4191,7 @@ if (!gotTheLock) {
 
       // Auto-retry once for Copilot 401/403
       if (!response.ok && (response.status === 401 || response.status === 403) && isCopilotUrl(options.url)) {
-        console.log('[api:stream] Copilot auth error, attempting token refresh and retry');
+        console.log('[ApiProxy] Copilot rejected streaming credentials; refreshing token and retrying');
         const { headers: refreshedHeaders, retried } = await retryCopilotWithRefreshedToken(options);
         if (retried) {
           response = await session.defaultSession.fetch(options.url, {
@@ -4174,7 +4200,9 @@ if (!gotTheLock) {
             body: options.body,
             signal: controller.signal,
           });
-          console.log(`[api:stream] retry -> ${response.status} ${response.statusText}`);
+          console.log(
+            `[ApiProxy] After token refresh, streaming ${options.method} request to ${sanitizeUrlForApiProxyLog(options.url)} returned HTTP ${response.status}`,
+          );
         }
       }
 
