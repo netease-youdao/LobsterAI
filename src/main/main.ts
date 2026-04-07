@@ -563,7 +563,6 @@ let skillManager: SkillManager | null = null;
 let mcpStore: McpStore | null = null;
 let mcpServerManager: McpServerManager | null = null;
 let mcpBridgeServer: McpBridgeServer | null = null;
-let mcpBridgeSecret: string | null = null;
 let mcpBridgeStartPromise: Promise<McpBridgeConfig | null> | null = null;
 let imGatewayManager: IMGatewayManager | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
@@ -660,7 +659,7 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
         return null as McpBridgeConfig | null;
       });
       console.log(`[OpenClaw] bootstrap: MCP bridge setup done (${elapsed()}), result=${bridgeResult ? `${bridgeResult.tools.length} tools` : 'null'}`);
-      console.log(`[OpenClaw] bootstrap: mcpBridgeServer=${mcpBridgeServer?.callbackUrl || 'null'}, mcpServerManager.tools=${mcpServerManager?.toolManifest?.length ?? 'null'}, secret=${mcpBridgeSecret ? 'set' : 'null'}`);
+      console.log(`[OpenClaw] bootstrap: mcpBridgeServer=${mcpBridgeServer?.callbackUrl || 'null'}, mcpServerManager.tools=${mcpServerManager?.toolManifest?.length ?? 'null'}`);
 
       // Ensure IDENTITY.md has default content in the current workspace
       try {
@@ -857,13 +856,12 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
         }
       },
       getMcpBridgeConfig: (): McpBridgeConfig | null => {
-        if (!mcpBridgeServer?.callbackUrl || !mcpBridgeServer?.askUserCallbackUrl || !mcpBridgeSecret) {
+        if (!mcpBridgeServer?.callbackUrl || !mcpBridgeServer?.askUserCallbackUrl) {
           return null;
         }
         return {
           callbackUrl: mcpBridgeServer.callbackUrl,
           askUserCallbackUrl: mcpBridgeServer.askUserCallbackUrl,
-          secret: mcpBridgeSecret,
           tools: mcpServerManager?.toolManifest ?? [],
         };
       },
@@ -1179,12 +1177,6 @@ const startMcpBridge = (): Promise<McpBridgeConfig | null> => {
   try {
     console.log('[McpBridge] startMcpBridge called');
 
-    // Generate a per-session secret for bridge auth
-    if (!mcpBridgeSecret) {
-      const crypto = await import('crypto');
-      mcpBridgeSecret = crypto.randomUUID();
-    }
-
     // Discover MCP tools (may be empty if no servers configured)
     const enabledServers = getMcpStore().getEnabledServers();
     console.log(`[McpBridge] enabledServers: ${enabledServers.length} (${enabledServers.map(s => s.name).join(', ')})`);
@@ -1204,7 +1196,7 @@ const startMcpBridge = (): Promise<McpBridgeConfig | null> => {
       mcpServerManager = new McpServerManager();
     }
     if (!mcpBridgeServer) {
-      mcpBridgeServer = new McpBridgeServer(mcpServerManager, mcpBridgeSecret);
+      mcpBridgeServer = new McpBridgeServer(mcpServerManager);
     }
     if (!mcpBridgeServer.port) {
       console.log('[McpBridge] starting HTTP callback server...');
@@ -1254,7 +1246,7 @@ const startMcpBridge = (): Promise<McpBridgeConfig | null> => {
     }
 
     console.log(`[McpBridge] started: ${tools.length} MCP tools, callback=${callbackUrl}`);
-    return { callbackUrl, askUserCallbackUrl, secret: mcpBridgeSecret, tools };
+    return { callbackUrl, askUserCallbackUrl, tools };
   } catch (error) {
     console.error('[McpBridge] startup error:', error instanceof Error ? error.stack || error.message : String(error));
     return null;

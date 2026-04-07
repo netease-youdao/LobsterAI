@@ -46,14 +46,12 @@ export class McpBridgeServer {
   private server: http.Server | null = null;
   private _port: number | null = null;
   private readonly mcpManager: McpServerManager;
-  private readonly secret: string;
   private readonly pendingAskUser = new Map<string, PendingAskUser>();
   private onAskUserCallback: ((request: AskUserRequest) => void) | null = null;
   private onAskUserDismissCallback: ((requestId: string) => void) | null = null;
 
-  constructor(mcpManager: McpServerManager, secret: string) {
+  constructor(mcpManager: McpServerManager) {
     this.mcpManager = mcpManager;
-    this.secret = secret;
   }
 
   get port(): number | null {
@@ -148,14 +146,6 @@ export class McpBridgeServer {
     if (req.method !== 'POST') {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
-      return;
-    }
-
-    // Verify secret token (accept either header name)
-    const authHeader = req.headers['x-mcp-bridge-secret'] || req.headers['x-ask-user-secret'];
-    if (authHeader !== this.secret) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
     }
 
