@@ -2309,6 +2309,31 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('openclaw:engine:cancelStartup', async () => {
+    try {
+      const manager = getOpenClawEngineManager();
+      const status = await manager.cancelStartup();
+      return { success: true, status };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to cancel startup',
+      };
+    }
+  });
+
+  ipcMain.handle('openclaw:engine:getGatewayLogPath', () => {
+    try {
+      const manager = getOpenClawEngineManager();
+      return { success: true, path: manager.getGatewayLogPath() };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get log path',
+      };
+    }
+  });
+
   let restartGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   ipcMain.handle('openclaw:engine:restartGateway', async () => {
     if (restartGatewayPromise) {

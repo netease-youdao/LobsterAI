@@ -142,6 +142,8 @@ contextBridge.exposeInMainWorld('electron', {
       install: () => ipcRenderer.invoke('openclaw:engine:install'),
       retryInstall: () => ipcRenderer.invoke('openclaw:engine:retryInstall'),
       restartGateway: () => ipcRenderer.invoke('openclaw:engine:restartGateway'),
+      cancelStartup: () => ipcRenderer.invoke('openclaw:engine:cancelStartup'),
+      getGatewayLogPath: () => ipcRenderer.invoke('openclaw:engine:getGatewayLogPath'),
       onProgress: (callback: (status: any) => void) => {
         const handler = (_event: any, status: any) => callback(status);
         ipcRenderer.on('openclaw:engine:onProgress', handler);

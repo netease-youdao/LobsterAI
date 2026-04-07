@@ -557,6 +557,27 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
+  /**
+   * Cancel an in-progress startup. Sets shutdownRequested so the health-check
+   * polling loop aborts, then kills the gateway process and transitions to
+   * the 'ready' state so the user can retry later.
+   */
+  async cancelStartup(): Promise<OpenClawEngineStatus> {
+    if (this.status.phase !== 'starting') {
+      console.log('[OpenClaw] cancelStartup: not in starting phase, ignoring');
+      return this.getStatus();
+    }
+    console.log('[OpenClaw] cancelStartup: user requested startup cancellation');
+    await this.stopGateway();
+    // stopGateway sets shutdownRequested=true; reset it so future starts work.
+    this.shutdownRequested = false;
+    return this.getStatus();
+  }
+
+  getGatewayLogPath(): string {
+    return this.gatewayLogPath;
+  }
+
   async restartGateway(): Promise<OpenClawEngineStatus> {
     console.log('[OpenClaw] restartGateway: stopping existing gateway...');
     await this.stopGateway();

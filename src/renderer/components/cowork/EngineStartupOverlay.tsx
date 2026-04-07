@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 import type { OpenClawEngineStatus } from '../../types/cowork';
+
+/** Delay (ms) before showing cancel/view-logs buttons during startup. */
+const SHOW_ACTIONS_DELAY_MS = 30_000;
 
 const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
   switch (status.phase) {
@@ -27,11 +30,18 @@ const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
 /**
  * Global overlay shown when the OpenClaw gateway is starting up.
  * Renders on top of all views (cowork, skills, scheduled tasks, mcp).
+ *
+ * After {@link SHOW_ACTIONS_DELAY_MS} in the `starting` phase, "Cancel Startup"
+ * and "View Logs" buttons appear so the user has an escape hatch if the
+ * gateway is taking unusually long.
  */
 const EngineStartupOverlay: React.FC = () => {
   const config = useSelector((state: RootState) => state.cowork.config);
   const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
   const [status, setStatus] = useState<OpenClawEngineStatus | null>(null);
+  const [showActions, setShowActions] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!isOpenClawEngine) return;
@@ -47,6 +57,28 @@ const EngineStartupOverlay: React.FC = () => {
     return unsubscribe;
   }, [isOpenClawEngine]);
 
+  // Start / reset the delayed-actions timer whenever the phase changes.
+  useEffect(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setShowActions(false);
+
+    if (status?.phase === 'starting') {
+      timerRef.current = setTimeout(() => {
+        setShowActions(true);
+      }, SHOW_ACTIONS_DELAY_MS);
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [status?.phase]);
+
   if (!isOpenClawEngine || !status || status.phase !== 'starting') {
     return null;
   }
@@ -54,6 +86,22 @@ const EngineStartupOverlay: React.FC = () => {
   const progressPercent = typeof status.progressPercent === 'number'
     ? Math.max(0, Math.min(100, Math.round(status.progressPercent)))
     : null;
+
+  const handleCancelStartup = async () => {
+    setIsCancelling(true);
+    try {
+      await coworkService.cancelOpenClawStartup();
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  const handleViewLogs = async () => {
+    const logPath = await coworkService.getOpenClawGatewayLogPath();
+    if (logPath) {
+      window.electron?.shell?.showItemInFolder?.(logPath);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm">
@@ -76,6 +124,25 @@ const EngineStartupOverlay: React.FC = () => {
               <div className="text-xs text-secondary">
                 {progressPercent}%
               </div>
+            </div>
+          )}
+          {showActions && (
+            <div className="flex items-center gap-3 mt-2">
+              <button
+                type="button"
+                disabled={isCancelling}
+                onClick={handleCancelStartup}
+                className="px-4 py-1.5 text-sm rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors disabled:opacity-50"
+              >
+                {i18nService.t('coworkOpenClawCancelStartup')}
+              </button>
+              <button
+                type="button"
+                onClick={handleViewLogs}
+                className="px-4 py-1.5 text-sm rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
+              >
+                {i18nService.t('coworkOpenClawViewLogs')}
+              </button>
             </div>
           )}
         </div>
