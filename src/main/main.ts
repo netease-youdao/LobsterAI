@@ -2750,6 +2750,35 @@ if (!gotTheLock) {
     }
   });
 
+  // ========== Bookmark IPC Handlers ==========
+
+  ipcMain.handle('cowork:bookmark:add', async (_event, options: { sessionId: string; messageId: string }) => {
+    try {
+      const result = getCoworkStore().addBookmark(options.sessionId, options.messageId);
+      return { success: true, bookmark: result };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to add bookmark' };
+    }
+  });
+
+  ipcMain.handle('cowork:bookmark:remove', async (_event, options: { sessionId: string; messageId: string }) => {
+    try {
+      getCoworkStore().removeBookmark(options.sessionId, options.messageId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to remove bookmark' };
+    }
+  });
+
+  ipcMain.handle('cowork:bookmark:list', async (_event, sessionId: string) => {
+    try {
+      const bookmarks = getCoworkStore().listBookmarks(sessionId);
+      return { success: true, bookmarks };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to list bookmarks' };
+    }
+  });
+
   // ========== Agent IPC Handlers ==========
 
   ipcMain.handle('agents:list', async () => {
