@@ -1,0 +1,13 @@
+diff --git a/src/infra/heartbeat-runner.ts b/src/infra/heartbeat-runner.ts
+index 2d0bee48f0..426036bd07 100644
+--- a/src/infra/heartbeat-runner.ts
++++ b/src/infra/heartbeat-runner.ts
+@@ -675,7 +675,7 @@ export async function runHeartbeatOnce(opts: {
+     canRelayToUser,
+   });
+   const ctx = {
+-    Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
++    Body: hasCronEvents ? prompt : appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
+     From: sender,
+     To: sender,
+     OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,

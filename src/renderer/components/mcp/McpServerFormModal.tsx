@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { i18nService } from '../../services/i18n';
 import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
+import Modal from '../common/Modal';
 
 interface McpServerFormModalProps {
   isOpen: boolean;
@@ -200,10 +201,10 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
 
   if (!isOpen) return null;
 
-  const inputClass = 'w-full px-3 py-2 text-sm rounded-xl dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-2 focus:ring-claude-accent';
+  const inputClass = 'w-full px-3 py-2 text-sm rounded-xl bg-background text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary';
   const readOnlyInputClass = inputClass + ' opacity-60 cursor-not-allowed';
-  const labelClass = 'text-xs font-semibold tracking-wide dark:text-claude-darkTextSecondary text-claude-textSecondary';
-  const kvInputClass = 'flex-1 px-2 py-1.5 text-sm rounded-lg dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-1 focus:ring-claude-accent';
+  const labelClass = 'text-xs font-semibold tracking-wide text-secondary';
+  const kvInputClass = 'flex-1 px-2 py-1.5 text-sm rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-1 focus:ring-primary';
 
   // Title
   const modalTitle = isEdit
@@ -218,16 +219,9 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     : i18nService.t('saveMcpServer');
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-lg mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-lg mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6 max-h-[80vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+          <div className="text-lg font-semibold text-foreground">
             {modalTitle}
           </div>
         </div>
@@ -314,7 +308,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                   <button
                     type="button"
                     onClick={handleAddEnvRow}
-                    className="text-xs text-claude-accent hover:text-claude-accent/80 transition-colors"
+                    className="text-xs text-primary hover:text-primary/80 transition-colors"
                   >
                     + {i18nService.t('addKeyValue')}
                   </button>
@@ -341,7 +335,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                       <button
                         type="button"
                         onClick={() => handleRemoveEnvRow(index)}
-                        className="p-1 text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
+                        className="p-1 text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
                           <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
@@ -377,7 +371,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                   <button
                     type="button"
                     onClick={handleAddHeaderRow}
-                    className="text-xs text-claude-accent hover:text-claude-accent/80 transition-colors"
+                    className="text-xs text-primary hover:text-primary/80 transition-colors"
                   >
                     + {i18nService.t('addKeyValue')}
                   </button>
@@ -401,7 +395,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleRemoveHeaderRow(index)}
-                      className="p-1 text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
+                      className="p-1 text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
                         <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
@@ -421,21 +415,20 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-1.5 text-xs rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+              className="px-3 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
             >
               {i18nService.t('cancel')}
             </button>
             <button
               type="button"
               onClick={handleSave}
-              className="px-3 py-1.5 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+              className="px-3 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
             >
               {saveText}
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

@@ -5,7 +5,7 @@ import {
   parseSimpleScheduledReminderText,
   parseLegacyScheduledReminderSystemMessage,
   parseScheduledReminderPrompt,
-} from '../../common/scheduledReminderText';
+} from '../../scheduledTask/reminderText';
 
 function pad(value: number): string {
   return String(value).padStart(2, '0');

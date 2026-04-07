@@ -147,6 +147,14 @@ class McpService {
       return { success: false, tools: 0, error: message };
     }
   }
+
+  onBridgeSyncStart(callback: () => void): () => void {
+    return window.electron.mcp.onBridgeSyncStart(callback);
+  }
+
+  onBridgeSyncDone(callback: (data: { tools: number; error?: string }) => void): () => void {
+    return window.electron.mcp.onBridgeSyncDone(callback);
+  }
 }
 
 export const mcpService = new McpService();

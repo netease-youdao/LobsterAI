@@ -9,20 +9,11 @@ import {
   getCoworkOpenAICompatProxyStatus,
 } from './coworkOpenAICompatProxy';
 import { normalizeProviderApiFormat, type AnthropicApiFormat } from './coworkFormatTransform';
-
-const ZHIPU_CODING_PLAN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4';
-// Qwen Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const QWEN_CODING_PLAN_OPENAI_BASE_URL = 'https://coding.dashscope.aliyuncs.com/v1';
-const QWEN_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://coding.dashscope.aliyuncs.com/apps/anthropic';
-// Volcengine Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
-const VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding';
-// Moonshot/Kimi Coding Plan 专属端点 (OpenAI 兼容和 Anthropic 兼容)
-const MOONSHOT_CODING_PLAN_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1';
-const MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL = 'https://api.kimi.com/coding';
+import { ProviderName, resolveCodingPlanBaseUrl } from '../../shared/providers';
 
 type ProviderModel = {
   id: string;
+  name?: string;
   supportsImage?: boolean;
 };
 
@@ -50,6 +41,7 @@ export type ApiConfigResolution = {
     providerName: string;
     codingPlanEnabled: boolean;
     supportsImage?: boolean;
+    modelName?: string;
   };
 };
 
@@ -58,6 +50,39 @@ let storeGetter: (() => SqliteStore | null) | null = null;
 
 export function setStoreGetter(getter: () => SqliteStore | null): void {
   storeGetter = getter;
+}
+
+// Auth token getter injected from main.ts for server model provider
+let authTokensGetter: (() => { accessToken: string; refreshToken: string } | null) | null = null;
+
+export function setAuthTokensGetter(getter: () => { accessToken: string; refreshToken: string } | null): void {
+  authTokensGetter = getter;
+}
+
+// Server base URL getter injected from main.ts
+let serverBaseUrlGetter: (() => string) | null = null;
+
+export function setServerBaseUrlGetter(getter: () => string): void {
+  serverBaseUrlGetter = getter;
+}
+
+// Cached server model metadata (populated when auth:getModels is called)
+// Keyed by modelId → { supportsImage }
+let serverModelMetadataCache: Map<string, { supportsImage?: boolean }> = new Map();
+
+export function updateServerModelMetadata(models: Array<{ modelId: string; supportsImage?: boolean }>): void {
+  serverModelMetadataCache = new Map(models.map(m => [m.modelId, { supportsImage: m.supportsImage }]));
+}
+
+export function clearServerModelMetadata(): void {
+  serverModelMetadataCache.clear();
+}
+
+export function getAllServerModelMetadata(): Array<{ modelId: string; supportsImage?: boolean }> {
+  return Array.from(serverModelMetadataCache.entries()).map(([modelId, meta]) => ({
+    modelId,
+    supportsImage: meta.supportsImage,
+  }));
 }
 
 const getStore = (): SqliteStore | null => {
@@ -94,20 +119,40 @@ type MatchedProvider = {
   apiFormat: AnthropicApiFormat;
   baseURL: string;
   supportsImage?: boolean;
+  modelName?: string;
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
-  if (providerName === 'openai' || providerName === 'gemini' || providerName === 'stepfun' || providerName === 'youdaozhiyun') {
+  if (providerName === ProviderName.OpenAI || providerName === ProviderName.Gemini || providerName === ProviderName.StepFun || providerName === ProviderName.Youdaozhiyun || providerName === ProviderName.Copilot) {
     return 'openai';
   }
-  if (providerName === 'anthropic') {
+  if (providerName === ProviderName.Anthropic) {
     return 'anthropic';
   }
   return normalizeProviderApiFormat(apiFormat);
 }
 
 function providerRequiresApiKey(providerName: string): boolean {
-  return providerName !== 'ollama';
+  return providerName !== ProviderName.Ollama;
+}
+
+function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
+  const tokens = authTokensGetter?.();
+  const serverBaseUrl = serverBaseUrlGetter?.();
+  if (!tokens?.accessToken || !serverBaseUrl) return null;
+  const effectiveModelId = modelId?.trim() || '';
+  if (!effectiveModelId) return null;
+  const baseURL = `${serverBaseUrl}/api/proxy/v1`;
+  const cachedMeta = serverModelMetadataCache.get(effectiveModelId);
+  console.log('[ClaudeSettings] lobsterai-server fallback activated:', { baseURL, modelId: effectiveModelId, supportsImage: cachedMeta?.supportsImage });
+  return {
+    providerName: ProviderName.LobsteraiServer,
+    providerConfig: { enabled: true, apiKey: tokens.accessToken, baseUrl: baseURL, apiFormat: 'openai', models: [{ id: effectiveModelId, supportsImage: cachedMeta?.supportsImage }] },
+    modelId: effectiveModelId,
+    apiFormat: 'openai',
+    baseURL,
+    supportsImage: cachedMeta?.supportsImage,
+  };
 }
 
 function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvider | null; error?: string } {
@@ -140,6 +185,8 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   if (!modelId) {
     const fallback = resolveFallbackModel();
     if (!fallback) {
+      const serverFallback = tryLobsteraiServerFallback(configuredModelId);
+      if (serverFallback) return { matched: serverFallback };
       return { matched: null, error: 'No available model configured in enabled providers.' };
     }
     modelId = fallback.modelId;
@@ -147,6 +194,15 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
 
   let providerEntry: [string, ProviderConfig] | undefined;
   const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
+
+  // Handle lobsterai-server provider: dynamically construct from auth tokens
+  if (preferredProviderName === ProviderName.LobsteraiServer) {
+    const serverMatch = tryLobsteraiServerFallback(modelId);
+    if (serverMatch) {
+      return { matched: serverMatch };
+    }
+  }
+
   if (preferredProviderName) {
     const preferredProvider = providers[preferredProviderName];
     if (
@@ -172,6 +228,8 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       modelId = fallback.modelId;
       providerEntry = [fallback.providerName, fallback.providerConfig];
     } else {
+      const serverFallback = tryLobsteraiServerFallback(modelId);
+      if (serverFallback) return { matched: serverFallback };
       return { matched: null, error: `No enabled provider found for model: ${modelId}` };
     }
   }
@@ -180,50 +238,24 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   let apiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
   let baseURL = providerConfig.baseUrl?.trim();
 
-  // Handle Zhipu GLM Coding Plan endpoint switch
-  if (providerName === 'zhipu' && providerConfig.codingPlanEnabled) {
-    baseURL = ZHIPU_CODING_PLAN_BASE_URL;
-    apiFormat = 'openai';
-  }
-
-  // Handle Qwen Coding Plan endpoint switch
-  // Coding Plan supports both OpenAI and Anthropic compatible formats
-  if (providerName === 'qwen' && providerConfig.codingPlanEnabled) {
-    if (apiFormat === 'anthropic') {
-      baseURL = QWEN_CODING_PLAN_ANTHROPIC_BASE_URL;
-    } else {
-      baseURL = QWEN_CODING_PLAN_OPENAI_BASE_URL;
-      apiFormat = 'openai';
-    }
-  }
-
-  // Handle Volcengine Coding Plan endpoint switch
-  // Coding Plan supports both OpenAI and Anthropic compatible formats
-  if (providerName === 'volcengine' && providerConfig.codingPlanEnabled) {
-    if (apiFormat === 'anthropic') {
-      baseURL = VOLCENGINE_CODING_PLAN_ANTHROPIC_BASE_URL;
-    } else {
-      baseURL = VOLCENGINE_CODING_PLAN_OPENAI_BASE_URL;
-      apiFormat = 'openai';
-    }
-  }
-
-  // Handle Moonshot/Kimi Coding Plan endpoint switch
-  // Coding Plan supports both OpenAI and Anthropic compatible formats
-  if (providerName === 'moonshot' && providerConfig.codingPlanEnabled) {
-    if (apiFormat === 'anthropic') {
-      baseURL = MOONSHOT_CODING_PLAN_ANTHROPIC_BASE_URL;
-    } else {
-      baseURL = MOONSHOT_CODING_PLAN_OPENAI_BASE_URL;
-      apiFormat = 'openai';
-    }
+  if (providerConfig.codingPlanEnabled) {
+    const resolved = resolveCodingPlanBaseUrl(providerName, true, apiFormat, baseURL ?? '');
+    baseURL = resolved.baseUrl;
+    apiFormat = resolved.effectiveFormat;
   }
 
   if (!baseURL) {
+    const serverFallback = tryLobsteraiServerFallback(modelId);
+    if (serverFallback) return { matched: serverFallback };
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
   }
 
-  if (apiFormat === 'anthropic' && providerRequiresApiKey(providerName) && !providerConfig.apiKey?.trim()) {
+   // Check for API key or OAuth credentials
+  const hasApiKey = providerConfig.apiKey?.trim();
+  const hasOAuthCreds = providerName === 'qwen' && (providerConfig as any).oauthCredentials;
+  if (apiFormat === 'anthropic' && providerRequiresApiKey(providerName) && !providerConfig.apiKey?.trim() && !hasApiKey && !hasOAuthCreds) {
+    const serverFallback = tryLobsteraiServerFallback(modelId);
+    if (serverFallback) return { matched: serverFallback };
     return { matched: null, error: `Provider ${providerName} requires API key for Anthropic-compatible mode.` };
   }
 
@@ -237,6 +269,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       apiFormat,
       baseURL,
       supportsImage: matchedModel?.supportsImage,
+      modelName: matchedModel?.name,
     },
   };
 }
@@ -267,7 +300,22 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
   }
 
   const resolvedBaseURL = matched.baseURL;
-  const resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
+  let resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
+  
+  // Handle Qwen OAuth credentials
+  if (matched.providerName === 'qwen' && !resolvedApiKey && (matched.providerConfig as any).oauthCredentials) {
+    const oauthCreds = (matched.providerConfig as any).oauthCredentials;
+    // Check if token is still valid (with 5 minute buffer)
+    const expiryBuffer = 5 * 60 * 1000;
+    if (Date.now() < (oauthCreds.expires - expiryBuffer)) {
+      resolvedApiKey = oauthCreds.access; // Use access token as API key
+    } else {
+      // Token expired, should refresh in background
+      console.warn('Qwen OAuth token expired, please refresh credentials');
+      resolvedApiKey = oauthCreds.access; // Still try to use it, server might refresh
+    }
+  }
+  
   // Providers that don't require auth (e.g. Ollama) still need a non-empty
   // placeholder so downstream components (OpenClaw gateway, compat proxy)
   // don't reject the request with "No API key found for provider".
@@ -349,7 +397,45 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   if (!matched) {
     return { config: null, error };
   }
-  const apiKey = matched.providerConfig.apiKey?.trim() || '';
+  let apiKey = matched.providerConfig.apiKey?.trim() || '';
+  let effectiveBaseURL = matched.baseURL;
+  let effectiveApiFormat = matched.apiFormat;
+  
+  // Handle Qwen OAuth credentials for OpenClaw gateway
+  if (matched.providerName === 'qwen' && !apiKey && (matched.providerConfig as any).oauthCredentials) {
+    const oauthCreds = (matched.providerConfig as any).oauthCredentials;
+    // Check if token is still valid (with 5 minute buffer)
+    const expiryBuffer = 5 * 60 * 1000;
+    if (Date.now() < (oauthCreds.expires - expiryBuffer)) {
+      apiKey = oauthCreds.access; // Use access token as API key
+      
+      // Use OAuth resourceUrl as baseURL if available
+      if (oauthCreds.resourceUrl) {
+        effectiveBaseURL = normalizeQwenBaseUrl(oauthCreds.resourceUrl);
+        effectiveApiFormat = 'openai'; // OAuth endpoints use OpenAI format
+        
+        // Map specific model IDs to OAuth endpoint model names
+        matched.modelId = mapQwenModelToOAuthModel(matched.modelId, matched.supportsImage);
+      }
+    } else {
+      // Token expired, should refresh in background
+      console.warn('Qwen OAuth token expired for OpenClaw gateway, please refresh credentials');
+      apiKey = oauthCreds.access; // Still try to use it, server might refresh
+      
+      if (oauthCreds.resourceUrl) {
+        effectiveBaseURL = normalizeQwenBaseUrl(oauthCreds.resourceUrl);
+        effectiveApiFormat = 'openai';
+        
+        // Map specific model IDs to OAuth endpoint model names
+        matched.modelId = mapQwenModelToOAuthModel(matched.modelId, matched.supportsImage);
+      }
+    }
+  }
+  
+  console.log('[ClaudeSettings] resolved raw API config:', JSON.stringify({
+    ...matched,
+    providerConfig: { ...matched.providerConfig, apiKey: apiKey ? '***' : '' },
+  }));
   // OpenClaw's gateway requires a non-empty apiKey for every provider — even
   // local servers (Ollama, vLLM, etc.) that don't enforce auth.  When the user
   // leaves the key blank we supply a placeholder so the gateway doesn't reject
@@ -359,17 +445,76 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   return {
     config: {
       apiKey: effectiveApiKey,
-      baseURL: matched.baseURL,
+      baseURL: effectiveBaseURL,
       model: matched.modelId,
-      apiType: matched.apiFormat === 'anthropic' ? 'anthropic' : 'openai',
+      apiType: effectiveApiFormat === 'anthropic' ? 'anthropic' : 'openai',
     },
     providerMetadata: {
       providerName: matched.providerName,
       codingPlanEnabled: !!matched.providerConfig.codingPlanEnabled,
       supportsImage: matched.supportsImage,
+      modelName: matched.modelName,
     },
   };
 }
+
+function normalizeQwenBaseUrl(value: string | undefined): string {
+  const DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
+  const raw = value?.trim() || DEFAULT_BASE_URL;
+  const withProtocol = raw.startsWith("http") ? raw : `https://${raw}`;
+  return withProtocol.endsWith("/v1") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/v1`;
+}
+
+/**
+ * Map LobsterAI model IDs to OAuth endpoint model names
+ * OAuth endpoint only supports 'coder-model' and 'vision-model'
+ */
+function mapQwenModelToOAuthModel(modelId: string, supportsImage?: boolean): string {
+  // If the model supports image input, use vision-model
+  if (supportsImage) {
+    return 'vision-model';
+  }
+  
+  // For all other models (including qwen3.5-plus, qwen3-coder-plus), use coder-model
+  return 'coder-model';
+}
+  /**
+   * Collect apiKeys for ALL configured providers (not just the currently selected one).
+   * Used by OpenClaw config sync to pre-register all apiKeys as env vars at gateway
+   * startup, so switching between providers doesn't require a process restart.
+   *
+   * Returns a map of env-var-safe provider name → apiKey.
+   */
+export function resolveAllProviderApiKeys(): Record<string, string> {
+  const result: Record<string, string> = {};
+
+  // lobsterai-server token is now managed by the token proxy
+  // (openclawTokenProxy.ts) — no longer injected as an env var.
+
+    // lobsterai-server: uses auth accessToken
+    const tokens = authTokensGetter?.();
+    const serverBaseUrl = serverBaseUrlGetter?.();
+    if (tokens?.accessToken && serverBaseUrl) {
+      result.SERVER = tokens.accessToken;
+    }
+
+    // All configured custom providers
+    const sqliteStore = getStore();
+    if (!sqliteStore) return result;
+    const appConfig = sqliteStore.get<AppConfig>('app_config');
+    if (!appConfig?.providers) return result;
+
+    for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
+      if (!providerConfig?.enabled) continue;
+      const apiKey = providerConfig.apiKey?.trim();
+      if (!apiKey && providerRequiresApiKey(providerName)) continue;
+      const envName = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      result[envName] = apiKey || 'sk-lobsterai-local';
+    }
+
+    return result;
+  }
+  
 
 export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {
   const baseEnv = { ...process.env } as Record<string, string>;
@@ -378,6 +523,70 @@ export function buildEnvForConfig(config: CoworkApiConfig): Record<string, strin
   baseEnv.ANTHROPIC_API_KEY = config.apiKey;
   baseEnv.ANTHROPIC_BASE_URL = config.baseURL;
   baseEnv.ANTHROPIC_MODEL = config.model;
-
   return baseEnv;
+}
+
+export type ProviderRawConfig = {
+  providerName: string;
+  baseURL: string;
+  apiKey: string;
+  apiType: 'anthropic' | 'openai';
+  codingPlanEnabled: boolean;
+  models: Array<{ id: string; name?: string; supportsImage?: boolean }>;
+};
+
+export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
+  const sqliteStore = getStore();
+  if (!sqliteStore) return [];
+  const appConfig = sqliteStore.get<AppConfig>('app_config');
+  if (!appConfig?.providers) return [];
+
+  const result: ProviderRawConfig[] = [];
+
+  for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
+    if (!providerConfig?.enabled) continue;
+    if (providerName === ProviderName.LobsteraiServer) continue;
+
+    const apiKey = providerConfig.apiKey?.trim() || '';
+    if (!apiKey && providerRequiresApiKey(providerName)) continue;
+
+    const baseURL = providerConfig.baseUrl?.trim() || '';
+
+    let effectiveBaseURL = baseURL;
+    let effectiveApiFormat = getEffectiveProviderApiFormat(providerName, providerConfig.apiFormat);
+
+    if (providerConfig.codingPlanEnabled) {
+      const resolved = resolveCodingPlanBaseUrl(providerName, true, effectiveApiFormat, effectiveBaseURL);
+      effectiveBaseURL = resolved.baseUrl;
+      effectiveApiFormat = resolved.effectiveFormat;
+    }
+
+    if (!effectiveBaseURL) continue;
+
+    const models = (providerConfig.models ?? []).filter((m) => m.id?.trim());
+    if (models.length === 0) continue;
+
+    result.push({
+      providerName,
+      baseURL: effectiveBaseURL,
+      apiKey: apiKey || 'sk-lobsterai-local',
+      apiType: effectiveApiFormat === 'anthropic' ? 'anthropic' : 'openai',
+      codingPlanEnabled: !!providerConfig.codingPlanEnabled,
+      models,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Returns the long-lived GitHub OAuth token used by OpenClaw's built-in
+ * github-copilot provider to exchange for short-lived Copilot API tokens.
+ * OpenClaw reads this from the COPILOT_GITHUB_TOKEN env var.
+ */
+export function getCopilotGithubToken(): string | null {
+  const sqliteStore = getStore();
+  if (!sqliteStore) return null;
+  const token = sqliteStore.get<string>('github_copilot_github_token');
+  return token?.trim() || null;
 }

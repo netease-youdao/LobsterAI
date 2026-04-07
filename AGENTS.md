@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -39,18 +39,34 @@ npm run openclaw:runtime:host   # current platform
 ## Architecture Overview
 
 LobsterAI is an Electron + React desktop application with two primary modes:
-1. **Cowork Mode** - AI-assisted coding sessions using Claude Agent SDK with tool execution
+1. **Cowork Mode** - AI-assisted coding sessions powered by OpenClaw as the primary agent engine
 2. **Artifacts System** - Rich preview of code outputs (HTML, SVG, React, Mermaid)
 
 Uses strict process isolation with IPC communication.
+
+### Authentication Flow
+
+1. **登录：** 打开系统浏览器 → Portal 登录页 → URS 登录成功 → deep link `lobsterai://auth/callback?code=<authCode>`
+2. **换取令牌：** `POST /api/auth/exchange` 消费一次性 authCode → 返回 `accessToken`(2h) + `refreshToken`(30d)
+3. **持久化：** SQLite kv store `auth_tokens` 存储双 token，应用重启后自动恢复登录态
+4. **请求认证：** `fetchWithAuth()` 在每个 API 请求附加 `Authorization: Bearer <accessToken>`
+5. **被动刷新：** 收到 HTTP 401 → 使用 refreshToken 调用 `POST /api/auth/refresh` → 获取新 accessToken → 重试原请求
+6. **主动刷新：** 定期检查 accessToken 距 exp < 5 分钟 → 后台静默刷新，避免请求失败
+7. **滚动续期：** 每次 refresh 签发新 refreshToken（新 30 天有效期），连续使用不掉线
+8. **退出条件：** 连续 30 天不使用（refreshToken 过期）→ 清除本地 token → 用户需重新登录
+
+**关键文件：**
+- Token 存储与请求：`src/renderer/services/api.ts`（`fetchWithAuth()`、token 管理）
+- 登录流程：`src/main/main.ts`（deep link 处理 `lobsterai://` 协议）
+- 持久化：`src/main/sqliteStore.ts`（kv 表存储 `auth_tokens`）
 
 ### Process Model
 
 **Main Process** (`src/main/main.ts`):
 - Window lifecycle management
-- SQLite storage via `sql.js` (`src/main/sqliteStore.ts`)
+- SQLite storage via `better-sqlite3` (`src/main/sqliteStore.ts`)
 - Agent engine routing (`src/main/libs/agentEngine/coworkEngineRouter.ts`) - dispatches to `claudeRuntimeAdapter.ts` (built-in) or `openclawRuntimeAdapter.ts` (OpenClaw)
-- IM gateways (`src/main/im/`) - DingTalk, Feishu, Telegram, Discord, NetEase IM
+- IM gateways (`src/main/im/`) - WeChat, WeCom, DingTalk, Feishu, QQ, Telegram, Discord, NetEase IM, NetEase Bee, POPO
 - Skill management (`src/main/skillManager.ts`)
 - IPC handlers for store, cowork, and API operations (40+ channels)
 - Security: context isolation enabled, node integration disabled, sandbox enabled
@@ -71,7 +87,7 @@ src/main/
 ├── sqliteStore.ts       # SQLite database (kv + cowork tables)
 ├── coworkStore.ts       # Cowork session/message CRUD operations
 ├── skillManager.ts      # Skill loading and management
-├── im/                  # IM gateway integrations (DingTalk/Feishu/Telegram/Discord)
+├── im/                  # IM gateway integrations (WeChat/WeCom/DingTalk/Feishu/QQ/Telegram/Discord/POPO)
 └── libs/
     ├── agentEngine/
     │   ├── coworkEngineRouter.ts    # Routes to built-in or OpenClaw runtime
@@ -112,8 +128,8 @@ SKILLs/                  # Custom skill definitions for cowork sessions
 ### Data Flow
 
 1. **Initialization**: `src/renderer/App.tsx` → `coworkService.init()` → loads config/sessions via IPC → sets up stream listeners
-2. **Cowork Session**: User sends prompt → `coworkService.startSession()` → IPC to main → `CoworkRunner.startSession()` → Claude Agent SDK execution → streaming events back to renderer via IPC → Redux updates
-3. **Tool Permissions**: Claude requests tool use → `CoworkRunner` emits `permissionRequest` → UI shows `CoworkPermissionModal` → user approves/denies → result sent back to SDK
+2. **Cowork Session**: User sends prompt → `coworkService.startSession()` → IPC to main → `CoworkEngineRouter` → OpenClaw gateway (primary) → streaming events back to renderer via IPC → Redux updates
+3. **Tool Permissions**: Agent requests tool use → `CoworkEngineRouter` emits `permissionRequest` → UI shows `CoworkPermissionModal` → user approves/denies → result sent back to engine
 4. **Persistence**: Cowork sessions stored in SQLite (`cowork_sessions`, `cowork_messages` tables)
 
 ### Cowork System
@@ -121,19 +137,22 @@ SKILLs/                  # Custom skill definitions for cowork sessions
 The Cowork feature provides AI-assisted coding sessions:
 
 **Execution Modes** (`CoworkExecutionMode`):
-- `auto` - Automatically choose based on context (OpenClaw: `sandbox.mode=non-main`)
-- `local` - Run tools directly on the local machine (OpenClaw: `sandbox.mode=off`)
-- `sandbox` - Full sandbox isolation (OpenClaw: `sandbox.mode=all`)
+- `auto` - Automatically choose based on context
+- `local` - Run tools directly on the local machine
 
 **Agent Engines** (configured via `agentEngine` in cowork config):
-- `yd_cowork` - Built-in Claude Agent SDK runner (`claudeRuntimeAdapter.ts`)
-- `openclaw` - OpenClaw gateway (`openclawRuntimeAdapter.ts`); requires the bundled OpenClaw runtime to be running. Engine lifecycle managed by `OpenClawEngineManager` with states: `not_installed → ready → starting → running | error`
+- `openclaw` - **Primary engine**. OpenClaw gateway (`openclawRuntimeAdapter.ts`); requires the bundled OpenClaw runtime to be running. Engine lifecycle managed by `OpenClawEngineManager` with states: `not_installed → ready → starting → running | error`
+- `yd_cowork` - **Deprecated**. Legacy built-in adapter wrapping the Claude Agent SDK (`claudeRuntimeAdapter.ts`). Code still present but no longer the recommended engine.
 
 Both engines expose identical stream events through `CoworkEngineRouter`, so the renderer is engine-agnostic. Engine-specific IPC: `openclaw:engine:*` channels manage runtime lifecycle separately from `cowork:*` session channels.
 
-**Memory System**: Automatically extracts and manages user memories from conversations:
-- `coworkMemoryExtractor.ts` - Detects explicit remember/forget commands (Chinese/English) and implicitly extracts personal facts using signal patterns (profile, preferences, ownership). Uses guard levels (`strict`/`standard`/`relaxed`) with confidence thresholds.
-- `coworkMemoryJudge.ts` - Validates memory candidates with rule-based scoring and optional LLM secondary judgment for borderline cases. Includes TTL-based caching for LLM results.
+**Memory System**: File-based persistent memory stored in the OpenClaw working directory:
+- `MEMORY.md` - Durable facts, preferences, and decisions; loaded automatically at every session start.
+- `memory/YYYY-MM-DD.md` - Daily notes for recent context.
+- `USER.md` / `SOUL.md` - User profile and agent personality files read at session startup.
+- Writes happen via the agent's `write` tool when the user issues an explicit "remember" instruction or the agent self-records important findings. No background extraction or confidence scoring.
+- `coworkMemoryExtractor.ts` / `coworkMemoryJudge.ts` - Legacy extraction pipeline used only by the deprecated built-in engine; not active when OpenClaw is the primary engine.
+- GUI in Settings panel allows manual add/edit/delete of `MEMORY.md` entries.
 
 **Stream Events** (IPC from main to renderer):
 - `message` - New message added to session
@@ -188,7 +207,7 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 - App config stored in SQLite `kv` table
 - Cowork config stored in `cowork_config` table (workingDirectory, systemPrompt, executionMode, **agentEngine**)
 - Cowork sessions and messages stored in `cowork_sessions` and `cowork_messages` tables
-- Scheduled tasks stored in `scheduled_tasks` table (cron expressions, task content)
+- Scheduled task metadata stored in `scheduled_task_meta` table (origin and binding info); task definitions are managed by OpenClaw
 - Database file: `lobsterai.sqlite` in user data directory
 - OpenClaw pinned version declared in `package.json` under `"openclaw": { "version": "...", "repo": "..." }`; update the version field and re-run to upgrade
 
@@ -199,8 +218,9 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 
 ### Key Dependencies
 
-- `@anthropic-ai/claude-agent-sdk` - Claude Agent SDK for cowork sessions
-- `sql.js` - SQLite database for persistence
+- OpenClaw (bundled runtime under `Resources/cfmind`) - Primary agent engine for cowork sessions
+- `@anthropic-ai/claude-agent-sdk` - Legacy built-in engine dependency (deprecated, code still present)
+- `better-sqlite3` - SQLite database for persistence
 - `react-markdown`, `remark-gfm`, `rehype-katex` - Markdown rendering with math support
 - `mermaid` - Diagram rendering
 - `dompurify` - SVG/HTML sanitization
@@ -211,6 +231,39 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 - Match existing formatting: 2-space indentation, single quotes, and semicolons.
 - Naming: `PascalCase` for components (e.g., `Chat.tsx`), `camelCase` for functions/vars, and `*Slice.ts` for Redux slices.
 - Tailwind CSS is the primary styling approach; prefer utility classes over bespoke CSS.
+
+## String Literal Constants
+
+**Never use bare string literals** for values that act as discriminants, status codes, IPC channel names, mode selectors, or any string compared/switched against in multiple places. Instead, define a centralized `as const` object and derive the type from it.
+
+### Pattern
+
+```typescript
+// In constants.ts (one per module, e.g. src/scheduledTask/constants.ts)
+export const SessionTarget = {
+  Main: 'main',
+  Isolated: 'isolated',
+} as const;
+export type SessionTarget = typeof SessionTarget[keyof typeof SessionTarget];
+```
+
+### Rules
+
+1. **One source of truth per module.** Each module that owns a set of string constants must have a `constants.ts` file. Consumer modules import both the value object and the type.
+2. **Value construction and comparison must use constants.** Write `SessionTarget.Main`, not `'main'`. This applies to source files, test files, and any other TypeScript that references these values.
+3. **Discriminant `kind` fields in interface definitions remain literal.** The `kind: 'at'` in `interface ScheduleAt` defines the discriminated union shape and must stay as a literal. The constant should match this value; consumers use the constant object for comparisons and construction.
+4. **IPC channel names must be constants.** All `ipcMain.handle()` registrations and `ipcRenderer.invoke()` calls must reference an `IpcChannel` constant, never a bare string.
+5. **Tests use constants too.** Test files must import and use the same constants — this is the primary defense against "modified the constant but forgot to update the test" drift.
+
+### What NOT to constantize
+
+- Platform-specific identifiers passed through from external sources (e.g., `'telegram'`, `'feishu'` as IM platform names from user config).
+- One-off strings used in a single location with no comparison logic (e.g., error messages, log tags).
+- CSS class names, HTML attributes, and other UI-layer strings managed by Tailwind/React.
+
+### Existing reference
+
+`src/scheduledTask/constants.ts` is the canonical example of this pattern, covering schedule kinds, payload kinds, delivery modes, session targets, wake modes, origin kinds, binding kinds, task status, IPC channels, and migration keys.
 
 ## Logging Guidelines
 

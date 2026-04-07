@@ -27,7 +27,7 @@ export default defineConfig({
             minify: false,
             rollupOptions: {
               external: (id) => {
-                const staticExternals = ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'];
+                const staticExternals = ['better-sqlite3', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'];
                 if (staticExternals.includes(id)) return true;
                 if (id.startsWith('@larksuite/openclaw-lark-tools') || id.startsWith('@larksuite/openclaw-lark')) return true;
                 return false;
@@ -62,6 +62,7 @@ export default defineConfig({
   base: process.env.NODE_ENV === 'development' ? '/' : './',
   resolve: {
     alias: {
+      '@shared': path.resolve(__dirname, './src/shared'),
       '@': path.resolve(__dirname, './src/renderer'),
     },
   },
@@ -91,4 +92,4 @@ export default defineConfig({
     },
   },
   clearScreen: false,
-}); 
+});

@@ -1,0 +1,24 @@
+diff --git a/src/infra/heartbeat-events-filter.ts b/src/infra/heartbeat-events-filter.ts
+index 1682c3b308..cf1678a3a0 100644
+--- a/src/infra/heartbeat-events-filter.ts
++++ b/src/infra/heartbeat-events-filter.ts
+@@ -23,18 +23,7 @@ export function buildCronEventPrompt(
+       "Reply HEARTBEAT_OK."
+     );
+   }
+-  if (!deliverToUser) {
+-    return (
+-      "A scheduled reminder has been triggered. The reminder content is:\n\n" +
+-      eventText +
+-      "\n\nHandle this reminder internally. Do not relay it to the user unless explicitly requested."
+-    );
+-  }
+-  return (
+-    "A scheduled reminder has been triggered. The reminder content is:\n\n" +
+-    eventText +
+-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
+-  );
++  return eventText;
+ }
+ 
+ export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {

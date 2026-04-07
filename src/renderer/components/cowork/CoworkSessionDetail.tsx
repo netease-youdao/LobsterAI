@@ -1,20 +1,16 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { useSelector } from 'react-redux';
-import { RootState } from '../../store';
-import { i18nService } from '../../services/i18n';
-import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
-import type { Skill } from '../../types/skill';
-import CoworkPromptInput from './CoworkPromptInput';
-import MarkdownContent from '../MarkdownContent';
+import { ShareIcon } from '@heroicons/react/20/solid';
 import {
   CheckIcon,
-  InformationCircleIcon,
-  ShareIcon,
-  ExclamationTriangleIcon,
   ChevronRightIcon,
+  DocumentArrowDownIcon,
   PhotoIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
+import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useDispatch,useSelector } from 'react-redux';
+
+import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -25,13 +21,25 @@ import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { BookmarkButton, BookmarksPanel } from './BookmarkComponents';
 import { bookmarkService } from '../../services/bookmark';
+import { i18nService } from '../../services/i18n';
+import { RootState } from '../../store';
+import { setActiveSkillIds } from '../../store/slices/skillSlice';
+import type { CoworkImageAttachment,CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import type { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
-import { getScheduledReminderDisplayText } from '../../../common/scheduledReminderText';
+import Modal from '../common/Modal';
+import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
+import InformationCircleIcon from '../icons/InformationCircleIcon';
+import MarkdownContent from '../MarkdownContent';
+import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
+import DiffView, { extractDiffFromToolInput } from './DiffView';
+import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
   onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
+  onDeleteSession?: (sessionId: string) => Promise<void>;
   onNavigateHome?: () => void;
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -40,8 +48,7 @@ interface CoworkSessionDetailProps {
 }
 
 const AUTO_SCROLL_THRESHOLD = 120;
-const NAV_HIDE_DELAY = 3000;
-const NAV_SCROLL_LOCK_DURATION = 500;
+const NAV_SCROLL_LOCK_DURATION = 800;
 const NAV_BOTTOM_SNAP_THRESHOLD = 20;
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 
@@ -635,7 +642,7 @@ const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) =>
       case 'pending':
       case 'unknown':
       default:
-        return 'bg-transparent dark:border-claude-darkTextSecondary/60 border-claude-textSecondary/60';
+        return 'bg-transparent border-border';
     }
   };
 
@@ -652,8 +659,8 @@ const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) =>
           <div className="min-w-0 flex-1">
             <div className={`text-xs whitespace-pre-wrap break-words leading-5 ${
               item.status === 'completed'
-                ? 'dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/80'
-                : 'dark:text-claude-darkText text-claude-text'
+                ? 'text-muted'
+                : 'text-foreground'
             }`}>
               {item.primaryText}
             </div>
@@ -701,11 +708,18 @@ const ToolCallGroup: React.FC<{
   // Check if this is a Bash-like tool that should show terminal style
   const isBashTool = isBashLikeToolName(rawToolName);
 
+  // Check if this is an Edit/MultiEdit tool with diff data
+  const diffDataList = useMemo(
+    () => extractDiffFromToolInput(rawToolName, toolInput as Record<string, unknown> | undefined),
+    [rawToolName, toolInput],
+  );
+  const isEditWithDiff = diffDataList !== null && diffDataList.length > 0;
+
   return (
     <div className="relative py-1">
       {/* Vertical connecting line to next tool group */}
       {!isLastInSequence && (
-        <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px dark:bg-claude-darkTextSecondary/30 bg-claude-textSecondary/30" />
+        <div className="absolute left-[3.5px] top-[14px] bottom-[-8px] w-px bg-border" />
       )}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
@@ -720,11 +734,11 @@ const ToolCallGroup: React.FC<{
         }`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <span className="text-sm font-medium text-secondary">
               {toolName}
             </span>
             {toolInputSummary && (
-              <code className="text-xs dark:text-claude-darkTextSecondary/80 text-claude-textSecondary/80 font-mono truncate max-w-[400px]">
+              <code className="text-xs text-muted font-mono truncate max-w-[400px]">
                 {toolInputSummary}
               </code>
             )}
@@ -732,10 +746,10 @@ const ToolCallGroup: React.FC<{
           {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
             <div className={`text-xs mt-0.5 ${
               hasToolResultText
-                ? 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
+                ? 'text-muted'
                 : showNoDetailError
                   ? 'text-red-500/80'
-                  : 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
+                  : 'text-muted'
             }`}>
               {hasToolResultText
                 ? (toolResultSummary ?? `${resultLineCount} ${resultLineCount === 1 ? 'line' : 'lines'} of output`)
@@ -743,7 +757,7 @@ const ToolCallGroup: React.FC<{
             </div>
           )}
           {!toolResult && (
-            <div className="text-xs dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 mt-0.5">
+            <div className="text-xs text-muted mt-0.5">
               {i18nService.t('coworkToolRunning')}
             </div>
           )}
@@ -753,19 +767,19 @@ const ToolCallGroup: React.FC<{
         <div className="ml-4 mt-2">
           {isBashTool ? (
             // Terminal-style display for Bash commands
-            <div className="rounded-lg overflow-hidden border dark:border-claude-darkBorder border-claude-border">
+            <div className="rounded-lg overflow-hidden border border-border">
               {/* Terminal header */}
-              <div className="flex items-center gap-1.5 px-3 py-1.5 dark:bg-claude-darkSurface bg-claude-surfaceInset">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surfaceInset">
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
                 <div className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
                 <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
-                <span className="ml-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary font-medium">Terminal</span>
+                <span className="ml-2 text-[10px] text-secondary font-medium">Terminal</span>
               </div>
               {/* Terminal content */}
-              <div className="dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset px-3 py-3 max-h-72 overflow-y-auto font-mono text-xs">
+              <div className="bg-surface-inset px-3 py-3 max-h-72 overflow-y-auto font-mono text-xs">
                 {toolInputDisplay && (
-                  <div className="dark:text-claude-darkText text-claude-text">
-                    <span className="text-claude-accent select-none">$ </span>
+                  <div className="text-foreground">
+                    <span className="text-primary select-none">$ </span>
                     <span className="whitespace-pre-wrap break-words">{toolInputDisplay}</span>
                   </div>
                 )}
@@ -774,14 +788,14 @@ const ToolCallGroup: React.FC<{
                     isToolError
                       ? 'text-red-400'
                       : hasToolResultText
-                        ? 'dark:text-claude-darkTextSecondary text-claude-textSecondary'
-                        : 'dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 italic'
+                        ? 'text-secondary'
+                        : 'text-muted italic'
                   }`}>
                     {displayToolResult}
                   </div>
                 )}
                 {!toolResult && (
-                  <div className="dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 mt-1.5 italic">
+                  <div className="text-muted mt-1.5 italic">
                     {i18nService.t('coworkToolRunning')}
                   </div>
                 )}
@@ -789,16 +803,46 @@ const ToolCallGroup: React.FC<{
             </div>
           ) : isTodoWriteTool && todoItems ? (
             <TodoWriteInputView items={todoItems} />
+          ) : isEditWithDiff && diffDataList ? (
+            // Diff view for Edit/MultiEdit tools
+            <div className="space-y-2">
+              {diffDataList.map((diff, idx) => (
+                <DiffView
+                  key={idx}
+                  oldStr={diff.oldStr}
+                  newStr={diff.newStr}
+                  filePath={diff.filePath}
+                />
+              ))}
+              {toolResult && (hasToolResultText || showNoDetailError) && (
+                <div>
+                  <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider mb-1">
+                    {i18nService.t('coworkToolResult')}
+                  </div>
+                  <div className="max-h-32 overflow-y-auto">
+                    <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                      isToolError
+                        ? 'text-red-500'
+                        : hasToolResultText
+                          ? 'dark:text-claude-darkText text-claude-text'
+                          : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
+                    }`}>
+                      {displayToolResult}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             // Standard display for other tools with input/output labels
             <div className="space-y-2">
               {toolInputDisplay && (
                 <div>
-                  <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider mb-1">
+                  <div className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">
                     {i18nService.t('coworkToolInput')}
                   </div>
                   <div className="max-h-48 overflow-y-auto">
-                    <pre className="text-xs dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words font-mono">
+                    <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
                       {toolInputDisplay}
                     </pre>
                   </div>
@@ -806,7 +850,7 @@ const ToolCallGroup: React.FC<{
               )}
               {toolResult && (hasToolResultText || showNoDetailError) && (
                 <div>
-                  <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider mb-1">
+                  <div className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">
                     {i18nService.t('coworkToolResult')}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
@@ -814,8 +858,8 @@ const ToolCallGroup: React.FC<{
                       isToolError
                         ? 'text-red-500'
                         : hasToolResultText
-                          ? 'dark:text-claude-darkText text-claude-text'
-                          : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
+                          ? 'text-foreground'
+                          : 'text-secondary italic'
                     }`}>
                       {displayToolResult}
                     </pre>
@@ -851,7 +895,7 @@ const CopyButton: React.FC<{
   return (
     <button
       onClick={handleCopy}
-      className={`p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-all duration-200 ${
+      className={`p-1.5 rounded-md hover:bg-surface-raised transition-all duration-200 ${
         visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
       }`}
       title={i18nService.t('copyToClipboard')}
@@ -894,7 +938,47 @@ const CopyButton: React.FC<{
   );
 };
 
-export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]; sessionId?: string }> = React.memo(({ message, skills, sessionId }) => {
+// Re-edit button component — lets the user re-fill a sent message back into the input
+const ReEditButton: React.FC<{
+  visible: boolean;
+  onClick: () => void;
+}> = ({ visible, onClick }) => {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-all duration-200 ${
+        visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
+      title={i18nService.t('coworkReEdit')}
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="24"
+        height="24"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="w-4 h-4 text-[var(--icon-secondary)]"
+        aria-hidden="true"
+      >
+        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+        <path d="m15 5 4 4" />
+      </svg>
+    </button>
+  );
+};
+
+export const UserMessageItem: React.FC<{
+  message: CoworkMessage;
+  skills: Skill[];
+  onReEdit?: (message: CoworkMessage) => void;
+}> = React.memo(({ message, skills, onReEdit }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
@@ -917,7 +1001,7 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
         <div className="pl-4 sm:pl-8 md:pl-12">
           <div className="flex items-start gap-3 flex-row-reverse">
             <div className="w-full min-w-0 flex flex-col items-end">
-              <div className="w-fit max-w-[42rem] rounded-2xl px-4 py-2.5 dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text shadow-subtle">
+              <div className="w-fit max-w-[42rem] rounded-2xl px-4 py-2.5 bg-surface text-foreground shadow-subtle">
                 {message.content?.trim() && (
                   <MarkdownContent
                     content={message.content}
@@ -931,7 +1015,7 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                         <img
                           src={`data:${img.mimeType};base64,${img.base64Data}`}
                           alt={img.name}
-                          className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border dark:border-claude-darkBorder/50 border-claude-border/50 hover:border-claude-accent/50 transition-colors"
+                          className="max-h-48 max-w-[16rem] rounded-lg object-contain cursor-pointer border border-border hover:border-primary transition-colors"
                           title={img.name}
                           onClick={() => setExpandedImage(`data:${img.mimeType};base64,${img.base64Data}`)}
                         />
@@ -945,18 +1029,12 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                 )}
               </div>
               <div className="flex items-center justify-end gap-1.5 mt-1">
-                {messageSkills.map(skill => (
-                  <div
-                    key={skill.id}
-                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-claude-accent/5 dark:bg-claude-accent/10"
-                    title={skill.description}
-                  >
-                    <PuzzleIcon className="h-2.5 w-2.5 text-claude-accent/70" />
-                    <span className="text-[10px] font-medium text-claude-accent/70 max-w-[60px] truncate">
-                      {skill.name}
-                    </span>
-                  </div>
-                ))}
+                {onReEdit && (
+                  <ReEditButton
+                    visible={isHovered}
+                    onClick={() => onReEdit(message)}
+                  />
+                )}
                 <CopyButton
                   content={message.content}
                   visible={isHovered}
@@ -967,6 +1045,21 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                     messageId={message.id}
                     visible={isHovered}
                   />
+                {messageSkills.length > 0 && (
+                  <div className="flex items-center gap-1.5 mr-1.5">
+                    {messageSkills.map(skill => (
+                      <div
+                        key={skill.id}
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-primary-muted"
+                        title={skill.description}
+                      >
+                        <PuzzleIcon className="h-2.5 w-2.5 text-primary" />
+                        <span className="text-[10px] font-medium text-primary max-w-[60px] truncate">
+                          {skill.name}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -1013,11 +1106,12 @@ const AssistantMessageItem: React.FC<{
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <div className="dark:text-claude-darkText text-claude-text">
+      <div className="text-foreground">
         <MarkdownContent
           content={displayContent}
           className="prose dark:prose-invert max-w-none"
           resolveLocalFilePath={resolveLocalFilePath}
+          showRevealInFolderAction
         />
       </div>
       {(showCopyButton || sessionId) && (
@@ -1075,7 +1169,7 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
       <div className="max-w-3xl mx-auto">
         <div className="streaming-bar" />
         <div className="py-1">
-          <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <span className="text-xs text-secondary">
             {getStatusText()}
           </span>
         </div>
@@ -1086,9 +1180,9 @@ const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ message
 
 const TypingDots: React.FC = () => (
   <div className="flex items-center space-x-1.5 py-1">
-    <div className="w-2 h-2 rounded-full bg-claude-accent animate-bounce" style={{ animationDelay: '0ms' }} />
-    <div className="w-2 h-2 rounded-full bg-claude-accent animate-bounce" style={{ animationDelay: '150ms' }} />
-    <div className="w-2 h-2 rounded-full bg-claude-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0ms' }} />
+    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '150ms' }} />
+    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '300ms' }} />
   </div>
 );
 
@@ -1110,26 +1204,26 @@ const ThinkingBlock: React.FC<{
   }, [isCurrentlyStreaming]);
 
   return (
-    <div className="rounded-lg border dark:border-claude-darkBorder/50 border-claude-border/50 overflow-hidden">
+    <div className="rounded-lg border border-border overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left dark:hover:bg-claude-darkSurfaceHover/50 hover:bg-claude-surfaceHover/50 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-raised transition-colors"
       >
         <ChevronRightIcon
-          className={`h-3.5 w-3.5 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0 transition-transform duration-200 ${
+          className={`h-3.5 w-3.5 text-secondary flex-shrink-0 transition-transform duration-200 ${
             isExpanded ? 'rotate-90' : ''
           }`}
         />
-        <span className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        <span className="text-xs font-medium text-secondary">
           {i18nService.t('reasoning')}
         </span>
         {isCurrentlyStreaming && (
-          <span className="w-1.5 h-1.5 rounded-full bg-claude-accent animate-pulse" />
+          <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
         )}
       </button>
       {isExpanded && (
         <div className="px-3 pb-3 max-h-64 overflow-y-auto">
-          <div className="text-xs leading-relaxed dark:text-claude-darkTextSecondary/80 text-claude-textSecondary/80 whitespace-pre-wrap">
+          <div className="text-xs leading-relaxed text-muted whitespace-pre-wrap">
             {displayContent}
           </div>
         </div>
@@ -1156,6 +1250,7 @@ export const AssistantTurnBlock: React.FC<{
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
   const renderSystemMessage = (message: CoworkMessage) => {
+    const isError = !hasText(message.content) && typeof message.metadata?.error === 'string';
     const rawContent = hasText(message.content)
       ? message.content
       : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');
@@ -1164,10 +1259,13 @@ export const AssistantTurnBlock: React.FC<{
     if (!content.trim()) return null;
 
     return (
-      <div className="rounded-lg border dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/40 bg-claude-bg/60 px-3 py-2">
-        <div className="flex items-start gap-2">
-          <InformationCircleIcon className="h-4 w-4 mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0" />
-          <div className="text-xs whitespace-pre-wrap dark:text-claude-darkTextSecondary text-claude-textSecondary">
+      <div className="rounded-lg border border-border bg-background px-3 py-2">
+        <div className="flex items-center gap-2">
+          {isError
+            ? <ExclamationTriangleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
+            : <InformationCircleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
+          }
+          <div className="text-xs whitespace-pre-wrap text-secondary">
             {content}
           </div>
         </div>
@@ -1188,14 +1286,14 @@ export const AssistantTurnBlock: React.FC<{
       <div className="py-1">
         <div className="flex items-start gap-2">
           <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-            isToolError ? 'bg-red-500' : 'bg-claude-darkTextSecondary/50'
+            isToolError ? 'bg-red-500' : 'bg-surface-raised'
           }`} />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <div className="text-sm font-medium text-secondary">
               {i18nService.t('coworkToolResult')}
             </div>
             {resultLineCount > 0 && (
-              <div className="text-xs dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 mt-0.5">
+              <div className="text-xs text-muted mt-0.5">
                 {resultLineCount} {resultLineCount === 1 ? 'line' : 'lines'} of output
               </div>
             )}
@@ -1203,19 +1301,19 @@ export const AssistantTurnBlock: React.FC<{
               <div className={`text-xs mt-0.5 ${
                 isToolError
                   ? 'text-red-500/80'
-                  : 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
+                  : 'text-muted'
               }`}>
                 {fallbackText}
               </div>
             )}
             {(hasToolResultText || showNoDetailError) && (
-              <div className="mt-2 px-3 py-2 rounded-lg dark:bg-claude-darkSurface/50 bg-claude-surface/50 max-h-64 overflow-y-auto">
+              <div className="mt-2 px-3 py-2 rounded-lg bg-surface-raised max-h-64 overflow-y-auto">
                 <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
                   isToolError
                     ? 'text-red-500'
                     : hasToolResultText
-                      ? 'dark:text-claude-darkText text-claude-text'
-                      : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
+                      ? 'text-foreground'
+                      : 'text-secondary italic'
                 }`}>
                   {displayText}
                 </pre>
@@ -1304,12 +1402,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onManageSkills,
   onContinue,
   onStop,
+  onDeleteSession,
   onNavigateHome,
   isSidebarCollapsed,
   onToggleSidebar,
   onNewChat,
   updateBadge,
 }) => {
+  const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
@@ -1317,19 +1417,29 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const promptInputRef = useRef<CoworkPromptInputRef>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
-  // Turn navigation states
-  // currentTurnIndex (state) drives UI rendering; currentTurnIndexRef (ref) provides
-  // up-to-date value inside callbacks (avoids stale closure). Both must be updated together.
-  const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
-  const currentTurnIndexRef = useRef(0);
-  const [showTurnNav, setShowTurnNav] = useState(false);
-  const hideNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Clear lazy-render height cache when session changes
+  const sessionId = currentSession?.id;
+  useEffect(() => {
+    clearHeightCache();
+  }, [sessionId]);
+
+  // Rail navigation states
+  const [currentRailIndex, setCurrentRailIndex] = useState(-1);
+  const currentRailIndexRef = useRef(-1);
+  const railItemCountRef = useRef(0);
+  // Mapping: turnIndex → { first: firstRailIdx, last: lastRailIdx }
+  const turnToRailRangeRef = useRef<{ first: number; last: number }[]>([]);
   const isNavigatingRef = useRef(false);
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
+  const railLinesRef = useRef<HTMLDivElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
+  const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
+  const [isRailHovered, setIsRailHovered] = useState(false);
+  const [railTooltip, setRailTooltip] = useState<{ label: string; top: number; right: number; isUser: boolean } | null>(null);
 
   // Menu and action states
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -1337,6 +1447,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [showExportOptions, setShowExportOptions] = useState(false);
 
   // Bookmark panel state
   const [isBookmarksPanelOpen, setIsBookmarksPanelOpen] = useState(false);
@@ -1378,21 +1489,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // Cleanup nav timers on unmount
   useEffect(() => {
     return () => {
-      if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
       if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     };
   }, []);
 
   // Reset nav state when session changes
   useEffect(() => {
-    setShowTurnNav(false);
     setIsScrollable(false);
-    setCurrentTurnIndex(0);
-    currentTurnIndexRef.current = 0;
+    setCurrentRailIndex(-1);
+    currentRailIndexRef.current = -1;
     isNavigatingRef.current = false;
     turnElsCacheRef.current = [];
-    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+    setHoveredRailIndex(null);
   }, [currentSession?.id]);
 
   // Close menu on outside click
@@ -1552,6 +1661,91 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return () => window.removeEventListener('cowork:jump-to-message', handler);
   }, [handleJumpToMessage]);
 
+  const sessionToMarkdown = useCallback((): string => {
+    if (!currentSession) return '';
+    const lines: string[] = [];
+    lines.push(`# ${currentSession.title}`);
+    lines.push('');
+    lines.push(`> ${i18nService.t('coworkExportCreatedAt')}: ${new Date(currentSession.createdAt).toLocaleString()}`);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+    for (const msg of currentSession.messages) {
+      if (msg.type === 'user') {
+        lines.push(`## 🧑 User`);
+        lines.push('');
+        lines.push(msg.content);
+        lines.push('');
+      } else if (msg.type === 'assistant') {
+        lines.push(`## 🤖 Assistant`);
+        lines.push('');
+        lines.push(msg.content);
+        lines.push('');
+      } else if (msg.type === 'tool_use' && msg.metadata?.toolName) {
+        lines.push(`### 🔧 Tool: ${msg.metadata.toolName}`);
+        lines.push('');
+        if (msg.metadata.toolInput) {
+          lines.push('```json');
+          lines.push(JSON.stringify(msg.metadata.toolInput, null, 2));
+          lines.push('```');
+          lines.push('');
+        }
+      } else if (msg.type === 'tool_result') {
+        lines.push('#### Tool Result');
+        lines.push('');
+        lines.push('```');
+        lines.push(msg.content.slice(0, 2000) + (msg.content.length > 2000 ? '\n... (truncated)' : ''));
+        lines.push('```');
+        lines.push('');
+      }
+    }
+    return lines.join('\n');
+  }, [currentSession]);
+
+  const sessionToJSON = useCallback((): string => {
+    if (!currentSession) return '{}';
+    return JSON.stringify({
+      title: currentSession.title,
+      createdAt: new Date(currentSession.createdAt).toISOString(),
+      updatedAt: new Date(currentSession.updatedAt).toISOString(),
+      status: currentSession.status,
+      messages: currentSession.messages.map(msg => ({
+        type: msg.type,
+        content: msg.content,
+        timestamp: new Date(msg.timestamp).toISOString(),
+        ...(msg.metadata?.toolName ? { toolName: msg.metadata.toolName } : {}),
+        ...(msg.metadata?.toolInput ? { toolInput: msg.metadata.toolInput } : {}),
+      })),
+    }, null, 2);
+  }, [currentSession]);
+
+  const handleExportText = useCallback(async (format: 'md' | 'json') => {
+    if (!currentSession) return;
+    closeMenu();
+    const content = format === 'md' ? sessionToMarkdown() : sessionToJSON();
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const fileName = sanitizeExportFileName(`${currentSession.title}-${timestamp}.${format}`);
+    try {
+      const result = await window.electron.cowork.exportSessionText({
+        content,
+        defaultFileName: fileName,
+        fileExtension: format,
+      });
+      if (result.success && !result.canceled) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkExportTextSuccess'),
+        }));
+      } else if (!result.success) {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (error) {
+      console.error('Failed to export session text:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportTextFailed'),
+      }));
+    }
+  }, [currentSession, closeMenu, sessionToMarkdown, sessionToJSON]);
+
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!currentSession || isExportingImage) return;
@@ -1710,7 +1904,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   const handleConfirmDelete = async () => {
     if (!currentSession) return;
-    await coworkService.deleteSession(currentSession.id);
+    if (onDeleteSession) {
+      await onDeleteSession(currentSession.id);
+    } else {
+      await coworkService.deleteSession(currentSession.id);
+    }
     setShowConfirmDelete(false);
     if (onNavigateHome) {
       onNavigateHome();
@@ -1734,62 +1932,92 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
     if (!scrollable) return;
 
-    // Show turn nav and reset hide timer (use functional updater to avoid redundant re-renders)
-    setShowTurnNav((prev) => (prev ? prev : true));
-
-    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
-    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
-
     // Skip index recalculation during programmatic navigation
     if (isNavigatingRef.current) return;
 
-    // Update current turn index based on cached turn elements
+    // Use turn-level elements (always in DOM, even for lazy-rendered turns) for scroll detection
     const turnEls = turnElsCacheRef.current;
-    if (turnEls.length === 0) return;
+    const railCount = railItemCountRef.current;
+    if (turnEls.length === 0 || railCount === 0) return;
 
-    // If at very bottom, snap to last turn (use smaller threshold than auto-scroll)
+    // If at very bottom, snap to last rail item
     if (distanceToBottom <= NAV_BOTTOM_SNAP_THRESHOLD) {
-      const lastIndex = turnEls.length - 1;
-      currentTurnIndexRef.current = lastIndex;
-      setCurrentTurnIndex(lastIndex);
+      const lastRail = railCount - 1;
+      if (currentRailIndexRef.current !== lastRail) {
+        currentRailIndexRef.current = lastRail;
+        setCurrentRailIndex(lastRail);
+      }
       return;
     }
 
+    // Find current turn based on turn element offsetTop
     const scrollTop = container.scrollTop;
-    let visibleIndex = 0;
+    let currentTurn = 0;
     for (let i = 0; i < turnEls.length; i++) {
       if (turnEls[i].offsetTop <= scrollTop + 80) {
-        visibleIndex = i;
+        currentTurn = i;
       } else {
         break;
       }
     }
-    currentTurnIndexRef.current = visibleIndex;
-    setCurrentTurnIndex(visibleIndex);
+
+    // Map turn to rail index: check if scrolled past the midpoint of the turn
+    // (first half → user message = first rail item, second half → assistant = last rail item)
+    const range = turnToRailRangeRef.current[currentTurn];
+    if (!range) return;
+    let railIdx = range.first;
+    if (range.first !== range.last) {
+      const turnEl = turnEls[currentTurn];
+      const nextTurnTop = currentTurn + 1 < turnEls.length
+        ? turnEls[currentTurn + 1].offsetTop
+        : container.scrollHeight;
+      const turnMid = turnEl.offsetTop + (nextTurnTop - turnEl.offsetTop) / 2;
+      if (scrollTop + 80 >= turnMid) {
+        railIdx = range.last;
+      }
+    }
+
+    if (currentRailIndexRef.current !== railIdx) {
+      currentRailIndexRef.current = railIdx;
+      setCurrentRailIndex(railIdx);
+    }
   }, []);
 
-  const navigateToTurn = useCallback((direction: 'prev' | 'next') => {
-    const turnEls = turnElsCacheRef.current;
-    if (turnEls.length === 0) return;
-    const idx = currentTurnIndexRef.current;
-    const targetIndex = direction === 'prev' ? idx - 1 : idx + 1;
-    if (targetIndex < 0 || targetIndex >= turnEls.length) return;
+  const navigateToRailItem = useCallback((railIndex: number) => {
+    if (railIndex < 0 || railIndex >= railItemCountRef.current) return;
 
-    // Block scroll handler from overriding index during smooth scroll
+    // Find the turn that contains this rail item
+    const ranges = turnToRailRangeRef.current;
+    let targetTurnIdx = -1;
+    for (let t = 0; t < ranges.length; t++) {
+      if (ranges[t] && railIndex >= ranges[t].first && railIndex <= ranges[t].last) {
+        targetTurnIdx = t;
+        break;
+      }
+    }
+
     isNavigatingRef.current = true;
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
 
-    turnEls[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
-    currentTurnIndexRef.current = targetIndex;
-    setCurrentTurnIndex(targetIndex);
-    // Reset hide timer
-    setShowTurnNav(true);
-    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
-    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
-  }, []);
+    // Try to scroll to the exact data-rail-index element if it's in the DOM
+    const container = scrollContainerRef.current;
+    if (container) {
+      const el = container.querySelector<HTMLElement>(`[data-rail-index="${railIndex}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else if (targetTurnIdx >= 0) {
+        // Fallback: scroll to the turn element (always in DOM)
+        const turnEls = turnElsCacheRef.current;
+        if (targetTurnIdx < turnEls.length) {
+          turnEls[targetTurnIdx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    }
 
-  // Get the last message content for auto-scroll on streaming updates
+    currentRailIndexRef.current = railIndex;
+    setCurrentRailIndex(railIndex);
+  }, []);
   const lastMessage = currentSession?.messages?.[currentSession.messages.length - 1];
   const lastMessageContent = lastMessage?.content;
 
@@ -1835,19 +2063,70 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return value;
   }, []);
 
+  const handleReEdit = useCallback((message: CoworkMessage) => {
+    const ref = promptInputRef.current;
+    if (!ref) return;
+    // Set text content
+    if (message.content?.trim()) {
+      ref.setValue(message.content);
+    }
+    // Restore image attachments (always call to clear previous attachments)
+    const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
+    ref.setImageAttachments(imageAttachments);
+    // Restore active skills
+    const skillIds = (message.metadata as CoworkMessageMetadata)?.skillIds;
+    if (skillIds && skillIds.length > 0) {
+      dispatch(setActiveSkillIds(skillIds));
+    }
+    // Focus the input
+    ref.focus();
+  }, [dispatch]);
+
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
-  // Cache turn DOM elements when turns change
+  // Cache turn-level DOM elements (data-turn-index, always in DOM even for lazy turns)
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) { turnElsCacheRef.current = []; return; }
-    // DOM is already committed when useEffect runs, query synchronously
     turnElsCacheRef.current = Array.from(
       container.querySelectorAll<HTMLElement>('[data-turn-index]')
     );
   }, [turns]);
+
+  // Sync rail index when turns change or rail first appears (isScrollable becomes true)
+  useEffect(() => {
+    // After turns/scrollable change, if rail index is uninitialized (-1) or out of bounds,
+    // wait for next frame so render IIFE has updated railItemCountRef, then sync
+    const frameId = requestAnimationFrame(() => {
+      const count = railItemCountRef.current;
+      if (count === 0) return;
+      const idx = currentRailIndexRef.current;
+      if (idx < 0 || idx >= count) {
+        const resolved = count - 1;
+        currentRailIndexRef.current = resolved;
+        setCurrentRailIndex(resolved);
+      }
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [turns, isScrollable]);
+
+  // Scroll rail lines container to keep active item visible (without affecting page scroll)
+  useEffect(() => {
+    const container = railLinesRef.current;
+    if (!container || currentRailIndex < 0) return;
+    const activeEl = container.children[currentRailIndex] as HTMLElement | undefined;
+    if (!activeEl) return;
+    // Manual scroll calculation to avoid scrollIntoView bubbling to parent scrollable
+    const elTop = activeEl.offsetTop;
+    const elBottom = elTop + activeEl.offsetHeight;
+    if (elTop < container.scrollTop) {
+      container.scrollTop = elTop;
+    } else if (elBottom > container.scrollTop + container.clientHeight) {
+      container.scrollTop = elBottom - container.clientHeight;
+    }
+  }, [currentRailIndex]);
 
   // Auto scroll to bottom when new messages arrive or content updates (streaming)
   useEffect(() => {
@@ -1859,11 +2138,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       container.scrollTop = container.scrollHeight;
       setIsScrollable(container.scrollHeight > container.clientHeight);
     }
-    // Sync turn index to last when auto-scrolled to bottom
+    // Sync rail index to last when auto-scrolled to bottom
     if (turns.length > 0) {
-      const lastIndex = turns.length - 1;
-      currentTurnIndexRef.current = lastIndex;
-      setCurrentTurnIndex(lastIndex);
+      // Use -1 when rail hasn't rendered yet (count is 0),
+      // so the render IIFE resolvedRailIndex fallback picks the last item
+      const lastRail = railItemCountRef.current > 0 ? railItemCountRef.current - 1 : -1;
+      currentRailIndexRef.current = lastRail;
+      setCurrentRailIndex(lastRail);
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
 
@@ -1873,6 +2154,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   }
 
   const renderConversationTurns = () => {
+    let railCounter = 0;
     if (turns.length === 0) {
       if (!isStreaming) return null;
       return (
@@ -1895,16 +2177,28 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const isLastTurn = index === turns.length - 1;
       const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
       const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+      // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX)
+      const alwaysRender = index >= turns.length - 3;
+
+      // Compute rail indices for user/assistant messages (must match rail IIFE logic)
+      let asstContent = '';
+      for (const item of turn.assistantItems) {
+        if (item.type === 'assistant' && item.message?.content) {
+          asstContent += item.message.content;
+        }
+      }
+      const userRailIdx = turn.userMessage ? railCounter++ : -1;
+      const asstRailIdx = asstContent ? railCounter++ : -1;
 
       return (
-        <div key={turn.id} data-turn-index={index}>
+        <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
           {turn.userMessage && (
-            <div data-export-role="user-message" data-message-id={turn.userMessage.id}>
-              <UserMessageItem message={turn.userMessage} skills={skills} sessionId={currentSession.id} />
+            <div data-export-role="user-message" {...(userRailIdx >= 0 ? { 'data-rail-index': userRailIdx } : undefined)}>
+              <UserMessageItem message={turn.userMessage} skills={skills} onReEdit={remoteManaged ? undefined : handleReEdit} />
             </div>
           )}
           {showAssistantBlock && (
-            <div data-export-role="assistant-block">
+            <div data-export-role="assistant-block" {...(asstRailIdx >= 0 ? { 'data-rail-index': asstRailIdx } : undefined)}>
               <AssistantTurnBlock
                 turn={turn}
                 resolveLocalFilePath={resolveLocalFilePath}
@@ -1915,15 +2209,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               />
             </div>
           )}
-        </div>
+        </LazyRenderTurn>
       );
     });
   };
 
   return (
-    <div ref={detailRootRef} className="flex-1 flex flex-col dark:bg-claude-darkBg bg-claude-bg h-full">
+    <div ref={detailRootRef} className="flex-1 flex flex-col bg-background h-full">
       {/* Header */}
-      <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 shrink-0">
+      <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border bg-surface shrink-0">
         {/* Left side: Toggle buttons (when collapsed) + Title */}
         <div className="flex h-full items-center gap-2 min-w-0">
           {isSidebarCollapsed && (
@@ -1931,14 +2225,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
               </button>
               <button
                 type="button"
                 onClick={onNewChat}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 <ComposeIcon className="h-4 w-4" />
               </button>
@@ -1960,10 +2254,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 }
               }}
               onBlur={handleRenameBlur}
-              className="non-draggable min-w-0 max-w-[300px] rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkBg bg-claude-bg px-2 py-1 text-sm font-medium dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent"
+              className="non-draggable min-w-0 max-w-[300px] rounded-lg border border-border bg-background px-2 py-1 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
             />
           ) : (
-            <h1 className="text-sm leading-none font-medium dark:text-claude-darkText text-claude-text truncate max-w-[360px]">
+            <h1 className="text-sm leading-none font-medium text-foreground truncate max-w-[360px]">
               {currentSession.title || i18nService.t('coworkNewSession')}
             </h1>
           )}
@@ -1975,7 +2269,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           <button
             type="button"
             onClick={handleOpenFolder}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
             aria-label={i18nService.t('coworkOpenFolder')}
           >
             <FolderIcon className="h-4 w-4" />
@@ -2002,7 +2296,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             ref={actionButtonRef}
             type="button"
             onClick={openMenu}
-            className="p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+            className="p-1.5 rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             aria-label={i18nService.t('coworkSessionActions')}
           >
             <EllipsisHorizontalIcon className="h-5 w-5" />
@@ -2015,36 +2309,36 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       {menuPosition && (
         <div
           ref={menuRef}
-          className="fixed z-50 min-w-[180px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-popover popover-enter overflow-hidden"
+          className="fixed z-50 min-w-[180px] rounded-xl border border-border bg-surface shadow-popover popover-enter overflow-hidden"
           style={{ top: menuPosition.y, left: menuPosition.x }}
           role="menu"
         >
           <button
             type="button"
             onClick={handleRenameClick}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-foreground hover:bg-surface-raised transition-colors"
           >
-            <PencilSquareIcon className="h-4 w-4" />
+            <PencilSquareIcon className="h-4 w-4 text-secondary" />
             {i18nService.t('renameConversation')}
           </button>
           <button
             type="button"
             onClick={handleTogglePin}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-foreground hover:bg-surface-raised transition-colors"
           >
             <PushPinIcon
               slashed={currentSession.pinned}
-              className={`h-4 w-4 ${currentSession.pinned ? 'opacity-60' : ''}`}
+              className={`h-[18px] w-[18px] text-secondary ${currentSession.pinned ? 'opacity-60' : ''}`}
             />
             {currentSession.pinned ? i18nService.t('coworkUnpinSession') : i18nService.t('coworkPinSession')}
           </button>
           <button
             type="button"
-            onClick={handleShareClick}
+            onClick={(e) => { e.stopPropagation(); closeMenu(); setShowExportOptions(true); }}
             disabled={isExportingImage}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
           >
-            <ShareIcon className="h-4 w-4" />
+            <ShareIcon className="h-4 w-4 text-secondary" />
             {i18nService.t('coworkShareSession')}
           </button>
           <button
@@ -2058,38 +2352,86 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      {showConfirmDelete && (
+      {/* Export Options Modal */}
+      {showExportOptions && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
-          onClick={handleCancelDelete}
+          onClick={() => setShowExportOptions(false)}
         >
           <div
-            className="w-full max-w-sm mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
+            className="w-full max-w-xs mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+              <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkExportAs')}
+              </h3>
+            </div>
+            <div className="py-1">
+              <button
+                type="button"
+                onClick={(e) => { setShowExportOptions(false); handleShareClick(e); }}
+                disabled={isExportingImage}
+                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+              >
+                <PhotoIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <div>
+                  <div className="font-medium">{i18nService.t('coworkExportImage')}</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportImageDesc')}</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowExportOptions(false); handleExportText('md'); }}
+                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              >
+                <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <div>
+                  <div className="font-medium">Markdown</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportMarkdownDesc')}</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowExportOptions(false); handleExportText('json'); }}
+                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              >
+                <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <div>
+                  <div className="font-medium">JSON</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportJSONDesc')}</div>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showConfirmDelete && (
+        <Modal onClose={handleCancelDelete} overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop" className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden modal-content">
             {/* Header */}
             <div className="flex items-center gap-3 px-5 py-4">
               <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
                 <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
               </div>
-              <h2 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+              <h2 className="text-base font-semibold text-foreground">
                 {i18nService.t('deleteTaskConfirmTitle')}
               </h2>
             </div>
 
             {/* Content */}
             <div className="px-5 pb-4">
-              <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <p className="text-sm text-secondary">
                 {i18nService.t('deleteTaskConfirmMessage')}
               </p>
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-border">
               <button
                 onClick={handleCancelDelete}
-                className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
               >
                 {i18nService.t('cancel')}
               </button>
@@ -2100,56 +2442,223 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 {i18nService.t('deleteSession')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
-
-      {/* Messages */}
       <div className="relative flex-1 min-h-0">
         <div
           ref={scrollContainerRef}
           onScroll={handleMessagesScroll}
-          className="h-full min-h-0 overflow-y-auto pt-3"
+          className={`h-full min-h-0 overflow-y-auto pt-3 ${turns.length > 1 && isScrollable ? 'pr-8' : 'pr-3'}`}
         >
           {renderConversationTurns()}
           <div className="h-20" />
         </div>
 
-        {/* Turn Navigation Buttons */}
+        {/* Turn Navigation Rail — to the left of scrollbar */}
         {turns.length > 1 && isScrollable && (
           <div
-            className={`absolute right-6 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
-
-              dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
-              border dark:border-claude-darkBorder border-claude-border
-              ${showTurnNav ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+            className="absolute right-[18px] top-1/2 -translate-y-1/2 w-5 flex flex-col items-end z-10"
+            style={{ maxHeight: 'calc(100% - 40px)' }}
+            onMouseEnter={() => setIsRailHovered(true)}
+            onMouseLeave={() => {
+              setIsRailHovered(false);
+              setHoveredRailIndex(null);
+              setRailTooltip(null);
+            }}
           >
+            {/* Up Arrow */}
             <button
               type="button"
-              onClick={() => currentTurnIndex > 0 && navigateToTurn('prev')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex <= 0
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              onClick={() => {
+                const resolvedRail = currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex;
+                if (resolvedRail <= 0) return;
+                navigateToRailItem(resolvedRail - 1);
+              }}
+              onMouseEnter={() => { setHoveredRailIndex(null); }}
+              className={`shrink-0 flex items-center justify-center w-5 h-5 mb-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
+                ${!isRailHovered
+                  ? 'opacity-0 pointer-events-none'
+                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) <= 0
+                    ? 'opacity-30 cursor-default'
+                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
               </svg>
             </button>
-            <div className="dark:border-claude-darkBorder border-claude-border border-t" />
+
+            {/* Message Lines */}
+            <div
+              ref={railLinesRef}
+              className="overflow-y-auto min-h-0 flex-1"
+              style={{ scrollbarWidth: 'none' }}
+            >
+            {(() => {
+              // Build flat list of messages with their content length and turn index
+              const MIN_W = 6;  // px
+              const MAX_W = 16; // px
+              // Strip common markdown syntax for tooltip display
+              const stripMd = (s: string) => s
+                .replace(/^#+\s+/gm, '')
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/`[^`]*`/g, ' ')
+                .replace(/[*_~>]/g, '')
+                .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+                .replace(/\s+/g, ' ')
+                .trim();
+              // Get first meaningful text snippet from content
+              const getLabel = (content: string, fallback: string) => {
+                const stripped = stripMd(content);
+                return stripped.slice(0, 50) || fallback;
+              };
+              type RailItem = { key: string; turnIndex: number; label: string; contentLen: number; isUser: boolean };
+              const items: RailItem[] = [];
+              for (let i = 0; i < turns.length; i++) {
+                const turn = turns[i];
+                if (turn.userMessage) {
+                  const content = turn.userMessage.content ?? '';
+                  items.push({
+                    key: `${turn.id}-user`,
+                    turnIndex: i,
+                    label: getLabel(content, `Turn ${i + 1}`),
+                    contentLen: content.length,
+                    isUser: true,
+                  });
+                }
+                // Aggregate all assistant content into one line per turn
+                let asstContent = '';
+                for (const item of turn.assistantItems) {
+                  if (item.type === 'assistant' && item.message?.content) {
+                    asstContent += item.message.content;
+                  }
+                }
+                if (asstContent) {
+                  items.push({
+                    key: `${turn.id}-asst`,
+                    turnIndex: i,
+                    label: getLabel(asstContent, 'LobsterAI'),
+                    contentLen: asstContent.length,
+                    isUser: false,
+                  });
+                }
+              }
+              const maxLen = items.reduce((acc, m) => Math.max(acc, m.contentLen), 1);
+              // Sync rail item count and turn-to-rail mapping
+              railItemCountRef.current = items.length;
+              const rangeMap: { first: number; last: number }[] = [];
+              for (let ri = 0; ri < items.length; ri++) {
+                const ti = items[ri].turnIndex;
+                if (!rangeMap[ti]) {
+                  rangeMap[ti] = { first: ri, last: ri };
+                } else {
+                  rangeMap[ti].last = ri;
+                }
+              }
+              turnToRailRangeRef.current = rangeMap;
+
+              // Clamp rail index to valid range
+              const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= items.length
+                ? items.length - 1
+                : currentRailIndex;
+
+              return items.map((msg, idx) => {
+                const isActive = idx === resolvedRailIndex;
+                const isHovered = idx === hoveredRailIndex;
+                const ratio = msg.contentLen / maxLen;
+                const lineW = Math.round(MIN_W + ratio * (MAX_W - MIN_W));
+                return (
+                  <button
+                    key={msg.key}
+                    type="button"
+                    onClick={() => {
+                      navigateToRailItem(idx);
+                    }}
+                    onMouseEnter={(e) => {
+                      setHoveredRailIndex(idx);
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const top = Math.max(8, Math.min(rect.top + rect.height / 2, window.innerHeight - 8));
+                      setRailTooltip({
+                        label: msg.label,
+                        top,
+                        right: window.innerWidth - rect.left + 8,
+                        isUser: msg.isUser,
+                      });
+                    }}
+                    onMouseLeave={() => setRailTooltip(null)}
+                    className="flex items-center justify-end cursor-pointer w-5 py-[5px]"
+                  >
+                    <div
+                      className={`h-[2px] rounded-full transition-all ${
+                        isActive || isHovered
+                          ? 'bg-neutral-800 dark:bg-neutral-200'
+                          : 'bg-neutral-300 dark:bg-neutral-600'
+                      }`}
+                      style={{ width: isActive || isHovered ? MAX_W : lineW }}
+                    />
+                  </button>
+                );
+              });
+            })()}
+            </div>
+
+            {/* Down Arrow */}
             <button
               type="button"
-              onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurn('next')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex >= turns.length - 1
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              onClick={() => {
+                const maxRail = railItemCountRef.current - 1;
+                const resolvedRail = currentRailIndex < 0 ? maxRail : currentRailIndex;
+                if (resolvedRail >= maxRail) return;
+                navigateToRailItem(resolvedRail + 1);
+              }}
+              onMouseEnter={() => { setHoveredRailIndex(null); }}
+              className={`shrink-0 flex items-center justify-center w-5 h-5 mt-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
+                ${!isRailHovered
+                  ? 'opacity-0 pointer-events-none'
+                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) >= railItemCountRef.current - 1
+                    ? 'opacity-30 cursor-default'
+                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
               </svg>
             </button>
           </div>
+        )}
+
+        {railTooltip && createPortal(
+          <div
+            className={`fixed z-[100] px-3.5 py-2 text-[13px] leading-snug pointer-events-none overflow-hidden
+              max-w-[240px] shadow-[0_2px_12px_rgba(0,0,0,0.12)]
+              border dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)]
+              ${railTooltip.isUser
+                ? 'rounded-[12px_12px_4px_12px] bg-white border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
+                : 'rounded-xl bg-neutral-50 border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
+              }`}
+            style={{
+              top: railTooltip.top,
+              right: railTooltip.right,
+              transform: 'translateY(-50%)',
+            }}
+          >
+            {!railTooltip.isUser && (
+              <div className="text-[12px] font-medium mb-0.5 text-neutral-800 dark:text-neutral-200">
+                LobsterAI:
+              </div>
+            )}
+            <div
+              className="text-neutral-600 dark:text-neutral-300"
+              style={{
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                wordBreak: 'break-all',
+              }}
+            >
+              {railTooltip.label}
+            </div>
+          </div>,
+          document.body
         )}
       </div>
 
@@ -2160,6 +2669,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       <div className="p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
           <CoworkPromptInput
+            ref={promptInputRef}
             onSubmit={onContinue}
             onStop={onStop}
             isStreaming={isStreaming}
@@ -2172,6 +2682,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             sessionId={currentSession?.id}
           />
         </div>
+        <p className="text-center text-[11px] text-muted opacity-85 mt-2 mb-[-8px] select-none">
+          {i18nService.t('aiGeneratedDisclaimer')}
+        </p>
       </div>
 
       {/* Bookmarks Panel */}

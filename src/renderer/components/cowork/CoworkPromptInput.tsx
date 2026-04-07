@@ -1,29 +1,26 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
-import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
-import PaperClipIcon from '../icons/PaperClipIcon';
-import XMarkIcon from '../icons/XMarkIcon';
-import ModelSelector from '../ModelSelector';
-import FolderSelectorPopover from './FolderSelectorPopover';
-import { SkillsButton, ActiveSkillBadge } from '../skills';
+import { ExclamationTriangleIcon,PhotoIcon } from '@heroicons/react/24/outline';
+import { FolderIcon,PaperAirplaneIcon, StopIcon } from '@heroicons/react/24/solid';
+import React, { useCallback,useEffect, useRef, useState } from 'react';
+import { useDispatch,useSelector } from 'react-redux';
+
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
-import { setDraftPrompt } from '../../store/slices/coworkSlice';
+import { addDraftAttachment, clearDraftAttachments, type DraftAttachment,setDraftAttachments, setDraftPrompt } from '../../store/slices/coworkSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
-import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
+import { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
+import PaperClipIcon from '../icons/PaperClipIcon';
+import XMarkIcon from '../icons/XMarkIcon';
+import ModelSelector from '../ModelSelector';
+import { ActiveSkillBadge,SkillsButton } from '../skills';
+import FolderSelectorPopover from './FolderSelectorPopover';
 
-type CoworkAttachment = {
-  path: string;
-  name: string;
-  isImage?: boolean;
-  dataUrl?: string;
-};
+// CoworkAttachment is aliased from the Redux-persisted DraftAttachment type
+// so that attachment state survives view switches (cowork ↔ skills, etc.)
+type CoworkAttachment = DraftAttachment;
 
-const INPUT_FILE_LABEL = '输入文件';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
@@ -74,6 +71,8 @@ const buildInlinedSkillPrompt = (skill: Skill): string => {
 export interface CoworkPromptInputRef {
   /** 设置输入框值 */
   setValue: (value: string) => void;
+  /** 设置图片附件（用于重新编辑消息时还原图片） */
+  setImageAttachments: (images: CoworkImageAttachment[]) => void;
   /** 聚焦输入框 */
   focus: () => void;
 }
@@ -115,8 +114,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const dispatch = useDispatch();
     const draftKey = sessionId || '__home__';
     const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[draftKey] || '');
+    const attachments = useSelector((state: RootState) => state.cowork.draftAttachments[draftKey] || []) as CoworkAttachment[];
     const [value, setValue] = useState(draftPrompt);
-    const [attachments, setAttachments] = useState<CoworkAttachment[]>([]);
     const [showFolderMenu, setShowFolderMenu] = useState(false);
     const [showFolderRequiredWarning, setShowFolderRequiredWarning] = useState(false);
     const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -126,6 +125,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const dragDepthRef = useRef(0);
+    const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
@@ -139,6 +139,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight)}px`;
         }
       });
+    },
+    setImageAttachments: (images: CoworkImageAttachment[]) => {
+      const newAttachments: CoworkAttachment[] = images.map((img, idx) => ({
+        path: `inline:${img.name}:reedit-${Date.now()}-${idx}`,
+        name: img.name,
+        isImage: true,
+        dataUrl: `data:${img.mimeType};base64,${img.base64Data}`,
+      }));
+      dispatch(setDraftAttachments({ draftKey, attachments: newAttachments }));
     },
     focus: () => {
       textareaRef.current?.focus();
@@ -186,7 +195,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       const shouldClear = detail?.clear ?? true;
       if (shouldClear) {
         setValue('');
-        setAttachments([]);
+        dispatch(clearDraftAttachments(draftKey));
       }
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
@@ -195,8 +204,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     window.addEventListener('cowork:focus-input', handleFocusInput);
     return () => {
       window.removeEventListener('cowork:focus-input', handleFocusInput);
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
     };
-  }, []);
+  }, [dispatch, draftKey]);
 
   useEffect(() => {
     if (workingDirectory?.trim()) {
@@ -221,6 +231,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const handleSubmit = useCallback(async () => {
     if (showFolderSelector && !workingDirectory?.trim()) {
       setShowFolderRequiredWarning(true);
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+      warningTimerRef.current = setTimeout(() => {
+        setShowFolderRequiredWarning(false);
+        warningTimerRef.current = null;
+      }, 3000);
       return;
     }
 
@@ -257,7 +272,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Note: inline/clipboard images have pseudo-paths starting with 'inline:' and are excluded.
     const attachmentLines = attachments
       .filter((a) => !a.path.startsWith('inline:'))
-      .map((attachment) => `${INPUT_FILE_LABEL}: ${attachment.path}`)
+      .map((attachment) => `${i18nService.t('inputFileLabel')}: ${attachment.path}`)
       .join('\n');
     const finalPrompt = trimmedValue
       ? (attachmentLines ? `${trimmedValue}\n\n${attachmentLines}` : trimmedValue)
@@ -274,7 +289,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     if (result === false) return;
     setValue('');
     dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
-    setAttachments([]);
+    dispatch(clearDraftAttachments(draftKey));
     setImageVisionHint(false);
   }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);
 
@@ -311,12 +326,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   };
 
   const containerClass = isLarge
-    ? 'relative rounded-2xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-card focus-within:shadow-elevated focus-within:ring-1 focus-within:ring-claude-accent/40 focus-within:border-claude-accent'
-    : 'relative flex items-end gap-2 p-3 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface';
+    ? 'relative rounded-2xl border border-border bg-surface shadow-card focus-within:shadow-elevated focus-within:ring-1 focus-within:ring-primary/40 focus-within:border-primary'
+    : 'relative flex items-end gap-2 p-3 rounded-xl border border-border bg-surface';
 
   const textareaClass = isLarge
-    ? `w-full resize-none bg-transparent px-4 pt-2.5 pb-2 dark:text-claude-darkText text-claude-text placeholder:dark:text-claude-darkTextSecondary/60 placeholder:text-claude-textSecondary/60 focus:outline-none text-[15px] leading-6 min-h-[${minHeight}px] max-h-[${maxHeight}px]`
-    : 'flex-1 resize-none bg-transparent dark:text-claude-darkText text-claude-text placeholder:dark:text-claude-darkTextSecondary placeholder:text-claude-textSecondary focus:outline-none text-sm leading-relaxed min-h-[24px] max-h-[200px]';
+    ? `w-full resize-none bg-transparent px-4 pt-2.5 pb-2 text-foreground placeholder:dark:text-foregroundSecondary/60 placeholder:text-secondary/60 focus:outline-none text-[15px] leading-6 min-h-[${minHeight}px] max-h-[${maxHeight}px]`
+    : 'flex-1 resize-none bg-transparent text-foreground placeholder:placeholder:text-secondary focus:outline-none text-sm leading-relaxed min-h-[24px] max-h-[200px]';
 
   const truncatePath = (path: string, maxLength = 30): string => {
     if (!path) return i18nService.t('noFolderSelected');
@@ -334,31 +349,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
     if (!filePath) return;
-    setAttachments((prev) => {
-      if (prev.some((attachment) => attachment.path === filePath)) {
-        return prev;
-      }
-      return [...prev, {
+    dispatch(addDraftAttachment({
+      draftKey,
+      attachment: {
         path: filePath,
         name: getFileNameFromPath(filePath),
         isImage: imageInfo?.isImage,
         dataUrl: imageInfo?.dataUrl,
-      }];
-    });
-  }, []);
+      },
+    }));
+  }, [dispatch, draftKey]);
 
   const addImageAttachmentFromDataUrl = useCallback((name: string, dataUrl: string) => {
     // Use the dataUrl as the unique key (no file path for inline images)
     const pseudoPath = `inline:${name}:${Date.now()}`;
-    setAttachments((prev) => {
-      return [...prev, {
+    dispatch(addDraftAttachment({
+      draftKey,
+      attachment: {
         path: pseudoPath,
         name,
         isImage: true,
         dataUrl,
-      }];
-    });
-  }, []);
+      },
+    }));
+  }, [dispatch, draftKey]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -527,8 +541,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [addAttachment, isAddingFile, disabled, isStreaming, modelSupportsImage]);
 
   const handleRemoveAttachment = useCallback((path: string) => {
-    setAttachments((prev) => prev.filter((attachment) => attachment.path !== path));
-  }, []);
+    dispatch(setDraftAttachments({
+      draftKey,
+      attachments: attachments.filter((attachment) => attachment.path !== path),
+    }));
+  }, [attachments, dispatch, draftKey]);
 
   const hasFileTransfer = (dataTransfer: DataTransfer | null): boolean => {
     if (!dataTransfer) return false;
@@ -583,7 +600,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const canSubmit = !disabled && (!!value.trim() || attachments.length > 0);
   const enhancedContainerClass = isDraggingFiles
-    ? `${containerClass} ring-2 ring-claude-accent/50 border-claude-accent/60`
+    ? `${containerClass} ring-2 ring-primary/50 border-primary/60`
     : containerClass;
 
   return (
@@ -593,7 +610,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           {attachments.map((attachment) => (
               <div
                 key={attachment.path}
-                className="inline-flex items-center gap-1.5 rounded-full border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface px-2.5 py-1 text-xs dark:text-claude-darkText text-claude-text max-w-full"
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-foreground max-w-full"
                 title={attachment.path}
               >
                 {attachment.isImage ? (
@@ -605,7 +622,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 <button
                   type="button"
                   onClick={() => handleRemoveAttachment(attachment.path)}
-                  className="ml-0.5 rounded-full p-0.5 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover"
+                  className="ml-0.5 rounded-full p-0.5 hover:bg-surface-raised"
                   aria-label={i18nService.t('coworkAttachmentRemove')}
                   title={i18nService.t('coworkAttachmentRemove')}
                 >
@@ -619,9 +636,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         <div className="mb-2 flex items-start gap-1.5 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
           <ExclamationTriangleIcon className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
           <span>
-            {i18nService.getLanguage() === 'zh'
-              ? '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。'
-              : 'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.'}
+            {i18nService.t('imageVisionHint')}
           </span>
           <button
             type="button"
@@ -640,7 +655,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         onDrop={handleDrop}
       >
         {isDraggingFiles && (
-          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-claude-accent/10 text-xs font-medium text-claude-accent">
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] bg-primary/10 text-xs font-medium text-primary">
             {i18nService.t('coworkDropFileHint')}
           </div>
         )}
@@ -662,31 +677,47 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               <div className="flex items-center gap-2 relative">
                 {showFolderSelector && (
                   <>
-                    <div className="relative group">
-                      <button
-                        ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
-                        type="button"
-                        onClick={() => setShowFolderMenu(!showFolderMenu)}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
-                      >
-                        <FolderIcon className="h-4 w-4" />
-                        <span className="max-w-[150px] truncate text-xs">
-                          {truncatePath(workingDirectory)}
-                        </span>
-                      </button>
-                      {/* Tooltip - hidden when folder menu is open */}
-                      {!showFolderMenu && (
-                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl dark:bg-claude-darkBg bg-claude-bg dark:text-claude-darkText text-claude-text dark:border-claude-darkBorder border-claude-border border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-50 max-w-[400px] break-all whitespace-nowrap">
-                          {truncatePath(workingDirectory, 120)}
-                        </div>
-                      )}
-                    </div>
+                      <div className="flex items-center">
+                        <button
+                          ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
+                          type="button"
+                          onClick={() => setShowFolderMenu(!showFolderMenu)}
+                          className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 rounded-lg text-sm transition-colors ${
+                            showFolderRequiredWarning
+                              ? 'ring-1 ring-warning text-warning animate-shake'
+                              : 'text-secondary hover:bg-surface-raised hover:text-foreground'
+                          }`}
+                        >
+                          <FolderIcon className="h-4 w-4 flex-shrink-0" />
+                          <span className="max-w-[150px] truncate text-xs">
+                            {truncatePath(workingDirectory)}
+                          </span>
+                          {workingDirectory && (
+                            <span
+                              role="button"
+                              tabIndex={-1}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleFolderSelect('');
+                              }}
+                              className="flex-shrink-0 ml-0.5 p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                            >
+                              <XMarkIcon className="h-3 w-3" />
+                            </span>
+                          )}
+                        </button>
+                      </div>
                     <FolderSelectorPopover
                       isOpen={showFolderMenu}
                       onClose={() => setShowFolderMenu(false)}
                       onSelectFolder={handleFolderSelect}
                       anchorRef={folderButtonRef as React.RefObject<HTMLElement>}
                     />
+                    {showFolderRequiredWarning && (
+                      <div className="absolute left-0 top-full mt-1 px-2 py-1 rounded-md bg-surface-raised text-warning text-xs whitespace-nowrap animate-fade-in-up shadow-subtle z-10">
+                        {i18nService.t('coworkSelectFolderFirst')}
+                      </div>
+                    )}
                   </>
                 )}
                 {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
@@ -694,7 +725,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   <button
                     type="button"
                     onClick={handleAddFile}
-                    className="flex items-center justify-center p-1.5 rounded-lg text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                    className="flex items-center justify-center p-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
                     title={i18nService.t('coworkAddFile')}
                     aria-label={i18nService.t('coworkAddFile')}
                     disabled={disabled || isStreaming || isAddingFile}
@@ -727,7 +758,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     type="button"
                     onClick={handleSubmit}
                     disabled={!canSubmit}
-                    className="p-2 rounded-xl bg-claude-accent hover:bg-claude-accentHover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2 rounded-xl bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Send"
                   >
                     <PaperAirplaneIcon className="h-5 w-5" />
@@ -755,7 +786,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 <button
                   type="button"
                   onClick={handleAddFile}
-                  className="flex-shrink-0 p-1.5 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:hover:text-claude-darkText hover:text-claude-text transition-colors"
+                  className="flex-shrink-0 p-1.5 rounded-lg text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
                   title={i18nService.t('coworkAddFile')}
                   aria-label={i18nService.t('coworkAddFile')}
                   disabled={disabled || isStreaming || isAddingFile}
@@ -779,7 +810,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 type="button"
                 onClick={handleSubmit}
                 disabled={!canSubmit}
-                className="flex-shrink-0 p-2 rounded-lg bg-claude-accent hover:bg-claude-accentHover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-shrink-0 p-2 rounded-lg bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 aria-label="Send"
               >
                 <PaperAirplaneIcon className="h-4 w-4" />
@@ -788,11 +819,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           </>
         )}
       </div>
-      {showFolderRequiredWarning && (
-        <div className="mt-2 text-xs text-red-500 dark:text-red-400">
-          {i18nService.t('coworkSelectFolderFirst')}
-        </div>
-      )}
     </div>
   );
   }

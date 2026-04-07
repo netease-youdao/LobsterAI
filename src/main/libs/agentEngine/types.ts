@@ -18,6 +18,7 @@ export interface CoworkRuntimeEvents {
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
+  sessionStopped: (sessionId: string) => void;
 }
 
 export type CoworkImageAttachment = {
@@ -34,6 +35,7 @@ export type CoworkStartOptions = {
   workspaceRoot?: string;
   confirmationMode?: 'modal' | 'text';
   imageAttachments?: CoworkImageAttachment[];
+  agentId?: string;
 };
 
 export type CoworkContinueOptions = {

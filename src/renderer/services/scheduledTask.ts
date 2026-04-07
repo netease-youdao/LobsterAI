@@ -14,11 +14,44 @@ import {
   appendAllRuns,
 } from '../store/slices/scheduledTaskSlice';
 import type {
+  ScheduledTask,
   ScheduledTaskChannelOption,
+  ScheduledTaskConversationOption,
   ScheduledTaskInput,
   ScheduledTaskStatusEvent,
   ScheduledTaskRunEvent,
-} from '../types/scheduledTask';
+} from '../../scheduledTask/types';
+import { i18nService } from './i18n';
+
+function showToast(message: string): void {
+  window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
+}
+
+function hasTaskDataAnomaly(task: ScheduledTask): boolean {
+  if (task.schedule.kind === 'every') {
+    const ms = task.schedule.everyMs;
+    if (!Number.isFinite(ms) || ms <= 0) return true;
+  }
+  if (task.schedule.kind === 'at') {
+    const d = new Date(task.schedule.at);
+    if (!Number.isFinite(d.getTime())) return true;
+  }
+  const ts = task.state;
+  const nums = [ts.nextRunAtMs, ts.lastRunAtMs, ts.lastDurationMs, ts.runningAtMs];
+  for (const v of nums) {
+    if (v !== null && !Number.isFinite(v)) return true;
+  }
+  return false;
+}
+
+function checkTasksForAnomalies(tasks: ScheduledTask[]): void {
+  const anomalous = tasks.filter(hasTaskDataAnomaly);
+  if (anomalous.length === 0) return;
+
+  const name = anomalous[0].name;
+  const msg = i18nService.t('scheduledTasksDataAnomalyWarning').replace('{name}', name);
+  showToast(msg);
+}
 
 class ScheduledTaskService {
   private cleanupFns: (() => void)[] = [];
@@ -76,6 +109,7 @@ class ScheduledTaskService {
     try {
       const result = await api.list();
       if (result.success && result.tasks) {
+        checkTasksForAnomalies(result.tasks);
         store.dispatch(setTasks(result.tasks));
       }
     } catch (err: unknown) {
@@ -92,6 +126,10 @@ class ScheduledTaskService {
     try {
       const result = await api.create(input);
       if (result.success && result.task) {
+        if (hasTaskDataAnomaly(result.task)) {
+          const msg = i18nService.t('scheduledTasksDataAnomalyWarning').replace('{name}', result.task.name);
+          showToast(msg);
+        }
         store.dispatch(addTask(result.task));
       } else {
         throw new Error(result.error || 'Failed to create task');
@@ -225,6 +263,18 @@ class ScheduledTaskService {
       return result.success && result.channels ? result.channels : [];
     } catch (err: unknown) {
       store.dispatch(setError(err instanceof Error ? err.message : String(err)));
+      return [];
+    }
+  }
+
+  async listChannelConversations(channel: string, accountId?: string): Promise<ScheduledTaskConversationOption[]> {
+    const api = window.electron?.scheduledTasks;
+    if (!api?.listChannelConversations) return [];
+
+    try {
+      const result = await api.listChannelConversations(channel, accountId);
+      return result.success && result.conversations ? result.conversations : [];
+    } catch {
       return [];
     }
   }

@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { Database } from 'sql.js';
+import Database from 'better-sqlite3';
 
 export interface McpServerRecord {
   id: string;
@@ -56,26 +56,13 @@ interface McpConfigJson {
 }
 
 export class McpStore {
-  private db: Database;
-  private saveDb: () => void;
+  private db: Database.Database;
 
-  constructor(db: Database, saveDb: () => void) {
+  constructor(db: Database.Database) {
     this.db = db;
-    this.saveDb = saveDb;
   }
 
-  private deserializeRow(values: unknown[]): McpServerRecord {
-    const row: McpServerRow = {
-      id: values[0] as string,
-      name: values[1] as string,
-      description: values[2] as string,
-      enabled: values[3] as number,
-      transport_type: values[4] as string,
-      config_json: values[5] as string,
-      created_at: values[6] as number,
-      updated_at: values[7] as number,
-    };
-
+  private deserializeRow(row: McpServerRow): McpServerRecord {
     let config: McpConfigJson = {};
     try {
       config = JSON.parse(row.config_json) as McpConfigJson;
@@ -116,20 +103,22 @@ export class McpStore {
   }
 
   listServers(): McpServerRecord[] {
-    const result = this.db.exec(
-      'SELECT id, name, description, enabled, transport_type, config_json, created_at, updated_at FROM mcp_servers ORDER BY created_at ASC'
-    );
-    if (!result[0]) return [];
-    return result[0].values.map((row) => this.deserializeRow(row));
+    const rows = this.db
+      .prepare(
+        'SELECT id, name, description, enabled, transport_type, config_json, created_at, updated_at FROM mcp_servers ORDER BY created_at ASC',
+      )
+      .all() as McpServerRow[];
+    return rows.map((row) => this.deserializeRow(row));
   }
 
   getServer(id: string): McpServerRecord | null {
-    const result = this.db.exec(
-      'SELECT id, name, description, enabled, transport_type, config_json, created_at, updated_at FROM mcp_servers WHERE id = ?',
-      [id]
-    );
-    if (!result[0]?.values[0]) return null;
-    return this.deserializeRow(result[0].values[0]);
+    const row = this.db
+      .prepare(
+        'SELECT id, name, description, enabled, transport_type, config_json, created_at, updated_at FROM mcp_servers WHERE id = ?',
+      )
+      .get(id) as McpServerRow | undefined;
+    if (!row) return null;
+    return this.deserializeRow(row);
   }
 
   createServer(data: McpServerFormData): McpServerRecord {
@@ -137,12 +126,12 @@ export class McpStore {
     const now = Date.now();
     const configJson = this.serializeConfig(data);
 
-    this.db.run(
-      `INSERT INTO mcp_servers (id, name, description, enabled, transport_type, config_json, created_at, updated_at)
+    this.db
+      .prepare(
+        `INSERT INTO mcp_servers (id, name, description, enabled, transport_type, config_json, created_at, updated_at)
        VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
-      [id, data.name, data.description, data.transportType, configJson, now, now]
-    );
-    this.saveDb();
+      )
+      .run(id, data.name, data.description, data.transportType, configJson, now, now);
 
     return this.getServer(id)!;
   }
@@ -168,11 +157,11 @@ export class McpStore {
 
     const configJson = this.serializeConfig(merged);
 
-    this.db.run(
-      `UPDATE mcp_servers SET name = ?, description = ?, transport_type = ?, config_json = ?, updated_at = ? WHERE id = ?`,
-      [merged.name, merged.description, merged.transportType, configJson, now, id]
-    );
-    this.saveDb();
+    this.db
+      .prepare(
+        `UPDATE mcp_servers SET name = ?, description = ?, transport_type = ?, config_json = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(merged.name, merged.description, merged.transportType, configJson, now, id);
 
     return this.getServer(id);
   }
@@ -181,8 +170,7 @@ export class McpStore {
     const existing = this.getServer(id);
     if (!existing) return false;
 
-    this.db.run('DELETE FROM mcp_servers WHERE id = ?', [id]);
-    this.saveDb();
+    this.db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
     return true;
   }
 
@@ -191,19 +179,18 @@ export class McpStore {
     if (!existing) return false;
 
     const now = Date.now();
-    this.db.run(
-      'UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE id = ?',
-      [enabled ? 1 : 0, now, id]
-    );
-    this.saveDb();
+    this.db
+      .prepare('UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE id = ?')
+      .run(enabled ? 1 : 0, now, id);
     return true;
   }
 
   getEnabledServers(): McpServerRecord[] {
-    const result = this.db.exec(
-      'SELECT id, name, description, enabled, transport_type, config_json, created_at, updated_at FROM mcp_servers WHERE enabled = 1 ORDER BY created_at ASC'
-    );
-    if (!result[0]) return [];
-    return result[0].values.map((row) => this.deserializeRow(row));
+    const rows = this.db
+      .prepare(
+        'SELECT id, name, description, enabled, transport_type, config_json, created_at, updated_at FROM mcp_servers WHERE enabled = 1 ORDER BY created_at ASC',
+      )
+      .all() as McpServerRow[];
+    return rows.map((row) => this.deserializeRow(row));
   }
 }

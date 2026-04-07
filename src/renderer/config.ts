@@ -1,3 +1,5 @@
+import { ProviderRegistry } from '@shared/providers';
+
 // 配置类型定义
 export interface AppConfig {
   // API 配置
@@ -22,7 +24,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       // API 协议格式：anthropic 为 Anthropic 兼容，openai 为 OpenAI 兼容
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -33,7 +35,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -44,7 +46,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Moonshot Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -57,7 +59,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 GLM Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -70,7 +72,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** OAuth auth type: 'apikey' (default) or 'oauth' (MiniMax Portal OAuth) */
       authType?: 'apikey' | 'oauth';
       /** OAuth refresh token for automatic token renewal */
@@ -87,7 +89,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -98,9 +100,20 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Qwen Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
+      /** OAuth 凭据 */
+      oauthCredentials?: {
+        access: string;
+        refresh: string;
+        expires: number;
+        resourceUrl?: string;
+      };
+      /** OAuth 专用 Base URL（与 API Key 的 baseUrl 独立） */
+      oauthBaseUrl?: string;
+      /** 是否使用OAuth方式而非API Key */
+      useOAuth?: boolean;
       models?: Array<{
         id: string;
         name: string;
@@ -111,7 +124,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -122,7 +135,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -133,7 +146,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -144,7 +157,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Volcengine Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -157,7 +170,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -168,7 +181,18 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
+    'github-copilot': {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -179,7 +203,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -190,7 +214,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -201,11 +225,20 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       codingPlanEnabled?: boolean;
+      oauthCredentials?: {
+        access: string;
+        refresh: string;
+        expires: number;
+        resourceUrl?: string;
+      };
+      oauthBaseUrl?: string;
+      useOAuth?: boolean;
       authType?: 'apikey' | 'oauth';
       oauthRefreshToken?: string;
       oauthTokenExpiresAt?: number;
+      displayName?: string;
       models?: Array<{
         id: string;
         name: string;
@@ -236,6 +269,31 @@ export interface AppConfig {
   };
 }
 
+const buildDefaultProviders = (): AppConfig['providers'] => {
+  const providers: Record<string, {
+    enabled: boolean;
+    apiKey: string;
+    baseUrl: string;
+    apiFormat?: 'anthropic' | 'openai' | 'gemini';
+    codingPlanEnabled?: boolean;
+    models?: Array<{ id: string; name: string; supportsImage?: boolean }>;
+  }> = {};
+
+  for (const id of ProviderRegistry.providerIds) {
+    const def = ProviderRegistry.get(id)!;
+    providers[id] = {
+      enabled: false,
+      apiKey: '',
+      baseUrl: def.defaultBaseUrl,
+      apiFormat: def.defaultApiFormat,
+      ...(def.codingPlanSupported ? { codingPlanEnabled: false } : {}),
+      models: def.defaultModels.map(m => ({ ...m })),
+    };
+  }
+
+  return providers as AppConfig['providers'];
+};
+
 // 默认配置
 export const defaultConfig: AppConfig = {
   api: {
@@ -249,163 +307,7 @@ export const defaultConfig: AppConfig = {
     defaultModel: 'deepseek-reasoner',
     defaultModelProvider: 'deepseek',
   },
-  providers: {
-    openai: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://api.openai.com',
-      apiFormat: 'openai',
-      models: [
-        { id: 'gpt-5.2-2025-12-11', name: 'GPT-5.2', supportsImage: true },
-        { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', supportsImage: true }
-      ]
-    },
-    gemini: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      apiFormat: 'openai',
-      models: [
-        { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true },
-        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true },
-        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', supportsImage: true }
-      ]
-    },
-    anthropic: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://api.anthropic.com',
-      apiFormat: 'anthropic',
-      models: [
-        { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', supportsImage: true },
-        { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', supportsImage: true },
-        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', supportsImage: true }
-      ]
-    },
-    deepseek: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://api.deepseek.com/anthropic',
-      apiFormat: 'anthropic',
-      models: [
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }
-      ]
-    },
-    moonshot: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://api.moonshot.cn/anthropic',
-      apiFormat: 'anthropic',
-      codingPlanEnabled: false,
-      models: [
-        { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true }
-      ]
-    },
-    zhipu: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
-      apiFormat: 'anthropic',
-      codingPlanEnabled: false,
-      models: [
-        { id: 'glm-5', name: 'GLM 5', supportsImage: false },
-        { id: 'glm-4.7', name: 'GLM 4.7', supportsImage: false }
-      ]
-    },
-    minimax: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://api.minimaxi.com/anthropic',
-      apiFormat: 'anthropic',
-      models: [
-        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
-        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false }
-      ]
-    },
-    youdaozhiyun: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://openapi.youdao.com/llmgateway/api/v1/chat/completions',
-      apiFormat: 'openai',
-      models: [
-        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
-        { id: 'deepseek-inhouse-chat', name: 'DeepSeek Chat (安全)', supportsImage: false },
-        { id: 'deepseek-inhouse-reasoner', name: 'DeepSeek Reasoner (安全)', supportsImage: false }
-      ]
-    },
-    qwen: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://dashscope.aliyuncs.com/apps/anthropic',
-      apiFormat: 'anthropic',
-      codingPlanEnabled: false,
-      models: [
-        { id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', supportsImage: true },
-        { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus', supportsImage: false }
-      ]
-    },
-    xiaomi: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://api.xiaomimimo.com/anthropic',
-      apiFormat: 'anthropic',
-      models: [
-        { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', supportsImage: false }
-      ]
-    },
-    stepfun: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://api.stepfun.com/v1',
-      apiFormat: 'openai',
-      models: [
-        { id: 'step-3.5-flash', name: 'Step 3.5 Flash', supportsImage: false }
-      ]
-    },
-    volcengine: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://ark.cn-beijing.volces.com/api/compatible',
-      apiFormat: 'anthropic',
-      codingPlanEnabled: false,
-      models: [
-        { id: 'ark-code-latest', name: 'Auto', supportsImage: false },
-        { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao-Seed-2.0-pro', supportsImage: false },
-        { id: 'doubao-seed-2-0-lite-260215', name: 'Doubao-Seed-2.0-lite', supportsImage: false },
-        { id: 'doubao-seed-2-0-mini-260215', name: 'Doubao-Seed-2.0-mini', supportsImage: false }
-      ]
-    },
-    openrouter: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'https://openrouter.ai/api',
-      apiFormat: 'anthropic',
-      models: [
-        { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', supportsImage: true },
-        { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', supportsImage: true },
-        { id: 'openai/gpt-5.2-codex', name: 'GPT 5.2 Codex', supportsImage: true },
-        { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true },
-      ]
-    },
-    ollama: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: 'http://localhost:11434/v1',
-      apiFormat: 'openai',
-      models: [
-        { id: 'qwen3-coder-next', name: 'Qwen3-Coder-Next', supportsImage: false },
-        { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false }
-      ]
-    },
-    custom: {
-      enabled: false,
-      apiKey: '',
-      baseUrl: '',
-      apiFormat: 'openai',
-      models: []
-    }
-  },
+  providers: buildDefaultProviders(),
   theme: 'system',
   language: 'zh',
   useSystemProxy: false,
@@ -430,38 +332,43 @@ export const CONFIG_KEYS = {
   SKILLS: 'skills',
 };
 
-// 模型提供商分类
-export const CHINA_PROVIDERS = ['deepseek', 'moonshot', 'qwen', 'zhipu', 'minimax', 'volcengine', 'youdaozhiyun', 'stepfun', 'xiaomi', 'ollama', 'custom'] as const;
-export const GLOBAL_PROVIDERS = ['openai', 'gemini', 'anthropic', 'openrouter'] as const;
-export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
+// Provider lists derived from ProviderRegistry — single source of truth
+export const CHINA_PROVIDERS = [...ProviderRegistry.idsByRegion('china')] as const;
+export const GLOBAL_PROVIDERS = ProviderRegistry.idsByRegion('global');
+
+export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] => {
+  if (language === 'zh') {
+    return [...CHINA_PROVIDERS];
+  }
+  return ProviderRegistry.idsForEnLocale();
+};
 
 /**
- * 根据语言获取可见的模型提供商
+ * 判断 provider key 是否为自定义提供商（custom_0, custom_1, ...）
  */
-export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] => {
-  // 开发环境下显示所有提供商
-  // if (import.meta.env.DEV) {
-  //   return [...CHINA_PROVIDERS, ...GLOBAL_PROVIDERS];
-  // }
+export const isCustomProvider = (key: string): boolean => key.startsWith('custom_');
 
-  // 中文 → 中国版，英文 → 国际版
-  if (language === 'zh') {
-    return CHINA_PROVIDERS;
-  }
+/**
+ * 从 custom_N key 中提取默认显示名称（如 custom_0 → "Custom0"）
+ */
+export const getCustomProviderDefaultName = (key: string): string => {
+  const suffix = key.replace('custom_', '');
+  return `Custom${suffix}`;
+};
 
-  const orderedProviders = [
-    ...EN_PRIORITY_PROVIDERS,
-    ...CHINA_PROVIDERS,
-    ...GLOBAL_PROVIDERS,
-  ];
-  const uniqueProviders = [...new Set(orderedProviders)];
-  // Move ollama and custom to the end, with custom last
-  for (const key of ['ollama', 'custom'] as const) {
-    const idx = uniqueProviders.indexOf(key);
-    if (idx !== -1) {
-      uniqueProviders.splice(idx, 1);
-      uniqueProviders.push(key);
-    }
+/**
+ * 获取 provider 的显示名称，自定义 provider 优先使用 displayName，
+ * 内置 provider 使用首字母大写的 key。
+ */
+export const getProviderDisplayName = (
+  providerKey: string,
+  providerConfig?: Record<string, unknown>,
+): string => {
+  if (isCustomProvider(providerKey)) {
+    const name = providerConfig && typeof providerConfig.displayName === 'string'
+      ? providerConfig.displayName
+      : '';
+    return name || getCustomProviderDefaultName(providerKey);
   }
-  return uniqueProviders;
+  return providerKey.charAt(0).toUpperCase() + providerKey.slice(1);
 };

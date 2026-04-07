@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import type { Platform } from '../shared/platform';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -14,6 +16,7 @@ contextBridge.exposeInMainWorld('electron', {
     setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('skills:setEnabled', options),
     delete: (id: string) => ipcRenderer.invoke('skills:delete', id),
     download: (source: string) => ipcRenderer.invoke('skills:download', source),
+    upgrade: (skillId: string, downloadUrl: string) => ipcRenderer.invoke('skills:upgrade', skillId, downloadUrl),
     confirmInstall: (pendingId: string, action: string) =>
       ipcRenderer.invoke('skills:confirmInstall', pendingId, action),
     getRoot: () => ipcRenderer.invoke('skills:getRoot'),
@@ -36,10 +39,23 @@ contextBridge.exposeInMainWorld('electron', {
     setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('mcp:setEnabled', options),
     fetchMarketplace: () => ipcRenderer.invoke('mcp:fetchMarketplace'),
     refreshBridge: () => ipcRenderer.invoke('mcp:refreshBridge'),
+    onBridgeSyncStart: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('mcp:bridge:syncStart', handler);
+      return () => ipcRenderer.removeListener('mcp:bridge:syncStart', handler);
+    },
+    onBridgeSyncDone: (callback: (data: { tools: number; error?: string }) => void) => {
+      const handler = (_event: any, data: { tools: number; error?: string }) => callback(data);
+      ipcRenderer.on('mcp:bridge:syncDone', handler);
+      return () => ipcRenderer.removeListener('mcp:bridge:syncDone', handler);
+    },
   },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),
     requestCalendar: () => ipcRenderer.invoke('permissions:requestCalendar'),
+  },
+  enterprise: {
+    getConfig: () => ipcRenderer.invoke('enterprise:getConfig'),
   },
   api: {
     // 普通 API 请求（非流式）
@@ -133,9 +149,39 @@ contextBridge.exposeInMainWorld('electron', {
       },
     },
   },
+  agents: {
+    list: async () => {
+      const result = await ipcRenderer.invoke('agents:list');
+      return result?.success ? result.agents : [];
+    },
+    get: async (id: string) => {
+      const result = await ipcRenderer.invoke('agents:get', id);
+      return result?.success ? result.agent : null;
+    },
+    create: async (request: { id?: string; name: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; source?: string; presetId?: string }) => {
+      const result = await ipcRenderer.invoke('agents:create', request);
+      return result?.success ? result.agent : null;
+    },
+    update: async (id: string, updates: { name?: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; enabled?: boolean }) => {
+      const result = await ipcRenderer.invoke('agents:update', id, updates);
+      return result?.success ? result.agent : null;
+    },
+    delete: async (id: string) => {
+      const result = await ipcRenderer.invoke('agents:delete', id);
+      return result?.success ? result.deleted : false;
+    },
+    presets: async () => {
+      const result = await ipcRenderer.invoke('agents:presets');
+      return result?.success ? result.presets : [];
+    },
+    addPreset: async (presetId: string) => {
+      const result = await ipcRenderer.invoke('agents:addPreset', presetId);
+      return result?.success ? result.agent : null;
+    },
+  },
   cowork: {
     // Session management
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; agentId?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:start', options),
     continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:continue', options),
@@ -153,14 +199,16 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:get', sessionId),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
-    listSessions: () =>
-      ipcRenderer.invoke('cowork:session:list'),
+    listSessions: (agentId?: string) =>
+      ipcRenderer.invoke('cowork:session:list', agentId),
     exportResultImage: (options: { rect: { x: number; y: number; width: number; height: number }; defaultFileName?: string }) =>
       ipcRenderer.invoke('cowork:session:exportResultImage', options),
     captureImageChunk: (options: { rect: { x: number; y: number; width: number; height: number } }) =>
       ipcRenderer.invoke('cowork:session:captureImageChunk', options),
     saveResultImage: (options: { pngBase64: string; defaultFileName?: string }) =>
       ipcRenderer.invoke('cowork:session:saveResultImage', options),
+    exportSessionText: (options: { content: string; defaultFileName?: string; fileExtension?: string }) =>
+      ipcRenderer.invoke('cowork:session:exportText', options),
 
     // Permission handling
     respondToPermission: (options: { requestId: string; result: any }) =>
@@ -225,6 +273,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, data: { sessionId: string; request: any }) => callback(data);
       ipcRenderer.on('cowork:stream:permission', handler);
       return () => ipcRenderer.removeListener('cowork:stream:permission', handler);
+    },
+    onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => {
+      const handler = (_event: any, data: { requestId: string }) => callback(data);
+      ipcRenderer.on('cowork:stream:permissionDismiss', handler);
+      return () => ipcRenderer.removeListener('cowork:stream:permissionDismiss', handler);
     },
     onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => {
       const handler = (_event: any, data: { sessionId: string; claudeSessionId: string | null }) => callback(data);
@@ -292,10 +345,10 @@ contextBridge.exposeInMainWorld('electron', {
     syncConfig: () => ipcRenderer.invoke('im:config:sync'),
 
     // Gateway control
-    startGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin') => ipcRenderer.invoke('im:gateway:start', platform),
-    stopGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin') => ipcRenderer.invoke('im:gateway:stop', platform),
+    startGateway: (platform: Platform) => ipcRenderer.invoke('im:gateway:start', platform),
+    stopGateway: (platform: Platform) => ipcRenderer.invoke('im:gateway:stop', platform),
     testGateway: (
-      platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom' | 'popo' | 'weixin',
+      platform: Platform,
       configOverride?: any
     ) => ipcRenderer.invoke('im:gateway:test', platform, configOverride),
 
@@ -315,6 +368,24 @@ contextBridge.exposeInMainWorld('electron', {
     approvePairingCode: (platform: string, code: string) => ipcRenderer.invoke('im:pairing:approve', platform, code),
     rejectPairingRequest: (platform: string, code: string) => ipcRenderer.invoke('im:pairing:reject', platform, code),
 
+    // DingTalk Multi-Instance
+    addDingTalkInstance: (name: string) => ipcRenderer.invoke('im:dingtalk:instance:add', name),
+    deleteDingTalkInstance: (instanceId: string) => ipcRenderer.invoke('im:dingtalk:instance:delete', instanceId),
+    setDingTalkInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:dingtalk:instance:config:set', instanceId, config, options),
+
+    // QQ Multi-Instance
+    addQQInstance: (name: string) => ipcRenderer.invoke('im:qq:instance:add', name),
+    deleteQQInstance: (instanceId: string) => ipcRenderer.invoke('im:qq:instance:delete', instanceId),
+    setQQInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:qq:instance:config:set', instanceId, config, options),
+
+    // Feishu Multi-Instance
+    addFeishuInstance: (name: string) => ipcRenderer.invoke('im:feishu:instance:add', name),
+    deleteFeishuInstance: (instanceId: string) => ipcRenderer.invoke('im:feishu:instance:delete', instanceId),
+    setFeishuInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:feishu:instance:config:set', instanceId, config, options),
+
     // Event listeners
     onStatusChange: (callback: (status: any) => void) => {
       const handler = (_event: any, status: any) => callback(status);
@@ -329,48 +400,82 @@ contextBridge.exposeInMainWorld('electron', {
   },
   scheduledTasks: {
     // Task CRUD
-    list: () => ipcRenderer.invoke('scheduledTask:list'),
-    get: (id: string) => ipcRenderer.invoke('scheduledTask:get', id),
-    create: (input: any) => ipcRenderer.invoke('scheduledTask:create', input),
-    update: (id: string, input: any) => ipcRenderer.invoke('scheduledTask:update', id, input),
-    delete: (id: string) => ipcRenderer.invoke('scheduledTask:delete', id),
-    toggle: (id: string, enabled: boolean) => ipcRenderer.invoke('scheduledTask:toggle', id, enabled),
+    list: () => ipcRenderer.invoke(ScheduledTaskIpc.List),
+    get: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Get, id),
+    create: (input: any) => ipcRenderer.invoke(ScheduledTaskIpc.Create, input),
+    update: (id: string, input: any) => ipcRenderer.invoke(ScheduledTaskIpc.Update, id, input),
+    delete: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Delete, id),
+    toggle: (id: string, enabled: boolean) => ipcRenderer.invoke(ScheduledTaskIpc.Toggle, id, enabled),
 
     // Execution
-    runManually: (id: string) => ipcRenderer.invoke('scheduledTask:runManually', id),
-    stop: (id: string) => ipcRenderer.invoke('scheduledTask:stop', id),
+    runManually: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.RunManually, id),
+    stop: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Stop, id),
 
     // Run history
     listRuns: (taskId: string, limit?: number, offset?: number) =>
-      ipcRenderer.invoke('scheduledTask:listRuns', taskId, limit, offset),
-    countRuns: (taskId: string) => ipcRenderer.invoke('scheduledTask:countRuns', taskId),
+      ipcRenderer.invoke(ScheduledTaskIpc.ListRuns, taskId, limit, offset),
+    countRuns: (taskId: string) => ipcRenderer.invoke(ScheduledTaskIpc.CountRuns, taskId),
     listAllRuns: (limit?: number, offset?: number) =>
-      ipcRenderer.invoke('scheduledTask:listAllRuns', limit, offset),
+      ipcRenderer.invoke(ScheduledTaskIpc.ListAllRuns, limit, offset),
     resolveSession: (sessionKey: string) =>
-      ipcRenderer.invoke('scheduledTask:resolveSession', sessionKey),
+      ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, sessionKey),
 
     // Delivery channels
-    listChannels: () => ipcRenderer.invoke('scheduledTask:listChannels'),
+    listChannels: () => ipcRenderer.invoke(ScheduledTaskIpc.ListChannels),
+    listChannelConversations: (channel: string, accountId?: string) => ipcRenderer.invoke(ScheduledTaskIpc.ListChannelConversations, channel, accountId),
 
     // Stream event listeners
     onStatusUpdate: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('scheduledTask:statusUpdate', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:statusUpdate', handler);
+      ipcRenderer.on(ScheduledTaskIpc.StatusUpdate, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.StatusUpdate, handler);
     },
     onRunUpdate: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('scheduledTask:runUpdate', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:runUpdate', handler);
+      ipcRenderer.on(ScheduledTaskIpc.RunUpdate, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.RunUpdate, handler);
     },
     onRefresh: (callback: () => void) => {
       const handler = () => callback();
-      ipcRenderer.on('scheduledTask:refresh', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:refresh', handler);
+      ipcRenderer.on(ScheduledTaskIpc.Refresh, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.Refresh, handler);
     },
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
+  },
+  qwen: {
+    // OAuth登录
+    oauthLogin: () => ipcRenderer.invoke('qwen:oauth:login'),
+    // OAuth刷新token
+    oauthRefresh: (refreshToken: string) => ipcRenderer.invoke('qwen:oauth:refresh', refreshToken),
+    // OAuth进度监听
+    onOAuthProgress: (callback: (message: string) => void) => {
+      const handler = (_event: any, message: string) => callback(message);
+      ipcRenderer.on('qwen:oauth:progress', handler);
+      return () => ipcRenderer.removeListener('qwen:oauth:progress', handler);
+    },
+  },
+  auth: {
+    login: (loginUrl?: string) => ipcRenderer.invoke('auth:login', { loginUrl }),
+    exchange: (code: string) => ipcRenderer.invoke('auth:exchange', { code }),
+    getUser: () => ipcRenderer.invoke('auth:getUser'),
+    getQuota: () => ipcRenderer.invoke('auth:getQuota'),
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    refreshToken: () => ipcRenderer.invoke('auth:refreshToken'),
+    getAccessToken: () => ipcRenderer.invoke('auth:getAccessToken'),
+    getModels: () => ipcRenderer.invoke('auth:getModels'),
+    getProfileSummary: () => ipcRenderer.invoke('auth:getProfileSummary'),
+    onCallback: (callback: (data: { code: string }) => void) => {
+      const handler = (_event: any, data: { code: string }) => callback(data);
+      ipcRenderer.on('auth:callback', handler);
+      return () => ipcRenderer.removeListener('auth:callback', handler);
+    },
+    onQuotaChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('auth:quotaChanged', handler);
+      return () => ipcRenderer.removeListener('auth:quotaChanged', handler);
+    },
   },
   feishu: {
     install: {
@@ -394,6 +499,38 @@ contextBridge.exposeInMainWorld('electron', {
           success: boolean;
           error?: string;
         }>,
+    },
+  },
+  githubCopilot: {
+    requestDeviceCode: () =>
+      ipcRenderer.invoke('github-copilot:request-device-code') as Promise<{
+        userCode: string;
+        verificationUri: string;
+        deviceCode: string;
+        interval: number;
+        expiresIn: number;
+      }>,
+    pollForToken: (deviceCode: string, interval: number, expiresIn: number) =>
+      ipcRenderer.invoke('github-copilot:poll-for-token', { deviceCode, interval, expiresIn }) as Promise<{
+        success: boolean;
+        token?: string;
+        githubUser?: string;
+        baseUrl?: string;
+        error?: string;
+      }>,
+    cancelPolling: () => ipcRenderer.invoke('github-copilot:cancel-polling') as Promise<void>,
+    signOut: () => ipcRenderer.invoke('github-copilot:sign-out') as Promise<void>,
+    refreshToken: () =>
+      ipcRenderer.invoke('github-copilot:refresh-token') as Promise<{
+        success: boolean;
+        token?: string;
+        baseUrl?: string;
+        error?: string;
+      }>,
+    onTokenUpdated: (callback: (data: { token: string; baseUrl: string }) => void) => {
+      const handler = (_event: unknown, data: { token: string; baseUrl: string }) => callback(data);
+      ipcRenderer.on('github-copilot:token-updated', handler);
+      return () => ipcRenderer.removeListener('github-copilot:token-updated', handler);
     },
   },
 });

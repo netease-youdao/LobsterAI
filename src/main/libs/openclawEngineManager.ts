@@ -5,9 +5,8 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
-import { getElectronNodeRuntimePath, ensureElectronNodeShim } from './coworkUtil';
+import { getElectronNodeRuntimePath, ensureElectronNodeShim, getSkillsRoot } from './coworkUtil';
 import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
-import { applyBundledOpenClawRuntimeHotfixes } from './openclawRuntimeHotfix';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 
@@ -17,7 +16,8 @@ const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
 const GATEWAY_BOOT_TIMEOUT_MS = 300 * 1000;
-const GATEWAY_RESTART_DELAY_MS = 3000;
+const GATEWAY_MAX_RESTART_ATTEMPTS = 5;
+const GATEWAY_RESTART_DELAYS = [3_000, 5_000, 10_000, 20_000, 30_000];
 
 export type OpenClawEnginePhase =
   | 'not_installed'
@@ -155,6 +155,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayProcess: GatewayProcess | null = null;
   private readonly expectedGatewayExits = new WeakSet<object>();
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
+  private gatewayRestartAttempt = 0;
   private shutdownRequested = false;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
@@ -340,7 +341,7 @@ export class OpenClawEngineManager extends EventEmitter {
         }
       }
 
-      this.stopGatewayProcess(this.gatewayProcess);
+      await this.stopGatewayProcess(this.gatewayProcess);
       this.gatewayProcess = null;
     }
 
@@ -358,19 +359,6 @@ export class OpenClawEngineManager extends EventEmitter {
 
     this.ensureBareEntryFiles(runtime.root);
     console.log(`[OpenClaw] startGateway: ensureBareEntryFiles done (${elapsed()})`);
-    // Skip hotfixes when gateway-bundle.mjs exists. The hotfixes patch individual
-    // JS files in dist/, but the bundle is a single esbuild artifact that doesn't
-    // use those files. Applying hotfixes with bundle present is wasteful (Electron's
-    // transparent asar read causes walkJsFiles to scan ~1100 files inside gateway.asar)
-    // and can take 250+ seconds on Windows due to Defender scanning.
-    const bundlePath = path.join(runtime.root, 'gateway-bundle.mjs');
-    if (fs.existsSync(bundlePath)) {
-      console.log(`[OpenClaw] startGateway: skipping applyRuntimeHotfixes (bundle exists) (${elapsed()})`);
-    } else {
-      this.applyRuntimeHotfixes(runtime.root);
-      console.log(`[OpenClaw] startGateway: applyRuntimeHotfixes done (${elapsed()})`);
-    }
-
     const openclawEntry = this.resolveOpenClawEntry(runtime.root);
     console.log(`[OpenClaw] startGateway: resolveOpenClawEntry done (${elapsed()}), entry=${openclawEntry}`);
     if (!openclawEntry) {
@@ -404,9 +392,12 @@ export class OpenClawEngineManager extends EventEmitter {
     console.log(`[OpenClaw] compile cache dir: ${compileCacheDir}`);
     const electronNodeRuntimePath = getElectronNodeRuntimePath();
     const cliShimDir = this.ensureBundledCliShims();
+    const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      SKILLS_ROOT: skillsRoot,
+      LOBSTERAI_SKILLS_ROOT: skillsRoot,
       OPENCLAW_HOME: runtime.root,
       OPENCLAW_STATE_DIR: this.stateDir,
       OPENCLAW_CONFIG_PATH: this.configPath,
@@ -426,6 +417,18 @@ export class OpenClawEngineManager extends EventEmitter {
       // This keeps plaintext credentials out of the config file on disk.
       ...this.secretEnvVars,
     };
+
+    // Ensure the gateway process uses the host's local timezone for logging.
+    // macOS does not set TZ in the environment by default (it uses NSTimeZone/ICU),
+    // so utilityProcess.fork() children may fall back to UTC for date formatting.
+    if (!env.TZ) {
+      const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (hostTimezone) {
+        env.TZ = hostTimezone;
+        console.log(`[OpenClaw] injected TZ=${hostTimezone} into gateway env`);
+      }
+    }
+
     if (cliShimDir) {
       // Plain object is case-sensitive: the spread key from process.env on Windows is "Path",
       // not "PATH". We must read the actual key to avoid creating a PATH with only cliShimDir.
@@ -515,6 +518,8 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     console.log(`[OpenClaw] startGateway: gateway is running, total startup time: ${elapsed()}`);
+    // Reset restart counter on successful start — gateway is healthy
+    this.gatewayRestartAttempt = 0;
     this.setStatus({
       phase: 'running',
       version: runtime.version,
@@ -535,7 +540,9 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     if (this.gatewayProcess) {
-      this.stopGatewayProcess(this.gatewayProcess);
+      console.log('[OpenClaw] stopping gateway process...');
+      await this.stopGatewayProcess(this.gatewayProcess);
+      console.log('[OpenClaw] gateway process stopped');
       this.gatewayProcess = null;
     }
 
@@ -553,6 +560,8 @@ export class OpenClawEngineManager extends EventEmitter {
   async restartGateway(): Promise<OpenClawEngineStatus> {
     console.log('[OpenClaw] restartGateway: stopping existing gateway...');
     await this.stopGateway();
+    // Reset restart counter on manual restart so user can always retry
+    this.gatewayRestartAttempt = 0;
     console.log('[OpenClaw] restartGateway: starting gateway with new env...');
     return this.startGateway();
   }
@@ -677,20 +686,6 @@ export class OpenClawEngineManager extends EventEmitter {
       console.log('[OpenClaw] Extracted dist/control-ui/');
     } catch (err) {
       console.error('[OpenClaw] Failed to extract dist/control-ui/ from gateway.asar:', err);
-    }
-  }
-
-  private applyRuntimeHotfixes(runtimeRoot: string): void {
-    const result = applyBundledOpenClawRuntimeHotfixes(runtimeRoot);
-    if (result.changed) {
-      console.log(
-        `[OpenClaw] Applied runtime hotfixes: ${result.patchedFiles
-          .map((filePath) => path.relative(runtimeRoot, filePath))
-          .join(', ')}`,
-      );
-    }
-    if (result.errors.length > 0) {
-      console.warn('[OpenClaw] Runtime hotfix warnings:', result.errors.join(' | '));
     }
   }
 
@@ -1202,24 +1197,70 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  private stopGatewayProcess(child: GatewayProcess): void {
+  private stopGatewayProcess(child: GatewayProcess): Promise<void> {
     this.expectedGatewayExits.add(child);
 
-    try {
-      child.kill();
-    } catch {
-      // ignore
-    }
+    return new Promise<void>((resolve) => {
+      // Already exited — resolve immediately.
+      if ('exitCode' in child && child.exitCode !== null) {
+        resolve();
+        return;
+      }
 
-    setTimeout(() => {
+      const timeoutMs = 5_000;
+      let settled = false;
+
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(forceTimer);
+        resolve();
+      };
+
+      // Listen for exit (ChildProcess) or exit (UtilityProcess).
+      child.once('exit', done);
+
+      // First attempt: graceful kill.
       try {
-        if ('pid' in child && typeof child.pid === 'number') {
-          child.kill();
-        }
+        child.kill();
       } catch {
         // ignore
       }
-    }, 1200);
+
+      // Fallback: force-kill after 1.2s if still alive, then hard-timeout at 5s.
+      const forceTimer = setTimeout(() => {
+        try {
+          if ('pid' in child && typeof child.pid === 'number') {
+            child.kill();
+          }
+        } catch {
+          // ignore
+        }
+        // Guarantee we don't block shutdown forever.
+        setTimeout(done, 2_000);
+      }, 1_200);
+
+      // Hard timeout: always resolve within timeoutMs.
+      setTimeout(done, timeoutMs);
+    });
+  }
+
+  // Workaround: Electron utilityProcess V8 isolate reports getTimezoneOffset()=0.
+  private static rewriteUtcTimestamps(text: string): string {
+    return text.replace(
+      /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g,
+      (utc) => {
+        const d = new Date(utc);
+        if (Number.isNaN(d.getTime())) return utc;
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const ms = String(d.getMilliseconds()).padStart(3, '0');
+        const offsetMin = -d.getTimezoneOffset();
+        const sign = offsetMin >= 0 ? '+' : '-';
+        const absH = Math.floor(Math.abs(offsetMin) / 60);
+        const absM = Math.abs(offsetMin) % 60;
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${ms}${sign}${pad(absH)}:${pad(absM)}`;
+      },
+    );
   }
 
   private attachGatewayProcessLogs(child: GatewayProcess): void {
@@ -1234,11 +1275,13 @@ export class OpenClawEngineManager extends EventEmitter {
 
     child.stdout?.on('data', (chunk) => {
       appendLog(chunk, 'stdout');
-      console.log(`[OpenClaw stdout] ${typeof chunk === 'string' ? chunk : chunk.toString()}`);
+      const text = typeof chunk === 'string' ? chunk : chunk.toString();
+      console.log(`[OpenClaw stdout] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
     child.stderr?.on('data', (chunk) => {
       appendLog(chunk, 'stderr');
-      console.error(`[OpenClaw stderr] ${typeof chunk === 'string' ? chunk : chunk.toString()}`);
+      const text = typeof chunk === 'string' ? chunk : chunk.toString();
+      console.error(`[OpenClaw stderr] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
   }
 
@@ -1288,11 +1331,26 @@ export class OpenClawEngineManager extends EventEmitter {
     if (this.shutdownRequested) return;
     if (this.gatewayRestartTimer) return;
 
+    if (this.gatewayRestartAttempt >= GATEWAY_MAX_RESTART_ATTEMPTS) {
+      console.error(`[OpenClaw] gateway auto-restart limit reached (${GATEWAY_MAX_RESTART_ATTEMPTS} attempts), giving up`);
+      this.setStatus({
+        phase: 'error',
+        version: this.status.version,
+        message: `OpenClaw gateway failed to start after ${GATEWAY_MAX_RESTART_ATTEMPTS} attempts. Check model configuration or restart manually.`,
+        canRetry: true,
+      });
+      return;
+    }
+
+    const delay = GATEWAY_RESTART_DELAYS[Math.min(this.gatewayRestartAttempt, GATEWAY_RESTART_DELAYS.length - 1)];
+    this.gatewayRestartAttempt++;
+    console.log(`[OpenClaw] scheduling gateway restart attempt ${this.gatewayRestartAttempt}/${GATEWAY_MAX_RESTART_ATTEMPTS} in ${delay}ms`);
+
     this.gatewayRestartTimer = setTimeout(() => {
       this.gatewayRestartTimer = null;
       if (this.shutdownRequested) return;
       void this.startGateway();
-    }, GATEWAY_RESTART_DELAY_MS);
+    }, delay);
   }
 
   private setStatus(next: OpenClawEngineStatus): void {

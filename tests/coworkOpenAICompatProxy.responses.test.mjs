@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const proxyModule = require('../dist-electron/libs/coworkOpenAICompatProxy.js');
+const proxyModule = require('../dist-electron/main/libs/coworkOpenAICompatProxy.js');
 const testUtils = proxyModule.__openAICompatProxyTestUtils;
 
 if (!testUtils) {

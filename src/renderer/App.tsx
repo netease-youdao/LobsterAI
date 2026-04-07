@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from './store';
+import { RootState, store } from './store';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import Toast from './components/Toast';
@@ -9,6 +9,7 @@ import { CoworkView, BookmarksView } from './components/cowork';
 import { SkillsView } from './components/skills';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import { McpView } from './components/mcp';
+import AgentsView from './components/agent/AgentsView';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
@@ -16,11 +17,13 @@ import { configService } from './services/config';
 import { apiService } from './services/api';
 import { themeService } from './services/theme';
 import { coworkService } from './services/cowork';
+import { authService } from './services/auth';
 import { scheduledTaskService } from './services/scheduledTask';
 import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
-import { defaultConfig } from './config';
+import { defaultConfig, getProviderDisplayName } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
+import { setDraftPrompt } from './store/slices/coworkSlice';
 import type { ApiConfig } from './services/api';
 import type { CoworkPermissionResult } from './types/cowork';
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
@@ -33,7 +36,7 @@ import PrivacyDialog from './components/PrivacyDialog';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'bookmarks'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'bookmarks' | 'agents'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -45,6 +48,10 @@ const App: React.FC = () => {
   const [downloadProgress, setDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [enterpriseConfig, setEnterpriseConfig] = useState<{
+    ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
+    disableUpdate?: boolean;
+  } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
   const dispatch = useDispatch();
@@ -92,7 +99,11 @@ const App: React.FC = () => {
         // 初始化配置
         console.info('[App] initializeApp: configService.init');
         await waitWithTimeout(configService.init(), 5000, 'configService.init');
-        
+
+        // Load enterprise config if present
+        const entConfig = await window.electron.enterprise.getConfig();
+        setEnterpriseConfig(entConfig);
+
         // 初始化主题
         console.info('[App] initializeApp: themeService.initialize');
         themeService.initialize();
@@ -100,10 +111,13 @@ const App: React.FC = () => {
         // 初始化语言
         console.info('[App] initializeApp: i18nService.initialize');
         await waitWithTimeout(i18nService.initialize(), 5000, 'i18nService.initialize');
-        
+
+        // 初始化认证服务（恢复登录状态）
+        console.info('[App] initializeApp: authService.init');
+        await authService.init();
+
         console.info('[App] initializeApp: configService.getConfig');
         const config = await configService.getConfig();
-        
         const apiConfig: ApiConfig = {
           apiKey: config.api.key,
           baseUrl: config.api.baseUrl,
@@ -119,7 +133,7 @@ const App: React.FC = () => {
                 providerModels.push({
                   id: model.id,
                   name: model.name,
-                  provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+                  provider: getProviderDisplayName(providerName, providerConfig),
                   providerKey: providerName,
                   supportsImage: model.supportsImage ?? false,
                 });
@@ -136,10 +150,13 @@ const App: React.FC = () => {
         const resolvedModels = providerModels.length > 0 ? providerModels : fallbackModels;
         if (resolvedModels.length > 0) {
           dispatch(setAvailableModels(resolvedModels));
-          const preferredModel = resolvedModels.find(
+          // Search all available models (including server models loaded by authService)
+          // so that a previously selected server model is correctly restored.
+          const allModels = store.getState().model.availableModels;
+          const preferredModel = allModels.find(
             model => model.id === config.model.defaultModel
               && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
-          ) ?? resolvedModels[0];
+          ) ?? allModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
 
@@ -149,6 +166,7 @@ const App: React.FC = () => {
 
         setIsInitialized(true);
         console.info('[App] initializeApp: shell ready');
+
 
         // 初始化定时任务服务，但不阻塞首屏
         void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
@@ -172,6 +190,28 @@ const App: React.FC = () => {
     return () => {
       unsubscribe();
     };
+  }, []);
+
+  // Listen for Copilot token auto-refresh events from the main process
+  useEffect(() => {
+    const removeListener = window.electron.githubCopilot.onTokenUpdated(({ token, baseUrl }) => {
+      console.log('[App] received Copilot token update from main process');
+      const currentConfig = configService.getConfig();
+      const copilotProvider = currentConfig.providers?.['github-copilot'];
+      if (copilotProvider) {
+        void configService.updateConfig({
+          providers: {
+            ...currentConfig.providers,
+            'github-copilot': {
+              ...copilotProvider,
+              apiKey: token,
+              ...(baseUrl ? { baseUrl } : {}),
+            },
+          },
+        } as Partial<typeof currentConfig>);
+      }
+    });
+    return removeListener;
   }, []);
 
   // Network status monitoring
@@ -250,6 +290,8 @@ const App: React.FC = () => {
         detail: { messageId },
       }));
     }, 300);
+  const handleShowAgents = useCallback(() => {
+    setMainView('agents');
   }, []);
 
   const handleToggleSidebar = useCallback(() => {
@@ -267,6 +309,13 @@ const App: React.FC = () => {
       }));
     }, 0);
   }, [dispatch, mainView, currentSessionId]);
+
+  const handleCreateSkillByChat = useCallback(() => {
+    dispatch(setDraftPrompt({ sessionId: '__home__', draft: i18nService.t('skillCreatorPrompt') }));
+    coworkService.clearSession();
+    dispatch(clearSelection());
+    setMainView('cowork');
+  }, [dispatch]);
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -417,7 +466,7 @@ const App: React.FC = () => {
             allModels.push({
               id: model.id,
               name: model.name,
-              provider: providerName.charAt(0).toUpperCase() + providerName.slice(1),
+              provider: getProviderDisplayName(providerName, providerConfig),
               providerKey: providerName,
               supportsImage: model.supportsImage ?? false,
             });
@@ -505,6 +554,9 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isInitialized) return;
 
+    // Enterprise mode: completely skip update detection
+    if (enterpriseConfig?.disableUpdate) return;
+
     let cancelled = false;
     let lastCheckTime = 0;
 
@@ -537,7 +589,7 @@ const App: React.FC = () => {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isInitialized, runUpdateCheck]);
+  }, [isInitialized, runUpdateCheck, enterpriseConfig]);
 
   // 根据场景选择使用哪个权限组件
   const permissionModal = useMemo(() => {
@@ -576,7 +628,7 @@ const App: React.FC = () => {
     />
   ) : null;
   const windowsStandaloneTitleBar = isWindows ? (
-    <div className="draggable relative h-9 shrink-0 dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted">
+    <div className="draggable relative h-9 shrink-0 bg-surface-raised">
       <WindowTitleBar isOverlayActive={isOverlayActive} />
     </div>
   ) : null;
@@ -585,15 +637,15 @@ const App: React.FC = () => {
     return (
       <div className="h-screen overflow-hidden flex flex-col">
         {windowsStandaloneTitleBar}
-        <div className="flex-1 flex items-center justify-center dark:bg-claude-darkBg bg-claude-bg">
+        <div className="flex-1 flex items-center justify-center bg-background">
           <div className="flex flex-col items-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-claude-accent to-claude-accentHover flex items-center justify-center shadow-glow-accent animate-pulse">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary to-primary-hover flex items-center justify-center shadow-glow-accent animate-pulse">
               <ChatBubbleLeftRightIcon className="h-8 w-8 text-white" />
             </div>
-            <div className="w-24 h-1 rounded-full bg-claude-accent/20 overflow-hidden">
-              <div className="h-full w-1/2 rounded-full bg-claude-accent animate-shimmer" />
+            <div className="w-24 h-1 rounded-full bg-primary/20 overflow-hidden">
+              <div className="h-full w-1/2 rounded-full bg-primary animate-shimmer" />
             </div>
-            <div className="dark:text-claude-darkText text-claude-text text-xl font-medium">{i18nService.t('loading')}</div>
+            <div className="text-foreground text-xl font-medium">{i18nService.t('loading')}</div>
           </div>
         </div>
       </div>
@@ -604,15 +656,15 @@ const App: React.FC = () => {
     return (
       <div className="h-screen overflow-hidden flex flex-col">
         {windowsStandaloneTitleBar}
-        <div className="flex-1 flex flex-col items-center justify-center dark:bg-claude-darkBg bg-claude-bg">
+        <div className="flex-1 flex flex-col items-center justify-center bg-background">
           <div className="flex flex-col items-center space-y-6 max-w-md px-6">
             <div className="w-16 h-16 rounded-full bg-red-500 flex items-center justify-center shadow-lg">
               <ChatBubbleLeftRightIcon className="h-8 w-8 text-white" />
             </div>
-            <div className="dark:text-claude-darkText text-claude-text text-xl font-medium text-center">{initError}</div>
+            <div className="text-foreground text-xl font-medium text-center">{initError}</div>
             <button
               onClick={() => handleShowSettings()}
-              className="px-6 py-2.5 bg-claude-accent hover:bg-claude-accentHover text-white rounded-xl shadow-md transition-colors text-sm font-medium"
+              className="px-6 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl shadow-md transition-colors text-sm font-medium"
             >
               {i18nService.t('openSettings')}
             </button>
@@ -623,6 +675,7 @@ const App: React.FC = () => {
               initialTab={settingsOptions.initialTab}
               notice={settingsOptions.notice}
               onUpdateFound={handleUpdateFound}
+              enterpriseConfig={enterpriseConfig}
             />
           )}
         </div>
@@ -631,7 +684,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="h-screen overflow-hidden flex flex-col dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted">
+    <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
       {toastMessage && (
         <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
       )}
@@ -645,20 +698,24 @@ const App: React.FC = () => {
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowMcp={handleShowMcp}
           onShowBookmarks={handleShowBookmarks}
+          onShowAgents={handleShowAgents}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
           updateBadge={!isSidebarCollapsed ? updateBadge : null}
+          hideLogin={enterpriseConfig?.ui?.login === 'hide'}
         />
         <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
-          <div className="relative h-full min-h-0 rounded-xl dark:bg-claude-darkBg bg-claude-bg overflow-hidden">
+          <div className="relative h-full min-h-0 rounded-xl bg-background overflow-hidden">
             <EngineStartupOverlay />
             {mainView === 'skills' ? (
               <SkillsView
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
+                onCreateSkillByChat={handleCreateSkillByChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
+                readOnly={enterpriseConfig?.ui?.skills === 'readonly'}
               />
             ) : mainView === 'scheduledTasks' ? (
               <ScheduledTasksView
@@ -682,6 +739,14 @@ const App: React.FC = () => {
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
                 onNavigateToSession={handleNavigateToBookmark}
               />
+            ) : mainView === 'agents' ? (
+              <AgentsView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                onShowCowork={handleShowCowork}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
             ) : (
               <CoworkView
                 onRequestAppSettings={handleShowSettings}
@@ -703,6 +768,7 @@ const App: React.FC = () => {
           initialTab={settingsOptions.initialTab}
           notice={settingsOptions.notice}
           onUpdateFound={handleUpdateFound}
+          enterpriseConfig={enterpriseConfig}
         />
       )}
       {showUpdateModal && updateInfo && (

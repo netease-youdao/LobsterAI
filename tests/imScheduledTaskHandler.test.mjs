@@ -27,8 +27,9 @@ test('normalizes model-detected IM reminder requests into direct cron.add inputs
   assert.equal(parsed.taskName, '喝饮料提醒');
   assert.equal(parsed.payloadText, '⏰ 提醒：喝饮料');
   assert.equal(parsed.delayLabel, '2分钟后');
-  assert.equal(parsed.scheduleAt, '2026-03-15T16:30:00+08:00');
-  assert.match(parsed.confirmationText, /2分钟后（16:30）会提醒你喝饮料/u);
+  // scheduleAt may be in any timezone representation; compare as absolute timestamps
+  assert.equal(new Date(parsed.scheduleAt).getTime(), new Date('2026-03-15T16:30:00+08:00').getTime());
+  assert.match(parsed.confirmationText, /2分钟后.*会提醒你喝饮料/u);
 });
 
 test('only uses heuristic as a cheap reminder candidate prefilter', () => {
