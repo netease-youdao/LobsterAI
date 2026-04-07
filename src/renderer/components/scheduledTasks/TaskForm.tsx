@@ -1,6 +1,6 @@
-import { PlatformRegistry } from '@shared/platform';
+﻿import { PlatformRegistry } from '@shared/platform';
 import { OpenClawProviderId,ProviderRegistry } from '@shared/providers/constants';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import type {
@@ -46,6 +46,7 @@ interface FormState {
   notifyTo: string;
   notifyAccountId: string | undefined;
   modelId: string;
+  agentId: string | null;
 }
 
 function nowDefaults() {
@@ -72,6 +73,7 @@ const DEFAULT_FORM_STATE: FormState = {
   notifyTo: '',
   notifyAccountId: undefined,
   modelId: '',
+  agentId: null,
 };
 
 function isIMChannel(channel: string): boolean {
@@ -99,6 +101,7 @@ function createFormState(task?: ScheduledTask): FormState {
     notifyTo: task.delivery.to || '',
     notifyAccountId: task.delivery.accountId,
     modelId: task.payload.kind === 'agentTurn' ? (task.payload.model ?? '') : '',
+    agentId: task.agentId ?? null,
   };
 }
 
@@ -130,6 +133,13 @@ function buildScheduleInput(form: FormState): ScheduledTaskInput['schedule'] {
 const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
   const [form, setForm] = useState<FormState>(() => createFormState(task));
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const enabledAgents = agents.filter((a) => a.enabled);
+  const showAgentSelector = enabledAgents.length > 1;
+  const getAgentIcon = (agent: { id: string; icon: string } | null | undefined) =>
+    agent ? (agent.icon || (agent.id === 'main' ? '🦞' : '🤖')) : '🦞';
+  const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
+  const agentDropdownRef = useRef<HTMLDivElement>(null);
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
     const savedChannel = task?.delivery.channel;
@@ -241,6 +251,16 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         ? task.schedule
         : buildScheduleInput(form);
 
+      // Validate agent still exists when editing
+      if (mode === 'edit' && form.agentId) {
+        const agent = agents.find((a) => a.id === form.agentId);
+        if (!agent) {
+          setSubmitError(i18nService.t('scheduledTasksFormAgentUnavailable'));
+          setSubmitting(false);
+          return;
+        }
+      }
+
       const input: ScheduledTaskInput = {
         name: form.name.trim(),
         description: '',
@@ -261,6 +281,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               ...(form.notifyTo ? { to: form.notifyTo } : {}),
               ...(form.notifyAccountId ? { accountId: form.notifyAccountId } : {}),
             },
+        agentId: form.agentId,
       };
 
       if (mode === 'create') {
@@ -511,6 +532,9 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       if (convDropdownRef.current && !convDropdownRef.current.contains(event.target as Node)) {
         setConvDropdownOpen(false);
       }
+      if (agentDropdownRef.current && !agentDropdownRef.current.contains(event.target as Node)) {
+        setAgentDropdownOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -692,7 +716,71 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
             placeholder={i18nService.t('scheduledTasksFormPromptPlaceholder')}
             rows={4}
           />
-          <div className="flex items-center px-2 py-1">
+          <div className="flex items-center px-2 py-1 gap-2">
+            {/* Agent selector (create mode, only when >1 enabled agents) */}
+            {mode === 'create' && showAgentSelector && (() => {
+              const selectedAgent = form.agentId ? enabledAgents.find((a) => a.id === form.agentId) : null;
+              const defaultAgent = agents.find((a) => a.id === 'main');
+              return (
+                <div className="relative" ref={agentDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setAgentDropdownOpen(!agentDropdownOpen)}
+                    className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md text-foreground-secondary hover:bg-surface-raised transition-colors"
+                  >
+                    <span className="text-sm leading-none">
+                      {getAgentIcon(selectedAgent ?? defaultAgent)}
+                    </span>
+                    <span className="truncate max-w-[80px]">
+                      {selectedAgent ? selectedAgent.name : (defaultAgent?.name ?? i18nService.t('scheduledTasksFormAgentDefault'))}
+                    </span>
+                    <svg className={`w-3 h-3 flex-shrink-0 transition-transform ${agentDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {agentDropdownOpen && (
+                    <div className="absolute z-50 bottom-full mb-1 left-0 min-w-[160px] rounded-xl border border-border bg-surface shadow-lg overflow-hidden">
+                      <div
+                        className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-raised transition-colors ${!form.agentId ? 'bg-surface-raised' : ''}`}
+                        onClick={() => { updateForm({ agentId: null }); setAgentDropdownOpen(false); }}
+                      >
+                        <span className="text-sm leading-none">{getAgentIcon(defaultAgent)}</span>
+                        <span className="text-sm text-foreground truncate">{defaultAgent?.name ?? i18nService.t('scheduledTasksFormAgentDefault')}</span>
+                      </div>
+                      {enabledAgents.filter((a) => !a.isDefault).map((agent) => (
+                        <div
+                          key={agent.id}
+                          className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-raised transition-colors ${form.agentId === agent.id ? 'bg-surface-raised' : ''}`}
+                          onClick={() => { updateForm({ agentId: agent.id }); setAgentDropdownOpen(false); }}
+                        >
+                          <span className="text-sm leading-none">{getAgentIcon(agent)}</span>
+                          <span className="text-sm text-foreground truncate">{agent.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            {/* Agent display (edit mode, read-only, only when >1 enabled agents) */}
+            {mode === 'edit' && showAgentSelector && (() => {
+              const agentToShow = form.agentId
+                ? (agents.find((a) => a.id === form.agentId) ?? null)
+                : agents.find((a) => a.id === 'main') ?? null;
+              const isUnavailable = !!form.agentId && !agentToShow;
+              return (
+                <div className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md ${isUnavailable ? 'text-red-500' : 'text-foreground-secondary'}`}>
+                  <span className="text-sm leading-none">
+                    {isUnavailable ? '⚠️' : getAgentIcon(agentToShow)}
+                  </span>
+                  <span className="truncate max-w-[80px]">
+                    {isUnavailable
+                      ? i18nService.t('scheduledTasksFormAgentUnavailableShort')
+                      : (agentToShow ? agentToShow.name : (agents.find((a) => a.id === 'main')?.name ?? i18nService.t('scheduledTasksFormAgentDefault')))}
+                  </span>
+                </div>
+              );
+            })()}
             <ModelSelector
               dropdownDirection="up"
               value={selectedModelValue}
