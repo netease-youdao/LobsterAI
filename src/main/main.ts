@@ -3286,6 +3286,10 @@ if (!gotTheLock) {
     getCronJobService,
     getIMGatewayManager: () => getIMGatewayManager() as any,
     getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter as any,
+    deleteCronSessions: (jobId: string) => {
+      const sync = openClawRuntimeAdapter?.getChannelSessionSync();
+      return sync ? sync.deleteCronSessionsByJobId(jobId) : [];
+    },
   });
 
   // ==================== Permissions IPC Handlers ====================

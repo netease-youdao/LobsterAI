@@ -7,6 +7,7 @@ import {
 } from '../../../scheduledTask/constants';
 import { PlatformRegistry } from '../../../shared/platform';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
+import type { ScheduledTaskMetaStore } from '../../../scheduledTask/metaStore';
 import { listScheduledTaskChannels } from './helpers';
 
 export interface ScheduledTaskHandlerDeps {
@@ -34,6 +35,10 @@ export interface ScheduledTaskHandlerDeps {
     getGatewayClient: () => unknown;
     fetchSessionByKey: (sessionKey: string) => Promise<unknown>;
   } | null;
+  /** Optional: clean up local cowork sessions spawned by a cron job. */
+  deleteCronSessions?: (jobId: string) => string[];
+  /** Optional: clean up orphaned task metadata. */
+  getMetaStore?: () => ScheduledTaskMetaStore | null;
 }
 
 /**
@@ -139,6 +144,29 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Delete, async (_event, id: string) => {
     try {
       await getCronJobService().removeJob(id);
+
+      // Clean up local cowork sessions spawned by this cron job so they do not
+      // reappear as ghost entries after an app restart (fixes #1359).
+      if (deps.deleteCronSessions) {
+        try {
+          const deleted = deps.deleteCronSessions(id);
+          if (deleted.length > 0) {
+            console.log(`[IPC][scheduledTask:delete] cleaned up ${deleted.length} cron session(s) for job ${id}`);
+          }
+        } catch (cleanupError) {
+          console.warn('[IPC][scheduledTask:delete] session cleanup failed:', cleanupError);
+        }
+      }
+
+      // Remove orphaned task metadata.
+      if (deps.getMetaStore) {
+        try {
+          deps.getMetaStore()?.delete(id);
+        } catch (metaError) {
+          console.warn('[IPC][scheduledTask:delete] meta cleanup failed:', metaError);
+        }
+      }
+
       return { success: true, result: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to delete task' };
