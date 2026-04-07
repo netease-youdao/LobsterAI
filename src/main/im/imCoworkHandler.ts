@@ -47,7 +47,6 @@ const PERMISSION_CONFIRM_TIMEOUT_MS = 60_000;
 const ACCUMULATOR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const IM_ALLOW_RESPONSE_RE = /^(允许|同意|yes|y)$/i;
 const IM_DENY_RESPONSE_RE = /^(拒绝|不同意|no|n)$/i;
-const IM_ALLOW_OPTION_LABEL = '允许本次操作';
 
 export interface IMCoworkHandlerOptions {
   coworkRuntime: CoworkRuntime;
@@ -717,12 +716,12 @@ export class IMCoworkHandler extends EventEmitter {
         : [];
       const preferredOption = options.find((option) => {
         const label = typeof option?.label === 'string' ? option.label : '';
-        return label.includes(IM_ALLOW_OPTION_LABEL);
+        return label.includes(t('safetyApprovalAllow'));
       });
       const fallbackOption = options[0];
       const selectedLabel = typeof preferredOption?.label === 'string'
         ? preferredOption.label
-        : (typeof fallbackOption?.label === 'string' ? fallbackOption.label : IM_ALLOW_OPTION_LABEL);
+        : (typeof fallbackOption?.label === 'string' ? fallbackOption.label : t('safetyApprovalAllow'));
       answers[questionTitle] = selectedLabel;
     });
 

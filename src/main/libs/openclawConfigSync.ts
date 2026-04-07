@@ -14,6 +14,7 @@ import type { McpToolManifestEntry } from './mcpServerManager';
 import { hasBundledOpenClawExtension } from './openclawLocalExtensions';
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
+import { getLanguage } from '../i18n';
 
 export type McpBridgeConfig = {
   callbackUrl: string;
@@ -1690,6 +1691,14 @@ export class OpenClawConfigSync {
 
       // Build the managed section
       const sections: string[] = [];
+
+      // Inject UI language directive for tool-generated confirmation dialogs.
+      // This only covers AskUserQuestion options and confirmations shown in the App UI,
+      // not general conversation language (IM channels respond in their user's language).
+      const uiLanguage = getLanguage();
+      if (uiLanguage === 'en') {
+        sections.push('## UI Language\n\nThe LobsterAI desktop app UI language is English. When you call the AskUserQuestion tool to ask the user for confirmation (e.g. before deleting files), write the question text and all option labels in English.');
+      }
 
       // Add system prompt if configured — strip MARKER to prevent content corruption
       const systemPrompt = (coworkConfig.systemPrompt || '').trim().replaceAll(MARKER, '');

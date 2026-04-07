@@ -16,6 +16,7 @@ import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkM
 import { setCoworkProxySessionId } from './coworkOpenAICompatProxy';
 import { SCHEDULED_TASK_SWITCH_MESSAGE } from '../../scheduledTask/enginePrompt';
 import { z } from 'zod';
+import { t } from '../i18n';
 
 const ATTACHMENT_LINE_RE = /^\s*(?:[-*]\s*)?(输入文件|input\s*file)\s*[:：]\s*(.+?)\s*$/i;
 const INFERRED_FILE_REFERENCE_RE = /([^\s"'`，。！？：:；;（）()\[\]{}<>《》【】]+?\.[A-Za-z][A-Za-z0-9]{0,7})/g;
@@ -55,8 +56,6 @@ const TOOL_INPUT_PREVIEW_MAX_ITEMS = 30;
 const TASK_WORKSPACE_CONTAINER_DIR = '.lobsterai-tasks';
 const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
-const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
-const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
 const PYTHON_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:python(?:3)?|py(?:\.exe)?|pip(?:3)?)(?:\s+-3)?(?:\s|$)|\.py(?:\s|$)/i;
 const PYTHON_PIP_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|py(?:\.exe)?\s+-m\s+pip)(?:\s|$)/i;
 const MEMORY_REQUEST_TAIL_SPLIT_RE = /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
@@ -1262,11 +1261,11 @@ export class CoworkRunner extends EventEmitter {
           question,
           options: [
             {
-              label: SAFETY_APPROVAL_ALLOW_OPTION,
-              description: '仅允许当前这一次操作继续执行。',
-            },
-            {
-              label: SAFETY_APPROVAL_DENY_OPTION,
+          label: t('safetyApprovalAllow'),
+            description: '仅允许当前这一次操作继续执行。',
+          },
+          {
+            label: t('safetyApprovalDeny'),
               description: '拒绝当前操作，保持文件安全边界。',
             },
           ],
@@ -1304,7 +1303,7 @@ export class CoworkRunner extends EventEmitter {
       .split('|||')
       .map((value) => value.trim())
       .filter(Boolean)
-      .includes(SAFETY_APPROVAL_ALLOW_OPTION);
+      .includes(t('safetyApprovalAllow'));
   }
 
   private async requestSafetyApproval(
