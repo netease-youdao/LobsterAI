@@ -11,8 +11,12 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   [/\b429\b|rate[_ ]limit|too many requests|overloaded|RESOURCE_EXHAUSTED/i, 'coworkErrorRateLimit'],
   // Billing: DeepSeek 402, OpenAI, OpenRouter, Qwen, StepFun
   [/insufficient.*(balance|quota|credits)|billing|quota[_ ]exceeded|Arrearage|account.*not.*in.*good.*standing|余额不足|\b402\b/i, 'coworkErrorInsufficientBalance'],
-  // Input too long: context length, HTTP 413, Qwen, payload too large
-  [/input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max[_ ]tokens/i, 'coworkErrorInputTooLong'],
+  // Input too long: context length, HTTP 413, Qwen, payload too large.
+  // Avoid matching bare "max_tokens" (e.g. unsupported/invalid param messages) — require an exceed/limit sense.
+  [
+    /input.*too.*long|context.*length.*exceeded|range of input length|\b413\b|payload.*too.*large|request.*entity.*too.*large|max_tokens\s+exceeded|max_completion_tokens\s+exceeded|(?:exceed|exceeds|exceeded).{0,80}max[_ ]tokens|max[_ ]tokens.{0,80}(?:exceed|exceeds|exceeded)|total.{0,40}token.{0,40}exceed|context\s+(?:window|length).{0,40}exceed/i,
+    'coworkErrorInputTooLong',
+  ],
   // PDF processing failure
   [/could not process pdf/i, 'coworkErrorCouldNotProcessPdf'],
   // Model not found: standard, Qwen, Ollama
