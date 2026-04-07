@@ -12,6 +12,7 @@ import {
   setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
+  updateSessionTags,
   enqueuePendingPermission,
   dequeuePendingPermission,
   clearPendingPermissions,
@@ -398,6 +399,28 @@ class CoworkService {
 
     console.error('Failed to rename session:', result.error);
     return false;
+  }
+
+  async setSessionTags(sessionId: string, tags: string[]): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.setSessionTags) return false;
+
+    const result = await cowork.setSessionTags({ sessionId, tags });
+    if (result.success) {
+      store.dispatch(updateSessionTags({ sessionId, tags }));
+      return true;
+    }
+
+    console.error('[coworkService] Failed to set session tags:', result.error);
+    return false;
+  }
+
+  async getAllTags(): Promise<string[]> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.getAllTags) return [];
+
+    const result = await cowork.getAllTags();
+    return result.success ? (result.tags ?? []) : [];
   }
 
   async exportSessionResultImage(options: {

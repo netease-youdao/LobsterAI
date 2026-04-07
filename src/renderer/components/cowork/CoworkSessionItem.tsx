@@ -15,10 +15,12 @@ interface CoworkSessionItemProps {
   isBatchMode: boolean;
   isSelected: boolean;
   showBatchOption?: boolean;
+  allTags?: string[];
   onSelect: () => void;
   onDelete: () => void;
   onTogglePin: (pinned: boolean) => void;
   onRename: (title: string) => void;
+  onSetTags: (tags: string[]) => void;
   onToggleSelection: () => void;
   onEnterBatchMode: () => void;
 }
@@ -94,15 +96,19 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   isBatchMode,
   isSelected,
   showBatchOption = true,
+  allTags = [],
   onSelect,
   onDelete,
   onTogglePin,
   onRename,
+  onSetTags,
   onToggleSelection,
   onEnterBatchMode,
 }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
+  const [showTagEditor, setShowTagEditor] = useState(false);
+  const [tagInput, setTagInput] = useState('');
   const [renameValue, setRenameValue] = useState(session.title);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -212,6 +218,27 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     onEnterBatchMode();
   };
 
+  const handleTagClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowTagEditor(true);
+    setMenuPosition(null);
+    setTagInput('');
+  };
+
+  const handleAddTag = (tag: string) => {
+    const trimmed = tag.trim();
+    if (!trimmed) return;
+    const currentTags = session.tags ?? [];
+    if (currentTags.includes(trimmed)) return;
+    onSetTags([...currentTags, trimmed]);
+    setTagInput('');
+  };
+
+  const handleRemoveTag = (tag: string) => {
+    const currentTags = session.tags ?? [];
+    onSetTags(currentTags.filter(t => t !== tag));
+  };
+
   useEffect(() => {
     if (!menuPosition) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -259,6 +286,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const actionLabel = i18nService.t('coworkSessionActions');
   const renameLabel = i18nService.t('renameConversation');
   const deleteLabel = i18nService.t('deleteSession');
+  const tagLabel = i18nService.t('coworkSessionManageTags');
   const relativeTime = formatRelativeTime(session.updatedAt);
   const showRunningIndicator = session.status === 'running';
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
@@ -268,6 +296,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     const items = [
       { key: 'rename', label: renameLabel, onClick: handleRenameClick, tone: 'neutral' as const },
       { key: 'pin', label: pinButtonLabel, onClick: handleTogglePin, tone: 'neutral' as const },
+      { key: 'tag', label: tagLabel, onClick: handleTagClick, tone: 'neutral' as const },
       { key: 'delete', label: deleteLabel, onClick: handleDeleteClick, tone: 'danger' as const },
     ];
     if (showBatchOption) {
@@ -277,9 +306,11 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   }, [
     batchLabel,
     deleteLabel,
+    tagLabel,
     handleBatchClick,
     handleDeleteClick,
     handleRenameClick,
+    handleTagClick,
     handleTogglePin,
     pinButtonLabel,
     renameLabel,
@@ -361,6 +392,15 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
               {i18nService.t(statusLabels[session.status])}
             </span>
           </div>
+          {session.tags && session.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {session.tags.map(tag => (
+                <span key={tag} className="inline-block px-1.5 py-0.5 text-[10px] rounded-md bg-primary/10 text-primary truncate max-w-[80px]">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -419,6 +459,12 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                   className={`h-4 w-4 ${session.pinned ? 'opacity-60' : ''}`}
                 />
               )}
+              {item.key === 'tag' && (
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-4 w-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.568 3H5.25A2.25 2.25 0 0 0 3 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 0 0 5.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 0 0 9.568 3Z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 6h.008v.008H6V6Z" />
+                </svg>
+              )}
               {item.key === 'delete' && <TrashIcon className="h-4 w-4" />}
               {item.label}
             </button>
@@ -461,6 +507,74 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                 {i18nService.t('deleteSession')}
               </button>
             </div>
+        </Modal>
+      )}
+
+      {/* Tag Editor Modal */}
+      {showTagEditor && (
+        <Modal
+          onClose={() => setShowTagEditor(false)}
+          className="w-full max-w-xs mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden"
+        >
+          <div className="px-5 py-4" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-sm font-semibold text-foreground mb-3">
+              {i18nService.t('coworkSessionManageTags')}
+            </h2>
+            {/* Existing tags */}
+            {(session.tags ?? []).length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {(session.tags ?? []).map(tag => (
+                  <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-md bg-primary/10 text-primary">
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag)}
+                      className="hover:text-red-500 transition-colors"
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {/* Add new tag */}
+            <div className="flex gap-2 mb-2">
+              <input
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddTag(tagInput); } }}
+                placeholder={i18nService.t('coworkSessionTagPlaceholder')}
+                className="flex-1 min-w-0 px-2 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => handleAddTag(tagInput)}
+                disabled={!tagInput.trim()}
+                className="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition-colors"
+              >
+                +
+              </button>
+            </div>
+            {/* Suggested tags from all sessions */}
+            {allTags.length > 0 && (
+              <div>
+                <div className="text-[10px] text-secondary mb-1">{i18nService.t('coworkSessionTagSuggestions')}</div>
+                <div className="flex flex-wrap gap-1">
+                  {allTags.filter(t => !(session.tags ?? []).includes(t)).slice(0, 8).map(tag => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => handleAddTag(tag)}
+                      className="px-1.5 py-0.5 text-[10px] rounded-md border border-border text-secondary hover:bg-surface-raised transition-colors"
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </Modal>
       )}
     </div>
