@@ -99,6 +99,7 @@ body {
 /* Custom scrollbar styles - cold modern */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {

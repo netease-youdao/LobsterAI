@@ -4,6 +4,7 @@ import SearchIcon from '../icons/SearchIcon';
 import { i18nService } from '../../services/i18n';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionList from './CoworkSessionList';
+import Modal from '../common/Modal';
 
 const emptySet = new Set<string>();
 
@@ -67,16 +68,15 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center modal-backdrop p-6"
-      onClick={onClose}
+    <Modal
+      onClose={onClose}
+      overlayClassName="fixed inset-0 z-50 flex items-start justify-center modal-backdrop p-6"
+      className="modal-content w-full max-w-2xl mt-10 rounded-2xl border border-border bg-surface shadow-modal overflow-hidden"
     >
       <div
-        className="modal-content w-full max-w-2xl mt-10 rounded-2xl border border-border bg-surface shadow-modal overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label={i18nService.t('search')}
-        onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
           <div className="relative flex-1">
@@ -120,7 +120,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 };
 

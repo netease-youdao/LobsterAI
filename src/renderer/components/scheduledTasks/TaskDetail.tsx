@@ -31,6 +31,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
     const agent = state.agent.agents.find((a) => a.id === task.agentId);
     return agent?.name ?? task.agentId;
   });
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
 
   useEffect(() => {
     void scheduledTaskService.loadRuns(task.id);
@@ -39,6 +40,13 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const statusLabel = i18nService.t(getStatusLabelKey(task.state.lastStatus));
   const statusTone = getStatusTone(task.state.lastStatus);
   const promptText = task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message;
+  const taskModelRef = task.payload.kind === 'agentTurn' ? task.payload.model : undefined;
+  const taskModelLabel = taskModelRef
+    ? (() => {
+        const bareId = taskModelRef.includes('/') ? taskModelRef.slice(taskModelRef.indexOf('/') + 1) : taskModelRef;
+        return availableModels.find((m) => m.id === bareId)?.name ?? bareId;
+      })()
+    : undefined;
 
   const sectionClass = 'rounded-lg border border-border p-4';
   const sectionTitleClass = 'text-sm font-semibold text-foreground mb-3';
@@ -109,6 +117,12 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             <div>
               <div className={labelClass}>{i18nService.t('scheduledTasksDetailAgent' as Parameters<typeof i18nService.t>[0])}</div>
               <div className={valueClass}>{agentName}</div>
+            </div>
+          )}
+          {taskModelLabel && (
+            <div>
+              <div className={labelClass}>{i18nService.t('scheduledTasksDetailModel')}</div>
+              <div className={valueClass}>{taskModelLabel}</div>
             </div>
           )}
           {task.sessionKey && (

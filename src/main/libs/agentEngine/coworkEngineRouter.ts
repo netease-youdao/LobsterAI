@@ -180,6 +180,10 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.clearRequestEngineBySession(sessionId);
       this.emit('error', sessionId, error);
     });
+
+    runtime.on('sessionStopped', (sessionId) => {
+      this.emit('sessionStopped', sessionId);
+    });
   }
 
   private clearRequestEngineBySession(sessionId: string): void {

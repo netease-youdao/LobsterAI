@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import Modal from './common/Modal';
 import { useSelector } from 'react-redux';
 import { RootState } from '../store';
 import { agentService } from '../services/agent';
@@ -55,6 +56,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const isMac = window.electron.platform === 'darwin';
 
   useEffect(() => {
@@ -246,12 +248,14 @@ const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex-1 overflow-y-auto px-2.5 pb-4">
         <SidebarAgentList
           onShowCowork={onShowCowork}
+          onSessionsLoadingChange={setSessionsLoading}
         />
         <div className="px-3 pb-2 text-sm font-medium text-secondary">
           {i18nService.t('coworkHistory')}
         </div>
         <CoworkSessionList
           sessions={filteredSessions}
+          isLoading={sessionsLoading}
           currentSessionId={currentSessionId}
           isBatchMode={isBatchMode}
           selectedIds={selectedIds}
@@ -328,14 +332,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       )}
       {/* Batch Delete Confirmation Modal */}
       {showBatchDeleteConfirm && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={() => setShowBatchDeleteConfirm(false)}
-        >
-          <div
-            className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <Modal onClose={() => setShowBatchDeleteConfirm(false)} className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden">
             <div className="flex items-center gap-3 px-5 py-4">
               <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
                 <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-500" />
@@ -363,8 +360,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 {i18nService.t('batchDelete')} ({selectedIds.size})
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </aside>
   );
@@ -374,7 +370,8 @@ const Sidebar: React.FC<SidebarProps> = ({
 
 const SidebarAgentList: React.FC<{
   onShowCowork: () => void;
-}> = ({ onShowCowork }) => {
+  onSessionsLoadingChange: (loading: boolean) => void;
+}> = ({ onShowCowork, onSessionsLoadingChange }) => {
   const agents = useSelector((state: RootState) => state.agent.agents);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
 
@@ -384,11 +381,16 @@ const SidebarAgentList: React.FC<{
 
   const enabledAgents = agents.filter((a) => a.enabled);
 
-  const handleSwitch = (agentId: string) => {
+  const handleSwitch = async (agentId: string) => {
     if (agentId === currentAgentId) return;
     agentService.switchAgent(agentId);
-    coworkService.loadSessions(agentId);
     onShowCowork();
+    onSessionsLoadingChange(true);
+    try {
+      await coworkService.loadSessions(agentId);
+    } finally {
+      onSessionsLoadingChange(false);
+    }
   };
 
   return (

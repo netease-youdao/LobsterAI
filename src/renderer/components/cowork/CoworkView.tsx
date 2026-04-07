@@ -34,10 +34,15 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const [isInitialized, setIsInitialized] = useState(false);
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
-  // Track if we're starting a session to prevent duplicate submissions
+  // Track if we're starting/continuing a session to prevent duplicate submissions
   const isStartingRef = useRef(false);
+  const isContinuingRef = useRef(false);
   // Track pending start request so stop can cancel delayed startup.
-  const pendingStartRef = useRef<{ requestId: number; cancelled: boolean } | null>(null);
+  const pendingStartRef = useRef<{
+    requestId: number;
+    cancelled: boolean;
+    cancellationAction: 'stop' | 'delete' | null;
+  } | null>(null);
   const startRequestIdRef = useRef(0);
   // Ref for CoworkPromptInput
   const promptInputRef = useRef<CoworkPromptInputRef>(null);
@@ -55,19 +60,19 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const selectedActionId = useSelector((state: RootState) => state.quickAction.selectedActionId);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
 
-  const buildApiConfigNotice = (error?: string) => {
-    const baseNotice = i18nService.t('coworkModelSettingsRequired');
+  const buildApiConfigNotice = (error?: string): { noticeI18nKey: string; noticeExtra?: string } => {
+    const key = 'coworkModelSettingsRequired';
     if (!error) {
-      return baseNotice;
+      return { noticeI18nKey: key };
     }
     const normalizedError = error.trim();
     if (
       normalizedError.startsWith('No enabled provider found for model:')
       || normalizedError === 'No available model configured in enabled providers.'
     ) {
-      return baseNotice;
+      return { noticeI18nKey: key };
     }
-    return `${baseNotice} (${error})`;
+    return { noticeI18nKey: key, noticeExtra: error };
   };
 
   const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
@@ -125,7 +130,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         if (apiConfig && !apiConfig.hasConfig) {
           onRequestAppSettings?.({
             initialTab: 'model',
-            notice: buildApiConfigNotice(apiConfig.error),
+            ...buildApiConfigNotice(apiConfig.error),
           });
         }
       } catch (error) {
@@ -164,10 +169,17 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     if (isStartingRef.current) return;
     isStartingRef.current = true;
     const requestId = ++startRequestIdRef.current;
-    pendingStartRef.current = { requestId, cancelled: false };
+    pendingStartRef.current = { requestId, cancelled: false, cancellationAction: null };
     const isPendingStartCancelled = () => {
       const pending = pendingStartRef.current;
       return !pending || pending.requestId !== requestId || pending.cancelled;
+    };
+    const getPendingCancellationAction = () => {
+      const pending = pendingStartRef.current;
+      if (!pending || pending.requestId !== requestId || !pending.cancelled) {
+        return null;
+      }
+      return pending.cancellationAction;
     };
 
     try {
@@ -176,7 +188,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         if (apiConfig && !apiConfig.hasConfig) {
           onRequestAppSettings?.({
             initialTab: 'model',
-            notice: buildApiConfigNotice(apiConfig.error),
+            ...buildApiConfigNotice(apiConfig.error),
           });
           isStartingRef.current = false;
           return;
@@ -285,6 +297,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       // Stop immediately if user cancelled while startup request was in flight.
       if (isPendingStartCancelled() && startedSession) {
         await coworkService.stopSession(startedSession.id);
+        if (getPendingCancellationAction() === 'delete') {
+          await coworkService.deleteSession(startedSession.id);
+        }
       }
     } finally {
       if (pendingStartRef.current?.requestId === requestId) {
@@ -296,51 +311,67 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   const handleContinueSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => {
     if (!currentSession) return;
+    // Prevent duplicate submissions
+    if (isContinuingRef.current) return;
     if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
       return false;
     }
 
-    console.log('[CoworkView] handleContinueSession called', {
-      hasImageAttachments: !!imageAttachments,
-      imageAttachmentsCount: imageAttachments?.length ?? 0,
-      imageAttachmentsNames: imageAttachments?.map(a => a.name),
-      imageAttachmentsBase64Lengths: imageAttachments?.map(a => a.base64Data.length),
-    });
+    isContinuingRef.current = true;
+    try {
+      console.log('[CoworkView] handleContinueSession called', {
+        hasImageAttachments: !!imageAttachments,
+        imageAttachmentsCount: imageAttachments?.length ?? 0,
+        imageAttachmentsNames: imageAttachments?.map(a => a.name),
+        imageAttachmentsBase64Lengths: imageAttachments?.map(a => a.base64Data.length),
+      });
 
-    // Capture active skill IDs before clearing
-    const sessionSkillIds = [...activeSkillIds];
+      // Capture active skill IDs before clearing
+      const sessionSkillIds = [...activeSkillIds];
 
-    // Clear active skills after capturing so they don't persist to next message
-    if (sessionSkillIds.length > 0) {
-      dispatch(clearActiveSkills());
+      // Clear active skills after capturing so they don't persist to next message
+      if (sessionSkillIds.length > 0) {
+        dispatch(clearActiveSkills());
+      }
+
+      // Combine skill prompt with system prompt for continuation.
+      // Skip auto-routing prompt for OpenClaw — skills are loaded natively.
+      let effectiveSkillPrompt = skillPrompt;
+      if (!skillPrompt && !isOpenClawEngine) {
+        effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
+      }
+      const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
+        .filter(p => p?.trim())
+        .join('\n\n') || undefined;
+
+      await coworkService.continueSession({
+        sessionId: currentSession.id,
+        prompt,
+        systemPrompt: combinedSystemPrompt,
+        activeSkillIds: sessionSkillIds.length > 0 ? sessionSkillIds : undefined,
+        imageAttachments,
+      });
+    } finally {
+      isContinuingRef.current = false;
     }
-
-    // Combine skill prompt with system prompt for continuation.
-    // Skip auto-routing prompt for OpenClaw — skills are loaded natively.
-    let effectiveSkillPrompt = skillPrompt;
-    if (!skillPrompt && !isOpenClawEngine) {
-      effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
-    }
-    const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
-      .filter(p => p?.trim())
-      .join('\n\n') || undefined;
-
-    await coworkService.continueSession({
-      sessionId: currentSession.id,
-      prompt,
-      systemPrompt: combinedSystemPrompt,
-      activeSkillIds: sessionSkillIds.length > 0 ? sessionSkillIds : undefined,
-      imageAttachments,
-    });
   };
 
   const handleStopSession = async () => {
     if (!currentSession) return;
     if (currentSession.id.startsWith('temp-') && pendingStartRef.current) {
       pendingStartRef.current.cancelled = true;
+      pendingStartRef.current.cancellationAction = 'stop';
     }
     await coworkService.stopSession(currentSession.id);
+  };
+
+  const handleDeleteSession = async (sessionId: string) => {
+    if (sessionId.startsWith('temp-') && pendingStartRef.current) {
+      pendingStartRef.current.cancelled = true;
+      pendingStartRef.current.cancellationAction = 'delete';
+    }
+    await coworkService.deleteSession(sessionId);
   };
 
   // Get selected quick action
@@ -500,6 +531,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           onManageSkills={() => onShowSkills?.()}
           onContinue={handleContinueSession}
           onStop={handleStopSession}
+          onDeleteSession={handleDeleteSession}
           onNavigateHome={() => dispatch(clearCurrentSession())}
           isSidebarCollapsed={isSidebarCollapsed}
           onToggleSidebar={onToggleSidebar}

@@ -9,9 +9,13 @@ import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangl
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { RootState } from '../../store';
 import { imService } from '../../services/im';
-import { setDingTalkConfig, setFeishuConfig, setTelegramOpenClawConfig, setQQConfig, setDiscordConfig, setNimConfig, setNeteaseBeeChanConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
+import { setDingTalkConfig, setDingTalkInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setTelegramOpenClawConfig, setQQConfig, setQQInstanceConfig, setDiscordConfig, setNimConfig, setNeteaseBeeChanConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
-import type { IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, FeishuOpenClawConfig, DingTalkOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
+import type { IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
+import { MAX_QQ_INSTANCES, MAX_FEISHU_INSTANCES, MAX_DINGTALK_INSTANCES } from '../../types/im';
+import QQInstanceSettings from './QQInstanceSettings';
+import FeishuInstanceSettings from './FeishuInstanceSettings';
+import DingTalkInstanceSettings from './DingTalkInstanceSettings';
 import { PlatformRegistry } from '@shared/platform';
 import type { Platform } from '@shared/platform';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
@@ -20,6 +24,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { ArrowPathIcon } from '@heroicons/react/24/outline';
 import { SchemaForm } from './SchemaForm';
 import type { UiHint } from './SchemaForm';
+import Modal from '../common/Modal';
 
 
 
@@ -100,6 +105,12 @@ const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
   const [activePlatform, setActivePlatform] = useState<Platform>('weixin');
+  const [activeQQInstanceId, setActiveQQInstanceId] = useState<string | null>(null);
+  const [qqExpanded, setQqExpanded] = useState(false);
+  const [activeFeishuInstanceId, setActiveFeishuInstanceId] = useState<string | null>(null);
+  const [feishuExpanded, setFeishuExpanded] = useState(false);
+  const [activeDingTalkInstanceId, setActiveDingTalkInstanceId] = useState<string | null>(null);
+  const [dingtalkExpanded, setDingtalkExpanded] = useState(false);
   const [testingPlatform, setTestingPlatform] = useState<Platform | null>(null);
   const [connectivityResults, setConnectivityResults] = useState<Partial<Record<Platform, IMConnectivityTestResult>>>({});
   const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<Platform | null>(null);
@@ -164,7 +175,8 @@ const IMSettings: React.FC = () => {
     }
   }, [activePlatform]);
 
-  const handleFeishuStartQr = async () => {
+  // @ts-ignore: will be used when QR flow is wired to FeishuInstanceSettings
+  const _handleFeishuStartQr = async () => {
     if (feishuQrPollTimerRef.current) clearInterval(feishuQrPollTimerRef.current);
     if (feishuQrCountdownTimerRef.current) clearInterval(feishuQrCountdownTimerRef.current);
     setFeishuQrStatus('loading');
@@ -202,8 +214,17 @@ const IMSettings: React.FC = () => {
           if (pollResult.done && pollResult.appId && pollResult.appSecret) {
             clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
             clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
-            dispatch(setFeishuConfig({ appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true }));
-            await imService.updateConfig({ feishu: { ...config.feishu, appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true } });
+            // QR flow creates a new instance with the scanned credentials
+            const inst = await imService.addFeishuInstance('Feishu Bot');
+            if (inst) {
+              await imService.updateFeishuInstanceConfig(inst.instanceId, {
+                appId: pollResult.appId,
+                appSecret: pollResult.appSecret,
+                enabled: true,
+              });
+              setActiveFeishuInstanceId(inst.instanceId);
+              setFeishuExpanded(true);
+            }
             if (!isMountedRef.current) return;   // re-check after async updateConfig
             setFeishuQrStatus('success');
           } else if (pollResult.error && pollResult.error !== 'authorization_pending' && pollResult.error !== 'slow_down') {
@@ -288,41 +309,22 @@ const IMSettings: React.FC = () => {
     return { schema: channelSchema, hints };
   }, [openclawSchema]);
 
-  // Handle DingTalk OpenClaw config change
-  const dtOpenClawConfig = config.dingtalk;
-  const handleDingTalkOpenClawChange = (update: Partial<DingTalkOpenClawConfig>) => {
-    dispatch(setDingTalkConfig(update));
-  };
-  const handleSaveDingTalkOpenClawConfig = async (override?: Partial<DingTalkOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...dtOpenClawConfig, ...override }
-      : dtOpenClawConfig;
-    await imService.persistConfig({ dingtalk: configToSave });
-  };
-  const [dingtalkAllowedUserIdInput, setDingtalkAllowedUserIdInput] = useState('');
+  // Handle DingTalk multi-instance config
+  const dingtalkMultiConfig = config.dingtalk;
 
-  // Handle Feishu OpenClaw config change
-  const fsOpenClawConfig = config.feishu;
-  const handleFeishuOpenClawChange = (update: Partial<FeishuOpenClawConfig>) => {
-    dispatch(setFeishuConfig(update));
-  };
-  const handleSaveFeishuOpenClawConfig = async (override?: Partial<FeishuOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...fsOpenClawConfig, ...override }
-      : fsOpenClawConfig;
-    await imService.persistConfig({ feishu: configToSave });
-  };
+  // Handle Feishu multi-instance config
+  const feishuMultiConfig = config.feishu;
 
-  // State for Feishu allow-from inputs
-  const [feishuAllowedUserIdInput, setFeishuAllowedUserIdInput] = useState('');
-  const [feishuGroupAllowIdInput, setFeishuGroupAllowIdInput] = useState('');
   // Inline QR code state for feishu bot creation (mirroring WeCom quick-setup pattern)
-  const [feishuQrStatus, setFeishuQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
-  const [feishuQrUrl, setFeishuQrUrl] = useState<string>('');
-  const [feishuQrTimeLeft, setFeishuQrTimeLeft] = useState<number>(0);
-  const [feishuQrError, setFeishuQrError] = useState<string>('');
+  // These are used by handleFeishuStartQr which creates instances via QR flow
+  // @ts-ignore: will be used when QR flow is wired to FeishuInstanceSettings
+  const [_feishuQrStatus, setFeishuQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
+  // @ts-ignore
+  const [_feishuQrUrl, setFeishuQrUrl] = useState<string>('');
+  // @ts-ignore
+  const [_feishuQrTimeLeft, setFeishuQrTimeLeft] = useState<number>(0);
+  // @ts-ignore
+  const [_feishuQrError, setFeishuQrError] = useState<string>('');
   // These don't need to be state — they don't affect rendering directly
   const feishuQrDeviceCodeRef = useRef<string>('');
   const feishuQrPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -354,18 +356,7 @@ const IMSettings: React.FC = () => {
     await imService.persistConfig({ telegram: configToSave });
   };
 
-  // Handle QQ OpenClaw config change
-  const qqOpenClawConfig = config.qq;
-  const handleQQOpenClawChange = (update: Partial<QQOpenClawConfig>) => {
-    dispatch(setQQConfig(update));
-  };
-  const handleSaveQQOpenClawConfig = async (override?: Partial<QQOpenClawConfig>) => {
-    if (!configLoaded) return;
-    const configToSave = override
-      ? { ...qqOpenClawConfig, ...override }
-      : qqOpenClawConfig;
-    await imService.persistConfig({ qq: configToSave });
-  };
+  const qqMultiConfig = config.qq;
 
   // Handle Discord OpenClaw config change
   const dcOpenClawConfig = config.discord;
@@ -530,13 +521,13 @@ const IMSettings: React.FC = () => {
 
     // For Feishu, save feishu config directly
     if (activePlatform === 'feishu') {
-      await imService.persistConfig({ feishu: fsOpenClawConfig });
+      await imService.persistConfig({ feishu: feishuMultiConfig });
       return;
     }
 
     // For QQ, save qq config directly (OpenClaw mode)
     if (activePlatform === 'qq') {
-      await imService.persistConfig({ qq: qqOpenClawConfig });
+      await imService.persistConfig({ qq: qqMultiConfig });
       return;
     }
 
@@ -628,24 +619,12 @@ const IMSettings: React.FC = () => {
       }
 
       if (platform === 'dingtalk') {
-        const newEnabled = !dtOpenClawConfig.enabled;
-        const success = await imService.updateConfig({ dingtalk: { ...dtOpenClawConfig, enabled: newEnabled } });
-        if (success) {
-          dispatch(setDingTalkConfig({ enabled: newEnabled }));
-          if (newEnabled) dispatch(clearError());
-          await imService.loadStatus();
-        }
+        // DingTalk multi-instance: toggle is handled per-instance in DingTalkInstanceSettings
         return;
       }
 
       if (platform === 'feishu') {
-        const newEnabled = !fsOpenClawConfig.enabled;
-        const success = await imService.updateConfig({ feishu: { ...fsOpenClawConfig, enabled: newEnabled } });
-        if (success) {
-          dispatch(setFeishuConfig({ enabled: newEnabled }));
-          if (newEnabled) dispatch(clearError());
-          await imService.loadStatus();
-        }
+        // Feishu multi-instance: toggle is handled per-instance in FeishuInstanceSettings
         return;
       }
 
@@ -661,13 +640,7 @@ const IMSettings: React.FC = () => {
       }
 
       if (platform === 'qq') {
-        const newEnabled = !qqOpenClawConfig.enabled;
-        const success = await imService.updateConfig({ qq: { ...qqOpenClawConfig, enabled: newEnabled } });
-        if (success) {
-          dispatch(setQQConfig({ enabled: newEnabled }));
-          if (newEnabled) dispatch(clearError());
-          await imService.loadStatus();
-        }
+        // QQ multi-instance: toggle is handled per-instance in QQInstanceSettings
         return;
       }
 
@@ -746,13 +719,13 @@ const IMSettings: React.FC = () => {
     }
   };
 
-  const dingtalkConnected = status.dingtalk.connected;
-  const feishuConnected = status.feishu.connected;
+  const dingtalkConnected = status.dingtalk?.instances?.some(i => i.connected) ?? false;
+  const feishuConnected = status.feishu?.instances?.some(i => i.connected) ?? false;
   const telegramConnected = status.telegram.connected;
   const discordConnected = status.discord.connected;
   const nimConnected = status.nim.connected;
   const neteaseBeeChanConnected = status['netease-bee']?.connected ?? false;
-  const qqConnected = status.qq?.connected ?? false;
+  const qqConnected = status.qq?.instances?.some(i => i.connected) ?? false;
   const wecomConnected = status.wecom?.connected ?? false;
   const weixinConnected = status.weixin?.connected ?? false;
   const popoConnected = status.popo?.connected ?? false;
@@ -773,7 +746,7 @@ const IMSettings: React.FC = () => {
   // Check if platform can be started
   const canStart = (platform: Platform): boolean => {
     if (platform === 'dingtalk') {
-      return !!(config.dingtalk.clientId && config.dingtalk.clientSecret);
+      return config.dingtalk.instances.some(i => !!(i.clientId && i.clientSecret));
     }
     if (platform === 'telegram') {
       return !!tgOpenClawConfig.botToken;
@@ -788,7 +761,7 @@ const IMSettings: React.FC = () => {
       return !!(config['netease-bee'].clientId && config['netease-bee'].secret);
     }
     if (platform === 'qq') {
-      return !!(config.qq.appId && config.qq.appSecret);
+      return config.qq.instances.some(i => !!(i.appId && i.appSecret));
     }
     if (platform === 'wecom') {
       return !!(wecomOpenClawConfig.botId && wecomOpenClawConfig.secret);
@@ -803,12 +776,21 @@ const IMSettings: React.FC = () => {
       }
       return !!(config.popo.appKey && config.popo.appSecret && config.popo.aesKey);
     }
-    return !!(config.feishu.appId && config.feishu.appSecret);
+    return config.feishu.instances?.some(i => !!(i.appId && i.appSecret));
   };
 
   // Get platform enabled state (persisted toggle state)
   const isPlatformEnabled = (platform: Platform): boolean => {
-    return config[platform].enabled;
+    if (platform === 'dingtalk') {
+      return config.dingtalk.instances?.some(i => i.enabled);
+    }
+    if (platform === 'qq') {
+      return config.qq.instances.some(i => i.enabled);
+    }
+    if (platform === 'feishu') {
+      return config.feishu.instances?.some(i => i.enabled);
+    }
+    return (config[platform] as { enabled: boolean }).enabled;
   };
 
   // Get platform connection status (runtime state)
@@ -854,16 +836,41 @@ const IMSettings: React.FC = () => {
       return;
     }
 
+    // For DingTalk, persist dingtalk config and test (OpenClaw mode)
+    if (platform === 'dingtalk') {
+      await imService.persistConfig({ dingtalk: dingtalkMultiConfig });
+      const result = await runConnectivityTest(platform, {
+        dingtalk: dingtalkMultiConfig,
+      } as Partial<IMGatewayConfig>);
+      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
+      if (activeDingTalkInstanceId && result) {
+        const inst = dingtalkMultiConfig.instances.find(i => i.instanceId === activeDingTalkInstanceId);
+        if (inst && !inst.enabled) {
+          const authCheck = result.checks.find((c) => c.code === 'auth_check');
+          if (authCheck && authCheck.level === 'pass') {
+            dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { enabled: true } }));
+            await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, { enabled: true });
+          }
+        }
+      }
+      return;
+    }
+
     // For QQ, persist qq config and test (OpenClaw mode)
     if (platform === 'qq') {
-      await imService.persistConfig({ qq: qqOpenClawConfig });
+      await imService.persistConfig({ qq: qqMultiConfig });
       const result = await runConnectivityTest(platform, {
-        qq: qqOpenClawConfig,
+        qq: qqMultiConfig,
       } as Partial<IMGatewayConfig>);
-      if (!qqOpenClawConfig.enabled && result) {
-        const authCheck = result.checks.find((c) => c.code === 'auth_check');
-        if (authCheck && authCheck.level === 'pass') {
-          toggleGateway(platform);
+      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
+      if (activeQQInstanceId && result) {
+        const inst = qqMultiConfig.instances.find(i => i.instanceId === activeQQInstanceId);
+        if (inst && !inst.enabled) {
+          const authCheck = result.checks.find((c) => c.code === 'auth_check');
+          if (authCheck && authCheck.level === 'pass') {
+            dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { enabled: true } }));
+            await imService.updateQQInstanceConfig(activeQQInstanceId, { enabled: true });
+          }
         }
       }
       return;
@@ -901,14 +908,19 @@ const IMSettings: React.FC = () => {
 
     // For Feishu, persist feishu config and test (OpenClaw mode)
     if (platform === 'feishu') {
-      await imService.persistConfig({ feishu: fsOpenClawConfig });
+      await imService.persistConfig({ feishu: feishuMultiConfig });
       const result = await runConnectivityTest(platform, {
-        feishu: fsOpenClawConfig,
+        feishu: feishuMultiConfig,
       } as Partial<IMGatewayConfig>);
-      if (!fsOpenClawConfig.enabled && result) {
-        const authCheck = result.checks.find((c) => c.code === 'auth_check');
-        if (authCheck && authCheck.level === 'pass') {
-          toggleGateway(platform);
+      // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
+      if (activeFeishuInstanceId && result) {
+        const inst = feishuMultiConfig.instances.find(i => i.instanceId === activeFeishuInstanceId);
+        if (inst && !inst.enabled) {
+          const authCheck = result.checks.find((c) => c.code === 'auth_check');
+          if (authCheck && authCheck.level === 'pass') {
+            dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: true } }));
+            await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: true });
+          }
         }
       }
       return;
@@ -1063,7 +1075,165 @@ const IMSettings: React.FC = () => {
         {platforms.map((platform) => {
                 const logo = PlatformRegistry.logo(platform);
            const isEnabled = isPlatformEnabled(platform);
+          const isConnected = getPlatformConnected(platform) || getPlatformStarting(platform);
           const canToggle = isEnabled || canStart(platform);
+
+          if (platform === 'dingtalk') {
+            return (
+              <div key="dingtalk">
+                {/* DingTalk Platform Header - clickable to expand/collapse */}
+                <div
+                  onClick={() => { setActivePlatform('dingtalk'); setActiveDingTalkInstanceId(null); setDingtalkExpanded(!dingtalkExpanded); }}
+                  className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
+                    activePlatform === 'dingtalk'
+                      ? 'bg-primary-muted border border-primary shadow-subtle'
+                      : 'bg-surface hover:bg-surface-raised border border-transparent'
+                  }`}
+                >
+                  <div className="flex flex-1 items-center">
+                    <div className="mr-2 flex h-7 w-7 items-center justify-center">
+                      <img src={PlatformRegistry.logo('dingtalk')} alt="DingTalk" className="w-6 h-6 object-contain rounded-md" />
+                    </div>
+                    <span className={`text-sm font-medium truncate ${activePlatform === 'dingtalk' ? 'text-primary' : 'text-foreground'}`}>
+                      {i18nService.t('dingtalk')}
+                    </span>
+                  </div>
+                  <span className="text-xs opacity-50">{dingtalkExpanded ? '\u25BC' : '\u25B6'}</span>
+                </div>
+                {/* DingTalk Instance Sub-items */}
+                {dingtalkExpanded && (
+                  <div className="ml-5 mt-1 space-y-1">
+                    {config.dingtalk.instances.map((inst) => {
+                      const instStatus = status.dingtalk?.instances?.find(s => s.instanceId === inst.instanceId);
+                      const isSelected = activePlatform === 'dingtalk' && activeDingTalkInstanceId === inst.instanceId;
+                      const dotColor = !inst.enabled ? 'bg-gray-400' : (instStatus?.connected ? 'bg-green-500' : 'bg-yellow-500');
+                      return (
+                        <div
+                          key={inst.instanceId}
+                          onClick={() => { setActivePlatform('dingtalk'); setActiveDingTalkInstanceId(inst.instanceId); }}
+                          className={`flex items-center p-1.5 pl-2 rounded-lg cursor-pointer transition-colors text-sm ${
+                            isSelected
+                              ? 'bg-primary/10 dark:bg-primary/20'
+                              : 'hover:bg-surface-raised'
+                          }`}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${dotColor} mr-2 flex-shrink-0`} />
+                          <span className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}>
+                            {inst.instanceName}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          if (platform === 'feishu') {
+            return (
+              <div key="feishu">
+                {/* Feishu Platform Header - clickable to expand/collapse */}
+                <div
+                  onClick={() => { setActivePlatform('feishu'); setActiveFeishuInstanceId(null); setFeishuExpanded(!feishuExpanded); }}
+                  className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
+                    activePlatform === 'feishu'
+                      ? 'bg-primary-muted border border-primary shadow-subtle'
+                      : 'bg-surface hover:bg-surface-raised border border-transparent'
+                  }`}
+                >
+                  <div className="flex flex-1 items-center">
+                    <div className="mr-2 flex h-7 w-7 items-center justify-center">
+                      <img src={PlatformRegistry.logo('feishu')} alt="Feishu" className="w-6 h-6 object-contain rounded-md" />
+                    </div>
+                    <span className={`text-sm font-medium truncate ${activePlatform === 'feishu' ? 'text-primary' : 'text-foreground'}`}>
+                      {i18nService.t('feishu')}
+                    </span>
+                  </div>
+                  <span className="text-xs opacity-50">{feishuExpanded ? '\u25BC' : '\u25B6'}</span>
+                </div>
+                {/* Feishu Instance Sub-items */}
+                {feishuExpanded && (
+                  <div className="ml-5 mt-1 space-y-1">
+                    {config.feishu.instances.map((inst) => {
+                      const instStatus = status.feishu?.instances?.find(s => s.instanceId === inst.instanceId);
+                      const isSelected = activePlatform === 'feishu' && activeFeishuInstanceId === inst.instanceId;
+                      const dotColor = !inst.enabled ? 'bg-gray-400' : (instStatus?.connected ? 'bg-green-500' : 'bg-yellow-500');
+                      return (
+                        <div
+                          key={inst.instanceId}
+                          onClick={() => { setActivePlatform('feishu'); setActiveFeishuInstanceId(inst.instanceId); }}
+                          className={`flex items-center p-1.5 pl-2 rounded-lg cursor-pointer transition-colors text-sm ${
+                            isSelected
+                              ? 'bg-primary/10 dark:bg-primary/20'
+                              : 'hover:bg-surface-raised'
+                          }`}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${dotColor} mr-2 flex-shrink-0`} />
+                          <span className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}>
+                            {inst.instanceName}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          if (platform === 'qq') {
+            return (
+              <div key="qq">
+                {/* QQ Platform Header - clickable to expand/collapse */}
+                <div
+                  onClick={() => { setActivePlatform('qq'); setActiveQQInstanceId(null); setQqExpanded(!qqExpanded); }}
+                  className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
+                    activePlatform === 'qq'
+                      ? 'bg-primary-muted border border-primary shadow-subtle'
+                      : 'bg-surface hover:bg-surface-raised border border-transparent'
+                  }`}
+                >
+                  <div className="flex flex-1 items-center">
+                    <div className="mr-2 flex h-7 w-7 items-center justify-center">
+                      <img src={PlatformRegistry.logo('qq')} alt="QQ" className="w-6 h-6 object-contain rounded-md" />
+                    </div>
+                    <span className={`text-sm font-medium truncate ${activePlatform === 'qq' ? 'text-primary' : 'text-foreground'}`}>
+                      {i18nService.t('qq')}
+                    </span>
+                  </div>
+                  <span className="text-xs opacity-50">{qqExpanded ? '\u25BC' : '\u25B6'}</span>
+                </div>
+                {/* QQ Instance Sub-items */}
+                {qqExpanded && (
+                  <div className="ml-5 mt-1 space-y-1">
+                    {config.qq.instances.map((inst) => {
+                      const instStatus = status.qq?.instances?.find(s => s.instanceId === inst.instanceId);
+                      const isSelected = activePlatform === 'qq' && activeQQInstanceId === inst.instanceId;
+                      const dotColor = !inst.enabled ? 'bg-gray-400' : (instStatus?.connected ? 'bg-green-500' : 'bg-yellow-500');
+                      return (
+                        <div
+                          key={inst.instanceId}
+                          onClick={() => { setActivePlatform('qq'); setActiveQQInstanceId(inst.instanceId); }}
+                          className={`flex items-center p-1.5 pl-2 rounded-lg cursor-pointer transition-colors text-sm ${
+                            isSelected
+                              ? 'bg-primary/10 dark:bg-primary/20'
+                              : 'hover:bg-surface-raised'
+                          }`}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${dotColor} mr-2 flex-shrink-0`} />
+                          <span className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}>
+                            {inst.instanceName}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
           return (
             <div
               key={platform}
@@ -1094,7 +1264,7 @@ const IMSettings: React.FC = () => {
                 <div
                   className={`w-7 h-4 rounded-full flex items-center transition-colors ${
                     isEnabled
-                      ? 'bg-primary'
+                      ? (isConnected ? 'bg-green-500' : 'bg-yellow-500')
                       : 'bg-gray-400 dark:bg-gray-600'
                   } ${(!canToggle || togglingPlatform === platform) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                   onClick={(e) => {
@@ -1116,15 +1286,16 @@ const IMSettings: React.FC = () => {
 
       {/* Platform Settings - Right Side */}
       <div className="flex-1 min-w-0 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
-        {/* Header with status */}
+        {/* Header with status (hidden for QQ which has per-instance headers) */}
+        {activePlatform !== 'qq' && activePlatform !== 'feishu' && activePlatform !== 'dingtalk' && (
         <div className="flex items-center gap-3 pb-3 border-b border-border-subtle">
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-surface border border-border-subtle p-1">
-              <img
+             <div className="flex h-7 w-7 items-center justify-center rounded-md bg-surface border border-border-subtle p-1">
+               <img
                 src={PlatformRegistry.logo(activePlatform)}
-                alt={i18nService.t(activePlatform)}
-                className="w-4 h-4 object-contain rounded"
-              />
+                 alt={i18nService.t(activePlatform)}
+                 className="w-4 h-4 object-contain rounded"
+               />
             </div>
             <h3 className="text-sm font-medium text-foreground">
               {`${i18nService.t(activePlatform)}${i18nService.t('settings')}`}
@@ -1142,995 +1313,221 @@ const IMSettings: React.FC = () => {
                 : i18nService.t('disconnected')}
           </div>
         </div>
-
-
-        {/* DingTalk Settings */}
-        {activePlatform === 'dingtalk' && (
-          <div className="space-y-3">
-            <PlatformGuide
-              steps={[
-                i18nService.t('imDingtalkGuideStep1'),
-                i18nService.t('imDingtalkGuideStep2'),
-                i18nService.t('imDingtalkGuideStep3'),
-                i18nService.t('imDingtalkGuideStep4'),
-              ]}
-                guideUrl={PlatformRegistry.guideUrl('dingtalk')}
-            />
-            {/* Client ID */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Client ID (AppKey)
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={dtOpenClawConfig.clientId}
-                  onChange={(e) => handleDingTalkOpenClawChange({ clientId: e.target.value })}
-                  onBlur={() => handleSaveDingTalkOpenClawConfig()}
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="dingxxxxxx"
-                />
-                {dtOpenClawConfig.clientId && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleDingTalkOpenClawChange({ clientId: '' }); void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, clientId: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Client Secret */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Client Secret (AppSecret)
-              </label>
-              <div className="relative">
-                <input
-                  type={showSecrets['dingtalk.clientSecret'] ? 'text' : 'password'}
-                  value={dtOpenClawConfig.clientSecret}
-                  onChange={(e) => handleDingTalkOpenClawChange({ clientSecret: e.target.value })}
-                  onBlur={() => handleSaveDingTalkOpenClawConfig()}
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
-                  placeholder="••••••••••••"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {dtOpenClawConfig.clientSecret && (
-                    <button
-                      type="button"
-                      onClick={() => { handleDingTalkOpenClawChange({ clientSecret: '' }); void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, clientSecret: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'dingtalk.clientSecret': !prev['dingtalk.clientSecret'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['dingtalk.clientSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['dingtalk.clientSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Advanced Settings (collapsible) */}
-            <details className="group">
-              <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
-                {i18nService.t('imAdvancedSettings')}
-              </summary>
-              <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
-                {/* DM Policy */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    DM Policy
-                  </label>
-                  <select
-                    value={dtOpenClawConfig.dmPolicy}
-                    onChange={(e) => {
-                      const update = { dmPolicy: e.target.value as DingTalkOpenClawConfig['dmPolicy'] };
-                      handleDingTalkOpenClawChange(update);
-                      void handleSaveDingTalkOpenClawConfig(update);
-                    }}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  >
-                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
-                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
-                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
-                  </select>
-                </div>
-
-                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
-                {dtOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('dingtalk')}
-
-                {/* Allow From (User IDs) */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Allow From (User IDs)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={dingtalkAllowedUserIdInput}
-                      onChange={(e) => setDingtalkAllowedUserIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          const id = dingtalkAllowedUserIdInput.trim();
-                          if (id && !dtOpenClawConfig.allowFrom.includes(id)) {
-                            const newIds = [...dtOpenClawConfig.allowFrom, id];
-                            handleDingTalkOpenClawChange({ allowFrom: newIds });
-                            setDingtalkAllowedUserIdInput('');
-                            void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
-                          }
-                        }
-                      }}
-                      className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                      placeholder={i18nService.t('imDingtalkUserIdPlaceholder')}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const id = dingtalkAllowedUserIdInput.trim();
-                        if (id && !dtOpenClawConfig.allowFrom.includes(id)) {
-                          const newIds = [...dtOpenClawConfig.allowFrom, id];
-                          handleDingTalkOpenClawChange({ allowFrom: newIds });
-                          setDingtalkAllowedUserIdInput('');
-                          void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
-                        }
-                      }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
-                    >
-                      {i18nService.t('add') || '添加'}
-                    </button>
-                  </div>
-                  {dtOpenClawConfig.allowFrom.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {dtOpenClawConfig.allowFrom.map((id) => (
-                        <span
-                          key={id}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
-                        >
-                          {id}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newIds = dtOpenClawConfig.allowFrom.filter((x) => x !== id);
-                              handleDingTalkOpenClawChange({ allowFrom: newIds });
-                              void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
-                            }}
-                            className="p-0.5 rounded text-secondary hover:text-red-500 transition-colors"
-                          >
-                            <XMarkIcon className="h-3 w-3" />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Group Policy */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Policy
-                  </label>
-                  <select
-                    value={dtOpenClawConfig.groupPolicy}
-                    onChange={(e) => {
-                      const update = { groupPolicy: e.target.value as DingTalkOpenClawConfig['groupPolicy'] };
-                      handleDingTalkOpenClawChange(update);
-                      void handleSaveDingTalkOpenClawConfig(update);
-                    }}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  >
-                    <option value="open">{i18nService.t('imGroupPolicyOpen')}</option>
-                    <option value="allowlist">{i18nService.t('imGroupPolicyAllowlist')}</option>
-                  </select>
-                </div>
-
-                {/* Session Timeout (deprecated) */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary opacity-60">
-                    {i18nService.t('imSessionTimeout')}
-                  </label>
-                  <input
-                    type="number"
-                    value={Math.round(dtOpenClawConfig.sessionTimeout / 60000)}
-                    onChange={(e) => {
-                      const minutes = parseInt(e.target.value, 10);
-                      if (!isNaN(minutes) && minutes > 0) {
-                        handleDingTalkOpenClawChange({ sessionTimeout: minutes * 60000 });
-                      }
-                    }}
-                    onBlur={() => handleSaveDingTalkOpenClawConfig()}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors opacity-60"
-                    min="1"
-                    placeholder="30"
-                  />
-                </div>
-
-                {/* Separate Session by Conversation */}
-                <label className="flex items-center gap-2 text-xs text-secondary">
-                  <input
-                    type="checkbox"
-                    checked={dtOpenClawConfig.separateSessionByConversation}
-                    onChange={(e) => {
-                      const update = { separateSessionByConversation: e.target.checked };
-                      handleDingTalkOpenClawChange(update);
-                      void handleSaveDingTalkOpenClawConfig(update);
-                    }}
-                    className="rounded border-gray-300 dark:border-gray-600"
-                  />
-                  <span>
-                    {i18nService.t('imSeparateSessionByConversation')}
-                    <span className="ml-1 opacity-60">— {i18nService.t('imSeparateSessionByConversationDesc')}</span>
-                  </span>
-                </label>
-
-                {/* Group Session Scope (only visible when separateSessionByConversation is on) */}
-                {dtOpenClawConfig.separateSessionByConversation && (
-                  <div className="space-y-1.5 pl-4">
-                    <label className="block text-xs font-medium text-secondary">
-                      {i18nService.t('imGroupSessionScope')}
-                    </label>
-                    <select
-                      value={dtOpenClawConfig.groupSessionScope}
-                      onChange={(e) => {
-                        const update = { groupSessionScope: e.target.value as 'group' | 'group_sender' };
-                        handleDingTalkOpenClawChange(update);
-                        void handleSaveDingTalkOpenClawConfig(update);
-                      }}
-                      className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                    >
-                      <option value="group">{i18nService.t('imGroupSessionScopeGroup')}</option>
-                      <option value="group_sender">{i18nService.t('imGroupSessionScopeGroupSender')}</option>
-                    </select>
-                  </div>
-                )}
-
-                {/* Shared Memory Across Conversations */}
-                <label className="flex items-center gap-2 text-xs text-secondary">
-                  <input
-                    type="checkbox"
-                    checked={dtOpenClawConfig.sharedMemoryAcrossConversations}
-                    onChange={(e) => {
-                      const update = { sharedMemoryAcrossConversations: e.target.checked };
-                      handleDingTalkOpenClawChange(update);
-                      void handleSaveDingTalkOpenClawConfig(update);
-                    }}
-                    className="rounded border-gray-300 dark:border-gray-600"
-                  />
-                  <span>
-                    {i18nService.t('imSharedMemoryAcrossConversations')}
-                    <span className="ml-1 opacity-60">— {i18nService.t('imSharedMemoryAcrossConversationsDesc')}</span>
-                  </span>
-                </label>
-
-                {/* Gateway Base URL */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    {i18nService.t('imGatewayBaseUrl')}
-                  </label>
-                  <input
-                    type="text"
-                    value={dtOpenClawConfig.gatewayBaseUrl}
-                    onChange={(e) => {
-                      handleDingTalkOpenClawChange({ gatewayBaseUrl: e.target.value });
-                    }}
-                    onBlur={() => handleSaveDingTalkOpenClawConfig()}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                    placeholder={i18nService.t('imGatewayBaseUrlPlaceholder')}
-                  />
-                </div>
-
-                {/* Debug */}
-                <label className="flex items-center gap-2 text-xs text-secondary">
-                  <input
-                    type="checkbox"
-                    checked={dtOpenClawConfig.debug}
-                    onChange={(e) => {
-                      const update = { debug: e.target.checked };
-                      handleDingTalkOpenClawChange(update);
-                      void handleSaveDingTalkOpenClawConfig(update);
-                    }}
-                    className="rounded border-gray-300 dark:border-gray-600"
-                  />
-                  {i18nService.t('imDebugMode')}
-                </label>
-              </div>
-            </details>
-
-            <div className="pt-1">
-              {renderConnectivityTestButton('dingtalk')}
-            </div>
-
-            {/* Error display */}
-            {status.dingtalk.lastError && (
-              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {status.dingtalk.lastError}
-              </div>
-            )}
-          </div>
         )}
 
-        {/* Feishu Settings */}
-        {activePlatform === 'feishu' && (
-          <div className="space-y-3">
-            {/* Scan QR code section */}
-            <div className="rounded-lg border border-dashed border-border-subtle p-4 text-center space-y-3">
-              {(feishuQrStatus === 'idle' || feishuQrStatus === 'error') && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void handleFeishuStartQr()}
-                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {i18nService.t('feishuBotCreateWizardScanBtn')}
-                  </button>
-                  <p className="text-xs text-secondary">
-                    {i18nService.t('feishuBotCreateWizardScanHint')}
-                  </p>
-                  {feishuQrStatus === 'error' && feishuQrError && (
-                    <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                      <XCircleIcon className="h-4 w-4 flex-shrink-0" />
-                      {feishuQrError}
-                    </div>
-                  )}
-                </>
-              )}
-              {feishuQrStatus === 'loading' && (
-                <div className="flex flex-col items-center gap-2 py-2">
-                  <ArrowPathIcon className="h-7 w-7 text-primary animate-spin" />
-                  <span className="text-xs text-secondary">正在生成二维码…</span>
-                </div>
-              )}
-              {feishuQrStatus === 'showing' && feishuQrUrl && (
-                <div className="flex flex-col items-center gap-2">
-                  <div className="p-2 bg-white rounded-lg inline-block">
-                    <QRCodeSVG value={feishuQrUrl} size={160} />
-                  </div>
-                  <p className="text-xs text-secondary max-w-[240px]">
-                    {i18nService.t('feishuBotCreateWizardQrcodeDesc')}
-                  </p>
-                  <p className="text-xs text-secondary">
-                    {feishuQrTimeLeft}s
-                  </p>
-                </div>
-              )}
-              {feishuQrStatus === 'success' && (
-                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
-                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
-                  {i18nService.t('feishuBotCreateWizardSuccessTitle')}
-                </div>
-              )}
-            </div>
 
-            {/* Divider */}
-            <div className="relative flex items-center">
-              <div className="flex-1 border-t border-border-subtle" />
-              <span className="px-3 text-xs text-secondary whitespace-nowrap">
-                {i18nService.t('feishuBotCreateWizardOrManual')}
-              </span>
-              <div className="flex-1 border-t border-border-subtle" />
-            </div>
-
-            {/* Manual guide */}
-            <PlatformGuide
-              steps={[
-                i18nService.t('imFeishuGuideStep1'),
-                i18nService.t('imFeishuGuideStep2'),
-              ]}
-                guideUrl={PlatformRegistry.guideUrl('feishu')}
-            />
-            {/* App ID */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                App ID
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={fsOpenClawConfig.appId}
-                  onChange={(e) => handleFeishuOpenClawChange({ appId: e.target.value })}
-                  onBlur={() => handleSaveFeishuOpenClawConfig()}
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="cli_xxxxx"
-                />
-                {fsOpenClawConfig.appId && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleFeishuOpenClawChange({ appId: '' }); void imService.persistConfig({ feishu: { ...fsOpenClawConfig, appId: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* App Secret */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                App Secret
-              </label>
-              <div className="relative">
-                <input
-                  type={showSecrets['feishu.appSecret'] ? 'text' : 'password'}
-                  value={fsOpenClawConfig.appSecret}
-                  onChange={(e) => handleFeishuOpenClawChange({ appSecret: e.target.value })}
-                  onBlur={() => handleSaveFeishuOpenClawConfig()}
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
-                  placeholder="••••••••••••"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {fsOpenClawConfig.appSecret && (
-                    <button
-                      type="button"
-                      onClick={() => { handleFeishuOpenClawChange({ appSecret: '' }); void imService.persistConfig({ feishu: { ...fsOpenClawConfig, appSecret: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'feishu.appSecret': !prev['feishu.appSecret'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['feishu.appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['feishu.appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Domain */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Domain
-              </label>
-              <select
-                value={fsOpenClawConfig.domain}
-                onChange={(e) => {
-                  const update = { domain: e.target.value };
-                  handleFeishuOpenClawChange(update);
-                  void handleSaveFeishuOpenClawConfig(update);
+        {/* DingTalk Settings (multi-instance) */}
+        {activePlatform === 'dingtalk' && !activeDingTalkInstanceId && (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <img src={PlatformRegistry.logo('dingtalk')} alt="DingTalk" className="w-12 h-12 object-contain rounded-md mb-4 opacity-50" />
+            <p className="text-sm text-secondary mb-4">
+              {config.dingtalk.instances.length === 0
+                ? (language === 'zh' ? '尚未添加钉钉实例，点击下方按钮添加' : 'No DingTalk instances yet. Click below to add one.')
+                : (language === 'zh' ? '请在左侧选择一个钉钉实例' : 'Select a DingTalk instance from the sidebar.')}
+            </p>
+            {config.dingtalk.instances.length < MAX_DINGTALK_INSTANCES && (
+              <button
+                type="button"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const inst = await imService.addDingTalkInstance(`DingTalk Bot ${config.dingtalk.instances.length + 1}`);
+                  if (inst) { setActiveDingTalkInstanceId(inst.instanceId); setDingtalkExpanded(true); }
                 }}
-                className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
               >
-                <option value="feishu">{i18nService.t('imFeishuDomainFeishu')}</option>
-                <option value="lark">{i18nService.t('imFeishuDomainLark')}</option>
-              </select>
-            </div>
-
-            {/* Advanced Settings (collapsible) */}
-            <details className="group">
-              <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
-                {i18nService.t('imAdvancedSettings')}
-              </summary>
-              <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
-                {/* DM Policy */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    DM Policy
-                  </label>
-                  <select
-                    value={fsOpenClawConfig.dmPolicy}
-                    onChange={(e) => {
-                      const update = { dmPolicy: e.target.value as FeishuOpenClawConfig['dmPolicy'] };
-                      handleFeishuOpenClawChange(update);
-                      void handleSaveFeishuOpenClawConfig(update);
-                    }}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  >
-                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
-                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
-                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
-                    <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
-                  </select>
-                </div>
-
-                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
-                {fsOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('feishu')}
-
-                {/* Allow From (User IDs) */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Allow From (User IDs)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={feishuAllowedUserIdInput}
-                      onChange={(e) => setFeishuAllowedUserIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          const id = feishuAllowedUserIdInput.trim();
-                          if (id && !fsOpenClawConfig.allowFrom.includes(id)) {
-                            const newIds = [...fsOpenClawConfig.allowFrom, id];
-                            handleFeishuOpenClawChange({ allowFrom: newIds });
-                            setFeishuAllowedUserIdInput('');
-                            void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
-                          }
-                        }
-                      }}
-                      className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                      placeholder={i18nService.t('imFeishuUserIdPlaceholder')}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const id = feishuAllowedUserIdInput.trim();
-                        if (id && !fsOpenClawConfig.allowFrom.includes(id)) {
-                          const newIds = [...fsOpenClawConfig.allowFrom, id];
-                          handleFeishuOpenClawChange({ allowFrom: newIds });
-                          setFeishuAllowedUserIdInput('');
-                          void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
-                        }
-                      }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
-                    >
-                      {i18nService.t('add') || '添加'}
-                    </button>
-                  </div>
-                  {fsOpenClawConfig.allowFrom.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {fsOpenClawConfig.allowFrom.map((id) => (
-                        <span
-                          key={id}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
-                        >
-                          {id}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newIds = fsOpenClawConfig.allowFrom.filter((uid) => uid !== id);
-                              handleFeishuOpenClawChange({ allowFrom: newIds });
-                              void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
-                            }}
-                            className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                          >
-                            <XMarkIcon className="w-3 h-3" />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Group Policy */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Policy
-                  </label>
-                  <select
-                    value={fsOpenClawConfig.groupPolicy}
-                    onChange={(e) => {
-                      const update = { groupPolicy: e.target.value as FeishuOpenClawConfig['groupPolicy'] };
-                      handleFeishuOpenClawChange(update);
-                      void handleSaveFeishuOpenClawConfig(update);
-                    }}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  >
-                    <option value="allowlist">Allowlist</option>
-                    <option value="open">Open</option>
-                    <option value="disabled">Disabled</option>
-                  </select>
-                </div>
-
-                {/* Group Allow From */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Allow From (Chat IDs)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={feishuGroupAllowIdInput}
-                      onChange={(e) => setFeishuGroupAllowIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          const id = feishuGroupAllowIdInput.trim();
-                          if (id && !fsOpenClawConfig.groupAllowFrom.includes(id)) {
-                            const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
-                            handleFeishuOpenClawChange({ groupAllowFrom: newIds });
-                            setFeishuGroupAllowIdInput('');
-                            void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
-                          }
-                        }
-                      }}
-                      className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                      placeholder={i18nService.t('imFeishuChatIdPlaceholder')}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const id = feishuGroupAllowIdInput.trim();
-                        if (id && !fsOpenClawConfig.groupAllowFrom.includes(id)) {
-                          const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
-                          handleFeishuOpenClawChange({ groupAllowFrom: newIds });
-                          setFeishuGroupAllowIdInput('');
-                          void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
-                        }
-                      }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
-                    >
-                      {i18nService.t('add') || '添加'}
-                    </button>
-                  </div>
-                  {fsOpenClawConfig.groupAllowFrom.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {fsOpenClawConfig.groupAllowFrom.map((id) => (
-                        <span
-                          key={id}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
-                        >
-                          {id}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newIds = fsOpenClawConfig.groupAllowFrom.filter((gid) => gid !== id);
-                              handleFeishuOpenClawChange({ groupAllowFrom: newIds });
-                              void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
-                            }}
-                            className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                          >
-                            <XMarkIcon className="w-3 h-3" />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Reply Mode */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Reply Mode
-                  </label>
-                  <select
-                    value={fsOpenClawConfig.replyMode}
-                    onChange={(e) => {
-                      const update = { replyMode: e.target.value as FeishuOpenClawConfig['replyMode'] };
-                      handleFeishuOpenClawChange(update);
-                      void handleSaveFeishuOpenClawConfig(update);
-                    }}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  >
-                    <option value="auto">{i18nService.t('imReplyModeAuto')}</option>
-                    <option value="static">{i18nService.t('imReplyModeStatic')}</option>
-                    <option value="streaming">{i18nService.t('imReplyModeStreaming')}</option>
-                  </select>
-                </div>
-
-                {/* History Limit */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    History Limit
-                  </label>
-                  <input
-                    type="number"
-                    value={fsOpenClawConfig.historyLimit}
-                    onChange={(e) => handleFeishuOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })}
-                    onBlur={() => handleSaveFeishuOpenClawConfig()}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                    min="1"
-                    max="200"
-                  />
-                </div>
-
-                {/* Media Max MB */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Media Max (MB)
-                  </label>
-                  <input
-                    type="number"
-                    value={fsOpenClawConfig.mediaMaxMb}
-                    onChange={(e) => handleFeishuOpenClawChange({ mediaMaxMb: parseInt(e.target.value) || 30 })}
-                    onBlur={() => handleSaveFeishuOpenClawConfig()}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                    min="1"
-                    max="50"
-                  />
-                </div>
-              </div>
-            </details>
-
-            <div className="pt-1">
-              {renderConnectivityTestButton('feishu')}
-            </div>
-
-            {/* Error display */}
-            {status.feishu.error && (
-              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {status.feishu.error}
-              </div>
+                + {i18nService.t('imDingTalkAddInstance')}
+              </button>
             )}
-
           </div>
         )}
-
-        {/* QQ Settings */}
-        {activePlatform === 'qq' && (
-          <div className="space-y-3">
-            <PlatformGuide
-              steps={[
-                i18nService.t('imQQGuideStep1'),
-                i18nService.t('imQQGuideStep2'),
-                i18nService.t('imQQGuideStep3'),
-                i18nService.t('imQQGuideStep4'),
-              ]}
-                guideUrl={PlatformRegistry.guideUrl('qq')}
+        {activePlatform === 'dingtalk' && activeDingTalkInstanceId && (() => {
+          const selectedInstance = config.dingtalk.instances.find(i => i.instanceId === activeDingTalkInstanceId);
+          if (!selectedInstance) return null;
+          const selectedStatus = status.dingtalk?.instances?.find(s => s.instanceId === activeDingTalkInstanceId);
+          return (
+            <DingTalkInstanceSettings
+              instance={selectedInstance}
+              instanceStatus={selectedStatus}
+              onConfigChange={(update) => {
+                dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: update }));
+              }}
+              onSave={async (override) => {
+                const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
+                if (selectedInstance.enabled) {
+                  await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
+                } else {
+                  await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
+                }
+              }}
+              onRename={async (newName) => {
+                dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { instanceName: newName } as any }));
+                await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, { instanceName: newName } as any);
+              }}
+              onDelete={async () => {
+                await imService.deleteDingTalkInstance(activeDingTalkInstanceId);
+                const remaining = config.dingtalk.instances.filter(i => i.instanceId !== activeDingTalkInstanceId);
+                setActiveDingTalkInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+              }}
+              onToggleEnabled={async () => {
+                const newEnabled = !selectedInstance.enabled;
+                if (newEnabled && !(selectedInstance.clientId && selectedInstance.clientSecret)) return;
+                const success = await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, { enabled: newEnabled });
+                if (success) {
+                  dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { enabled: newEnabled } }));
+                  if (newEnabled) dispatch(clearError());
+                }
+              }}
+              onTestConnectivity={() => {
+                void handleConnectivityTest('dingtalk');
+              }}
+              testingPlatform={testingPlatform}
+              connectivityResults={connectivityResults}
+              language={language}
             />
-            {/* AppID */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                AppID
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={qqOpenClawConfig.appId}
-                  onChange={(e) => handleQQOpenClawChange({ appId: e.target.value })}
-                  onBlur={() => handleSaveQQOpenClawConfig()}
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="102xxxxx"
-                />
-                {qqOpenClawConfig.appId && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleQQOpenClawChange({ appId: '' }); void imService.persistConfig({ qq: { ...qqOpenClawConfig, appId: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+          );
+        })()}
 
-            {/* AppSecret */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                AppSecret
-              </label>
-              <div className="relative">
-                <input
-                  type={showSecrets['qq.appSecret'] ? 'text' : 'password'}
-                  value={qqOpenClawConfig.appSecret}
-                  onChange={(e) => handleQQOpenClawChange({ appSecret: e.target.value })}
-                  onBlur={() => handleSaveQQOpenClawConfig()}
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
-                  placeholder="••••••••••••"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {qqOpenClawConfig.appSecret && (
-                    <button
-                      type="button"
-                      onClick={() => { handleQQOpenClawChange({ appSecret: '' }); void imService.persistConfig({ qq: { ...qqOpenClawConfig, appSecret: '' } }); }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'qq.appSecret': !prev['qq.appSecret'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['qq.appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['qq.appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-              <p className="text-xs text-secondary">
-                {i18nService.t('imQQCredentialHint')}
-              </p>
-            </div>
-
-            {/* Advanced Settings (collapsible) */}
-            <details className="group">
-              <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
-                {i18nService.t('imAdvancedSettings')}
-              </summary>
-              <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
-                {/* DM Policy */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    DM Policy
-                  </label>
-                  <select
-                    value={qqOpenClawConfig.dmPolicy}
-                    onChange={(e) => {
-                      const update = { dmPolicy: e.target.value as QQOpenClawConfig['dmPolicy'] };
-                      handleQQOpenClawChange(update);
-                      void handleSaveQQOpenClawConfig(update);
-                    }}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  >
-                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
-                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
-                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
-                  </select>
-                </div>
-
-                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
-                {qqOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('qq')}
-
-                {/* Allow From */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Allow From (User IDs)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={allowedUserIdInput}
-                      onChange={(e) => setAllowedUserIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          const id = allowedUserIdInput.trim();
-                          if (id && !qqOpenClawConfig.allowFrom.includes(id)) {
-                            const newIds = [...qqOpenClawConfig.allowFrom, id];
-                            handleQQOpenClawChange({ allowFrom: newIds });
-                            setAllowedUserIdInput('');
-                            void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
-                          }
-                        }
-                      }}
-                      className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                      placeholder={i18nService.t('imQQUserIdPlaceholder')}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const id = allowedUserIdInput.trim();
-                        if (id && !qqOpenClawConfig.allowFrom.includes(id)) {
-                          const newIds = [...qqOpenClawConfig.allowFrom, id];
-                          handleQQOpenClawChange({ allowFrom: newIds });
-                          setAllowedUserIdInput('');
-                          void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
-                        }
-                      }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
-                    >
-                      {i18nService.t('add') || '添加'}
-                    </button>
-                  </div>
-                  {qqOpenClawConfig.allowFrom.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {qqOpenClawConfig.allowFrom.map((id) => (
-                        <span
-                          key={id}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
-                        >
-                          {id}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newIds = qqOpenClawConfig.allowFrom.filter((uid) => uid !== id);
-                              handleQQOpenClawChange({ allowFrom: newIds });
-                              void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
-                            }}
-                            className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                          >
-                            <XMarkIcon className="w-3 h-3" />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Group Policy */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Policy
-                  </label>
-                  <select
-                    value={qqOpenClawConfig.groupPolicy}
-                    onChange={(e) => {
-                      const update = { groupPolicy: e.target.value as QQOpenClawConfig['groupPolicy'] };
-                      handleQQOpenClawChange(update);
-                      void handleSaveQQOpenClawConfig(update);
-                    }}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  >
-                    <option value="open">Open</option>
-                    <option value="allowlist">Allowlist</option>
-                    <option value="disabled">Disabled</option>
-                  </select>
-                </div>
-
-                {/* History Limit */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    History Limit
-                  </label>
-                  <input
-                    type="number"
-                    value={qqOpenClawConfig.historyLimit}
-                    onChange={(e) => handleQQOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })}
-                    onBlur={() => handleSaveQQOpenClawConfig()}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                    min="1"
-                    max="200"
-                  />
-                </div>
-
-                {/* Markdown Support */}
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-secondary">
-                    Markdown Support
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const update = { markdownSupport: !qqOpenClawConfig.markdownSupport };
-                      handleQQOpenClawChange(update);
-                      void handleSaveQQOpenClawConfig(update);
-                    }}
-                    className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
-                      qqOpenClawConfig.markdownSupport ? 'bg-primary' : 'bg-surface'
-                    }`}
-                  >
-                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      qqOpenClawConfig.markdownSupport ? 'translate-x-4' : 'translate-x-0'
-                    }`} />
-                  </button>
-                </div>
-
-                {/* Image Server Base URL */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Image Server Base URL
-                  </label>
-                  <input
-                    type="text"
-                    value={qqOpenClawConfig.imageServerBaseUrl}
-                    onChange={(e) => handleQQOpenClawChange({ imageServerBaseUrl: e.target.value })}
-                    onBlur={() => handleSaveQQOpenClawConfig()}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                    placeholder="http://your-ip:18765"
-                  />
-                  <p className="text-xs text-secondary">
-                    {i18nService.t('imQQImageServerHint')}
-                  </p>
-                </div>
-              </div>
-            </details>
-
-            <div className="pt-1">
-              {renderConnectivityTestButton('qq')}
-            </div>
-
-            {/* Error display */}
-            {status.qq?.lastError && (
-              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {status.qq.lastError}
-              </div>
+        {/* Feishu Settings (multi-instance) */}
+        {activePlatform === 'feishu' && !activeFeishuInstanceId && (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <img src={PlatformRegistry.logo('feishu')} alt="Feishu" className="w-12 h-12 object-contain rounded-md mb-4 opacity-50" />
+            <p className="text-sm text-secondary mb-4">
+              {config.feishu.instances.length === 0
+                ? (language === 'zh' ? '尚未添加飞书实例，点击下方按钮添加' : 'No Feishu instances yet. Click below to add one.')
+                : (language === 'zh' ? '请在左侧选择一个飞书实例' : 'Select a Feishu instance from the sidebar.')}
+            </p>
+            {config.feishu.instances.length < MAX_FEISHU_INSTANCES && (
+              <button
+                type="button"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const inst = await imService.addFeishuInstance(`Feishu Bot ${config.feishu.instances.length + 1}`);
+                  if (inst) { setActiveFeishuInstanceId(inst.instanceId); setFeishuExpanded(true); }
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+              >
+                + {i18nService.t('imFeishuAddInstance')}
+              </button>
             )}
           </div>
         )}
+        {activePlatform === 'feishu' && activeFeishuInstanceId && (() => {
+          const selectedInstance = config.feishu.instances.find(i => i.instanceId === activeFeishuInstanceId);
+          if (!selectedInstance) return null;
+          const selectedStatus = status.feishu?.instances?.find(s => s.instanceId === activeFeishuInstanceId);
+          return (
+            <FeishuInstanceSettings
+              instance={selectedInstance}
+              instanceStatus={selectedStatus}
+              onConfigChange={(update) => {
+                dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: update }));
+              }}
+              onSave={async (override) => {
+                const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
+                if (selectedInstance.enabled) {
+                  await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
+                } else {
+                  await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
+                }
+              }}
+              onRename={async (newName) => {
+                dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { instanceName: newName } as any }));
+                await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, { instanceName: newName } as any);
+              }}
+              onDelete={async () => {
+                await imService.deleteFeishuInstance(activeFeishuInstanceId);
+                const remaining = config.feishu.instances.filter(i => i.instanceId !== activeFeishuInstanceId);
+                setActiveFeishuInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+              }}
+              onToggleEnabled={async () => {
+                const newEnabled = !selectedInstance.enabled;
+                if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
+                const success = await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: newEnabled });
+                if (success) {
+                  dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: newEnabled } }));
+                  if (newEnabled) dispatch(clearError());
+                }
+              }}
+              onTestConnectivity={() => {
+                void handleConnectivityTest('feishu');
+              }}
+              testingPlatform={testingPlatform}
+              connectivityResults={connectivityResults}
+              language={language}
+            />
+          );
+        })()}
+
+        {/* QQ Settings (multi-instance) */}
+        {activePlatform === 'qq' && !activeQQInstanceId && (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <img src={PlatformRegistry.logo('qq')} alt="QQ" className="w-12 h-12 object-contain rounded-md mb-4 opacity-50" />
+            <p className="text-sm text-secondary mb-4">
+              {config.qq.instances.length === 0
+                ? (language === 'zh' ? '尚未添加 QQ 实例，点击下方按钮添加' : 'No QQ instances yet. Click below to add one.')
+                : (language === 'zh' ? '请在左侧选择一个 QQ 实例' : 'Select a QQ instance from the sidebar.')}
+            </p>
+            {config.qq.instances.length < MAX_QQ_INSTANCES && (
+              <button
+                type="button"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const inst = await imService.addQQInstance(`QQ Bot ${config.qq.instances.length + 1}`);
+                  if (inst) { setActiveQQInstanceId(inst.instanceId); setQqExpanded(true); }
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+              >
+                + {i18nService.t('imQQAddInstance')}
+              </button>
+            )}
+          </div>
+        )}
+        {activePlatform === 'qq' && activeQQInstanceId && (() => {
+          const selectedInstance = config.qq.instances.find(i => i.instanceId === activeQQInstanceId);
+          if (!selectedInstance) return null;
+          const selectedStatus = status.qq?.instances?.find(s => s.instanceId === activeQQInstanceId);
+          return (
+            <QQInstanceSettings
+              instance={selectedInstance}
+              instanceStatus={selectedStatus}
+              onConfigChange={(update) => {
+                dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: update }));
+              }}
+              onSave={async (override) => {
+                const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
+                if (selectedInstance.enabled) {
+                  await imService.updateQQInstanceConfig(activeQQInstanceId, configToSave);
+                } else {
+                  await imService.persistQQInstanceConfig(activeQQInstanceId, configToSave);
+                }
+              }}
+              onRename={async (newName) => {
+                dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { instanceName: newName } as any }));
+                await imService.persistQQInstanceConfig(activeQQInstanceId, { instanceName: newName } as any);
+              }}
+              onDelete={async () => {
+                await imService.deleteQQInstance(activeQQInstanceId);
+                const remaining = config.qq.instances.filter(i => i.instanceId !== activeQQInstanceId);
+                setActiveQQInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+              }}
+              onToggleEnabled={async () => {
+                const newEnabled = !selectedInstance.enabled;
+                if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
+                const success = await imService.updateQQInstanceConfig(activeQQInstanceId, { enabled: newEnabled });
+                if (success) {
+                  dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { enabled: newEnabled } }));
+                  if (newEnabled) dispatch(clearError());
+                }
+              }}
+              onTestConnectivity={() => {
+                void handleConnectivityTest('qq');
+              }}
+              testingPlatform={testingPlatform}
+              connectivityResults={connectivityResults}
+              language={language}
+            />
+          );
+        })()}
 
         {/* Telegram Settings */}
         {activePlatform === 'telegram' && (
@@ -2250,7 +1647,7 @@ const IMSettings: React.FC = () => {
                           void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                     >
                       {i18nService.t('add') || '添加'}
                     </button>
@@ -2401,7 +1798,7 @@ const IMSettings: React.FC = () => {
                       void handleSaveTelegramOpenClawConfig(update);
                     }}
                     className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
-                      tgOpenClawConfig.linkPreview ? 'bg-primary' : 'bg-surface'
+                      tgOpenClawConfig.linkPreview ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                     }`}
                   >
                     <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
@@ -2570,7 +1967,7 @@ const IMSettings: React.FC = () => {
                           void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                     >
                       {i18nService.t('add') || '添加'}
                     </button>
@@ -2692,7 +2089,7 @@ const IMSettings: React.FC = () => {
                           void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
                         }
                       }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                     >
                       {i18nService.t('add') || '添加'}
                     </button>
@@ -2964,7 +2361,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => void handleWeixinQrLogin()}
-                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {i18nService.t('imWeixinScanBtn')}
                   </button>
@@ -3047,7 +2444,7 @@ const IMSettings: React.FC = () => {
                 type="button"
                 disabled={wecomQuickSetupStatus === 'pending'}
                 onClick={handleWecomQuickSetup}
-                className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {wecomQuickSetupStatus === 'pending'
                   ? i18nService.t('imWecomQuickSetupPending')
@@ -3223,7 +2620,7 @@ const IMSettings: React.FC = () => {
                           void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
                         }
                       }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                     >
                       {i18nService.t('add') || '添加'}
                     </button>
@@ -3286,7 +2683,7 @@ const IMSettings: React.FC = () => {
                       void handleSaveWecomOpenClawConfig(update);
                     }}
                     className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
-                      wecomOpenClawConfig.sendThinkingMessage ? 'bg-primary' : 'bg-surface'
+                      wecomOpenClawConfig.sendThinkingMessage ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                     }`}
                   >
                     <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
@@ -3613,7 +3010,7 @@ const IMSettings: React.FC = () => {
                           void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
                         }
                       }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                     >
                       {i18nService.t('add') || '添加'}
                     </button>
@@ -3699,7 +3096,7 @@ const IMSettings: React.FC = () => {
                           void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
                         }
                       }}
-                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary-muted text-primary hover:bg-primary-muted transition-colors"
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                     >
                       {i18nService.t('add') || '添加'}
                     </button>
@@ -3766,7 +3163,7 @@ const IMSettings: React.FC = () => {
                       void handleSavePopoConfig({ debug: next });
                     }}
                     className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
-                      popoConfig.debug ? 'bg-primary' : 'bg-surface'
+                      popoConfig.debug ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                     }`}
                   >
                     <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
@@ -3792,14 +3189,7 @@ const IMSettings: React.FC = () => {
         )}
 
         {connectivityModalPlatform && (
-          <div
-            className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
-            onClick={() => setConnectivityModalPlatform(null)}
-          >
-            <div
-              className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
+          <Modal onClose={() => setConnectivityModalPlatform(null)} overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden">
               <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                 <div className="text-sm font-semibold text-foreground">
                   {`${i18nService.t(connectivityModalPlatform)} ${i18nService.t('imConnectivitySectionTitle')}`}
@@ -3868,8 +3258,7 @@ const IMSettings: React.FC = () => {
               <div className="px-4 py-3 border-t border-border flex items-center justify-end">
                 {renderConnectivityTestButton(connectivityModalPlatform)}
               </div>
-            </div>
-          </div>
+          </Modal>
         )}
       </div>
     </div>

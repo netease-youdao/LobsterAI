@@ -16,10 +16,11 @@ export interface ScheduledTaskHandlerDeps {
       getSessionMapping: (conversationId: string, platform: string) => {
         coworkSessionId: string;
       } | undefined;
-      listSessionMappings: (platform: string) => Array<{
+      listSessionMappings: (platform: string, agentId?: string) => Array<{
         imConversationId: string;
         platform: string;
         coworkSessionId: string;
+        agentId: string;
         lastActiveAt: string;
       }>;
     } | undefined;
@@ -33,6 +34,51 @@ export interface ScheduledTaskHandlerDeps {
     getGatewayClient: () => unknown;
     fetchSessionByKey: (sessionKey: string) => Promise<unknown>;
   } | null;
+}
+
+/**
+ * Normalizes an announce-mode delivery payload for OpenClaw native delivery.
+ * Mutates `normalizedInput` in place: sets sessionTarget, converts SystemEvent
+ * payloads to AgentTurn, strips IM subtype prefixes from delivery.to, and primes
+ * the DingTalk reply route when needed.
+ */
+async function applyAnnounceDeliveryNormalization(
+  normalizedInput: Record<string, any>,
+  getIMGatewayManager: ScheduledTaskHandlerDeps['getIMGatewayManager'],
+): Promise<void> {
+  const delivery = normalizedInput.delivery;
+  if (!(delivery && delivery.mode === STDeliveryMode.Announce && delivery.channel && delivery.to)) {
+    return;
+  }
+  const platform = PlatformRegistry.platformOfChannel(delivery.channel);
+  if (!platform) return;
+
+  normalizedInput.sessionTarget = STSessionTarget.Isolated;
+  if (normalizedInput.payload?.kind === STPayloadKind.SystemEvent) {
+    normalizedInput.payload = {
+      kind: STPayloadKind.AgentTurn,
+      message: normalizedInput.payload.text || '',
+    };
+  }
+
+  // Strip IM subtype prefix (e.g. "direct:ou_xxx" -> "ou_xxx").
+  // Use lastIndexOf to handle IDs that contain colons themselves.
+  const rawTo = delivery.to;
+  const colonIdx = rawTo.lastIndexOf(':');
+  if (colonIdx > 0) {
+    delivery.to = rawTo.slice(colonIdx + 1);
+    console.debug('[ScheduledTask] stripped IM subtype prefix from delivery.to:', rawTo, '->', delivery.to);
+  }
+
+  if (platform === 'dingtalk') {
+    const imStore = getIMGatewayManager()?.getIMStore();
+    const mapping = imStore?.getSessionMapping(rawTo, platform);
+    if (mapping) {
+      await getIMGatewayManager()!.primeConversationReplyRoute(
+        platform, rawTo, mapping.coworkSessionId,
+      );
+    }
+  }
 }
 
 export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): void {
@@ -65,52 +111,8 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.log('[IPC][scheduledTask:create] normalizedInput:', JSON.stringify(normalizedInput, null, 2));
-      console.log('[IPC][scheduledTask:create] delivery:', JSON.stringify(normalizedInput.delivery, null, 2));
-
-      // When an IM conversation is selected as notification target, let OpenClaw
-      // handle delivery natively via its announce mechanism. We keep
-      // sessionTarget='isolated' and delivery.mode='announce' so OpenClaw runs
-      // the agent in an isolated cron session and delivers the result through
-      // its outbound channel adapter (e.g. feishu plugin).
-      //
-      // DingTalk still needs the reply route primed so the outbound adapter
-      // can locate the correct conversation.
-      const delivery = normalizedInput.delivery;
-      if (delivery && delivery.mode === STDeliveryMode.Announce && delivery.channel && delivery.to) {
-        const platform = PlatformRegistry.platformOfChannel(delivery.channel);
-        if (platform) {
-          console.log('[IPC][scheduledTask:create] IM notification target detected, using OpenClaw native announce delivery.',
-            JSON.stringify({ channel: delivery.channel, to: delivery.to, platform }));
-          normalizedInput.sessionTarget = STSessionTarget.Isolated;
-          if (normalizedInput.payload?.kind === STPayloadKind.SystemEvent) {
-            normalizedInput.payload = {
-              kind: STPayloadKind.AgentTurn,
-              message: normalizedInput.payload.text || '',
-            };
-          }
-          // Strip IM subtype prefix from delivery.to before passing to OpenClaw.
-          // LobsterAI stores conversationIds with subtype prefixes (e.g. "direct:ou_xxx",
-          // "group:oc_xxx") but OpenClaw channel adapters expect raw platform IDs
-          // (e.g. "ou_xxx", "oc_xxx").
-          const rawTo = delivery.to;
-          const colonIdx = rawTo.indexOf(':');
-          if (colonIdx > 0) {
-            delivery.to = rawTo.slice(colonIdx + 1);
-            console.log('[IPC][scheduledTask:create] stripped IM subtype prefix from delivery.to:',
-              rawTo, '->', delivery.to);
-          }
-          if (platform === 'dingtalk') {
-            const imStore = getIMGatewayManager()?.getIMStore();
-            const mapping = imStore?.getSessionMapping(rawTo, platform);
-            if (mapping) {
-              await getIMGatewayManager()!.primeConversationReplyRoute(
-                platform, rawTo, mapping.coworkSessionId,
-              );
-            }
-          }
-        }
-      }
+      console.debug('[ScheduledTask] create input:', JSON.stringify(normalizedInput, null, 2));
+      await applyAnnounceDeliveryNormalization(normalizedInput, getIMGatewayManager);
 
       const task = await getCronJobService().addJob(normalizedInput);
       console.log('[IPC][scheduledTask:create] result task id:', task?.id, 'name:', task?.name);
@@ -123,42 +125,8 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Update, async (_event, id: string, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.log('[IPC][scheduledTask:update] id:', id, 'normalizedInput:', JSON.stringify(normalizedInput, null, 2));
-      console.log('[IPC][scheduledTask:update] delivery:', JSON.stringify(normalizedInput.delivery, null, 2));
-
-      // Same OpenClaw native announce delivery logic as create handler.
-      const delivery = normalizedInput.delivery;
-      if (delivery && delivery.mode === STDeliveryMode.Announce && delivery.channel && delivery.to) {
-        const platform = PlatformRegistry.platformOfChannel(delivery.channel);
-        if (platform) {
-          console.log('[IPC][scheduledTask:update] IM notification target detected, using OpenClaw native announce delivery.',
-            JSON.stringify({ channel: delivery.channel, to: delivery.to, platform }));
-          normalizedInput.sessionTarget = STSessionTarget.Isolated;
-          if (normalizedInput.payload?.kind === STPayloadKind.SystemEvent) {
-            normalizedInput.payload = {
-              kind: STPayloadKind.AgentTurn,
-              message: normalizedInput.payload.text || '',
-            };
-          }
-          // Strip IM subtype prefix (e.g. "direct:ou_xxx" -> "ou_xxx")
-          const rawTo = delivery.to;
-          const colonIdx = rawTo.indexOf(':');
-          if (colonIdx > 0) {
-            delivery.to = rawTo.slice(colonIdx + 1);
-            console.log('[IPC][scheduledTask:update] stripped IM subtype prefix from delivery.to:',
-              rawTo, '->', delivery.to);
-          }
-          if (platform === 'dingtalk') {
-            const imStore = getIMGatewayManager()?.getIMStore();
-            const mapping = imStore?.getSessionMapping(rawTo, platform);
-            if (mapping) {
-              await getIMGatewayManager()!.primeConversationReplyRoute(
-                platform, rawTo, mapping.coworkSessionId,
-              );
-            }
-          }
-        }
-      }
+      console.debug('[ScheduledTask] update input id:', id, JSON.stringify(normalizedInput, null, 2));
+      await applyAnnounceDeliveryNormalization(normalizedInput, getIMGatewayManager);
 
       const task = await getCronJobService().updateJob(id, normalizedInput);
       console.log('[IPC][scheduledTask:update] result task id:', task?.id, 'name:', task?.name);
@@ -253,29 +221,19 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     }
   });
 
-  ipcMain.handle(ScheduledTaskIpc.ListChannelConversations, async (_event, channel: string) => {
+  ipcMain.handle(ScheduledTaskIpc.ListChannelConversations, async (_event, channel: string, accountId?: string) => {
     try {
-      console.log('[IPC][listChannelConversations] channel:', channel);
       const platform = PlatformRegistry.platformOfChannel(channel);
-      console.log('[IPC][listChannelConversations] resolved platform:', platform);
-      if (!platform) {
-        console.log('[IPC][listChannelConversations] no platform mapping, returning empty');
-        return { success: true, conversations: [] };
-      }
+      if (!platform) return { success: true, conversations: [] };
       const imStore = getIMGatewayManager()?.getIMStore();
-      if (!imStore) {
-        console.log('[IPC][listChannelConversations] no imStore available, returning empty');
-        return { success: true, conversations: [] };
-      }
-      const mappings = imStore.listSessionMappings(platform);
-      console.log('[IPC][listChannelConversations] found', mappings.length, 'session mappings for platform:', platform);
+      if (!imStore) return { success: true, conversations: [] };
+      const mappings = imStore.listSessionMappings(platform, accountId);
       const conversations = mappings.map((m) => ({
         conversationId: m.imConversationId,
         platform: m.platform,
         coworkSessionId: m.coworkSessionId,
         lastActiveAt: m.lastActiveAt,
       }));
-      console.log('[IPC][listChannelConversations] conversations:', JSON.stringify(conversations, null, 2));
       return { success: true, conversations };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to list conversations' };

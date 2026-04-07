@@ -3,7 +3,8 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
-import { CheckIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { CheckIcon } from '@heroicons/react/24/outline';
+import SearchIcon from '../icons/SearchIcon';
 
 interface AgentSkillSelectorProps {
   selectedSkillIds: string[];
@@ -51,7 +52,7 @@ const AgentSkillSelector: React.FC<AgentSkillSelectorProps> = ({ selectedSkillId
       {enabledSkills.length > 5 && (
         <div className="mb-2">
           <div className="relative">
-            <MagnifyingGlassIcon className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary/50" />
+            <SearchIcon className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary/50" />
             <input
               type="text"
               value={search}
@@ -75,14 +76,14 @@ const AgentSkillSelector: React.FC<AgentSkillSelectorProps> = ({ selectedSkillId
                 key={skill.id}
                 type="button"
                 onClick={() => toggle(skill.id)}
-                className={`w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-surface-raised transition-colors rounded-lg ${
+                className={`group w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-surface-raised transition-colors rounded-lg ${
                   isSelected ? 'bg-primary/5' : ''
                 }`}
               >
-                <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center ${
+                <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
                   isSelected
                     ? 'bg-primary border-primary'
-                    : 'border-border'
+                    : 'border-border dark:border-gray-500 group-hover:border-gray-400 dark:group-hover:border-gray-300'
                 }`}>
                   {isSelected && <CheckIcon className="h-3 w-3 text-white" />}
                 </div>

@@ -7,6 +7,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
+import Modal from '../common/Modal';
 
 interface SecurityFinding {
   dimension: string;
@@ -90,14 +91,7 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
   }
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={() => onAction('cancel')}
-    >
-      <div
-        className="w-full max-w-xl mx-4 rounded-2xl bg-surface shadow-xl border border-border overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={() => onAction('cancel')} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-xl mx-4 rounded-2xl bg-surface shadow-xl border border-border overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2.5">
@@ -212,8 +206,7 @@ const SkillSecurityReport: React.FC<SkillSecurityReportProps> = ({
             </button>
           </div>
         </div>
-      </div>
-    </div>,
+    </Modal>,
     document.body
   );
 };
