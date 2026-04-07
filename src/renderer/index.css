@@ -42,7 +42,8 @@ table {
   width: 100%;
 }
 
-th, td {
+th,
+td {
   border-color: var(--lobster-border);
   padding: 0.5em;
 }
@@ -69,7 +70,9 @@ blockquote {
 }
 
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto,
+    sans-serif;
   line-height: 1.6;
   font-weight: 400;
 
@@ -81,7 +84,10 @@ blockquote {
 
 /* Theme colors are driven by CSS variables from themes.css.
  * color-scheme is set by the [data-theme] selectors. */
-body, #root, .App, main {
+body,
+#root,
+.App,
+main {
   background-color: var(--lobster-background);
   color: var(--lobster-foreground);
 }
@@ -210,7 +216,7 @@ select::-ms-expand {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
   animation: shimmer 1.5s infinite;
 }
 
@@ -220,7 +226,7 @@ select::-ms-expand {
   height: 2px;
   overflow: hidden;
   border-radius: 1px;
-  background: rgba(59,130,246,0.1);
+  background: rgba(59, 130, 246, 0.1);
 }
 .streaming-bar::before {
   content: '';
@@ -230,7 +236,12 @@ select::-ms-expand {
   height: 100%;
   width: 40%;
   border-radius: 1px;
-  background: linear-gradient(90deg, rgba(59,130,246,0.3) 0%, rgba(59,130,246,0.8) 50%, rgba(59,130,246,0.3) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(59, 130, 246, 0.3) 0%,
+    rgba(59, 130, 246, 0.8) 50%,
+    rgba(59, 130, 246, 0.3) 100%
+  );
   animation: streaming-slide 1.5s ease-in-out infinite;
 }
 /* Streaming bar glow uses primary color */
@@ -238,6 +249,114 @@ select::-ms-expand {
   box-shadow: 0 0 6px var(--lobster-primary-muted);
 }
 @keyframes streaming-slide {
-  0% { left: -40%; }
-  100% { left: 100%; }
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   MarkdownEditor (@uiw/react-md-editor) — theme integration + style overrides
+   Maps GitHub CSS variables to the app's --lobster-* tokens and tightens up
+   the toolbar/button appearance to match the app's design language.
+───────────────────────────────────────────────────────────────────────────── */
+
+/* 1. Bridge GitHub color vars → lobster theme tokens */
+.md-editor-wrapper {
+  --color-fg-default: var(--lobster-foreground);
+  --color-accent-fg: var(--lobster-primary);
+  --color-neutral-muted: var(--lobster-surface-raised);
+  --color-danger-fg: var(--lobster-destructive);
+  --color-canvas-default: var(--lobster-surface);
+  --color-border-default: var(--lobster-border);
+}
+
+/* 2. Editor root: remove GitHub's box-shadow (outer wrapper already has a border) */
+.md-editor-wrapper .w-md-editor {
+  --md-editor-background-color: var(--lobster-surface);
+  --md-editor-box-shadow-color: var(--lobster-border);
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  color: var(--lobster-foreground);
+  font-family: inherit;
+}
+
+/* 3. Toolbar container */
+.md-editor-wrapper .w-md-editor-toolbar {
+  background-color: var(--lobster-surface-raised) !important;
+  border-bottom: 1px solid var(--lobster-border) !important;
+  padding: 4px 6px !important;
+  border-radius: 0 !important;
+  gap: 2px;
+}
+
+/* 4. Toolbar buttons — larger hit area, rounder corners, better icon alignment */
+.md-editor-wrapper .w-md-editor-toolbar li > button {
+  height: 28px !important;
+  min-width: 28px;
+  line-height: 1 !important;
+  border-radius: 6px !important;
+  padding: 0 6px !important;
+  margin: 0 !important;
+  color: var(--lobster-text-secondary) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease !important;
+}
+
+.md-editor-wrapper .w-md-editor-toolbar li > button:hover,
+.md-editor-wrapper .w-md-editor-toolbar li > button:focus {
+  background-color: var(--lobster-border) !important;
+  color: var(--lobster-foreground) !important;
+}
+
+.md-editor-wrapper .w-md-editor-toolbar li > button:active {
+  background-color: var(--lobster-primary-muted) !important;
+  color: var(--lobster-primary) !important;
+}
+
+.md-editor-wrapper .w-md-editor-toolbar li.active > button {
+  background-color: var(--lobster-primary-muted) !important;
+  color: var(--lobster-primary) !important;
+}
+
+/* 5. SVG icons — normalise size and block rendering */
+.md-editor-wrapper .w-md-editor-toolbar li > button svg {
+  display: block !important;
+  width: 14px !important;
+  height: 14px !important;
+  pointer-events: none;
+}
+
+/* 6. Divider between button groups */
+.md-editor-wrapper .w-md-editor-toolbar-divider {
+  background-color: var(--lobster-border) !important;
+  margin: 0 4px !important;
+  opacity: 0.8;
+}
+
+/* 7. Text/editing area — prevent global pre/code resets from leaking in */
+.md-editor-wrapper .w-md-editor-text-pre,
+.md-editor-wrapper .w-md-editor-text-pre > code {
+  background-color: transparent !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* 8. Make the editable area fill the full editor height so clicking any
+      empty space below the last line still focuses the textarea */
+.md-editor-wrapper .w-md-editor-area {
+  height: 100% !important;
+  cursor: text;
+}
+
+/* 8. Preview pane scrollbar */
+.md-editor-wrapper .w-md-editor-preview {
+  background-color: var(--lobster-surface) !important;
 }
