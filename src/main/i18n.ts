@@ -189,6 +189,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoConfigReadyOpenClaw: 'POPO 配置已就绪，通过 OpenClaw 运行。',
 
     'enterprise.updateBlocked': '版本更新由企业统一管理',
+
+    // Close button action dialog
+    closeActionDialogTitle: '关闭行为设置',
+    closeActionDialogMessage: '点击关闭按钮时你希望执行什么操作？',
+    closeActionMinimize: '最小化',
+    closeActionQuit: '退出',
+    closeActionCancel: '取消',
   },
   en: {
     // Tray menu
@@ -364,6 +371,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imPopoConfigReadyOpenClaw: 'POPO configuration is ready, running via OpenClaw.',
 
     'enterprise.updateBlocked': 'Updates are managed by enterprise',
+
+    // Close button action dialog
+    closeActionDialogTitle: 'Close Behavior',
+    closeActionDialogMessage: 'What should happen when you click the close button?',
+    closeActionMinimize: 'Minimize',
+    closeActionQuit: 'Quit',
+    closeActionCancel: 'Cancel',
   },
 };
 

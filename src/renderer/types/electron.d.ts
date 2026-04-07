@@ -403,6 +403,10 @@ interface IElectronAPI {
     get: () => Promise<{ enabled: boolean }>;
     set: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   };
+  closeButtonAction: {
+    get: () => Promise<{ action: string; promptShown: boolean }>;
+    set: (action: string) => Promise<{ success: boolean; error?: string }>;
+  };
   preventSleep: {
     get: () => Promise<{ enabled: boolean }>;
     set: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;

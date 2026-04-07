@@ -35,7 +35,7 @@ function getLabels(): { showWindow: string; newTask: string; settings: string; q
   };
 }
 
-function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
+function buildContextMenu(getWindow: () => BrowserWindow | null, onQuit?: () => void): Menu {
   const labels = getLabels();
 
   return Menu.buildFromTemplate([
@@ -76,13 +76,17 @@ function buildContextMenu(getWindow: () => BrowserWindow | null): Menu {
     {
       label: labels.quit,
       click: () => {
-        app.quit();
+        if (onQuit) {
+          onQuit();
+        } else {
+          app.quit();
+        }
       },
     },
   ]);
 }
 
-export function createTray(getWindow: () => BrowserWindow | null): Tray {
+export function createTray(getWindow: () => BrowserWindow | null, onQuit?: () => void): Tray {
   if (tray) {
     return tray;
   }
@@ -102,7 +106,7 @@ export function createTray(getWindow: () => BrowserWindow | null): Tray {
   tray = new Tray(icon);
   tray.setToolTip(APP_NAME);
 
-  contextMenu = buildContextMenu(getWindow);
+  contextMenu = buildContextMenu(getWindow, onQuit);
 
   clickHandler = () => {
     const win = getWindow();
