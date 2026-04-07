@@ -12,6 +12,7 @@ dist-electron
 __pycache__/
 .codebuddy/
 .work/
+.idea/
 vendor/openclaw-runtime/
 vendor/openclaw-plugins/
 
@@ -38,6 +39,8 @@ nul
 
 .playwright-mcp/
 .cowork-temp/
+.sisyphus/
+.idea/
 
 # editorconfig files
 .vscode/
@@ -47,3 +50,4 @@ sandbox/
 # Accidentally committed git hook files outside git-hooks/
 **/**/post-commit
 openspec/
+.superpowers/

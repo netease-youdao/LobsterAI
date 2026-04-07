@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+dist/
+dist-electron/
+release/
+vendor/
+
+# Build outputs
+build/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+
+# Large files
+*.asar
+*.zip
+*.tar
+*.tar.gz
+*.dmg
+*.exe
+*.AppImage
+*.deb
+
+# Skill build outputs
+SKILLs/**/node_modules/
+SKILLs/**/dist/
+SKILLs/**/build/
+
+# OpenClaw
+openclaw/
+resources/python-win/

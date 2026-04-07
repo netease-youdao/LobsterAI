@@ -130,6 +130,25 @@ interface CronJobServiceDeps {
   ensureGatewayReady: () => Promise<void>;
 }
 
+/**
+ * Coerce a value to a finite number, returning `fallback` when the value is
+ * undefined, null, NaN, Infinity, or not a number at all.
+ * Used to guard against malformed Gateway responses that could surface NaN in the UI.
+ */
+function safeFiniteNumber(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return fallback;
+}
+
+/**
+ * Same as {@link safeFiniteNumber} but returns `null` when the value is absent
+ * instead of a numeric fallback.  Suitable for optional timestamp fields.
+ */
+function safeFiniteNumberOrNull(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return null;
+}
+
 function mapGatewayResultStatus(
   status?: GatewayStatusType,
 ): 'success' | 'error' | 'skipped' | null {
@@ -165,19 +184,24 @@ export function mapGatewaySchedule(schedule: GatewaySchedule): Schedule {
   switch (schedule.kind) {
     case ScheduleKind.At:
       return { kind: ScheduleKind.At, at: schedule.at };
-    case ScheduleKind.Every:
+    case ScheduleKind.Every: {
+      const everyMs = safeFiniteNumber(schedule.everyMs, 60_000);
+      const anchorMs = safeFiniteNumberOrNull(schedule.anchorMs);
       return {
         kind: ScheduleKind.Every,
-        everyMs: schedule.everyMs,
-        ...(typeof schedule.anchorMs === 'number' ? { anchorMs: schedule.anchorMs } : {}),
+        everyMs,
+        ...(anchorMs !== null ? { anchorMs } : {}),
       };
-    case ScheduleKind.Cron:
+    }
+    case ScheduleKind.Cron: {
+      const staggerMs = safeFiniteNumberOrNull(schedule.staggerMs);
       return {
         kind: ScheduleKind.Cron,
         expr: schedule.expr,
         ...(schedule.tz ? { tz: schedule.tz } : {}),
-        ...(typeof schedule.staggerMs === 'number' ? { staggerMs: schedule.staggerMs } : {}),
+        ...(staggerMs !== null ? { staggerMs } : {}),
       };
+    }
   }
 }
 
@@ -215,6 +239,7 @@ function toGatewayPayload(payload: ScheduledTaskPayload): GatewayPayload {
     ...(typeof payload.timeoutSeconds === 'number'
       ? { timeoutSeconds: payload.timeoutSeconds }
       : {}),
+    ...(payload.model ? { model: payload.model } : {}),
   };
 }
 
@@ -282,13 +307,13 @@ export function mapGatewayTaskState(
   }
 
   return {
-    nextRunAtMs: state.nextRunAtMs ?? null,
-    lastRunAtMs: state.lastRunAtMs ?? null,
+    nextRunAtMs: safeFiniteNumberOrNull(state.nextRunAtMs),
+    lastRunAtMs: safeFiniteNumberOrNull(state.lastRunAtMs),
     lastStatus,
     lastError: lastStatus === TaskStatus.Success ? null : (state.lastError ?? null),
-    lastDurationMs: state.lastDurationMs ?? null,
-    runningAtMs: state.runningAtMs ?? null,
-    consecutiveErrors: state.consecutiveErrors ?? 0,
+    lastDurationMs: safeFiniteNumberOrNull(state.lastDurationMs),
+    runningAtMs: safeFiniteNumberOrNull(state.runningAtMs),
+    consecutiveErrors: safeFiniteNumber(state.consecutiveErrors ?? 0, 0),
   };
 }
 
@@ -326,6 +351,7 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
           ...(typeof job.payload.timeoutSeconds === 'number'
             ? { timeoutSeconds: job.payload.timeoutSeconds }
             : {}),
+          ...(job.payload.model ? { model: job.payload.model } : {}),
         },
     delivery: {
       mode: delivery.mode,
@@ -343,8 +369,8 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
     agentId: job.agentId ?? null,
     sessionKey: job.sessionKey ?? null,
     state: mapGatewayTaskState(job.state, delivery.mode),
-    createdAt: new Date(job.createdAtMs).toISOString(),
-    updatedAt: new Date(job.updatedAtMs).toISOString(),
+    createdAt: new Date(safeFiniteNumber(job.createdAtMs, Date.now())).toISOString(),
+    updatedAt: new Date(safeFiniteNumber(job.updatedAtMs, Date.now())).toISOString(),
   };
 }
 
@@ -367,15 +393,17 @@ export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
     status = TaskStatus.Success;
   }
 
+  const tsMs = safeFiniteNumber(entry.runAtMs ?? entry.ts, Date.now());
+
   return {
     id: `${entry.jobId}-${entry.ts}`,
     taskId: entry.jobId,
     sessionId: entry.sessionId ?? null,
     sessionKey: entry.sessionKey ?? null,
     status,
-    startedAt: new Date(entry.runAtMs ?? entry.ts).toISOString(),
-    finishedAt: status === TaskStatus.Running ? null : new Date(entry.ts).toISOString(),
-    durationMs: entry.durationMs ?? null,
+    startedAt: new Date(tsMs).toISOString(),
+    finishedAt: status === TaskStatus.Running ? null : new Date(safeFiniteNumber(entry.ts, tsMs)).toISOString(),
+    durationMs: safeFiniteNumberOrNull(entry.durationMs),
     error: status === TaskStatus.Success ? null : (entry.error ?? null),
   };
 }
@@ -627,7 +655,7 @@ export class CronJobService {
     if (!this.polling) return;
 
     try {
-      await this.ensureGatewayReady();
+      // await this.ensureGatewayReady();
       const client = this.getGatewayClient();
       if (!client) return;
 

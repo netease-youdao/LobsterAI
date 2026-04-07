@@ -1,17 +1,18 @@
-import { app, BrowserWindow, session } from 'electron';
 import { execSync, spawn, spawnSync } from 'child_process';
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import yaml from 'js-yaml';
+import { app, BrowserWindow, session } from 'electron';
 import extractZip from 'extract-zip';
-import { SqliteStore } from './sqliteStore';
+import fs from 'fs';
+import yaml from 'js-yaml';
+import path from 'path';
+
 import { cpRecursiveSync } from './fsCompat';
+import { t } from './i18n';
 import { getElectronNodeRuntimePath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
-import { scanSkillSecurity, scanMultipleSkillDirs, mergeReports } from './libs/skillSecurity/skillSecurityScanner';
-import type { SkillSecurityReport, SecurityReportAction } from './libs/skillSecurity/skillSecurityTypes';
-import { t } from './i18n';
+import { mergeReports,scanMultipleSkillDirs, scanSkillSecurity } from './libs/skillSecurity/skillSecurityScanner';
+import type { SecurityReportAction,SkillSecurityReport } from './libs/skillSecurity/skillSecurityTypes';
+import { SqliteStore } from './sqliteStore';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -444,6 +445,58 @@ const resolveGitCommand = (): { command: string; env?: NodeJS.ProcessEnv } => {
   return { command: gitExe, env };
 };
 
+/**
+ * On Windows, ensure a Node.js --require init script that monkey-patches
+ * child_process so all descendant processes inherit windowsHide: true.
+ * Returns the script path, or null on non-Windows / failure.
+ */
+const WINDOWS_HIDE_SCRIPT = [
+  "'use strict';",
+  'if (process.platform === "win32") {',
+  '  const cp = require("child_process");',
+  '  const hide = (o) => {',
+  '    if (o == null) return { windowsHide: true };',
+  '    if (typeof o !== "object") return o;',
+  '    if (Object.prototype.hasOwnProperty.call(o, "windowsHide")) return o;',
+  '    return { ...o, windowsHide: true };',
+  '  };',
+  '  for (const fn of ["spawn", "spawnSync", "exec", "execFile", "fork"]) {',
+  '    const orig = cp[fn];',
+  '    if (typeof orig !== "function") continue;',
+  '    cp[fn] = function (...a) {',
+  '      const optsIdx = fn === "exec" ? 1 : fn === "fork" || fn === "spawn" || fn === "spawnSync" || fn === "execFile" ? 2 : 1;',
+  '      if (a.length > optsIdx && typeof a[optsIdx] === "object" && a[optsIdx] !== null) {',
+  '        a[optsIdx] = hide(a[optsIdx]);',
+  '      } else if (a.length === optsIdx) {',
+  '        a.push(hide(undefined));',
+  '      }',
+  '      return orig.apply(this, a);',
+  '    };',
+  '  }',
+  '}',
+].join('\n');
+
+let _windowsHideScriptPath: string | null | undefined;
+
+const ensureWindowsHideScript = (): string | null => {
+  if (process.platform !== 'win32') return null;
+  if (_windowsHideScriptPath !== undefined) return _windowsHideScriptPath;
+  try {
+    const dir = path.join(app.getPath('userData'), 'bin');
+    fs.mkdirSync(dir, { recursive: true });
+    const scriptPath = path.join(dir, 'skill_windows_hide.cjs');
+    const existing = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : '';
+    if (existing !== WINDOWS_HIDE_SCRIPT) {
+      fs.writeFileSync(scriptPath, WINDOWS_HIDE_SCRIPT, 'utf8');
+    }
+    _windowsHideScriptPath = scriptPath;
+    return scriptPath;
+  } catch {
+    _windowsHideScriptPath = null;
+    return null;
+  }
+};
+
 const runCommand = (
   command: string,
   args: string[],
@@ -813,6 +866,103 @@ const isNpmPackageSpec = (source: string): boolean => {
   if (/^[\w.-]+(@[\w.^~>=<*-]+)?$/.test(source) && !source.includes('/')) return true;
 
   return false;
+};
+
+/**
+ * Parse a clawhub.ai URL and extract the skill name.
+ * Supports: /skills/{owner}/{name} and /skills/{name}
+ */
+const parseClawhubUrl = (source: string): { name: string } | null => {
+  try {
+    const url = new URL(source);
+    if (url.hostname !== 'clawhub.ai' && url.hostname !== 'www.clawhub.ai') return null;
+    const segments = url.pathname.split('/').filter(Boolean);
+    // Format: /skills/{owner}/{name}
+    if (segments.length >= 3 && segments[0] === 'skills') {
+      return { name: segments[2] };
+    }
+    // Format: /skills/{name}
+    if (segments.length >= 2 && segments[0] === 'skills') {
+      return { name: segments[1] };
+    }
+    // Format: /{owner}/{name} (no /skills/ prefix)
+    if (segments.length >= 2) {
+      return { name: segments[1] };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Resolve the bundled npx-cli.js path for running npx commands
+ * without requiring a system Node.js installation.
+ */
+const resolveNpxCliJs = (): string | null => {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin', 'npx-cli.js')]
+    : [
+        path.join(app.getAppPath(), 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+        path.join(process.cwd(), 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+      ];
+  return candidates.find(c => fs.existsSync(c)) || null;
+};
+
+/**
+ * Download a skill from ClawHub using `npx clawhub@latest install {name}`.
+ * Prefers the bundled npx (via Electron runtime) so it works in packaged
+ * apps where system Node.js is not installed.
+ */
+const downloadClawhubSkill = async (
+  skillName: string,
+  targetDir: string,
+  env: NodeJS.ProcessEnv
+): Promise<void> => {
+  const npxCliJs = resolveNpxCliJs();
+  const electronPath = getElectronNodeRuntimePath();
+
+  let command: string;
+  let args: string[];
+  if (npxCliJs) {
+    console.log(`[downloadClawhubSkill] using bundled npx: electron="${electronPath}", npxCliJs="${npxCliJs}"`);
+    command = electronPath;
+    args = [npxCliJs, 'clawhub@latest', 'install', skillName, '--dir', targetDir, '--no-input', '--force'];
+    // Inject --require script to hide CMD windows from all descendant processes
+    const hideScript = ensureWindowsHideScript();
+    if (hideScript) {
+      args = ['--require', hideScript, ...args];
+    }
+  } else {
+    const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    console.log(`[downloadClawhubSkill] bundled npx not found, falling back to system "${npxCommand}"`);
+    if (!hasCommand(npxCommand, env)) {
+      throw new Error('npx is not available. Please install Node.js from https://nodejs.org/');
+    }
+    command = npxCommand;
+    args = ['clawhub@latest', 'install', skillName, '--dir', targetDir, '--no-input', '--force'];
+  }
+
+  try {
+    await runCommand(command, args, {
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+    });
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    // Strip ANSI escape codes and decode URL-encoded characters
+    const cleaned = raw
+       
+      .replace(/\x1b\[[0-9;]*m/g, '')
+      .replace(/%[0-9A-Fa-f]{2}/g, (match) => {
+        try { return decodeURIComponent(match); } catch { return match; }
+      })
+      .trim();
+
+    if (/skill not found/i.test(cleaned)) {
+      throw new Error(t('skillErrClawhubNotFound'));
+    }
+    throw new Error(t('skillErrClawhubDownloadFailed') + '\n' + cleaned);
+  }
 };
 
 /**
@@ -1434,10 +1584,18 @@ export class SkillManager {
         cleanupPath = tempRoot;
         localSource = await downloadNpmPackage(trimmed, tempRoot);
         console.log(`[SkillManager] downloadSkill: npm package extracted to ${localSource}`);
+      } else if (parseClawhubUrl(trimmed)) {
+        const clawhubParsed = parseClawhubUrl(trimmed)!;
+        console.log(`[SkillManager] downloadSkill: detected ClawHub URL, skill name="${clawhubParsed.name}"`);
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-clawhub-'));
+        cleanupPath = tempRoot;
+        const env = buildSkillEnv();
+        await downloadClawhubSkill(clawhubParsed.name, tempRoot, env);
+        localSource = tempRoot;
       } else {
         const normalized = this.normalizeGitSource(trimmed);
         if (!normalized) {
-          return { success: false, error: 'Invalid skill source. Use owner/repo, repo URL, npm package spec, or a GitHub tree/blob URL.' };
+          return { success: false, error: t('skillErrInvalidSource') };
         }
         const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-'));
         cleanupPath = tempRoot;
@@ -1841,11 +1999,31 @@ export class SkillManager {
     const primaryRoot = this.ensureSkillsRoot();
     const roots = this.getSkillRoots(primaryRoot);
 
-    const watchHandler = () => this.scheduleNotify();
+    // Root-level watch: only react to directory additions/removals (new/deleted skills).
+    const rootWatchHandler = (_event: string, filename: string | null) => {
+      if (!filename) { this.scheduleNotify(); return; }
+      // Ignore hidden files/dirs and known non-skill files
+      if (filename.startsWith('.')) return;
+      // Accept directory changes (new skill added/removed) and config file
+      if (filename === SKILLS_CONFIG_FILE) { this.scheduleNotify(); return; }
+      // For other filenames, check if it looks like a skill directory entry
+      // (no extension = likely a directory name)
+      if (!path.extname(filename)) { this.scheduleNotify(); }
+    };
+
+    // Skill-directory-level watch: only react to skill definition file changes.
+    const skillDirWatchHandler = (_event: string, filename: string | null) => {
+      if (!filename) { this.scheduleNotify(); return; }
+      if (filename === SKILL_FILE_NAME || filename === SKILLS_CONFIG_FILE) {
+        this.scheduleNotify();
+      }
+      // Ignore cache files, data files, and any other non-definition files.
+    };
+
     roots.forEach(root => {
       if (!fs.existsSync(root)) return;
       try {
-        this.watchers.push(fs.watch(root, watchHandler));
+        this.watchers.push(fs.watch(root, rootWatchHandler));
       } catch (error) {
         console.warn('[skills] Failed to watch skills root:', root, error);
       }
@@ -1853,7 +2031,7 @@ export class SkillManager {
       const skillDirs = listSkillDirs(root);
       skillDirs.forEach(dir => {
         try {
-          this.watchers.push(fs.watch(dir, watchHandler));
+          this.watchers.push(fs.watch(dir, skillDirWatchHandler));
         } catch (error) {
           console.warn('[skills] Failed to watch skill directory:', dir, error);
         }
@@ -2461,4 +2639,5 @@ export const __skillManagerTestUtils = {
   parseFrontmatter,
   isTruthy,
   extractDescription,
+  parseClawhubUrl,
 };

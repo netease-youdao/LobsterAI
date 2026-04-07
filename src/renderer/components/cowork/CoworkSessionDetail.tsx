@@ -1,38 +1,43 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { createPortal } from 'react-dom';
-import { useSelector } from 'react-redux';
-import { RootState } from '../../store';
-import { i18nService } from '../../services/i18n';
-import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
-import type { Skill } from '../../types/skill';
-import CoworkPromptInput from './CoworkPromptInput';
-import MarkdownContent from '../MarkdownContent';
+import { ShareIcon } from '@heroicons/react/20/solid';
 import {
   CheckIcon,
   ChevronRightIcon,
+  DocumentArrowDownIcon,
   PhotoIcon,
 } from '@heroicons/react/24/outline';
-import { ShareIcon } from '@heroicons/react/20/solid';
-import InformationCircleIcon from '../icons/InformationCircleIcon';
-import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
 import { FolderIcon } from '@heroicons/react/24/solid';
-import { coworkService } from '../../services/cowork';
-import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import ComposeIcon from '../icons/ComposeIcon';
-import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
-import PuzzleIcon from '../icons/PuzzleIcon';
-import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
-import PencilSquareIcon from '../icons/PencilSquareIcon';
-import TrashIcon from '../icons/TrashIcon';
-import WindowTitleBar from '../window/WindowTitleBar';
-import { getCompactFolderName } from '../../utils/path';
+import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useDispatch,useSelector } from 'react-redux';
+
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
+import { coworkService } from '../../services/cowork';
+import { i18nService } from '../../services/i18n';
+import { RootState } from '../../store';
+import { setActiveSkillIds } from '../../store/slices/skillSlice';
+import type { CoworkImageAttachment,CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import type { Skill } from '../../types/skill';
+import { getCompactFolderName } from '../../utils/path';
+import Modal from '../common/Modal';
+import ComposeIcon from '../icons/ComposeIcon';
+import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
+import ExclamationTriangleIcon from '../icons/ExclamationTriangleIcon';
+import InformationCircleIcon from '../icons/InformationCircleIcon';
+import PencilSquareIcon from '../icons/PencilSquareIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import TrashIcon from '../icons/TrashIcon';
+import MarkdownContent from '../MarkdownContent';
+import WindowTitleBar from '../window/WindowTitleBar';
+import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
+import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
   onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
+  onDeleteSession?: (sessionId: string) => Promise<void>;
   onNavigateHome?: () => void;
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -931,7 +936,47 @@ const CopyButton: React.FC<{
   );
 };
 
-export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
+// Re-edit button component — lets the user re-fill a sent message back into the input
+const ReEditButton: React.FC<{
+  visible: boolean;
+  onClick: () => void;
+}> = ({ visible, onClick }) => {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-all duration-200 ${
+        visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
+      title={i18nService.t('coworkReEdit')}
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="24"
+        height="24"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="w-4 h-4 text-[var(--icon-secondary)]"
+        aria-hidden="true"
+      >
+        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+        <path d="m15 5 4 4" />
+      </svg>
+    </button>
+  );
+};
+
+export const UserMessageItem: React.FC<{
+  message: CoworkMessage;
+  skills: Skill[];
+  onReEdit?: (message: CoworkMessage) => void;
+}> = React.memo(({ message, skills, onReEdit }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
@@ -982,22 +1027,32 @@ export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[]
                 )}
               </div>
               <div className="flex items-center justify-end gap-1.5 mt-1">
-                {messageSkills.map(skill => (
-                  <div
-                    key={skill.id}
-                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-primary-muted"
-                    title={skill.description}
-                  >
-                    <PuzzleIcon className="h-2.5 w-2.5 text-primary" />
-                    <span className="text-[10px] font-medium text-primary max-w-[60px] truncate">
-                      {skill.name}
-                    </span>
-                  </div>
-                ))}
+                {onReEdit && (
+                  <ReEditButton
+                    visible={isHovered}
+                    onClick={() => onReEdit(message)}
+                  />
+                )}
                 <CopyButton
                   content={message.content}
                   visible={isHovered}
                 />
+                {messageSkills.length > 0 && (
+                  <div className="flex items-center gap-1.5 mr-1.5">
+                    {messageSkills.map(skill => (
+                      <div
+                        key={skill.id}
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-primary-muted"
+                        title={skill.description}
+                      >
+                        <PuzzleIcon className="h-2.5 w-2.5 text-primary" />
+                        <span className="text-[10px] font-medium text-primary max-w-[60px] truncate">
+                          {skill.name}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1324,12 +1379,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onManageSkills,
   onContinue,
   onStop,
+  onDeleteSession,
   onNavigateHome,
   isSidebarCollapsed,
   onToggleSidebar,
   onNewChat,
   updateBadge,
 }) => {
+  const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
@@ -1337,6 +1394,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const promptInputRef = useRef<CoworkPromptInputRef>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
   // Clear lazy-render height cache when session changes
@@ -1366,6 +1424,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
+  const [showExportOptions, setShowExportOptions] = useState(false);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1543,6 +1602,91 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setMenuPosition(null);
   };
 
+  const sessionToMarkdown = useCallback((): string => {
+    if (!currentSession) return '';
+    const lines: string[] = [];
+    lines.push(`# ${currentSession.title}`);
+    lines.push('');
+    lines.push(`> ${i18nService.t('coworkExportCreatedAt')}: ${new Date(currentSession.createdAt).toLocaleString()}`);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+    for (const msg of currentSession.messages) {
+      if (msg.type === 'user') {
+        lines.push(`## 🧑 User`);
+        lines.push('');
+        lines.push(msg.content);
+        lines.push('');
+      } else if (msg.type === 'assistant') {
+        lines.push(`## 🤖 Assistant`);
+        lines.push('');
+        lines.push(msg.content);
+        lines.push('');
+      } else if (msg.type === 'tool_use' && msg.metadata?.toolName) {
+        lines.push(`### 🔧 Tool: ${msg.metadata.toolName}`);
+        lines.push('');
+        if (msg.metadata.toolInput) {
+          lines.push('```json');
+          lines.push(JSON.stringify(msg.metadata.toolInput, null, 2));
+          lines.push('```');
+          lines.push('');
+        }
+      } else if (msg.type === 'tool_result') {
+        lines.push('#### Tool Result');
+        lines.push('');
+        lines.push('```');
+        lines.push(msg.content.slice(0, 2000) + (msg.content.length > 2000 ? '\n... (truncated)' : ''));
+        lines.push('```');
+        lines.push('');
+      }
+    }
+    return lines.join('\n');
+  }, [currentSession]);
+
+  const sessionToJSON = useCallback((): string => {
+    if (!currentSession) return '{}';
+    return JSON.stringify({
+      title: currentSession.title,
+      createdAt: new Date(currentSession.createdAt).toISOString(),
+      updatedAt: new Date(currentSession.updatedAt).toISOString(),
+      status: currentSession.status,
+      messages: currentSession.messages.map(msg => ({
+        type: msg.type,
+        content: msg.content,
+        timestamp: new Date(msg.timestamp).toISOString(),
+        ...(msg.metadata?.toolName ? { toolName: msg.metadata.toolName } : {}),
+        ...(msg.metadata?.toolInput ? { toolInput: msg.metadata.toolInput } : {}),
+      })),
+    }, null, 2);
+  }, [currentSession]);
+
+  const handleExportText = useCallback(async (format: 'md' | 'json') => {
+    if (!currentSession) return;
+    closeMenu();
+    const content = format === 'md' ? sessionToMarkdown() : sessionToJSON();
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const fileName = sanitizeExportFileName(`${currentSession.title}-${timestamp}.${format}`);
+    try {
+      const result = await window.electron.cowork.exportSessionText({
+        content,
+        defaultFileName: fileName,
+        fileExtension: format,
+      });
+      if (result.success && !result.canceled) {
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('coworkExportTextSuccess'),
+        }));
+      } else if (!result.success) {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (error) {
+      console.error('Failed to export session text:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportTextFailed'),
+      }));
+    }
+  }, [currentSession, closeMenu, sessionToMarkdown, sessionToJSON]);
+
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!currentSession || isExportingImage) return;
@@ -1701,7 +1845,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   const handleConfirmDelete = async () => {
     if (!currentSession) return;
-    await coworkService.deleteSession(currentSession.id);
+    if (onDeleteSession) {
+      await onDeleteSession(currentSession.id);
+    } else {
+      await coworkService.deleteSession(currentSession.id);
+    }
     setShowConfirmDelete(false);
     if (onNavigateHome) {
       onNavigateHome();
@@ -1856,6 +2004,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     return value;
   }, []);
 
+  const handleReEdit = useCallback((message: CoworkMessage) => {
+    const ref = promptInputRef.current;
+    if (!ref) return;
+    // Set text content
+    if (message.content?.trim()) {
+      ref.setValue(message.content);
+    }
+    // Restore image attachments (always call to clear previous attachments)
+    const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
+    ref.setImageAttachments(imageAttachments);
+    // Restore active skills
+    const skillIds = (message.metadata as CoworkMessageMetadata)?.skillIds;
+    if (skillIds && skillIds.length > 0) {
+      dispatch(setActiveSkillIds(skillIds));
+    }
+    // Focus the input
+    ref.focus();
+  }, [dispatch]);
+
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
@@ -1968,7 +2135,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
           {turn.userMessage && (
             <div data-export-role="user-message" {...(userRailIdx >= 0 ? { 'data-rail-index': userRailIdx } : undefined)}>
-              <UserMessageItem message={turn.userMessage} skills={skills} />
+              <UserMessageItem message={turn.userMessage} skills={skills} onReEdit={remoteManaged ? undefined : handleReEdit} />
             </div>
           )}
           {showAssistantBlock && (
@@ -2094,9 +2261,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </button>
           <button
             type="button"
-            onClick={handleShareClick}
+            onClick={(e) => { e.stopPropagation(); closeMenu(); setShowExportOptions(true); }}
             disabled={isExportingImage}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-foreground hover:bg-surface-raised transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
           >
             <ShareIcon className="h-4 w-4 text-secondary" />
             {i18nService.t('coworkShareSession')}
@@ -2112,16 +2279,64 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      {showConfirmDelete && (
+      {/* Export Options Modal */}
+      {showExportOptions && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
-          onClick={handleCancelDelete}
+          onClick={() => setShowExportOptions(false)}
         >
           <div
-            className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden modal-content"
+            className="w-full max-w-xs mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+              <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkExportAs')}
+              </h3>
+            </div>
+            <div className="py-1">
+              <button
+                type="button"
+                onClick={(e) => { setShowExportOptions(false); handleShareClick(e); }}
+                disabled={isExportingImage}
+                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+              >
+                <PhotoIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <div>
+                  <div className="font-medium">{i18nService.t('coworkExportImage')}</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportImageDesc')}</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowExportOptions(false); handleExportText('md'); }}
+                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              >
+                <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <div>
+                  <div className="font-medium">Markdown</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportMarkdownDesc')}</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowExportOptions(false); handleExportText('json'); }}
+                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+              >
+                <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                <div>
+                  <div className="font-medium">JSON</div>
+                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportJSONDesc')}</div>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showConfirmDelete && (
+        <Modal onClose={handleCancelDelete} overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop" className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden modal-content">
             {/* Header */}
             <div className="flex items-center gap-3 px-5 py-4">
               <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
@@ -2154,11 +2369,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 {i18nService.t('deleteSession')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
-
-      {/* Messages */}
       <div className="relative flex-1 min-h-0">
         <div
           ref={scrollContainerRef}
@@ -2340,7 +2552,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           </div>
         )}
 
-        {/* Rail Tooltip — rendered via portal to escape transform context */}
         {railTooltip && createPortal(
           <div
             className={`fixed z-[100] px-3.5 py-2 text-[13px] leading-snug pointer-events-none overflow-hidden
@@ -2385,6 +2596,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       <div className="p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
           <CoworkPromptInput
+            ref={promptInputRef}
             onSubmit={onContinue}
             onStop={onStop}
             isStreaming={isStreaming}
@@ -2397,6 +2609,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             sessionId={currentSession?.id}
           />
         </div>
+        <p className="text-center text-[11px] text-muted opacity-85 mt-2 mb-[-8px] select-none">
+          {i18nService.t('aiGeneratedDisclaimer')}
+        </p>
       </div>
     </div>
   );

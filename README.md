@@ -25,7 +25,7 @@
 
 **LobsterAI** is an all-in-one personal assistant Agent developed by [NetEase Youdao](https://www.youdao.com/). It works around the clock to handle your everyday tasks — data analysis, making presentations, generating videos, writing documents, searching the web, sending emails, scheduling tasks, and more.
 
-At its core is **Cowork mode** — it executes tools, manipulates files, and runs commands in a local or sandboxed environment, all under your supervision. You can also chat with agent via Telegram, Discord, DingTalk or Feishu (Lark) and get work done from your phone anytime, anywhere.
+At its core is **Cowork mode** — it executes tools, manipulates files, and runs commands in a local or sandboxed environment, all under your supervision. You can also reach the Agent via WeChat, WeCom, DingTalk, Feishu, QQ, Telegram, Discord, and more — getting work done from your phone anytime, anywhere.
 
 ## Key Features
 
@@ -35,7 +35,7 @@ At its core is **Cowork mode** — it executes tools, manipulates files, and run
 - **Windows Built-in Python Runtime** — Windows packages bundle a ready-to-use Python interpreter runtime; Python skill dependencies can be installed on demand
 - **Scheduled Tasks** — Create recurring tasks via conversation or the GUI — daily news digests, inbox cleanup, periodic report generation, and more
 - **Persistent Memory** — Automatically extracts user preferences and personal facts from conversations, remembers your habits across sessions, and gets smarter the more you use it
-- **Mobile via IM** — Control your Agent remotely from your phone through Telegram, Discord, DingTalk, or Feishu
+- **Mobile via IM** — Control your Agent remotely from your phone through WeChat, WeCom, DingTalk, Feishu, QQ, Telegram, Discord, and more
 - **Permission Gating** — All tool invocations require explicit user approval before execution
 - **Cross-Platform** — macOS (Intel + Apple Silicon), Windows, Linux desktop, plus mobile coverage via IM
 - **Local Data** — SQLite storage keeps your chat history and configuration on your device
@@ -43,7 +43,7 @@ At its core is **Cowork mode** — it executes tools, manipulates files, and run
 ## How It Works
 
 <p align="center">
-  <img src="docs/res/architecture_en.png" alt="Architecture" width="500">
+  <img src="docs/res/architecture_v2_en.png" alt="Architecture" width="500">
 </p>
 
 ## Quick Start
@@ -58,7 +58,7 @@ At its core is **Cowork mode** — it executes tools, manipulates files, and run
 ```bash
 # Clone the repository
 git clone https://github.com/netease-youdao/LobsterAI.git
-cd lobsterai
+cd LobsterAI
 
 # Install dependencies
 npm install
@@ -175,8 +175,8 @@ LobsterAI uses Electron's strict process isolation. All cross-process communicat
 **Main Process** (`src/main/main.ts`):
 - Window lifecycle management
 - SQLite persistence
-- CoworkRunner — Claude Agent SDK execution engine
-- IM Gateways — DingTalk, Feishu, Telegram, Discord remote access
+- OpenClaw agent engine (primary) + CoworkEngineRouter dispatch layer
+- IM Gateways — WeChat, WeCom, DingTalk, Feishu, QQ, Telegram, Discord, POPO remote access
 - 40+ IPC channel handlers
 - Security: context isolation enabled, node integration disabled, sandbox enabled
 
@@ -199,9 +199,15 @@ src/
 │   ├── sqliteStore.ts              # SQLite storage
 │   ├── coworkStore.ts              # Session/message CRUD
 │   ├── skillManager.ts             # Skill management
-│   ├── im/                         # IM gateways (DingTalk/Feishu/Telegram/Discord)
+│   ├── im/                         # IM gateways (WeChat/WeCom/DingTalk/Feishu/QQ/Telegram/Discord/POPO)
 │   └── libs/
-│       ├── coworkRunner.ts         # Agent SDK executor
+│       ├── agentEngine/
+│       │   ├── coworkEngineRouter.ts    # Dispatch layer (routes sessions to the active engine)
+│       │   ├── openclawRuntimeAdapter.ts # Primary OpenClaw gateway adapter
+│       │   └── claudeRuntimeAdapter.ts  # Legacy built-in adapter (deprecated)
+│       ├── coworkRunner.ts          # Legacy built-in executor (deprecated)
+│       ├── openclawEngineManager.ts # OpenClaw runtime lifecycle (install/start/status)
+│       ├── openclawConfigSync.ts    # Syncs cowork config → OpenClaw config files
 │       └── coworkMemoryExtractor.ts # Memory extraction
 │
 ├── renderer/                        # React frontend
@@ -230,7 +236,7 @@ SKILLs/                              # Skill definitions
 
 ## Cowork System
 
-Cowork is the core feature of LobsterAI — an AI working session system built on the Claude Agent SDK. Designed for productivity scenarios, it can autonomously complete complex tasks like data analysis, document generation, and information retrieval.
+Cowork is the core feature of LobsterAI — an AI working session system powered by OpenClaw as the primary agent engine. Designed for productivity scenarios, it can autonomously complete complex tasks like data analysis, document generation, and information retrieval.
 
 ### Execution Modes
 
@@ -255,7 +261,7 @@ All tool invocations involving file system access, terminal commands, or network
 
 ## Skills System
 
-LobsterAI ships with 16 built-in skills covering productivity, creative, and automation scenarios, configured via `SKILLs/skills.config.json`:
+LobsterAI ships with 29 built-in skills covering productivity, creative, investment research, and automation scenarios, configured via `SKILLs/skills.config.json`:
 
 | Skill | Function | Typical Use Case |
 |-------|----------|-----------------|
@@ -265,16 +271,28 @@ LobsterAI ships with 16 built-in skills covering productivity, creative, and aut
 | pptx | PowerPoint creation | Presentations, business reviews |
 | pdf | PDF processing | Document parsing, format conversion |
 | remotion | Video generation (Remotion) | Promo videos, data visualization animations |
+| seedance | AI video generation (Seedance) | Text-to-video, image-to-video |
+| seedream | AI image generation (Seedream) | Text-to-image, image editing and fusion |
 | playwright | Web automation | Browser tasks, automated testing |
 | canvas-design | Canvas drawing and design | Posters, chart design |
 | frontend-design | Frontend UI design | Prototyping, page design |
 | develop-web-game | Web game development | Quick game prototypes |
-| scheduled-task | Scheduled tasks | Periodic automated workflows |
+| stock-analyzer | Stock deep analysis | A-share research, valuation and financials |
+| stock-announcements | Stock announcement retrieval | Listed company filings, disclosure lookup |
+| stock-explorer | Stock information explorer | Basic stock info, market overview |
+| content-planner | Content planning | Topic strategy, content calendar creation |
+| article-writer | Article writing | Multi-style long-form content, social media posts |
+| daily-trending | Daily trending | Hot topic aggregation, trend tracking |
+| films-search | Film/TV resource search | Movie and series cloud-drive download links |
+| music-search | Music resource search | Song and album cloud-drive download links |
+| technology-news-search | Tech news search | Programming, AI, and IT industry updates (disabled by default) |
 | weather | Weather queries | Weather information |
 | local-tools | Local system tools | File management, system operations |
-| create-plan | Plan authoring | Project planning, task breakdown |
-| skill-creator | Custom skill creation | Extend new capabilities |
 | imap-smtp-email | Email send/receive | Email processing, auto-replies |
+| create-plan | Plan authoring | Project planning, task breakdown |
+| youdaonote | Youdao Note | Note management, to-dos, web clipping |
+| skill-vetter | Skill security audit | Safety check before installing third-party skills |
+| skill-creator | Custom skill creation | Extend new capabilities |
 
 Custom skills can be created via `skill-creator` and hot-loaded at runtime.
 
@@ -305,47 +323,43 @@ LobsterAI can bridge the Agent to multiple IM platforms. Send a message from you
 
 | Platform | Protocol | Description |
 |----------|----------|-------------|
-| DingTalk | DingTalk Stream | Enterprise robot bidirectional communication |
-| Feishu | Lark SDK | Feishu app robot |
-| Telegram | grammY | Bot API integration |
-| Discord | discord.js | Discord bot integration |
-| NetEase IM | node-nim V2 SDK | NetEase IM P2P messaging |
-| NetEase Bee | node-nim V2 SDK | NetEase Bee Personal Digital Assistant |
+| WeChat | OpenClaw gateway | WeChat account integration, supports DMs and group chats |
+| WeCom | OpenClaw gateway | WeCom app bot, supports DMs and group chats |
+| DingTalk | OpenClaw gateway | Enterprise bot, supports multiple instances |
+| Feishu | OpenClaw gateway | Feishu/Lark app bot, supports multiple instances |
+| QQ | OpenClaw gateway | QQ bot (official Bot API), supports multiple instances |
+| Telegram | OpenClaw gateway | Bot API, supports webhook and polling |
+| Discord | OpenClaw gateway | Discord bot, supports servers and DMs |
+| NetEase IM | node-nim V2 SDK | [NetEase IM P2P messaging](https://doc.yunxin.163.com/messaging2/getting-started) |
+| NetEase Bee | node-nim V2 SDK | [NetEase Bee personal digital assistant](https://wp.m.163.com/163/html/bee/lobsterai_guide/index.html) |
+| NetEase POPO | OpenClaw gateway | NetEase POPO enterprise IM, supports WebSocket and Webhook |
 
 Configure the corresponding platform Token/Secret in the Settings panel to enable. Once set up, you can send instructions directly to the Agent from your phone IM (e.g., "analyze this dataset", "make a weekly summary PPT"), and the Agent will execute on the desktop and return results.
 
 ## Persistent Memory
 
-LobsterAI has a built-in memory system that remembers your personal information and preferences across sessions, making the Agent more helpful the more you use it.
+LobsterAI's memory system is built on OpenClaw and persists information as files in the working directory, so the Agent remembers your preferences and context across sessions.
 
-### How Memories Are Captured
+### Memory File Structure
 
-- **Automatic Extraction** — During conversations, the system automatically identifies and stores your personal details (name, occupation), preferences (language, format, style), and personal facts (pets, tools you use) — no manual effort required
-- **Explicit Requests** — Tell the Agent directly, e.g., "remember that I prefer Markdown format" or "note down that my project is called LobsterAI," and it will store the memory with higher confidence
-- **Manual Management** — Add, edit, or delete memory entries in the Memory management panel within Settings
+| File | Purpose |
+|------|---------|
+| `MEMORY.md` | Durable facts, preferences, and decisions — loaded automatically at session start |
+| `memory/YYYY-MM-DD.md` | Daily notes — preserves recent context |
+| `USER.md` | User profile (name, occupation, habits, long-term info) |
+| `SOUL.md` | Agent personality and behavioral principles |
+
+### How Memories Are Written
+
+- **Explicit instructions** — Say "remember that…" or "from now on reply in English," and the Agent calls the `write` tool to save to `MEMORY.md` before acknowledging — no silent "mental notes"
+- **Agent-initiated** — The Agent can proactively write important findings, configurations, or environment notes to memory files during task execution, without explicit prompting
+- **GUI management** — Add, edit, or delete entries in `MEMORY.md` directly from the Settings panel; keyword search is supported
 
 ### How It Works
 
-After each conversation turn, the memory extractor analyzes the dialogue:
+At the start of every session, OpenClaw reads `SOUL.md`, `USER.md`, today's and yesterday's `memory/YYYY-MM-DD.md`, and `MEMORY.md` in sequence, injecting them as context. This lets the Agent pick up where it left off without you needing to re-explain preferences.
 
-| Extraction Type | Example | Confidence |
-|----------------|---------|------------|
-| Personal Profile | "My name is Alex", "I'm a product manager" | High |
-| Personal Ownership | "I have a cat", "I use a MacBook" | High |
-| Personal Preferences | "I like a concise style", "I prefer English replies" | Medium-High |
-| Assistant Preferences | "Don't use emojis in replies", "Write code in TypeScript" | Medium-High |
-| Explicit Requests | "Remember this", "Please note that down" | Highest |
-
-Extracted memories are automatically deduplicated and merged, then injected into the Agent's context in subsequent sessions — making responses more personalized and aligned with your needs.
-
-### Memory Settings
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| Memory Toggle | Enable or disable the memory feature | On |
-| Auto Capture | Whether to automatically extract memories from conversations | On |
-| Capture Strictness | Strict / Standard / Relaxed — controls auto-extraction sensitivity | Standard |
-| Max Injected Items | Maximum number of memories injected per session (1–60) | 12 |
+Memory writes go through file tools — there is no background extraction or inference. Content is fully under user or Agent control.
 
 ## Data Storage
 
@@ -357,7 +371,13 @@ All data is stored in a local SQLite database (`lobsterai.sqlite` in the user da
 | `cowork_config` | Cowork settings (working directory, system prompt, execution mode) |
 | `cowork_sessions` | Session metadata |
 | `cowork_messages` | Message history |
-| `scheduled_tasks` | Scheduled task definitions |
+| `user_memories` | User memory entries |
+| `user_memory_sources` | Memory source tracking |
+| `agents` | Custom Agent configurations |
+| `mcp_servers` | MCP server configurations |
+| `im_config` | IM gateway config (tokens/secrets per platform) |
+| `im_session_mappings` | Mapping between IM conversations and Cowork sessions |
+| `scheduled_task_meta` | Scheduled task metadata (origin and binding info) |
 
 ## Security Model
 
@@ -379,12 +399,12 @@ LobsterAI enforces security at multiple layers:
 | Build | Vite 5 |
 | Styling | Tailwind CSS 3 |
 | State | Redux Toolkit |
-| AI Engine | Claude Agent SDK (Anthropic) |
-| Storage | sql.js |
+| AI Engine | OpenClaw (primary) |
+| Storage | better-sqlite3 |
 | Markdown | react-markdown + remark-gfm + rehype-katex |
 | Diagrams | Mermaid |
 | Security | DOMPurify |
-| IM | dingtalk-stream · @larksuiteoapi/node-sdk · grammY · discord.js |
+| IM | @larksuiteoapi/node-sdk · nim-web-sdk-ng · @wecom/wecom-aibot-sdk · OpenClaw gateway (DingTalk / Telegram / Discord / QQ etc.) |
 
 ## Configuration
 
@@ -460,7 +480,7 @@ npm test -- logger
 npm test -- cowork
 ```
 
-New test files go next to the source file they test, using the `.test.mjs` extension:
+New test files go next to the source file they test, using the `.test.ts` extension:
 
 ```
 src/main/
@@ -481,6 +501,14 @@ test('log file pattern matches daily name', () => {
 Avoid importing Electron-only APIs (e.g. `electron-log`) in tests — inline any logic that depends on them instead.
 
 
+
+## Community
+
+Join our WeChat group to get help, share feedback, and stay up to date:
+
+<p align="center">
+  <img src="https://shared.ydstatic.com/market/souti/fihserChatWeb/online/1.3.5/dist/assets/wechat_group-ButC0ZCl.jpg" alt="WeChat Community QR Code" width="200">
+</p>
 
 ## Contributing
 

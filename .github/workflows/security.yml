@@ -1,0 +1,101 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  schedule:
+    - cron: '0 0 * * 1'  # 每周一
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ========== 密钥泄露检测 ==========
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@v3.88.30
+        with:
+          path: ./
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          extra_args: --only-verified
+
+  # ========== 依赖漏洞扫描 ==========
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      
+      # npm install 会生成临时 package-lock.json 供 audit 使用
+      - run: npm install
+      
+      # npm audit
+      - name: Run npm audit
+        run: |
+          echo "Running npm audit..."
+          npm audit --audit-level=high || echo "⚠ npm audit found issues (non-blocking)"
+      
+      # 使用 better-npm-audit 获得更好体验
+      - name: Run better-npm-audit
+        run: |
+          npx better-npm-audit audit --level=high || echo "⚠ better-npm-audit found issues (non-blocking)"
+
+  # ========== Skill 依赖扫描 ==========
+  skills-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      
+      - name: Audit Skills
+        run: |
+          set +e  # Don't exit on error
+          
+          for skill in SKILLs/*/; do
+            if [ -f "$skill/package.json" ]; then
+              echo ""
+              echo "=== Auditing $skill ==="
+              (cd "$skill" && npm install --package-lock-only 2>/dev/null && npm audit --audit-level=moderate 2>/dev/null) || echo "⚠ Audit issues found in $skill (non-blocking)"
+            fi
+          done
+          
+          echo ""
+          echo "=== Skill audit complete ==="
+
+  # ========== 代码扫描 (CodeQL) ==========
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript, typescript
+      
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4

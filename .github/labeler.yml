@@ -1,0 +1,87 @@
+# Labeler Configuration
+# Automatically labels PRs based on file changes
+
+"platform: macos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "build/icons/mac/**"
+          - "build/entitlements.mac.plist"
+          - "scripts/*mac*"
+          - "scripts/notarize.js"
+
+"platform: windows":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "build/icons/win/**"
+          - "scripts/*win*"
+          - "scripts/setup-python-runtime.js"
+          - "scripts/nsis-installer.nsh"
+
+"platform: linux":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "build/icons/png/**"
+          - "scripts/*linux*"
+
+"area: renderer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/renderer/**"
+          - "vite.config.ts"
+          - "tailwind.config.js"
+          - "postcss.config.js"
+
+"area: main":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/main/**"
+          - "src/common/**"
+          - "electron-tsconfig.json"
+
+"area: openclaw":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/main/libs/*openclaw*"
+          - "scripts/*openclaw*"
+          - "scripts/ensure-openclaw-version.cjs"
+          - "scripts/apply-openclaw-patches.cjs"
+
+"area: skills":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "SKILLs/**"
+          - "src/main/skillManager.ts"
+
+"area: cowork":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/main/libs/cowork*"
+          - "src/renderer/components/cowork/**"
+          - "src/renderer/store/slices/coworkSlice.ts"
+
+"area: im":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/main/im/**"
+          - "src/renderer/components/im/**"
+
+"area: artifacts":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/renderer/components/artifacts/**"
+          - "src/renderer/services/artifactParser.ts"
+
+"area: build":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - "electron-builder.json"
+          - "scripts/build*.js"
+          - "scripts/*build*"
+
+"area: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "**/*.md"
+          - "README*"

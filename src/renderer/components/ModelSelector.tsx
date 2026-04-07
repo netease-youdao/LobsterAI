@@ -8,13 +8,30 @@ import { i18nService } from '../services/i18n';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down';
+  /**
+   * Controlled mode: the currently selected Model (or `null` for "default").
+   * When provided, the component does NOT read/write Redux global state.
+   */
+  value?: Model | null;
+  /** Controlled mode callback. `null` means the user picked "default". */
+  onChange?: (model: Model | null) => void;
+  /** Show a "default" option at the top of the dropdown (controlled mode only). */
+  defaultLabel?: string;
 }
 
-const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down' }) => {
+const ModelSelector: React.FC<ModelSelectorProps> = ({
+  dropdownDirection = 'down',
+  value,
+  onChange,
+  defaultLabel,
+}) => {
   const dispatch = useDispatch();
   const [isOpen, setIsOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
+
+  const controlled = onChange !== undefined;
+  const globalSelectedModel = useSelector((state: RootState) => state.model.selectedModel);
+  const selectedModel = controlled ? value ?? null : globalSelectedModel;
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
 
   // 点击外部区域关闭下拉框
@@ -34,8 +51,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
     };
   }, [isOpen]);
 
-  const handleModelSelect = (model: Model) => {
-    dispatch(setSelectedModel(model));
+  const handleModelSelect = (model: Model | null) => {
+    if (controlled) {
+      onChange(model);
+    } else if (model) {
+      dispatch(setSelectedModel(model));
+    }
     setIsOpen(false);
   };
 
@@ -56,12 +77,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
   const userModels = availableModels.filter(m => !m.isServerModel);
   const hasBothGroups = serverModels.length > 0 && userModels.length > 0;
 
+  const isSelected = (model: Model): boolean => {
+    if (!selectedModel) return false;
+    return isSameModelIdentity(model, selectedModel);
+  };
+
   const renderModelItem = (model: Model) => (
     <button
       key={getModelIdentityKey(model)}
       onClick={() => handleModelSelect(model)}
-      className={`w-full px-4 py-2.5 text-left text-foreground hover:bg-surface-raised flex items-center justify-between transition-colors ${
-        isSameModelIdentity(model, selectedModel) ? 'bg-surface-raised/50' : ''
+      className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
+        isSelected(model) ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
       }`}
     >
       <div className="flex flex-col">
@@ -77,8 +103,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
           <span className="text-xs text-secondary">{model.provider}</span>
         )}
       </div>
-      {isSameModelIdentity(model, selectedModel) && (
-        <CheckIcon className="h-4 w-4 text-primary" />
+      {isSelected(model) && (
+        <CheckIcon className="h-4 w-4 text-claude-accent" />
       )}
     </button>
   );
@@ -95,13 +121,24 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ dropdownDirection = 'down
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-surface-raised text-foreground transition-colors cursor-pointer ${isOpen ? 'bg-surface-raised' : ''}`}
       >
-        <span className="font-medium text-sm">{selectedModel.name}</span>
-        <ChevronDownIcon className="h-4 w-4 text-secondary" />
+        <span className="font-medium text-sm">{selectedModel?.name ?? defaultLabel ?? ''}</span>
+        <ChevronDownIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
       </button>
 
       {isOpen && (
         <div className={`absolute ${dropdownPositionClass} w-60 bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}>
           <div className="max-h-64 overflow-y-auto">
+            {defaultLabel && (
+              <button
+                onClick={() => handleModelSelect(null)}
+                className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
+                  !selectedModel ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+                }`}
+              >
+                <span className="text-sm">{defaultLabel}</span>
+                {!selectedModel && <CheckIcon className="h-4 w-4 text-claude-accent" />}
+              </button>
+            )}
             {hasBothGroups ? (
               <>
                 {renderGroupHeader(i18nService.t('modelGroupServer'))}

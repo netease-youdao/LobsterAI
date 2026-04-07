@@ -1,26 +1,26 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
-import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
-import PaperClipIcon from '../icons/PaperClipIcon';
-import XMarkIcon from '../icons/XMarkIcon';
-import ModelSelector from '../ModelSelector';
-import FolderSelectorPopover from './FolderSelectorPopover';
-import { SkillsButton, ActiveSkillBadge } from '../skills';
+import { ExclamationTriangleIcon,PhotoIcon } from '@heroicons/react/24/outline';
+import { FolderIcon,PaperAirplaneIcon, StopIcon } from '@heroicons/react/24/solid';
+import React, { useCallback,useEffect, useRef, useState } from 'react';
+import { useDispatch,useSelector } from 'react-redux';
+
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
-import { setDraftPrompt, setDraftAttachments, clearDraftAttachments, type DraftAttachment } from '../../store/slices/coworkSlice';
+import { addDraftAttachment, clearDraftAttachments, type DraftAttachment,setDraftAttachments, setDraftPrompt } from '../../store/slices/coworkSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
-import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
+import { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
+import PaperClipIcon from '../icons/PaperClipIcon';
+import XMarkIcon from '../icons/XMarkIcon';
+import ModelSelector from '../ModelSelector';
+import { ActiveSkillBadge,SkillsButton } from '../skills';
+import FolderSelectorPopover from './FolderSelectorPopover';
 
 // CoworkAttachment is aliased from the Redux-persisted DraftAttachment type
 // so that attachment state survives view switches (cowork ↔ skills, etc.)
 type CoworkAttachment = DraftAttachment;
 
-const INPUT_FILE_LABEL = '输入文件';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
@@ -71,6 +71,8 @@ const buildInlinedSkillPrompt = (skill: Skill): string => {
 export interface CoworkPromptInputRef {
   /** 设置输入框值 */
   setValue: (value: string) => void;
+  /** 设置图片附件（用于重新编辑消息时还原图片） */
+  setImageAttachments: (images: CoworkImageAttachment[]) => void;
   /** 聚焦输入框 */
   focus: () => void;
 }
@@ -123,6 +125,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const dragDepthRef = useRef(0);
+    const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
@@ -136,6 +139,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight)}px`;
         }
       });
+    },
+    setImageAttachments: (images: CoworkImageAttachment[]) => {
+      const newAttachments: CoworkAttachment[] = images.map((img, idx) => ({
+        path: `inline:${img.name}:reedit-${Date.now()}-${idx}`,
+        name: img.name,
+        isImage: true,
+        dataUrl: `data:${img.mimeType};base64,${img.base64Data}`,
+      }));
+      dispatch(setDraftAttachments({ draftKey, attachments: newAttachments }));
     },
     focus: () => {
       textareaRef.current?.focus();
@@ -192,8 +204,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     window.addEventListener('cowork:focus-input', handleFocusInput);
     return () => {
       window.removeEventListener('cowork:focus-input', handleFocusInput);
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
     };
-  }, []);
+  }, [dispatch, draftKey]);
 
   useEffect(() => {
     if (workingDirectory?.trim()) {
@@ -218,6 +231,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const handleSubmit = useCallback(async () => {
     if (showFolderSelector && !workingDirectory?.trim()) {
       setShowFolderRequiredWarning(true);
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+      warningTimerRef.current = setTimeout(() => {
+        setShowFolderRequiredWarning(false);
+        warningTimerRef.current = null;
+      }, 3000);
       return;
     }
 
@@ -254,7 +272,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Note: inline/clipboard images have pseudo-paths starting with 'inline:' and are excluded.
     const attachmentLines = attachments
       .filter((a) => !a.path.startsWith('inline:'))
-      .map((attachment) => `${INPUT_FILE_LABEL}: ${attachment.path}`)
+      .map((attachment) => `${i18nService.t('inputFileLabel')}: ${attachment.path}`)
       .join('\n');
     const finalPrompt = trimmedValue
       ? (attachmentLines ? `${trimmedValue}\n\n${attachmentLines}` : trimmedValue)
@@ -331,32 +349,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
     if (!filePath) return;
-    const current = attachments;
-    if (current.some((attachment) => attachment.path === filePath)) return;
-    dispatch(setDraftAttachments({
+    dispatch(addDraftAttachment({
       draftKey,
-      attachments: [...current, {
+      attachment: {
         path: filePath,
         name: getFileNameFromPath(filePath),
         isImage: imageInfo?.isImage,
         dataUrl: imageInfo?.dataUrl,
-      }],
+      },
     }));
-  }, [attachments, dispatch, draftKey]);
+  }, [dispatch, draftKey]);
 
   const addImageAttachmentFromDataUrl = useCallback((name: string, dataUrl: string) => {
     // Use the dataUrl as the unique key (no file path for inline images)
     const pseudoPath = `inline:${name}:${Date.now()}`;
-    dispatch(setDraftAttachments({
+    dispatch(addDraftAttachment({
       draftKey,
-      attachments: [...attachments, {
+      attachment: {
         path: pseudoPath,
         name,
         isImage: true,
         dataUrl,
-      }],
+      },
     }));
-  }, [attachments, dispatch, draftKey]);
+  }, [dispatch, draftKey]);
 
   const fileToDataUrl = useCallback((file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -620,9 +636,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         <div className="mb-2 flex items-start gap-1.5 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
           <ExclamationTriangleIcon className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
           <span>
-            {i18nService.getLanguage() === 'zh'
-              ? '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。'
-              : 'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.'}
+            {i18nService.t('imageVisionHint')}
           </span>
           <button
             type="button"
@@ -663,31 +677,47 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               <div className="flex items-center gap-2 relative">
                 {showFolderSelector && (
                   <>
-                    <div className="relative group">
-                      <button
-                        ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
-                        type="button"
-                        onClick={() => setShowFolderMenu(!showFolderMenu)}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
-                      >
-                        <FolderIcon className="h-4 w-4" />
-                        <span className="max-w-[150px] truncate text-xs">
-                          {truncatePath(workingDirectory)}
-                        </span>
-                      </button>
-                      {/* Tooltip - hidden when folder menu is open */}
-                      {!showFolderMenu && (
-                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3.5 py-2.5 text-[13px] leading-relaxed rounded-xl shadow-xl bg-background text-foreground border-border border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none z-50 max-w-[400px] break-all whitespace-nowrap">
-                          {truncatePath(workingDirectory, 120)}
-                        </div>
-                      )}
-                    </div>
+                      <div className="flex items-center">
+                        <button
+                          ref={folderButtonRef as React.RefObject<HTMLButtonElement>}
+                          type="button"
+                          onClick={() => setShowFolderMenu(!showFolderMenu)}
+                          className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-1.5 rounded-lg text-sm transition-colors ${
+                            showFolderRequiredWarning
+                              ? 'ring-1 ring-warning text-warning animate-shake'
+                              : 'text-secondary hover:bg-surface-raised hover:text-foreground'
+                          }`}
+                        >
+                          <FolderIcon className="h-4 w-4 flex-shrink-0" />
+                          <span className="max-w-[150px] truncate text-xs">
+                            {truncatePath(workingDirectory)}
+                          </span>
+                          {workingDirectory && (
+                            <span
+                              role="button"
+                              tabIndex={-1}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleFolderSelect('');
+                              }}
+                              className="flex-shrink-0 ml-0.5 p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                            >
+                              <XMarkIcon className="h-3 w-3" />
+                            </span>
+                          )}
+                        </button>
+                      </div>
                     <FolderSelectorPopover
                       isOpen={showFolderMenu}
                       onClose={() => setShowFolderMenu(false)}
                       onSelectFolder={handleFolderSelect}
                       anchorRef={folderButtonRef as React.RefObject<HTMLElement>}
                     />
+                    {showFolderRequiredWarning && (
+                      <div className="absolute left-0 top-full mt-1 px-2 py-1 rounded-md bg-surface-raised text-warning text-xs whitespace-nowrap animate-fade-in-up shadow-subtle z-10">
+                        {i18nService.t('coworkSelectFolderFirst')}
+                      </div>
+                    )}
                   </>
                 )}
                 {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
@@ -789,11 +819,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           </>
         )}
       </div>
-      {showFolderRequiredWarning && (
-        <div className="mt-2 text-xs text-red-500 dark:text-red-400">
-          {i18nService.t('coworkSelectFolderFirst')}
-        </div>
-      )}
     </div>
   );
   }

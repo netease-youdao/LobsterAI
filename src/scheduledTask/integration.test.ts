@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import initSqlJs from 'sql.js';
+import Database from 'better-sqlite3';
 import { makeTask, makeModel } from './fixtures';
 import { ScheduledTaskMetaStore } from './metaStore';
 import { TaskModelMapper } from './modelMapper';
@@ -11,15 +11,14 @@ import {
 
 const mapper = new TaskModelMapper();
 
-async function createMetaStore() {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
+function createMetaStore() {
+  const db = new Database(':memory:');
   return new ScheduledTaskMetaStore(db);
 }
 
-test('integration: manual create -> edit delivery to IM -> binding auto-updates', async () => {
-  const metaStore = await createMetaStore();
-  const origin = { kind: OriginKind.Manual as const };
+test('integration: manual create -> edit delivery to IM -> binding auto-updates', () => {
+  const metaStore = createMetaStore();
+  const origin = { kind: OriginKind.Manual };
   const policy = taskPolicyRegistry.get(origin);
 
   // 1. Create draft
@@ -45,7 +44,7 @@ test('integration: manual create -> edit delivery to IM -> binding auto-updates'
 });
 
 test('integration: IM task -> switch to different IM platform -> binding platform updates', () => {
-  const origin = { kind: OriginKind.IM as const, platform: 'telegram', conversationId: 'c1' };
+  const origin = { kind: OriginKind.IM, platform: 'telegram', conversationId: 'c1' };
   const policy = taskPolicyRegistry.get(origin);
   const defaults = policy.getCreateDefaults(origin);
   const draft = mapper.createDraft(origin, defaults);
@@ -57,7 +56,7 @@ test('integration: IM task -> switch to different IM platform -> binding platfor
 });
 
 test('integration: cowork task -> delivery change to webhook -> binding stays', () => {
-  const origin = { kind: OriginKind.Cowork as const, sessionId: 'sess-99' };
+  const origin = { kind: OriginKind.Cowork, sessionId: 'sess-99' };
   const policy = taskPolicyRegistry.get(origin);
   const model = makeModel({
     origin,
@@ -70,8 +69,8 @@ test('integration: cowork task -> delivery change to webhook -> binding stays', 
   expect(edited.delivery.mode).toBe(DeliveryMode.Webhook);
 });
 
-test('integration: infer -> persist -> reload uses stored meta (not re-infer)', async () => {
-  const metaStore = await createMetaStore();
+test('integration: infer -> persist -> reload uses stored meta (not re-infer)', () => {
+  const metaStore = createMetaStore();
   const wire = makeTask({ sessionKey: 'agent:main:lobsterai:sess-99' });
 
   // 1. First load -- infer
@@ -117,7 +116,7 @@ test('integration: wire roundtrip preserves all fields', () => {
 });
 
 test('integration: legacy task with IM announce -> normalizeDraft links binding', () => {
-  const origin = { kind: OriginKind.Legacy as const };
+  const origin = { kind: OriginKind.Legacy };
   const policy = taskPolicyRegistry.get(origin);
   const model = makeModel({
     origin,

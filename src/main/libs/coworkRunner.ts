@@ -1621,6 +1621,7 @@ export class CoworkRunner extends EventEmitter {
     }
     this.clearPendingPermissions(sessionId);
     this.store.updateSession(sessionId, { status: 'idle' });
+    this.emit('sessionStopped', sessionId);
     setCoworkProxySessionId(null);
   }
 

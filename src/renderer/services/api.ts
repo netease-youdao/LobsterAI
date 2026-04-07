@@ -66,6 +66,7 @@ class ApiService {
       return normalized;
     }
 
+
     // Handle /v1, /v4 etc. versioned paths
     if (/\/v\d+$/.test(normalized)) {
       return `${normalized}/chat/completions`;
@@ -241,7 +242,7 @@ class ApiService {
   }
 
   private providerRequiresApiKey(provider: string): boolean {
-    return provider !== 'ollama';
+    return provider !== 'ollama' && provider !== 'github-copilot';
   }
 
   // 检测当前选择的模型属于哪个 provider
@@ -250,7 +251,7 @@ class ApiService {
     if (
       normalizedHint
       && (
-        ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'ollama'].includes(normalizedHint)
+        ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'github-copilot', 'ollama'].includes(normalizedHint)
         || normalizedHint.startsWith('custom_')
       )
     ) {
@@ -356,7 +357,33 @@ class ApiService {
       return this.chatWithAnthropic(userMessage, onProgress, history, selectedModel.id, effectiveConfig, supportsImages);
     }
 
-    return this.chatWithOpenAICompatible(userMessage, onProgress, history, selectedModel.id, effectiveConfig, supportsImages, provider);
+    try {
+      return await this.chatWithOpenAICompatible(userMessage, onProgress, history, selectedModel.id, effectiveConfig, supportsImages, provider);
+    } catch (error) {
+      // Auto-retry once for GitHub Copilot auth errors (401 / token expired)
+      if (
+        provider === 'github-copilot'
+        && error instanceof ApiError
+        && (error.statusCode === 401 || error.statusCode === 403)
+      ) {
+        console.log('[api-chat] Copilot auth error detected, attempting token refresh and retry');
+        try {
+          const result = await window.electron.githubCopilot.refreshToken();
+          if (result.success && result.token) {
+            // Update local config with the refreshed token
+            const refreshedConfig: ApiConfig = {
+              ...effectiveConfig,
+              apiKey: result.token,
+              ...(result.baseUrl ? { baseUrl: result.baseUrl } : {}),
+            };
+            return await this.chatWithOpenAICompatible(userMessage, onProgress, history, selectedModel.id, refreshedConfig, supportsImages, provider);
+          }
+        } catch (refreshError) {
+          console.warn('[api-chat] Copilot token refresh failed, throwing original error:', refreshError);
+        }
+      }
+      throw error;
+    }
   }
 
   // Anthropic API 调用
@@ -853,6 +880,13 @@ class ApiService {
           } else {
             headers.Authorization = `Bearer ${config.apiKey}`;
           }
+        }
+        if (provider === 'github-copilot') {
+          headers['Copilot-Integration-Id'] = 'vscode-chat';
+          headers['Editor-Version'] = 'vscode/1.96.2';
+          headers['Editor-Plugin-Version'] = 'copilot-chat/0.26.7';
+          headers['User-Agent'] = 'GitHubCopilotChat/0.26.7';
+          headers['Openai-Intent'] = 'conversation-panel';
         }
 
         const requestUrl = useResponsesApi
