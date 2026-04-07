@@ -457,6 +457,96 @@ const formatShortcutFromEvent = (e: React.KeyboardEvent): string | null => {
   return parts.join('+');
 };
 
+interface SessionStats {
+  totalSessions: number;
+  totalMessages: number;
+  sessionsToday: number;
+  messagesToday: number;
+  sessionsThisWeek: number;
+  avgMessagesPerSession: number;
+  sessionsByAgent: Array<{ agentId: string; count: number }>;
+}
+
+const SessionStatsPanel: React.FC = () => {
+  const [stats, setStats] = useState<SessionStats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadStats = async () => {
+      setLoading(true);
+      try {
+        const cowork = window.electron?.cowork;
+        if (cowork?.getSessionStats) {
+          const result = await cowork.getSessionStats();
+          if (result.success && result.stats) {
+            setStats(result.stats);
+          }
+        }
+      } catch (err) {
+        console.error('[SessionStatsPanel] Failed to load stats:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadStats();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-6">
+        <svg className="animate-spin h-5 w-5 text-secondary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+      </div>
+    );
+  }
+
+  if (!stats) {
+    return <p className="text-sm text-secondary">{i18nService.t('sessionStatsUnavailable')}</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-lg font-semibold text-foreground">{stats.totalSessions}</div>
+          <div className="text-xs text-secondary">{i18nService.t('sessionStatsTotalSessions')}</div>
+        </div>
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-lg font-semibold text-foreground">{stats.totalMessages}</div>
+          <div className="text-xs text-secondary">{i18nService.t('sessionStatsTotalMessages')}</div>
+        </div>
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-lg font-semibold text-foreground">{stats.sessionsToday}</div>
+          <div className="text-xs text-secondary">{i18nService.t('sessionStatsToday')}</div>
+        </div>
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-lg font-semibold text-foreground">{stats.sessionsThisWeek}</div>
+          <div className="text-xs text-secondary">{i18nService.t('sessionStatsThisWeek')}</div>
+        </div>
+      </div>
+      <div className="rounded-xl border border-border p-3">
+        <div className="text-sm font-medium text-foreground mb-1">{i18nService.t('sessionStatsAvgMessages')}</div>
+        <div className="text-lg font-semibold text-foreground">{stats.avgMessagesPerSession}</div>
+      </div>
+      {stats.sessionsByAgent.length > 1 && (
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-sm font-medium text-foreground mb-2">{i18nService.t('sessionStatsByAgent')}</div>
+          <div className="space-y-1.5">
+            {stats.sessionsByAgent.map(a => (
+              <div key={a.agentId} className="flex items-center justify-between text-sm">
+                <span className="text-secondary truncate mr-2">{a.agentId}</span>
+                <span className="font-medium text-foreground">{a.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
   const [recording, setRecording] = useState(false);
   const divRef = useRef<HTMLDivElement>(null);
@@ -2643,6 +2733,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   </>
                 );
               })()}
+            </div>
+
+            {/* Session Stats Section */}
+            <div>
+              <h4 className="text-sm font-medium text-foreground mb-3">
+                {i18nService.t('sessionStatsTitle')}
+              </h4>
+              <SessionStatsPanel />
             </div>
           </div>
         );

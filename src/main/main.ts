@@ -2750,6 +2750,18 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:stats', async () => {
+    try {
+      const stats = getCoworkStore().getSessionStats();
+      return { success: true, stats };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get session stats',
+      };
+    }
+  });
+
   // ========== Agent IPC Handlers ==========
 
   ipcMain.handle('agents:list', async () => {
