@@ -172,6 +172,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // 快捷键
     keyboardShortcuts: '键盘快捷键',
     shortcutNotSet: '未设置',
+    shortcutConflict: '与「{name}」快捷键冲突',
     newChat: '新建任务',
     search: '搜索任务',
     openSettings: '打开设置',
@@ -1451,6 +1452,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Shortcuts
     keyboardShortcuts: 'Keyboard Shortcuts',
     shortcutNotSet: 'Not set',
+    shortcutConflict: 'Conflicts with "{name}"',
     newChat: 'New Task',
     search: 'Search Tasks',
     openSettings: 'Open Settings',

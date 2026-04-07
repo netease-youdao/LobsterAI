@@ -457,7 +457,11 @@ const formatShortcutFromEvent = (e: React.KeyboardEvent): string | null => {
   return parts.join('+');
 };
 
-const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
+const ShortcutRecorder: React.FC<{
+  value: string;
+  onChange: (v: string) => void;
+  conflict?: string | null;
+}> = ({ value, onChange, conflict }) => {
   const [recording, setRecording] = useState(false);
   const divRef = useRef<HTMLDivElement>(null);
 
@@ -481,21 +485,28 @@ const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void 
   }, [recording]);
 
   return (
-    <div
-      ref={divRef}
-      tabIndex={0}
-      data-shortcut-input="true"
-      onKeyDown={handleKeyDown}
-      onClick={() => setRecording(true)}
-      onBlur={() => setRecording(false)}
-      className={`w-36 rounded-xl border px-3 py-1.5 text-sm cursor-pointer select-none text-center outline-none transition-colors
-        dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset dark:text-claude-darkText text-claude-text
-        ${recording
-          ? 'border-claude-accent ring-1 ring-claude-accent/30 dark:text-claude-darkTextSecondary text-claude-textSecondary'
-          : 'dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50'
-        }`}
-    >
-      {value || i18nService.t('shortcutNotSet')}
+    <div className="flex flex-col items-end gap-1">
+      <div
+        ref={divRef}
+        tabIndex={0}
+        data-shortcut-input="true"
+        onKeyDown={handleKeyDown}
+        onClick={() => setRecording(true)}
+        onBlur={() => setRecording(false)}
+        className={`w-36 rounded-xl border px-3 py-1.5 text-sm cursor-pointer select-none text-center outline-none transition-colors
+          dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset dark:text-claude-darkText text-claude-text
+          ${conflict
+            ? 'border-red-500 ring-1 ring-red-500/30'
+            : recording
+              ? 'border-claude-accent ring-1 ring-claude-accent/30 dark:text-claude-darkTextSecondary text-claude-textSecondary'
+              : 'dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50'
+          }`}
+      >
+        {value || i18nService.t('shortcutNotSet')}
+      </div>
+      {conflict && (
+        <span className="text-xs text-red-500">{conflict}</span>
+      )}
     </div>
   );
 };
@@ -563,6 +574,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
   });
+
+  // 快捷键名称映射，用于冲突提示
+  const shortcutLabelMap: Record<string, string> = {
+    newChat: i18nService.t('newChat'),
+    search: i18nService.t('search'),
+    settings: i18nService.t('openSettings'),
+  };
+
+  // 快捷键冲突状态: key -> 冲突提示文案
+  const [shortcutConflicts, setShortcutConflicts] = useState<Record<string, string | null>>({});
 
   // GitHub Copilot device code auth state
   const [copilotAuthStatus, setCopilotAuthStatus] = useState<'idle' | 'requesting' | 'awaiting_user' | 'polling' | 'authenticated' | 'error'>('idle');
@@ -1594,6 +1615,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    // 检查快捷键冲突
+    const hasConflicts = Object.values(shortcutConflicts).some(v => v != null);
+    if (hasConflicts) {
+      setActiveTab('shortcuts');
+      return;
+    }
+
     setIsSaving(true);
     setError(null);
 
@@ -1730,12 +1759,31 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setActiveTab(tab);
   };
 
+  // 检测快捷键冲突，返回 key -> 冲突提示文案 的映射
+  const detectShortcutConflicts = (shortcutMap: typeof shortcuts): Record<string, string | null> => {
+    const conflicts: Record<string, string | null> = {};
+    const entries = Object.entries(shortcutMap).filter(([, v]) => v);
+
+    for (const [key, value] of entries) {
+      const duplicate = entries.find(
+        ([k, v]) => k !== key && v.toLowerCase() === value.toLowerCase()
+      );
+      if (duplicate) {
+        const [dupKey] = duplicate;
+        const label = shortcutLabelMap[dupKey] ?? dupKey;
+        conflicts[key] = i18nService.t('shortcutConflict').replace('{name}', label);
+      } else {
+        conflicts[key] = null;
+      }
+    }
+    return conflicts;
+  };
+
   // 快捷键更新处理
   const handleShortcutChange = (key: keyof typeof shortcuts, value: string) => {
-    setShortcuts(prev => ({
-      ...prev,
-      [key]: value
-    }));
+    const newShortcuts = { ...shortcuts, [key]: value };
+    setShortcuts(newShortcuts);
+    setShortcutConflicts(detectShortcutConflicts(newShortcuts));
   };
 
   // 阻止点击设置窗口时事件传播到背景
@@ -3801,15 +3849,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-foreground">{i18nService.t('newChat')}</span>
-                  <ShortcutRecorder value={shortcuts.newChat} onChange={(v) => handleShortcutChange('newChat', v)} />
+                  <ShortcutRecorder value={shortcuts.newChat} onChange={(v) => handleShortcutChange('newChat', v)} conflict={shortcutConflicts.newChat} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-foreground">{i18nService.t('search')}</span>
-                  <ShortcutRecorder value={shortcuts.search} onChange={(v) => handleShortcutChange('search', v)} />
+                  <ShortcutRecorder value={shortcuts.search} onChange={(v) => handleShortcutChange('search', v)} conflict={shortcutConflicts.search} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-foreground">{i18nService.t('openSettings')}</span>
-                  <ShortcutRecorder value={shortcuts.settings} onChange={(v) => handleShortcutChange('settings', v)} />
+                  <ShortcutRecorder value={shortcuts.settings} onChange={(v) => handleShortcutChange('settings', v)} conflict={shortcutConflicts.settings} />
                 </div>
               </div>
             </div>
@@ -4059,7 +4107,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               </button>
               <button
                 type="submit"
-                disabled={isSaving}
+                disabled={isSaving || Object.values(shortcutConflicts).some(v => v != null)}
                 className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >
                 {isSaving ? i18nService.t('saving') : i18nService.t('save')}
