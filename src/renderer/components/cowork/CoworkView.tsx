@@ -582,6 +582,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
                 }}
                 showFolderSelector={true}
                 onManageSkills={() => onShowSkills?.()}
+                agentId={currentAgentId}
               />
             </div>
           </div>

@@ -90,6 +90,8 @@ interface CoworkPromptInputProps {
   showModelSelector?: boolean;
   onManageSkills?: () => void;
   sessionId?: string;
+  /** The current agent ID, used to isolate home-screen draft per agent */
+  agentId?: string;
   /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
   remoteManaged?: boolean;
 }
@@ -109,13 +111,24 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       showModelSelector = false,
       onManageSkills,
       sessionId,
+      agentId,
       remoteManaged = false,
     } = props;
     const dispatch = useDispatch();
-    const draftKey = sessionId || '__home__';
+    const draftKey = sessionId || (agentId ? `__home__:${agentId}` : '__home__');
     const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[draftKey] || '');
     const attachments = useSelector((state: RootState) => state.cowork.draftAttachments[draftKey] || []) as CoworkAttachment[];
     const [value, setValue] = useState(draftPrompt);
+
+    // Sync local value when agent switches (draftKey changes)
+    const prevDraftKeyRef = React.useRef(draftKey);
+    useEffect(() => {
+      if (prevDraftKeyRef.current !== draftKey) {
+        prevDraftKeyRef.current = draftKey;
+        setValue(draftPrompt);
+      }
+    }, [draftKey, draftPrompt]);
+
     const [showFolderMenu, setShowFolderMenu] = useState(false);
     const [showFolderRequiredWarning, setShowFolderRequiredWarning] = useState(false);
     const [isDraggingFiles, setIsDraggingFiles] = useState(false);
