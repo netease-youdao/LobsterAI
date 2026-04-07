@@ -3,21 +3,22 @@
  * Configuration form for a single Feishu bot instance in multi-instance mode
  */
 
-import React, { useState, useRef, useEffect } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { ArrowPathIcon, CheckCircleIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import TrashIcon from '../icons/TrashIcon';
-import { QRCodeSVG } from 'qrcode.react';
-import type { FeishuInstanceConfig, FeishuInstanceStatus, FeishuOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
-import { i18nService } from '../../services/i18n';
 import { PlatformRegistry } from '@shared/platform';
+import { QRCodeSVG } from 'qrcode.react';
+import React, { useEffect,useRef, useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { FeishuInstanceConfig, FeishuInstanceStatus, FeishuOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
+import TrashIcon from '../icons/TrashIcon';
 
 interface FeishuInstanceSettingsProps {
   instance: FeishuInstanceConfig;
   instanceStatus: FeishuInstanceStatus | undefined;
   onConfigChange: (update: Partial<FeishuOpenClawConfig>) => void;
   onSave: (override?: Partial<FeishuOpenClawConfig>) => Promise<void>;
-  onRename: (newName: string) => void;
+  onRename: (newName: string) => Promise<boolean>;
   onDelete: () => void;
   onToggleEnabled: () => void;
   onTestConnectivity: () => void;
@@ -222,13 +223,16 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
   React.useEffect(() => {
     setNameValue(instance.instanceName);
     setEditingName(false);
-  }, [instance.instanceId]);
+  }, [instance.instanceId, instance.instanceName]);
 
-  const handleNameBlur = () => {
+  const handleNameBlur = async () => {
     setEditingName(false);
     const trimmed = nameValue.trim();
     if (trimmed && trimmed !== instance.instanceName) {
-      onRename(trimmed);
+      const success = await onRename(trimmed);
+      if (!success) {
+        setNameValue(instance.instanceName);
+      }
     } else {
       setNameValue(instance.instanceName);
     }

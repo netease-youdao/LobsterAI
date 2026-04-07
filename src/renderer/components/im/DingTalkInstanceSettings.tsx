@@ -3,20 +3,21 @@
  * Configuration form for a single DingTalk bot instance in multi-instance mode
  */
 
-import React, { useState } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { SignalIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import TrashIcon from '../icons/TrashIcon';
-import type { DingTalkInstanceConfig, DingTalkInstanceStatus, DingTalkOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
-import { i18nService } from '../../services/i18n';
 import { PlatformRegistry } from '@shared/platform';
+import React, { useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { DingTalkInstanceConfig, DingTalkInstanceStatus, DingTalkOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
+import TrashIcon from '../icons/TrashIcon';
 
 interface DingTalkInstanceSettingsProps {
   instance: DingTalkInstanceConfig;
   instanceStatus: DingTalkInstanceStatus | undefined;
   onConfigChange: (update: Partial<DingTalkOpenClawConfig>) => void;
   onSave: (override?: Partial<DingTalkOpenClawConfig>) => Promise<void>;
-  onRename: (newName: string) => void;
+  onRename: (newName: string) => Promise<boolean>;
   onDelete: () => void;
   onToggleEnabled: () => void;
   onTestConnectivity: () => void;
@@ -147,13 +148,16 @@ const DingTalkInstanceSettings: React.FC<DingTalkInstanceSettingsProps> = ({
   React.useEffect(() => {
     setNameValue(instance.instanceName);
     setEditingName(false);
-  }, [instance.instanceId]);
+  }, [instance.instanceId, instance.instanceName]);
 
-  const handleNameBlur = () => {
+  const handleNameBlur = async () => {
     setEditingName(false);
     const trimmed = nameValue.trim();
     if (trimmed && trimmed !== instance.instanceName) {
-      onRename(trimmed);
+      const success = await onRename(trimmed);
+      if (!success) {
+        setNameValue(instance.instanceName);
+      }
     } else {
       setNameValue(instance.instanceName);
     }

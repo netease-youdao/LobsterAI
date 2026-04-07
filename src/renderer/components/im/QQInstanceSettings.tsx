@@ -3,20 +3,21 @@
  * Configuration form for a single QQ bot instance in multi-instance mode
  */
 
-import React, { useState } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { SignalIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import TrashIcon from '../icons/TrashIcon';
-import type { QQInstanceConfig, QQInstanceStatus, QQOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
-import { i18nService } from '../../services/i18n';
 import { PlatformRegistry } from '@shared/platform';
+import React, { useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { IMConnectivityTestResult,QQInstanceConfig, QQInstanceStatus, QQOpenClawConfig } from '../../types/im';
+import TrashIcon from '../icons/TrashIcon';
 
 interface QQInstanceSettingsProps {
   instance: QQInstanceConfig;
   instanceStatus: QQInstanceStatus | undefined;
   onConfigChange: (update: Partial<QQOpenClawConfig>) => void;
   onSave: (override?: Partial<QQOpenClawConfig>) => Promise<void>;
-  onRename: (newName: string) => void;
+  onRename: (newName: string) => Promise<boolean>;
   onDelete: () => void;
   onToggleEnabled: () => void;
   onTestConnectivity: () => void;
@@ -47,13 +48,16 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
   React.useEffect(() => {
     setNameValue(instance.instanceName);
     setEditingName(false);
-  }, [instance.instanceId]);
+  }, [instance.instanceId, instance.instanceName]);
 
-  const handleNameBlur = () => {
+  const handleNameBlur = async () => {
     setEditingName(false);
     const trimmed = nameValue.trim();
     if (trimmed && trimmed !== instance.instanceName) {
-      onRename(trimmed);
+      const success = await onRename(trimmed);
+      if (!success) {
+        setNameValue(instance.instanceName);
+      }
     } else {
       setNameValue(instance.instanceName);
     }
