@@ -201,6 +201,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
     listSessions: (agentId?: string) =>
       ipcRenderer.invoke('cowork:session:list', agentId),
+    getSessionStats: () =>
+      ipcRenderer.invoke('cowork:session:stats'),
     exportResultImage: (options: { rect: { x: number; y: number; width: number; height: number }; defaultFileName?: string }) =>
       ipcRenderer.invoke('cowork:session:exportResultImage', options),
     captureImageChunk: (options: { rect: { x: number; y: number; width: number; height: number } }) =>

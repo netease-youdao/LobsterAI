@@ -754,6 +754,66 @@ export class CoworkStore {
     }));
   }
 
+  getSessionStats(): {
+    totalSessions: number;
+    totalMessages: number;
+    sessionsToday: number;
+    messagesToday: number;
+    sessionsThisWeek: number;
+    avgMessagesPerSession: number;
+    sessionsByAgent: Array<{ agentId: string; count: number }>;
+  } {
+    const now = Date.now();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayMs = todayStart.getTime();
+    const weekMs = todayMs - 6 * 86400000;
+
+    const totalRow = this.getOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM cowork_sessions');
+    const totalSessions = totalRow?.cnt ?? 0;
+
+    const msgRow = this.getOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM cowork_messages');
+    const totalMessages = msgRow?.cnt ?? 0;
+
+    const todaySessRow = this.getOne<{ cnt: number }>(
+      'SELECT COUNT(*) as cnt FROM cowork_sessions WHERE created_at >= ?', [todayMs]
+    );
+    const sessionsToday = todaySessRow?.cnt ?? 0;
+
+    const todayMsgRow = this.getOne<{ cnt: number }>(
+      'SELECT COUNT(*) as cnt FROM cowork_messages WHERE created_at >= ?', [todayMs]
+    );
+    const messagesToday = todayMsgRow?.cnt ?? 0;
+
+    const weekSessRow = this.getOne<{ cnt: number }>(
+      'SELECT COUNT(*) as cnt FROM cowork_sessions WHERE created_at >= ?', [weekMs]
+    );
+    const sessionsThisWeek = weekSessRow?.cnt ?? 0;
+
+    const avgRow = this.getOne<{ avg_msg: number }>(
+      `SELECT COALESCE(AVG(msg_count), 0) as avg_msg FROM (
+        SELECT COUNT(*) as msg_count FROM cowork_messages GROUP BY session_id
+      )`
+    );
+    const avgMessagesPerSession = Math.round((avgRow?.avg_msg ?? 0) * 10) / 10;
+
+    const agentRows = this.getAll<{ agent_id: string; cnt: number }>(
+      `SELECT COALESCE(agent_id, 'main') as agent_id, COUNT(*) as cnt
+       FROM cowork_sessions GROUP BY agent_id ORDER BY cnt DESC LIMIT 10`
+    );
+    const sessionsByAgent = agentRows.map(r => ({ agentId: r.agent_id, count: r.cnt }));
+
+    return {
+      totalSessions,
+      totalMessages,
+      sessionsToday,
+      messagesToday,
+      sessionsThisWeek,
+      avgMessagesPerSession,
+      sessionsByAgent,
+    };
+  }
+
   resetRunningSessions(): number {
     const now = Date.now();
     const result = this.db
