@@ -251,12 +251,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
         ? task.schedule
         : buildScheduleInput(form);
 
-      // Validate agent is still enabled when editing
+      // Validate agent still exists when editing
       if (mode === 'edit' && form.agentId) {
         const agent = agents.find((a) => a.id === form.agentId);
-        if (!agent || !agent.enabled) {
-          const agentName = agent ? agent.name : form.agentId;
-          setSubmitError(i18nService.t('scheduledTasksFormAgentUnavailable').replace('{name}', agentName ?? ''));
+        if (!agent) {
+          setSubmitError(i18nService.t('scheduledTasksFormAgentUnavailable'));
           setSubmitting(false);
           return;
         }
@@ -763,12 +762,12 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
                 </div>
               );
             })()}
-            {/* Agent display (edit mode, read-only) */}
-            {mode === 'edit' && (() => {
+            {/* Agent display (edit mode, read-only, only when >1 enabled agents) */}
+            {mode === 'edit' && showAgentSelector && (() => {
               const agentToShow = form.agentId
                 ? (agents.find((a) => a.id === form.agentId) ?? null)
                 : agents.find((a) => a.id === 'main') ?? null;
-              const isUnavailable = !!form.agentId && (!agentToShow || !agentToShow.enabled);
+              const isUnavailable = !!form.agentId && !agentToShow;
               return (
                 <div className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md ${isUnavailable ? 'text-red-500' : 'text-foreground-secondary'}`}>
                   <span className="text-sm leading-none">
