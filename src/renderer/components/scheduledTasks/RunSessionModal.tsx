@@ -1,13 +1,16 @@
-import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { XMarkIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
-import type { CoworkSession, CoworkMessage } from '../../types/cowork';
+import type { CoworkSession } from '../../types/cowork';
+import { getTruncatedTitleState } from '../common/truncatedTitle';
 import {
-  buildDisplayItems,
-  buildConversationTurns,
-  UserMessageItem,
   AssistantTurnBlock,
+  buildConversationTurns,
+  buildDisplayItems,
+  UserMessageItem,
 } from '../cowork/CoworkSessionDetail';
+import Tooltip from '../ui/Tooltip';
 
 interface RunSessionModalProps {
   sessionId?: string | null;
@@ -26,44 +29,47 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
 
-  const loadSession = useCallback(async (isRetry = false): Promise<boolean> => {
-    if (!isRetry) {
-      setLoading(true);
-      setError(null);
-    }
-
-    try {
-      let loadedSession: CoworkSession | null = null;
-
-      // 1. Try loading by local session ID first
-      if (sessionId) {
-        const result = await window.electron?.cowork?.getSession(sessionId);
-        if (result?.success && result.session) {
-          loadedSession = result.session;
-        }
-      }
-
-      // 2. If not found locally, try resolving via OpenClaw sessionKey
-      if (!loadedSession && sessionKey) {
-        const result = await window.electron?.scheduledTasks?.resolveSession(sessionKey);
-        if (result?.success && result.session) {
-          loadedSession = result.session;
-        }
-      }
-
-      if (cancelledRef.current) return false;
-
-      if (loadedSession) {
-        setSession(loadedSession);
-        setLoading(false);
+  const loadSession = useCallback(
+    async (isRetry = false): Promise<boolean> => {
+      if (!isRetry) {
+        setLoading(true);
         setError(null);
-        return true;
       }
-      return false;
-    } catch {
-      return false;
-    }
-  }, [sessionId, sessionKey]);
+
+      try {
+        let loadedSession: CoworkSession | null = null;
+
+        // 1. Try loading by local session ID first
+        if (sessionId) {
+          const result = await window.electron?.cowork?.getSession(sessionId);
+          if (result?.success && result.session) {
+            loadedSession = result.session;
+          }
+        }
+
+        // 2. If not found locally, try resolving via OpenClaw sessionKey
+        if (!loadedSession && sessionKey) {
+          const result = await window.electron?.scheduledTasks?.resolveSession(sessionKey);
+          if (result?.success && result.session) {
+            loadedSession = result.session;
+          }
+        }
+
+        if (cancelledRef.current) return false;
+
+        if (loadedSession) {
+          setSession(loadedSession);
+          setLoading(false);
+          setError(null);
+          return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    },
+    [sessionId, sessionKey],
+  );
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -126,28 +132,37 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
     }
   };
 
-  const messages: CoworkMessage[] = session?.messages ?? [];
-  const displayItems = useMemo(() => buildDisplayItems(messages), [messages]);
+  const displayItems = useMemo(
+    () => buildDisplayItems(session?.messages ?? []),
+    [session?.messages],
+  );
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
+  const titleState = getTruncatedTitleState(
+    session?.title,
+    i18nService.t('scheduledTasksViewSession'),
+  );
 
   return (
-    <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/40 dark:bg-black/60" />
 
       {/* Modal */}
       <div
         className="relative w-full max-w-3xl mx-4 max-h-[80vh] flex flex-col rounded-2xl shadow-2xl bg-background border border-border overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border-subtle bg-surface/50 shrink-0">
-          <h3 className="text-sm font-semibold text-foreground truncate">
-            {session?.title || i18nService.t('scheduledTasksViewSession')}
-          </h3>
+          <Tooltip
+            content={titleState.tooltipContent}
+            disabled={!titleState.tooltipContent}
+            className="min-w-0 max-w-[80%] flex-1"
+          >
+            <h3 className="block w-full truncate text-sm font-semibold text-foreground">
+              {titleState.displayTitle}
+            </h3>
+          </Tooltip>
           <button
             type="button"
             onClick={onClose}
@@ -162,8 +177,21 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
           {loading && (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <svg className="w-5 h-5 animate-spin text-secondary" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
-                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                  className="opacity-25"
+                />
+                <path
+                  d="M4 12a8 8 0 018-8"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                  className="opacity-75"
+                />
               </svg>
               <span className="text-sm text-secondary">
                 {retryCount > 0
@@ -197,14 +225,12 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
 
           {!loading && !error && turns.length > 0 && (
             <div className="py-2">
-              {turns.map((turn) => {
+              {turns.map(turn => {
                 const showAssistantBlock = turn.assistantItems.length > 0;
 
                 return (
                   <React.Fragment key={turn.id}>
-                    {turn.userMessage && (
-                      <UserMessageItem message={turn.userMessage} skills={[]} />
-                    )}
+                    {turn.userMessage && <UserMessageItem message={turn.userMessage} skills={[]} />}
                     {showAssistantBlock && (
                       <AssistantTurnBlock
                         turn={turn}

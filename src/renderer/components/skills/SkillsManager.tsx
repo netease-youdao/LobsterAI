@@ -1,18 +1,14 @@
 import { ArrowPathIcon } from '@heroicons/react/20/solid';
-import {
-  ArrowDownTrayIcon,
-  CheckCircleIcon,
-  XMarkIcon,
-} from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, CheckCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { i18nService } from '../../services/i18n';
-import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
+import { compareVersions, resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
-import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
+import { MarketplaceSkill, MarketTag, Skill } from '../../types/skill';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import FolderOpenIcon from '../icons/FolderOpenIcon';
@@ -23,6 +19,7 @@ import PuzzleIcon from '../icons/PuzzleIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
 import UploadIcon from '../icons/UploadIcon';
+import Tooltip from '../ui/Tooltip';
 import SkillSecurityReport from './SkillSecurityReport';
 
 type SkillTab = 'installed' | 'marketplace';
@@ -30,13 +27,16 @@ type ImportSourceType = 'github' | 'clawhub';
 
 const importSourceTypes: ImportSourceType[] = ['github', 'clawhub'];
 
-const importTabConfig: Record<ImportSourceType, {
-  tabLabelKey: string;
-  descriptionKey: string;
-  urlLabelKey: string;
-  placeholderKey: string;
-  examplesKey: string;
-}> = {
+const importTabConfig: Record<
+  ImportSourceType,
+  {
+    tabLabelKey: string;
+    descriptionKey: string;
+    urlLabelKey: string;
+    placeholderKey: string;
+    examplesKey: string;
+  }
+> = {
   github: {
     tabLabelKey: 'githubTabLabel',
     descriptionKey: 'githubImportDescription',
@@ -75,7 +75,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   const [activeMarketTag, setActiveMarketTag] = useState('all');
   const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(false);
   const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
-  const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(null);
+  const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(
+    null,
+  );
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [skillPendingDelete, setSkillPendingDelete] = useState<Skill | null>(null);
   const [isDeletingSkill, setIsDeletingSkill] = useState(false);
@@ -119,13 +121,15 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   useEffect(() => {
     let isActive = true;
     setIsLoadingMarketplace(true);
-    skillService.fetchMarketplaceSkills().then((data) => {
+    skillService.fetchMarketplaceSkills().then(data => {
       if (!isActive) return;
       setMarketplaceSkills(data.skills);
       setMarketTags(data.tags);
       setIsLoadingMarketplace(false);
     });
-    return () => { isActive = false; };
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -190,8 +194,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   const filteredSkills = useMemo(() => {
     const query = skillSearchQuery.toLowerCase();
     return skills.filter(skill => {
-      const matchesSearch = skill.name.toLowerCase().includes(query)
-        || skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description).toLowerCase().includes(query);
+      const matchesSearch =
+        skill.name.toLowerCase().includes(query) ||
+        skillService
+          .getLocalizedSkillDescription(skill.id, skill.name, skill.description)
+          .toLowerCase()
+          .includes(query);
       return matchesSearch;
     });
   }, [skills, skillSearchQuery]);
@@ -201,8 +209,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     let results = marketplaceSkills;
     if (query) {
       results = results.filter(skill => {
-        return skill.name.toLowerCase().includes(query)
-          || resolveLocalizedText(skill.description).toLowerCase().includes(query);
+        return (
+          skill.name.toLowerCase().includes(query) ||
+          resolveLocalizedText(skill.description).toLowerCase().includes(query)
+        );
       });
     }
     if (activeMarketTag !== 'all') {
@@ -225,7 +235,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       dispatch(setSkills(updatedSkills));
       setSkillActionError('');
     } catch (error) {
-      setSkillActionError(error instanceof Error ? error.message : i18nService.t('skillUpdateFailed'));
+      setSkillActionError(
+        error instanceof Error ? error.message : i18nService.t('skillUpdateFailed'),
+      );
     }
   };
 
@@ -267,14 +279,17 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     setSkillActionError('');
     const result = await skillService.downloadSkill(trimmedSource);
     setIsDownloadingSkill(false);
-    console.log('[SkillsManager] downloadSkill result:', JSON.stringify({
-      success: result.success,
-      error: result.error,
-      hasAuditReport: !!result.auditReport,
-      pendingInstallId: result.pendingInstallId,
-      riskLevel: result.auditReport?.riskLevel,
-      findingsCount: result.auditReport?.findings?.length,
-    }));
+    console.log(
+      '[SkillsManager] downloadSkill result:',
+      JSON.stringify({
+        success: result.success,
+        error: result.error,
+        hasAuditReport: !!result.auditReport,
+        pendingInstallId: result.pendingInstallId,
+        riskLevel: result.auditReport?.riskLevel,
+        findingsCount: result.auditReport?.findings?.length,
+      }),
+    );
     if (!result.success) {
       setSkillActionError(result.error || i18nService.t('skillDownloadFailed'));
       return;
@@ -328,7 +343,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       // Not installed → switch to marketplace tab and search
       setActiveTab('marketplace');
       setSkillSearchQuery('skill-creator');
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotInstalled') }));
+      window.dispatchEvent(
+        new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotInstalled') }),
+      );
       return;
     }
 
@@ -336,7 +353,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       // Installed but disabled → switch to installed tab and search
       setActiveTab('installed');
       setSkillSearchQuery('skill-creator');
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotEnabled') }));
+      window.dispatchEvent(
+        new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotEnabled') }),
+      );
       return;
     }
 
@@ -371,7 +390,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     await handleAddSkillFromSource(trimmed);
   };
 
-  const getSkillInstallStatus = (marketplaceSkill: MarketplaceSkill): 'not_installed' | 'installed' | 'update_available' => {
+  const getSkillInstallStatus = (
+    marketplaceSkill: MarketplaceSkill,
+  ): 'not_installed' | 'installed' | 'update_available' => {
     const installed = skills.find(s => s.id === marketplaceSkill.id);
     if (!installed) return 'not_installed';
     if (!marketplaceSkill.version) return 'installed';
@@ -527,16 +548,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   return (
     <div className="space-y-4">
       <div>
-        <p className="text-sm text-secondary">
-          {i18nService.t('skillsDescription')}
-        </p>
+        <p className="text-sm text-secondary">{i18nService.t('skillsDescription')}</p>
       </div>
 
       {skillActionError && !isRemoteImportOpen && (
-        <ErrorMessage
-          message={skillActionError}
-          onClose={() => setSkillActionError('')}
-        />
+        <ErrorMessage message={skillActionError} onClose={() => setSkillActionError('')} />
       )}
 
       <div className="flex items-center gap-3">
@@ -546,7 +562,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             type="text"
             placeholder={i18nService.t('searchSkills')}
             value={skillSearchQuery}
-            onChange={(e) => setSkillSearchQuery(e.target.value)}
+            onChange={e => setSkillSearchQuery(e.target.value)}
             className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
@@ -624,9 +640,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               {skills.length}
             </span>
           )}
-          <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
-            activeTab === 'installed' ? 'bg-primary' : 'bg-transparent'
-          }`} />
+          <div
+            className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
+              activeTab === 'installed' ? 'bg-primary' : 'bg-transparent'
+            }`}
+          />
         </button>
         <button
           type="button"
@@ -638,9 +656,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
           }`}
         >
           {i18nService.t('skillMarketplace')}
-          <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
-            activeTab === 'marketplace' ? 'bg-primary' : 'bg-transparent'
-          }`} />
+          <div
+            className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
+              activeTab === 'marketplace' ? 'bg-primary' : 'bg-transparent'
+            }`}
+          />
         </button>
         {updatableSkills.length > 0 && (
           <div className="ml-auto pr-1 pb-1">
@@ -658,107 +678,122 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       </div>
 
       {activeTab === 'installed' && (
-      <>
-      <div className="grid grid-cols-2 gap-3">
-        {filteredSkills.length === 0 ? (
-          <div className="col-span-2 text-center py-8 text-sm text-secondary">
-            {i18nService.t('noSkillsAvailable')}
-          </div>
-        ) : (
-          filteredSkills.map((skill) => (
-            <div
-              key={skill.id}
-              className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary cursor-pointer"
-              onClick={() => setSelectedSkill(skill)}
-            >
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-                    <PuzzleIcon className="h-4 w-4 text-secondary" />
-                  </div>
-                  <span className="text-sm font-medium text-foreground truncate">
-                    {skill.name}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {!readOnly && !skill.isBuiltIn && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); handleRequestDeleteSkill(skill); }}
-                      className="p-1 rounded-lg text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                      title={i18nService.t('deleteSkill')}
-                    >
-                      <TrashIcon className="h-4 w-4" />
-                    </button>
-                  )}
-                  <div
-                    className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
-                      readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-                    } ${
-                      skill.enabled ? 'bg-primary' : 'bg-border'
-                    }`}
-                    onClick={(e) => { e.stopPropagation(); if (!readOnly) handleToggleSkill(skill.id); }}
-                  >
-                    <div
-                      className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
-                        skill.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                      }`}
-                    />
-                  </div>
-                </div>
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            {filteredSkills.length === 0 ? (
+              <div className="col-span-2 text-center py-8 text-sm text-secondary">
+                {i18nService.t('noSkillsAvailable')}
               </div>
-
-              <p className="text-xs text-secondary line-clamp-2 mb-2">
-                {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
-              </p>
-
-              <div className="flex items-center justify-between text-[10px] text-secondary">
-                <div className="flex items-center gap-2">
-                {skill.isOfficial && (
-                  <>
-                    <span className="px-1.5 py-0.5 rounded bg-primary-muted text-primary font-medium">
-                      {i18nService.t('official')}
-                    </span>
-                    <span>·</span>
-                  </>
-                )}
-                {skill.version && (
-                  <>
-                    <span className="px-1.5 py-0.5 rounded bg-surface-raised font-medium">
-                      v{skill.version}
-                    </span>
-                    <span>·</span>
-                  </>
-                )}
-                <span>{formatSkillDate(skill.updatedAt)}</span>
-                </div>
-                {(() => {
-                  const mp = marketplaceSkills.find(m => m.id === skill.id);
-                  if (mp && mp.version && compareVersions(mp.version, skill.version || '0.0.0') > 0) {
-                    return (
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleUpgradeSkill(mp); }}
-                        disabled={upgradeState?.isActive === true}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            ) : (
+              filteredSkills.map(skill => (
+                <div
+                  key={skill.id}
+                  className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary cursor-pointer"
+                  onClick={() => setSelectedSkill(skill)}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
+                        <PuzzleIcon className="h-4 w-4 text-secondary" />
+                      </div>
+                      <span className="text-sm font-medium text-foreground truncate">
+                        {skill.name}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {!readOnly && !skill.isBuiltIn && (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            handleRequestDeleteSkill(skill);
+                          }}
+                          className="p-1 rounded-lg text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          title={i18nService.t('deleteSkill')}
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      )}
+                      <div
+                        className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
+                          readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                        } ${skill.enabled ? 'bg-primary' : 'bg-border'}`}
+                        onClick={e => {
+                          e.stopPropagation();
+                          if (!readOnly) handleToggleSkill(skill.id);
+                        }}
                       >
-                        <ArrowPathIcon className="h-3.5 w-3.5" />
-                        {i18nService.t('skillUpgrade')}
-                      </button>
-                    );
-                  }
-                  return null;
-                })()}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-      </>
+                        <div
+                          className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
+                            skill.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-secondary line-clamp-2 mb-2">
+                    {skillService.getLocalizedSkillDescription(
+                      skill.id,
+                      skill.name,
+                      skill.description,
+                    )}
+                  </p>
+
+                  <div className="flex items-center justify-between text-[10px] text-secondary">
+                    <div className="flex items-center gap-2">
+                      {skill.isOfficial && (
+                        <>
+                          <span className="px-1.5 py-0.5 rounded bg-primary-muted text-primary font-medium">
+                            {i18nService.t('official')}
+                          </span>
+                          <span>·</span>
+                        </>
+                      )}
+                      {skill.version && (
+                        <>
+                          <span className="px-1.5 py-0.5 rounded bg-surface-raised font-medium">
+                            v{skill.version}
+                          </span>
+                          <span>·</span>
+                        </>
+                      )}
+                      <span>{formatSkillDate(skill.updatedAt)}</span>
+                    </div>
+                    {(() => {
+                      const mp = marketplaceSkills.find(m => m.id === skill.id);
+                      if (
+                        mp &&
+                        mp.version &&
+                        compareVersions(mp.version, skill.version || '0.0.0') > 0
+                      ) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              handleUpgradeSkill(mp);
+                            }}
+                            disabled={upgradeState?.isActive === true}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <ArrowPathIcon className="h-3.5 w-3.5" />
+                            {i18nService.t('skillUpgrade')}
+                          </button>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
       )}
 
-      {activeTab === 'marketplace' && (
-        isLoadingMarketplace ? (
+      {activeTab === 'marketplace' &&
+        (isLoadingMarketplace ? (
           <div className="text-center py-12 text-sm text-secondary">
             {i18nService.t('downloadingSkill')}
           </div>
@@ -777,7 +812,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 >
                   {i18nService.t('skillCategoryAll')}
                 </button>
-                {marketTags.map((tag) => (
+                {marketTags.map(tag => (
                   <button
                     key={tag.id}
                     type="button"
@@ -799,113 +834,125 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {filteredMarketplaceSkills.map((skill) => (
-              <div
-                key={skill.id}
-                className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary cursor-pointer"
-                onClick={() => setSelectedMarketplaceSkill(skill)}
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-                      <PuzzleIcon className="h-4 w-4 text-secondary" />
+                {filteredMarketplaceSkills.map(skill => (
+                  <div
+                    key={skill.id}
+                    className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary cursor-pointer"
+                    onClick={() => setSelectedMarketplaceSkill(skill)}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
+                          <PuzzleIcon className="h-4 w-4 text-secondary" />
+                        </div>
+                        <span className="text-sm font-medium text-foreground truncate">
+                          {skill.name}
+                        </span>
+                      </div>
+                      <div className="flex-shrink-0">
+                        {(() => {
+                          const status = getSkillInstallStatus(skill);
+                          if (status === 'update_available') {
+                            return (
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  handleUpgradeSkill(skill);
+                                }}
+                                disabled={upgradeState?.isActive === true}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                <ArrowPathIcon className="h-3.5 w-3.5" />
+                                {i18nService.t('skillUpgrade')}
+                              </button>
+                            );
+                          }
+                          if (status === 'installed') {
+                            return (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg text-green-600 dark:text-green-400 bg-green-500/10">
+                                <CheckCircleIcon className="h-3.5 w-3.5" />
+                                {i18nService.t('skillAlreadyInstalled')}
+                              </span>
+                            );
+                          }
+                          return !readOnly ? (
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                handleInstallMarketplaceSkill(skill);
+                              }}
+                              disabled={installingSkillId !== null}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <ArrowDownTrayIcon className="h-3.5 w-3.5" />
+                              {installingSkillId === skill.id
+                                ? i18nService.t('skillInstalling')
+                                : i18nService.t('skillInstall')}
+                            </button>
+                          ) : null;
+                        })()}
+                      </div>
                     </div>
-                    <span className="text-sm font-medium text-foreground truncate">
-                      {skill.name}
-                    </span>
-                  </div>
-                  <div className="flex-shrink-0">
-                    {(() => {
-                      const status = getSkillInstallStatus(skill);
-                      if (status === 'update_available') {
-                        return (
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); handleUpgradeSkill(skill); }}
-                            disabled={upgradeState?.isActive === true}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <ArrowPathIcon className="h-3.5 w-3.5" />
-                            {i18nService.t('skillUpgrade')}
-                          </button>
-                        );
-                      }
-                      if (status === 'installed') {
-                        return (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg text-green-600 dark:text-green-400 bg-green-500/10">
-                            <CheckCircleIcon className="h-3.5 w-3.5" />
-                            {i18nService.t('skillAlreadyInstalled')}
-                          </span>
-                        );
-                      }
-                      return !readOnly ? (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleInstallMarketplaceSkill(skill); }}
-                          disabled={installingSkillId !== null}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <ArrowDownTrayIcon className="h-3.5 w-3.5" />
-                          {installingSkillId === skill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
-                        </button>
-                      ) : null;
-                    })()}
-                  </div>
-                </div>
 
-                <p className="text-xs text-secondary line-clamp-2 mb-2">
-                  {resolveLocalizedText(skill.description)}
-                </p>
+                    <p className="text-xs text-secondary line-clamp-2 mb-2">
+                      {resolveLocalizedText(skill.description)}
+                    </p>
 
-                <div className="flex items-center gap-2 text-[10px] text-secondary">
-                  {skill.source?.from && (
-                    <>
-                      <span className="px-1.5 py-0.5 rounded bg-surface-raised font-medium">
-                        {skill.source.from}
-                      </span>
-                      <span>·</span>
-                    </>
-                  )}
-                  {skill.version && (
-                    <>
-                      {(() => {
-                        const installedVer = getInstalledVersion(skill.id);
-                        if (installedVer && compareVersions(skill.version, installedVer) > 0) {
-                          return (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium">
-                              v{installedVer} → v{skill.version}
-                            </span>
-                          );
-                        }
-                        return (
+                    <div className="flex items-center gap-2 text-[10px] text-secondary">
+                      {skill.source?.from && (
+                        <>
                           <span className="px-1.5 py-0.5 rounded bg-surface-raised font-medium">
-                            v{skill.version}
+                            {skill.source.from}
                           </span>
-                        );
-                      })()}
-                    </>
-                  )}
-                </div>
+                          <span>·</span>
+                        </>
+                      )}
+                      {skill.version && (
+                        <>
+                          {(() => {
+                            const installedVer = getInstalledVersion(skill.id);
+                            if (installedVer && compareVersions(skill.version, installedVer) > 0) {
+                              return (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium">
+                                  v{installedVer} → v{skill.version}
+                                </span>
+                              );
+                            }
+                            return (
+                              <span className="px-1.5 py-0.5 rounded bg-surface-raised font-medium">
+                                v{skill.version}
+                              </span>
+                            );
+                          })()}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
             )}
           </>
-        )
-      )}
+        ))}
 
-      {selectedMarketplaceSkill && createPortal(
-        <Modal onClose={() => setSelectedMarketplaceSkill(null)} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6">
+      {selectedMarketplaceSkill &&
+        createPortal(
+          <Modal
+            onClose={() => setSelectedMarketplaceSkill(null)}
+            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6"
+          >
             <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-3 min-w-0 max-w-[80%]">
                 <div className="w-9 h-9 rounded-lg bg-background flex items-center justify-center flex-shrink-0">
                   <PuzzleIcon className="h-5 w-5 text-secondary" />
                 </div>
-                <div className="min-w-0">
-                  <div className="text-base font-semibold text-foreground truncate">
+                <Tooltip content={selectedMarketplaceSkill.name} className="min-w-0 flex-1">
+                  <div className="block w-full truncate text-base font-semibold text-foreground">
                     {selectedMarketplaceSkill.name}
                   </div>
-                </div>
+                </Tooltip>
               </div>
               <button
                 type="button"
@@ -923,7 +970,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             <div className="space-y-2 mb-5">
               {selectedMarketplaceSkill.version && (
                 <div className="flex items-center text-xs">
-                  <span className="w-16 flex-shrink-0 text-secondary">{i18nService.t('skillDetailVersion')}</span>
+                  <span className="w-16 flex-shrink-0 text-secondary">
+                    {i18nService.t('skillDetailVersion')}
+                  </span>
                   <span className="px-1.5 py-0.5 rounded bg-surface-raised text-foreground font-medium">
                     v{selectedMarketplaceSkill.version}
                   </span>
@@ -931,7 +980,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               )}
               {selectedMarketplaceSkill.source?.from && (
                 <div className="flex items-center text-xs">
-                  <span className="w-16 flex-shrink-0 text-secondary">{i18nService.t('skillDetailSource')}</span>
+                  <span className="w-16 flex-shrink-0 text-secondary">
+                    {i18nService.t('skillDetailSource')}
+                  </span>
                   <span className="px-1.5 py-0.5 rounded bg-surface-raised text-foreground font-medium">
                     {selectedMarketplaceSkill.source.from}
                   </span>
@@ -948,7 +999,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                   <button
                     type="button"
                     className="text-primary hover:underline break-all text-left"
-                    onClick={(e) => { e.stopPropagation(); window.electron.shell.openExternal(selectedMarketplaceSkill.source.url); }}
+                    onClick={e => {
+                      e.stopPropagation();
+                      window.electron.shell.openExternal(selectedMarketplaceSkill.source.url);
+                    }}
                   >
                     {selectedMarketplaceSkill.source.url}
                   </button>
@@ -968,7 +1022,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                     className="w-full py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
                   >
                     <ArrowPathIcon className="h-4 w-4" />
-                    {i18nService.t('skillUpgrade')} v{installedVer} → v{selectedMarketplaceSkill.version}
+                    {i18nService.t('skillUpgrade')} v{installedVer} → v
+                    {selectedMarketplaceSkill.version}
                   </button>
                 );
               }
@@ -988,25 +1043,33 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                   className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
                 >
                   <ArrowDownTrayIcon className="h-4 w-4" />
-                  {installingSkillId === selectedMarketplaceSkill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
+                  {installingSkillId === selectedMarketplaceSkill.id
+                    ? i18nService.t('skillInstalling')
+                    : i18nService.t('skillInstall')}
                 </button>
               ) : null;
             })()}
-        </Modal>
-      , document.body)}
+          </Modal>,
+          document.body,
+        )}
 
-      {selectedSkill && createPortal(
-        <Modal onClose={() => setSelectedSkill(null)} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6">
+      {selectedSkill &&
+        createPortal(
+          <Modal
+            onClose={() => setSelectedSkill(null)}
+            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6"
+          >
             <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-3 min-w-0 max-w-[80%]">
                 <div className="w-9 h-9 rounded-lg bg-background flex items-center justify-center flex-shrink-0">
                   <PuzzleIcon className="h-5 w-5 text-secondary" />
                 </div>
-                <div className="min-w-0">
-                  <div className="text-base font-semibold text-foreground truncate">
+                <Tooltip content={selectedSkill.name} className="min-w-0 flex-1">
+                  <div className="block w-full truncate text-base font-semibold text-foreground">
                     {selectedSkill.name}
                   </div>
-                </div>
+                </Tooltip>
               </div>
               <button
                 type="button"
@@ -1018,7 +1081,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             </div>
 
             <p className="text-sm text-secondary mb-4">
-              {skillService.getLocalizedSkillDescription(selectedSkill.id, selectedSkill.name, selectedSkill.description)}
+              {skillService.getLocalizedSkillDescription(
+                selectedSkill.id,
+                selectedSkill.name,
+                selectedSkill.description,
+              )}
             </p>
 
             <div className="space-y-2 mb-5">
@@ -1028,7 +1095,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                   <>
                     {selectedSkill.isOfficial && (
                       <div className="flex items-center text-xs">
-                        <span className="w-16 flex-shrink-0 text-secondary">{i18nService.t('skillDetailSource')}</span>
+                        <span className="w-16 flex-shrink-0 text-secondary">
+                          {i18nService.t('skillDetailSource')}
+                        </span>
                         <span className="px-1.5 py-0.5 rounded bg-primary-muted text-primary font-medium">
                           {i18nService.t('official')}
                         </span>
@@ -1041,7 +1110,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                     )}
                     {!selectedSkill.isOfficial && mp?.source?.from && (
                       <div className="flex items-center text-xs">
-                        <span className="w-16 flex-shrink-0 text-secondary">{i18nService.t('skillDetailSource')}</span>
+                        <span className="w-16 flex-shrink-0 text-secondary">
+                          {i18nService.t('skillDetailSource')}
+                        </span>
                         <span className="px-1.5 py-0.5 rounded bg-surface-raised text-foreground font-medium">
                           {mp.source.from}
                         </span>
@@ -1058,7 +1129,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                         <button
                           type="button"
                           className="text-primary hover:underline break-all text-left"
-                          onClick={(e) => { e.stopPropagation(); window.electron.shell.openExternal(mp.source.url); }}
+                          onClick={e => {
+                            e.stopPropagation();
+                            window.electron.shell.openExternal(mp.source.url);
+                          }}
                         >
                           {mp.source.url}
                         </button>
@@ -1073,7 +1147,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               {!readOnly && !selectedSkill.isBuiltIn ? (
                 <button
                   type="button"
-                  onClick={() => { setSelectedSkill(null); handleRequestDeleteSkill(selectedSkill); }}
+                  onClick={() => {
+                    setSelectedSkill(null);
+                    handleRequestDeleteSkill(selectedSkill);
+                  }}
                   className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-xl text-red-500 dark:text-red-400 hover:bg-red-500/10 transition-colors"
                 >
                   <TrashIcon className="h-4 w-4" />
@@ -1085,9 +1162,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               <div
                 className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
                   readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-                } ${
-                  selectedSkill.enabled ? 'bg-primary' : 'bg-border'
-                }`}
+                } ${selectedSkill.enabled ? 'bg-primary' : 'bg-border'}`}
                 onClick={() => {
                   if (readOnly) return;
                   handleToggleSkill(selectedSkill.id);
@@ -1101,11 +1176,17 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 />
               </div>
             </div>
-        </Modal>
-      , document.body)}
+          </Modal>,
+          document.body,
+        )}
 
-      {skillPendingDelete && createPortal(
-        <Modal onClose={handleCancelDeleteSkill} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-sm mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-5">
+      {skillPendingDelete &&
+        createPortal(
+          <Modal
+            onClose={handleCancelDeleteSkill}
+            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            className="w-full max-w-sm mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-5"
+          >
             <div className="text-lg font-semibold text-foreground">
               {i18nService.t('deleteSkill')}
             </div>
@@ -1113,9 +1194,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               {i18nService.t('skillDeleteConfirm').replace('{name}', skillPendingDelete.name)}
             </p>
             {skillActionError && (
-              <div className="mt-3 text-xs text-red-500">
-                {skillActionError}
-              </div>
+              <div className="mt-3 text-xs text-red-500">{skillActionError}</div>
             )}
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
@@ -1135,18 +1214,30 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 {i18nService.t('confirmDelete')}
               </button>
             </div>
-        </Modal>
-      , document.body)}
+          </Modal>,
+          document.body,
+        )}
 
-      {isRemoteImportOpen && createPortal(
-        <Modal onClose={() => { setIsRemoteImportOpen(false); setSkillActionError(''); }} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6">
+      {isRemoteImportOpen &&
+        createPortal(
+          <Modal
+            onClose={() => {
+              setIsRemoteImportOpen(false);
+              setSkillActionError('');
+            }}
+            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6"
+          >
             <div className="flex items-start justify-between">
               <div className="text-lg font-semibold text-foreground">
                 {i18nService.t('remoteImportTitle')}
               </div>
               <button
                 type="button"
-                onClick={() => { setIsRemoteImportOpen(false); setSkillActionError(''); }}
+                onClick={() => {
+                  setIsRemoteImportOpen(false);
+                  setSkillActionError('');
+                }}
                 className="p-1.5 rounded-lg text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
               >
                 <XMarkIcon className="h-5 w-5" />
@@ -1154,15 +1245,17 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             </div>
 
             <div className="mt-4 flex items-center gap-1 border-b border-border">
-              {importSourceTypes.map((type) => (
+              {importSourceTypes.map(type => (
                 <button
                   key={type}
                   type="button"
-                  onClick={() => { setImportTab(type); setSkillDownloadSource(''); setSkillActionError(''); }}
+                  onClick={() => {
+                    setImportTab(type);
+                    setSkillDownloadSource('');
+                    setSkillActionError('');
+                  }}
                   className={`px-3 py-1.5 text-sm font-medium transition-colors relative ${
-                    importTab === type
-                      ? 'text-foreground'
-                      : 'text-secondary hover:text-foreground'
+                    importTab === type ? 'text-foreground' : 'text-secondary hover:text-foreground'
                   }`}
                 >
                   {i18nService.t(importTabConfig[type].tabLabelKey)}
@@ -1184,29 +1277,28 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 ref={importInputRef}
                 type="text"
                 value={skillDownloadSource}
-                onChange={(e) => setSkillDownloadSource(e.target.value)}
+                onChange={e => setSkillDownloadSource(e.target.value)}
                 placeholder={i18nService.t(importTabConfig[importTab].placeholderKey)}
                 className="w-full px-3 py-2.5 text-sm rounded-xl bg-background text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
               />
               <p className="text-xs text-secondary">
                 {i18nService.t(importTabConfig[importTab].examplesKey)}
               </p>
-              {skillActionError && (
-                <div className="text-xs text-red-500">
-                  {skillActionError}
-                </div>
-              )}
+              {skillActionError && <div className="text-xs text-red-500">{skillActionError}</div>}
               <button
                 type="button"
                 onClick={handleImportFromDialog}
                 disabled={isDownloadingSkill || !skillDownloadSource.trim()}
                 className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
               >
-                {isDownloadingSkill ? i18nService.t('importingSkill') : i18nService.t('importSkill')}
+                {isDownloadingSkill
+                  ? i18nService.t('importingSkill')
+                  : i18nService.t('importSkill')}
               </button>
             </div>
-        </Modal>
-      , document.body)}
+          </Modal>,
+          document.body,
+        )}
 
       {securityReport && (
         <SkillSecurityReport
@@ -1221,7 +1313,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
           <div className="w-full max-w-sm mx-4 rounded-2xl dark:bg-claude-darkSurface bg-claude-surface border dark:border-claude-darkBorder border-claude-border shadow-2xl p-6">
             <div className="text-center">
               <div className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-4">
-                {i18nService.t('skillUpgrading')
+                {i18nService
+                  .t('skillUpgrading')
                   .replace('{current}', String(upgradeState.current))
                   .replace('{total}', String(upgradeState.total))}
               </div>
@@ -1234,7 +1327,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               </div>
 
               <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
-                {i18nService.t('skillUpgradingCurrent')
+                {i18nService
+                  .t('skillUpgradingCurrent')
                   .replace('{name}', upgradeState.currentSkillName)
                   .replace('{version}', upgradeState.currentSkillVersion)}
               </div>
@@ -1242,7 +1336,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               {upgradeState.total > 1 && (
                 <button
                   type="button"
-                  onClick={() => { upgradeCancelledRef.current = true; }}
+                  onClick={() => {
+                    upgradeCancelledRef.current = true;
+                  }}
                   className="px-4 py-1.5 text-xs rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
                 >
                   {i18nService.t('skillUpgradeCancel')}
