@@ -70,7 +70,7 @@ function setupDb(): void {
     );
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -224,18 +224,17 @@ test('no console.warn when all metadata is valid or null', () => {
 
 test('backfillEmptyAgentModels assigns the current default model to empty agents only', () => {
   const now = Date.now();
-  db.run(
+  db.prepare(
     `INSERT INTO agents (id, name, model, icon, skill_ids, enabled, is_default, source, preset_id, description, system_prompt, identity, created_at, updated_at)
      VALUES
      ('main', 'main', '', '', '[]', 1, 1, 'custom', '', '', '', '', ?, ?),
      ('writer', 'Writer', '', '', '[]', 1, 0, 'custom', '', '', '', '', ?, ?),
      ('stockexpert', 'Stock Expert', 'qwen3.5-plus', '', '[]', 1, 0, 'preset', 'stockexpert', '', '', '', ?, ?)`,
-    [now, now, now, now, now, now],
-  );
+  ).run(now, now, now, now, now, now);
 
   expect(store.backfillEmptyAgentModels('deepseek-v3.2')).toBe(2);
 
-  const rows = db.exec(`SELECT id, model FROM agents ORDER BY id`)[0].values;
+  const rows = (db.prepare(`SELECT id, model FROM agents ORDER BY id`).all() as Array<{ id: string; model: string }>).map((r) => [r.id, r.model]);
   expect(rows).toEqual([
     ['main', 'deepseek-v3.2'],
     ['stockexpert', 'qwen3.5-plus'],

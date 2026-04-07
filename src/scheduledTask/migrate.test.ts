@@ -41,7 +41,7 @@ function cleanupDir(dir: string) {
 }
 
 /**
- * Build a fake sql.js-style Database whose exec() returns canned results.
+ * Build a fake better-sqlite3-style Database whose prepare() returns canned results.
  *
  * `tables` is a Set of table names that "exist".
  * `taskRows` / `runRows` / `taskNameRows` provide data for specific queries.
@@ -53,42 +53,33 @@ function fakeDb({
   taskNameRows = [] as { id: string; name: string }[],
 } = {}) {
   return {
-    exec(sql: string) {
-      // Table existence check
-      if (sql.includes('sqlite_master') && sql.includes("'scheduled_tasks'")) {
-        return tables.has('scheduled_tasks')
-          ? [{ columns: ['name'], values: [['scheduled_tasks']] }]
-          : [];
-      }
-      if (sql.includes('sqlite_master') && sql.includes("'scheduled_task_runs'")) {
-        return tables.has('scheduled_task_runs')
-          ? [{ columns: ['name'], values: [['scheduled_task_runs']] }]
-          : [];
-      }
-      // Task name rows (for run history migration) — match before the broader FROM scheduled_tasks
-      if (sql.includes('SELECT id, name FROM scheduled_tasks')) {
-        if (taskNameRows.length === 0) return [];
-        return [{ columns: ['id', 'name'], values: taskNameRows.map((r) => [r.id, r.name]) }];
-      }
-      // Legacy task rows
-      if (sql.includes('FROM scheduled_tasks') && !sql.includes('task_runs') && !sql.includes('sqlite_master')) {
-        if (taskRows.length === 0) return [];
-        const cols = ['id', 'name', 'description', 'enabled', 'schedule_json', 'prompt', 'notify_platforms_json'];
-        return [{
-          columns: cols,
-          values: taskRows.map((r) => cols.map((c) => r[c] ?? null)),
-        }];
-      }
-      // Legacy run rows
-      if (sql.includes('FROM scheduled_task_runs')) {
-        if (runRows.length === 0) return [];
-        const cols = ['id', 'task_id', 'session_id', 'status', 'started_at', 'finished_at', 'duration_ms', 'error'];
-        return [{
-          columns: cols,
-          values: runRows.map((r) => cols.map((c) => r[c] ?? null)),
-        }];
-      }
-      return [];
+    prepare(sql: string) {
+      return {
+        get(): unknown {
+          if (sql.includes('sqlite_master') && sql.includes("'scheduled_tasks'")) {
+            return tables.has('scheduled_tasks') ? { name: 'scheduled_tasks' } : undefined;
+          }
+          if (sql.includes('sqlite_master') && sql.includes("'scheduled_task_runs'")) {
+            return tables.has('scheduled_task_runs') ? { name: 'scheduled_task_runs' } : undefined;
+          }
+          return undefined;
+        },
+        all(): unknown[] {
+          // Task name rows (for run history migration) — match before the broader FROM scheduled_tasks
+          if (sql.includes('SELECT id, name FROM scheduled_tasks')) {
+            return taskNameRows;
+          }
+          // Legacy task rows
+          if (sql.includes('FROM scheduled_tasks') && !sql.includes('task_runs') && !sql.includes('sqlite_master')) {
+            return taskRows;
+          }
+          // Legacy run rows
+          if (sql.includes('FROM scheduled_task_runs')) {
+            return runRows;
+          }
+          return [];
+        },
+      };
     },
   };
 }
