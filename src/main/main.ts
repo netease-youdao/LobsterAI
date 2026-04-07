@@ -85,6 +85,7 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { isAllowedRendererKvStoreKey, RendererKvStoreKey } from '../shared/rendererKvStoreKeys';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -1728,12 +1729,20 @@ if (!gotTheLock) {
 
   // IPC 处理程序
   ipcMain.handle('store:get', (_event, key) => {
+    if (!isAllowedRendererKvStoreKey(key)) {
+      console.warn('[KvStore] Rejected store:get from the renderer because the key is not on the allowlist');
+      throw new Error('KvStore: key is not exposed to the renderer process');
+    }
     return getStore().get(key);
   });
 
   ipcMain.handle('store:set', async (_event, key, value) => {
+    if (!isAllowedRendererKvStoreKey(key)) {
+      console.warn('[KvStore] Rejected store:set from the renderer because the key is not on the allowlist');
+      throw new Error('KvStore: key is not exposed to the renderer process');
+    }
     getStore().set(key, value);
-    if (key === 'app_config') {
+    if (key === RendererKvStoreKey.AppConfig) {
       refreshEndpointsTestMode(getStore());
       const syncResult = await syncOpenClawConfig({
         reason: 'app-config-change',
@@ -1746,6 +1755,10 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('store:remove', (_event, key) => {
+    if (!isAllowedRendererKvStoreKey(key)) {
+      console.warn('[KvStore] Rejected store:remove from the renderer because the key is not on the allowlist');
+      throw new Error('KvStore: key is not exposed to the renderer process');
+    }
     getStore().delete(key);
   });
 
