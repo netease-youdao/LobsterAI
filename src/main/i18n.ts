@@ -69,6 +69,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
     imErrorPrefix: '处理消息时出错',
 
+    // Session completion notifications (used by renderer i18n, kept here for reference)
+
     // Exec approval continuation
     execApprovalApproved: '用户已确认执行该命令，请检查执行结果并继续。',
     execApprovalDenied: '用户已拒绝执行该命令。',
@@ -243,6 +245,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
     imErrorPrefix: 'Error processing message',
+
+    // Session completion notifications (used by renderer i18n, kept here for reference)
 
     // Exec approval continuation
     execApprovalApproved: 'The user approved the command execution. Please check the result and continue.',
