@@ -1,4 +1,5 @@
 import { ProviderRegistry } from '@shared/providers';
+import { RendererKvStoreKey } from '@shared/rendererKvStoreKeys';
 
 // 配置类型定义
 export interface AppConfig {
@@ -323,12 +324,13 @@ export const defaultConfig: AppConfig = {
   }
 };
 
-// 配置存储键
+// 配置存储键（与主进程 store IPC 白名单一致，见 RendererKvStoreKey）
 export const CONFIG_KEYS = {
-  APP_CONFIG: 'app_config',
+  APP_CONFIG: RendererKvStoreKey.AppConfig,
   AUTH: 'auth_state',
   CONVERSATIONS: 'conversations',
-  PROVIDERS_EXPORT_KEY: 'providers_export_key',
+  PROVIDERS_EXPORT_KEY: RendererKvStoreKey.ProvidersExportKey,
+  PRIVACY_AGREED: RendererKvStoreKey.PrivacyAgreed,
   SKILLS: 'skills',
 };
 

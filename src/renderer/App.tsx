@@ -20,7 +20,7 @@ import { coworkService } from './services/cowork';
 import { authService } from './services/auth';
 import { scheduledTaskService } from './services/scheduledTask';
 import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
-import { defaultConfig, getProviderDisplayName } from './config';
+import { CONFIG_KEYS, defaultConfig, getProviderDisplayName } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
 import { setDraftPrompt } from './store/slices/coworkSlice';
@@ -161,7 +161,7 @@ const App: React.FC = () => {
         }
 
         // 检查隐私协议是否已同意（必须在 setIsInitialized 之前）
-        const agreed = await window.electron.store.get('privacy_agreed');
+        const agreed = await window.electron.store.get(CONFIG_KEYS.PRIVACY_AGREED);
         setPrivacyAgreed(agreed === true);
 
         setIsInitialized(true);
@@ -423,7 +423,7 @@ const App: React.FC = () => {
   }, []);
 
   const handlePrivacyAccept = useCallback(async () => {
-    await window.electron.store.set('privacy_agreed', true);
+    await window.electron.store.set(CONFIG_KEYS.PRIVACY_AGREED, true);
     setPrivacyAgreed(true);
   }, []);
 
