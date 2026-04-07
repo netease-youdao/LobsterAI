@@ -713,12 +713,17 @@ export class CoworkStore {
     this.db.prepare('UPDATE cowork_sessions SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id);
   }
 
+  setSessionColor(id: string, color: string | null): void {
+    this.db.prepare('UPDATE cowork_sessions SET color = ? WHERE id = ?').run(color, id);
+  }
+
   listSessions(agentId?: string): CoworkSessionSummary[] {
     interface SessionSummaryRow {
       id: string;
       title: string;
       status: string;
       pinned: number | null;
+      color: string | null;
       agent_id: string | null;
       created_at: number;
       updated_at: number;
@@ -728,7 +733,7 @@ export class CoworkStore {
     if (agentId) {
       rows = this.getAll<SessionSummaryRow>(
         `
-        SELECT id, title, status, pinned, agent_id, created_at, updated_at
+        SELECT id, title, status, pinned, color, agent_id, created_at, updated_at
         FROM cowork_sessions
         WHERE agent_id = ?
         ORDER BY pinned DESC, updated_at DESC
@@ -737,7 +742,7 @@ export class CoworkStore {
       );
     } else {
       rows = this.getAll<SessionSummaryRow>(`
-        SELECT id, title, status, pinned, agent_id, created_at, updated_at
+        SELECT id, title, status, pinned, color, agent_id, created_at, updated_at
         FROM cowork_sessions
         ORDER BY pinned DESC, updated_at DESC
       `);
@@ -748,6 +753,7 @@ export class CoworkStore {
       title: row.title,
       status: row.status as CoworkSessionStatus,
       pinned: Boolean(row.pinned),
+      color: row.color ?? null,
       agentId: row.agent_id || 'main',
       createdAt: row.created_at,
       updatedAt: row.updated_at,

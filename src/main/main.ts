@@ -2713,6 +2713,18 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:setColor', async (_event, options: { sessionId: string; color: string | null }) => {
+    try {
+      getCoworkStore().setSessionColor(options.sessionId, options.color ?? null);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to set session color',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:get', async (_event, sessionId: string) => {
     try {
       const session = getCoworkStore().getSession(sessionId);
