@@ -8,7 +8,13 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { CoworkStore, CoworkMessage, CoworkExecutionMode } from '../coworkStore';
 import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
-import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
+import { shouldPruneSession, pruneMessages, getModelContextWindow } from './sessionPruning';
+import {
+  getElectronNodeRuntimePath,
+  getEnhancedEnv,
+  getEnhancedEnvWithTmpdir,
+  getSkillsRoot,
+} from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { isDeleteCommand, isDangerousCommand } from './commandSafety';
@@ -18,11 +24,19 @@ import { SCHEDULED_TASK_SWITCH_MESSAGE } from '../../scheduledTask/enginePrompt'
 import { z } from 'zod';
 
 const ATTACHMENT_LINE_RE = /^\s*(?:[-*]\s*)?(输入文件|input\s*file)\s*[:：]\s*(.+?)\s*$/i;
-const INFERRED_FILE_REFERENCE_RE = /([^\s"'`，。！？：:；;（）()\[\]{}<>《》【】]+?\.[A-Za-z][A-Za-z0-9]{0,7})/g;
-const INFERRED_FILE_SEARCH_IGNORE = new Set(['.git', 'node_modules', '.cowork-temp', '.idea', '.vscode']);
+const INFERRED_FILE_REFERENCE_RE =
+  /([^\s"'`，。！？：:；;（）()\[\]{}<>《》【】]+?\.[A-Za-z][A-Za-z0-9]{0,7})/g;
+const INFERRED_FILE_SEARCH_IGNORE = new Set([
+  '.git',
+  'node_modules',
+  '.cowork-temp',
+  '.idea',
+  '.vscode',
+]);
 const LOCAL_HISTORY_MAX_MESSAGES = 24;
 const LOCAL_HISTORY_MAX_TOTAL_CHARS = 32000;
 const LOCAL_HISTORY_MAX_MESSAGE_CHARS = 4000;
+const SESSION_PRUNING_THRESHOLD = 0.75; // Trigger pruning at 75% of context window
 const STREAM_UPDATE_THROTTLE_MS = 90;
 const STREAMING_TEXT_MAX_CHARS = 120_000;
 const STREAMING_THINKING_MAX_CHARS = 60_000;
@@ -57,67 +71,71 @@ const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
 const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
-const PYTHON_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:python(?:3)?|py(?:\.exe)?|pip(?:3)?)(?:\s+-3)?(?:\s|$)|\.py(?:\s|$)/i;
-const PYTHON_PIP_BASH_COMMAND_RE = /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|py(?:\.exe)?\s+-m\s+pip)(?:\s|$)/i;
-const MEMORY_REQUEST_TAIL_SPLIT_RE = /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
-const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
+const PYTHON_BASH_COMMAND_RE =
+  /(?:^|[^\w.-])(?:python(?:3)?|py(?:\.exe)?|pip(?:3)?)(?:\s+-3)?(?:\s|$)|\.py(?:\s|$)/i;
+const PYTHON_PIP_BASH_COMMAND_RE =
+  /(?:^|[^\w.-])(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|py(?:\.exe)?\s+-m\s+pip)(?:\s|$)/i;
+const MEMORY_REQUEST_TAIL_SPLIT_RE =
+  /[,，。]\s*(?:请|麻烦)?你(?:帮我|帮忙|给我|为我|看下|看一下|查下|查一下)|[,，。]\s*帮我|[,，。]\s*请帮我|[,，。]\s*(?:能|可以)不能?\s*帮我|[,，。]\s*你看|[,，。]\s*请你/i;
+const MEMORY_PROCEDURAL_TEXT_RE =
+  /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
 const WINDOWS_HIDE_INIT_SCRIPT_NAME = 'windows_hide_init.cjs';
 const WINDOWS_HIDE_INIT_SCRIPT_CONTENT = [
-  '\'use strict\';',
+  "'use strict';",
   '',
-  'if (process.platform === \'win32\') {',
-  '  const childProcess = require(\'child_process\');',
+  "if (process.platform === 'win32') {",
+  "  const childProcess = require('child_process');",
   '',
   '  const addWindowsHide = (options) => {',
   '    if (options == null) return { windowsHide: true };',
-  '    if (typeof options !== \'object\') return options;',
-  '    if (Object.prototype.hasOwnProperty.call(options, \'windowsHide\')) return options;',
+  "    if (typeof options !== 'object') return options;",
+  "    if (Object.prototype.hasOwnProperty.call(options, 'windowsHide')) return options;",
   '    return { ...options, windowsHide: true };',
   '  };',
   '',
   '  const patch = (name, buildWrapper) => {',
   '    const original = childProcess[name];',
-  '    if (typeof original !== \'function\') return;',
+  "    if (typeof original !== 'function') return;",
   '    childProcess[name] = buildWrapper(original);',
   '  };',
   '',
-  '  patch(\'spawn\', (original) => function patchedSpawn(command, args, options) {',
+  "  patch('spawn', (original) => function patchedSpawn(command, args, options) {",
   '    if (Array.isArray(args) || args === undefined) {',
   '      return original.call(this, command, args, addWindowsHide(options));',
   '    }',
   '    return original.call(this, command, addWindowsHide(args));',
   '  });',
   '',
-  '  patch(\'spawnSync\', (original) => function patchedSpawnSync(command, args, options) {',
+  "  patch('spawnSync', (original) => function patchedSpawnSync(command, args, options) {",
   '    if (Array.isArray(args) || args === undefined) {',
   '      return original.call(this, command, args, addWindowsHide(options));',
   '    }',
   '    return original.call(this, command, addWindowsHide(args));',
   '  });',
   '',
-  '  patch(\'fork\', (original) => function patchedFork(modulePath, args, options) {',
+  "  patch('fork', (original) => function patchedFork(modulePath, args, options) {",
   '    if (Array.isArray(args) || args === undefined) {',
   '      return original.call(this, modulePath, args, addWindowsHide(options));',
   '    }',
   '    return original.call(this, modulePath, addWindowsHide(args));',
   '  });',
   '',
-  '  patch(\'exec\', (original) => function patchedExec(command, options, callback) {',
-  '    if (typeof options === \'function\' || options === undefined) {',
+  "  patch('exec', (original) => function patchedExec(command, options, callback) {",
+  "    if (typeof options === 'function' || options === undefined) {",
   '      return original.call(this, command, addWindowsHide(undefined), options);',
   '    }',
   '    return original.call(this, command, addWindowsHide(options), callback);',
   '  });',
   '',
-  '  patch(\'execFile\', (original) => function patchedExecFile(file, args, options, callback) {',
+  "  patch('execFile', (original) => function patchedExecFile(file, args, options, callback) {",
   '    if (Array.isArray(args) || args === undefined) {',
-  '      if (typeof options === \'function\' || options === undefined) {',
+  "      if (typeof options === 'function' || options === undefined) {",
   '        return original.call(this, file, args, addWindowsHide(undefined), options);',
   '      }',
   '      return original.call(this, file, args, addWindowsHide(options), callback);',
   '    }',
-  '    if (typeof args === \'function\' || args === undefined) {',
+  "    if (typeof args === 'function' || args === undefined) {",
   '      return original.call(this, file, addWindowsHide(undefined), args);',
   '    }',
   '    return original.call(this, file, addWindowsHide(args), options);',
@@ -136,9 +154,7 @@ function ensureWindowsChildProcessHideInitScript(): string | null {
     fs.mkdirSync(initDir, { recursive: true });
     const initScriptPath = path.join(initDir, WINDOWS_HIDE_INIT_SCRIPT_NAME);
 
-    const existing = fs.existsSync(initScriptPath)
-      ? fs.readFileSync(initScriptPath, 'utf8')
-      : '';
+    const existing = fs.existsSync(initScriptPath) ? fs.readFileSync(initScriptPath, 'utf8') : '';
     if (existing !== WINDOWS_HIDE_INIT_SCRIPT_CONTENT) {
       fs.writeFileSync(initScriptPath, WINDOWS_HIDE_INIT_SCRIPT_CONTENT, 'utf8');
     }
@@ -147,7 +163,7 @@ function ensureWindowsChildProcessHideInitScript(): string | null {
     coworkLog(
       'WARN',
       'runClaudeCodeLocal',
-      `Failed to prepare Windows child-process hide init script: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to prepare Windows child-process hide init script: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }
@@ -251,20 +267,24 @@ export class CoworkRunner extends EventEmitter {
     this.store = store;
   }
 
-  setMcpServerProvider(provider: () => Array<{
-    name: string;
-    transportType: string;
-    command?: string;
-    args?: string[];
-    env?: Record<string, string>;
-    url?: string;
-    headers?: Record<string, string>;
-  }>): void {
+  setMcpServerProvider(
+    provider: () => Array<{
+      name: string;
+      transportType: string;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
+    }>,
+  ): void {
     this.mcpServerProvider = provider;
   }
 
   private isSessionStopRequested(sessionId: string, activeSession?: ActiveSession): boolean {
-    return this.stoppedSessions.has(sessionId) || Boolean(activeSession?.abortController.signal.aborted);
+    return (
+      this.stoppedSessions.has(sessionId) || Boolean(activeSession?.abortController.signal.aborted)
+    );
   }
 
   private applyTurnMemoryUpdatesForSession(sessionId: string): void {
@@ -278,8 +298,10 @@ export class CoworkRunner extends EventEmitter {
       return;
     }
 
-    const lastUser = [...session.messages].reverse().find((message) => message.type === 'user' && message.content?.trim());
-    const lastAssistant = [...session.messages].reverse().find((message) => {
+    const lastUser = [...session.messages]
+      .reverse()
+      .find(message => message.type === 'user' && message.content?.trim());
+    const lastAssistant = [...session.messages].reverse().find(message => {
       if (message.type !== 'assistant') return false;
       if (!message.content?.trim()) return false;
       if (message.metadata?.isThinking) return false;
@@ -291,7 +313,10 @@ export class CoworkRunner extends EventEmitter {
     }
 
     const key = `${sessionId}:${lastUser.id}:${lastAssistant.id}`;
-    if (this.lastTurnMemoryKeyBySession.get(sessionId) === key || this.turnMemoryQueueKeys.has(key)) {
+    if (
+      this.lastTurnMemoryKeyBySession.get(sessionId) === key ||
+      this.turnMemoryQueueKeys.has(key)
+    ) {
       return;
     }
     this.turnMemoryQueueKeys.add(key);
@@ -330,18 +355,28 @@ export class CoworkRunner extends EventEmitter {
             userMessageId: job.userMessageId,
             assistantMessageId: job.assistantMessageId,
           });
-          coworkLog('INFO', 'memory:turnUpdateAsync', 'Applied turn memory updates asynchronously', {
-            sessionId: job.sessionId,
-            queueSize: this.turnMemoryQueue.length,
-            latencyMs: Math.max(0, Date.now() - job.enqueuedAt),
-            ...result,
-          });
+          coworkLog(
+            'INFO',
+            'memory:turnUpdateAsync',
+            'Applied turn memory updates asynchronously',
+            {
+              sessionId: job.sessionId,
+              queueSize: this.turnMemoryQueue.length,
+              latencyMs: Math.max(0, Date.now() - job.enqueuedAt),
+              ...result,
+            },
+          );
         } catch (error) {
-          coworkLog('WARN', 'memory:turnUpdateAsync', 'Failed to apply turn memory updates asynchronously', {
-            sessionId: job.sessionId,
-            queueSize: this.turnMemoryQueue.length,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          coworkLog(
+            'WARN',
+            'memory:turnUpdateAsync',
+            'Failed to apply turn memory updates asynchronously',
+            {
+              sessionId: job.sessionId,
+              queueSize: this.turnMemoryQueue.length,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
         } finally {
           this.lastTurnMemoryKeyBySession.set(job.sessionId, job.key);
           this.turnMemoryQueueKeys.delete(job.key);
@@ -386,9 +421,10 @@ export class CoworkRunner extends EventEmitter {
     let totalChars = 0;
     const lines: string[] = [];
     for (const memory of memories) {
-      const text = memory.text.length > MAX_ITEM_CHARS
-        ? memory.text.slice(0, MAX_ITEM_CHARS) + '...'
-        : memory.text;
+      const text =
+        memory.text.length > MAX_ITEM_CHARS
+          ? memory.text.slice(0, MAX_ITEM_CHARS) + '...'
+          : memory.text;
       const line = `- ${this.escapeXml(text)}`;
       if (totalChars + line.length > MAX_TOTAL_CHARS) break;
       lines.push(line);
@@ -397,27 +433,31 @@ export class CoworkRunner extends EventEmitter {
     return `<userMemories>\n${lines.join('\n')}\n</userMemories>`;
   }
 
-  private formatChatSearchOutput(records: Array<{
-    url: string;
-    updatedAt: number;
-    title: string;
-    human: string;
-    assistant: string;
-  }>): string {
+  private formatChatSearchOutput(
+    records: Array<{
+      url: string;
+      updatedAt: number;
+      title: string;
+      human: string;
+      assistant: string;
+    }>,
+  ): string {
     if (records.length === 0) {
       return 'No matching chats found.';
     }
 
-    return records.map((record) => {
-      const updatedAtIso = new Date(record.updatedAt || Date.now()).toISOString();
-      return [
-        `<chat url="${this.escapeXml(record.url)}" updated_at="${updatedAtIso}">`,
-        `Title: ${record.title || 'Untitled'}`,
-        `Human: ${(record.human || '').trim() || '(empty)'}`,
-        `Assistant: ${(record.assistant || '').trim() || '(empty)'}`,
-        '</chat>',
-      ].join('\n');
-    }).join('\n\n');
+    return records
+      .map(record => {
+        const updatedAtIso = new Date(record.updatedAt || Date.now()).toISOString();
+        return [
+          `<chat url="${this.escapeXml(record.url)}" updated_at="${updatedAtIso}">`,
+          `Title: ${record.title || 'Untitled'}`,
+          `Human: ${(record.human || '').trim() || '(empty)'}`,
+          `Assistant: ${(record.assistant || '').trim() || '(empty)'}`,
+          '</chat>',
+        ].join('\n');
+      })
+      .join('\n\n');
   }
 
   private formatMemoryUserEditsResult(input: {
@@ -449,9 +489,8 @@ export class CoworkRunner extends EventEmitter {
       return '';
     }
     const tailMatch = normalized.match(MEMORY_REQUEST_TAIL_SPLIT_RE);
-    const clipped = tailMatch?.index && tailMatch.index > 0
-      ? normalized.slice(0, tailMatch.index)
-      : normalized;
+    const clipped =
+      tailMatch?.index && tailMatch.index > 0 ? normalized.slice(0, tailMatch.index) : normalized;
     return clipped.replace(/[，,；;:\-]+$/, '').trim();
   }
 
@@ -461,10 +500,18 @@ export class CoworkRunner extends EventEmitter {
       return { ok: false, text: '', reason: 'text is required' };
     }
     if (isQuestionLikeMemoryText(text)) {
-      return { ok: false, text: '', reason: 'memory text looks like a question, not a durable fact' };
+      return {
+        ok: false,
+        text: '',
+        reason: 'memory text looks like a question, not a durable fact',
+      };
     }
     if (MEMORY_ASSISTANT_STYLE_TEXT_RE.test(text)) {
-      return { ok: false, text: '', reason: 'memory text looks like assistant workflow instruction' };
+      return {
+        ok: false,
+        text: '',
+        reason: 'memory text looks like assistant workflow instruction',
+      };
     }
     if (MEMORY_PROCEDURAL_TEXT_RE.test(text)) {
       return { ok: false, text: '', reason: 'memory text looks like command/procedural content' };
@@ -520,17 +567,21 @@ export class CoworkRunner extends EventEmitter {
         limit: args.limit ?? 20,
         offset: 0,
       });
-      const payload = entries.length === 0
-        ? 'memories=(empty)'
-        : entries
-          .map((entry) => `${entry.id} | ${entry.status} | explicit=${entry.isExplicit ? 1 : 0} | ${entry.text}`)
-          .join('\n');
+      const payload =
+        entries.length === 0
+          ? 'memories=(empty)'
+          : entries
+              .map(
+                entry =>
+                  `${entry.id} | ${entry.status} | explicit=${entry.isExplicit ? 1 : 0} | ${entry.text}`,
+              )
+              .join('\n');
       return {
         text: this.formatMemoryUserEditsResult({
           action: 'list',
           successCount: entries.length,
           failedCount: 0,
-          changedIds: entries.map((entry) => entry.id),
+          changedIds: entries.map(entry => entry.id),
           payload,
         }),
         isError: false,
@@ -831,7 +882,7 @@ export class CoworkRunner extends EventEmitter {
       maxStringChars?: number;
       maxKeys?: number;
       maxItems?: number;
-    } = {}
+    } = {},
   ): unknown {
     const maxDepth = options.maxDepth ?? TOOL_INPUT_PREVIEW_MAX_DEPTH;
     const maxStringChars = options.maxStringChars ?? TOOL_INPUT_PREVIEW_MAX_CHARS;
@@ -841,10 +892,10 @@ export class CoworkRunner extends EventEmitter {
 
     const visit = (current: unknown, depth: number): unknown => {
       if (
-        current === null
-        || typeof current === 'number'
-        || typeof current === 'boolean'
-        || typeof current === 'undefined'
+        current === null ||
+        typeof current === 'number' ||
+        typeof current === 'boolean' ||
+        typeof current === 'undefined'
       ) {
         return current;
       }
@@ -861,7 +912,7 @@ export class CoworkRunner extends EventEmitter {
         return '[truncated-depth]';
       }
       if (Array.isArray(current)) {
-        const sanitized = current.slice(0, maxItems).map((item) => visit(item, depth + 1));
+        const sanitized = current.slice(0, maxItems).map(item => visit(item, depth + 1));
         if (current.length > maxItems) {
           sanitized.push(`[truncated-items:${current.length - maxItems}]`);
         }
@@ -893,7 +944,7 @@ export class CoworkRunner extends EventEmitter {
     current: string,
     delta: string,
     maxChars: number,
-    isTruncated: boolean
+    isTruncated: boolean,
   ): { content: string; truncated: boolean; changed: boolean } {
     if (!delta || isTruncated) {
       return { content: current, truncated: isTruncated, changed: false };
@@ -915,7 +966,7 @@ export class CoworkRunner extends EventEmitter {
 
   private shouldEmitStreamingUpdate(
     lastEmitAt: number,
-    force = false
+    force = false,
   ): { emit: boolean; now: number } {
     const now = Date.now();
     if (force || now - lastEmitAt >= STREAM_UPDATE_THROTTLE_MS) {
@@ -929,9 +980,10 @@ export class CoworkRunner extends EventEmitter {
     if (!raw) {
       return null;
     }
-    const content = raw.length <= maxChars
-      ? raw
-      : `${raw.slice(0, maxChars)}\n...[truncated ${raw.length - maxChars} chars]`;
+    const content =
+      raw.length <= maxChars
+        ? raw
+        : `${raw.slice(0, maxChars)}\n...[truncated ${raw.length - maxChars} chars]`;
 
     let role: string = message.type;
     if (message.type === 'assistant' && message.metadata?.isThinking) {
@@ -944,7 +996,7 @@ export class CoworkRunner extends EventEmitter {
   private buildHistoryBlocks(
     messages: CoworkMessage[],
     currentPrompt: string,
-    limits: { maxMessages: number; maxTotalChars: number; maxMessageChars: number }
+    limits: { maxMessages: number; maxTotalChars: number; maxMessageChars: number },
   ): string[] {
     if (messages.length === 0) {
       return [];
@@ -954,9 +1006,9 @@ export class CoworkRunner extends EventEmitter {
     const trimmedCurrentPrompt = currentPrompt.trim();
     const last = history[history.length - 1];
     if (
-      trimmedCurrentPrompt
-      && last?.type === 'user'
-      && last.content.trim() === trimmedCurrentPrompt
+      trimmedCurrentPrompt &&
+      last?.type === 'user' &&
+      last.content.trim() === trimmedCurrentPrompt
     ) {
       history.pop();
     }
@@ -976,9 +1028,10 @@ export class CoworkRunner extends EventEmitter {
       if (nextTotal > limits.maxTotalChars) {
         if (selectedFromNewest.length === 0) {
           const raw = block.replace(/\u0000/g, '').trim();
-          const truncated = raw.length <= limits.maxTotalChars
-            ? raw
-            : `${raw.slice(0, limits.maxTotalChars)}\n...[truncated ${raw.length - limits.maxTotalChars} chars]`;
+          const truncated =
+            raw.length <= limits.maxTotalChars
+              ? raw
+              : `${raw.slice(0, limits.maxTotalChars)}\n...[truncated ${raw.length - limits.maxTotalChars} chars]`;
           if (truncated) {
             selectedFromNewest.push(truncated);
           }
@@ -996,14 +1049,52 @@ export class CoworkRunner extends EventEmitter {
   /**
    * Inject conversation history into a local-mode prompt when the session is
    * restarted after a stop (subprocess was killed, no SDK session to resume).
+   * Applies context-window-aware pruning to prevent token overflow.
    */
-  private injectLocalHistoryPrompt(sessionId: string, currentPrompt: string, effectivePrompt: string): string {
+  private injectLocalHistoryPrompt(
+    sessionId: string,
+    currentPrompt: string,
+    effectivePrompt: string,
+  ): string {
     const session = this.store.getSession(sessionId);
     if (!session) {
       return effectivePrompt;
     }
 
-    const historyBlocks = this.buildHistoryBlocks(session.messages, currentPrompt, {
+    // Check if we need aggressive pruning for context window management.
+    // Reserve 40% of context window for system prompt + model response.
+    const apiConfig = getCurrentApiConfig('local');
+    const modelId = apiConfig?.model || 'default';
+    const contextWindow = getModelContextWindow(modelId);
+    const historyTokenBudget = Math.floor(contextWindow * 0.6);
+
+    const pruneResult = pruneMessages(
+      session.messages.map(m => ({ content: m.content, type: m.type, id: m.id })),
+      historyTokenBudget,
+    );
+
+    if (pruneResult.wasPruned) {
+      console.log(
+        `[SessionPruning] session ${sessionId}: pruned ${pruneResult.prunedCount} of ` +
+          `${session.messages.length} messages to fit within ${historyTokenBudget} token budget`,
+      );
+    }
+
+    // Build history blocks from kept messages (either all or pruned subset)
+    const messagesToUse = pruneResult.wasPruned
+      ? pruneResult.keptMessages.map(
+          m =>
+            ({
+              id: m.id || '',
+              type: m.type || 'user',
+              content: m.content,
+              metadata: {},
+              createdAt: 0,
+            }) as CoworkMessage,
+        )
+      : session.messages;
+
+    const historyBlocks = this.buildHistoryBlocks(messagesToUse, currentPrompt, {
       maxMessages: LOCAL_HISTORY_MAX_MESSAGES,
       maxTotalChars: LOCAL_HISTORY_MAX_TOTAL_CHARS,
       maxMessageChars: LOCAL_HISTORY_MAX_MESSAGE_CHARS,
@@ -1012,8 +1103,12 @@ export class CoworkRunner extends EventEmitter {
       return effectivePrompt;
     }
 
+    const preamble = pruneResult.wasPruned
+      ? `The session was interrupted and restarted. ${pruneResult.prunedSummaryPrefix} Continue using the recent conversation history below.`
+      : 'The session was interrupted and restarted. Continue using the conversation history below.';
+
     return [
-      'The session was interrupted and restarted. Continue using the conversation history below.',
+      preamble,
       'Use this context for continuity and do not quote it unless necessary.',
       '<conversation_history>',
       ...historyBlocks,
@@ -1027,9 +1122,7 @@ export class CoworkRunner extends EventEmitter {
 
   private normalizeWorkspaceRoot(workspaceRoot: string, cwd: string): string {
     const fallbackRoot = path.resolve(cwd);
-    const normalizedRoot = workspaceRoot?.trim()
-      ? path.resolve(workspaceRoot)
-      : fallbackRoot;
+    const normalizedRoot = workspaceRoot?.trim() ? path.resolve(workspaceRoot) : fallbackRoot;
     try {
       return fs.realpathSync(normalizedRoot);
     } catch {
@@ -1048,11 +1141,7 @@ export class CoworkRunner extends EventEmitter {
   }
 
   private resolveHostWorkspaceFallback(workspaceRoot: string): string | null {
-    const candidates = [
-      workspaceRoot,
-      this.store.getConfig().workingDirectory,
-      process.cwd(),
-    ];
+    const candidates = [workspaceRoot, this.store.getConfig().workingDirectory, process.cwd()];
 
     for (const candidate of candidates) {
       const trimmed = typeof candidate === 'string' ? candidate.trim() : '';
@@ -1065,7 +1154,11 @@ export class CoworkRunner extends EventEmitter {
     return null;
   }
 
-  private resolveSessionCwdForExecution(sessionId: string, cwd: string, workspaceRoot: string): string {
+  private resolveSessionCwdForExecution(
+    sessionId: string,
+    cwd: string,
+    workspaceRoot: string,
+  ): string {
     const trimmed = cwd.trim();
     const directResolved = path.resolve(trimmed || workspaceRoot || process.cwd());
     if (this.isDirectory(directResolved)) {
@@ -1151,22 +1244,23 @@ export class CoworkRunner extends EventEmitter {
   private buildWorkspaceSafetyPrompt(
     workspaceRoot: string,
     cwd: string,
-    confirmationMode: 'modal' | 'text'
+    confirmationMode: 'modal' | 'text',
   ): string {
-    const confirmationRules = confirmationMode === 'text'
-      ? [
-          '- Confirmation channel: plain text only (no modal).',
-          '- Before any delete operation, ask for explicit text confirmation first.',
-          '- Wait for explicit confirmation text before proceeding.',
-          '- Do not use AskUserQuestion in this session.',
-        ]
-      : [
-          '- Confirmation channel: AskUserQuestion modal.',
-          '- For every delete operation, you must call AskUserQuestion before executing any tool action.',
-          '- A direct user instruction is not enough for safety confirmation; AskUserQuestion approval is still required.',
-          '- Never use normal assistant text as the confirmation channel in modal mode.',
-          '- Continue only when AskUserQuestion returns explicit allow.',
-        ];
+    const confirmationRules =
+      confirmationMode === 'text'
+        ? [
+            '- Confirmation channel: plain text only (no modal).',
+            '- Before any delete operation, ask for explicit text confirmation first.',
+            '- Wait for explicit confirmation text before proceeding.',
+            '- Do not use AskUserQuestion in this session.',
+          ]
+        : [
+            '- Confirmation channel: AskUserQuestion modal.',
+            '- For every delete operation, you must call AskUserQuestion before executing any tool action.',
+            '- A direct user instruction is not enough for safety confirmation; AskUserQuestion approval is still required.',
+            '- Never use normal assistant text as the confirmation channel in modal mode.',
+            '- Continue only when AskUserQuestion returns explicit allow.',
+          ];
 
     return [
       '## Workspace Safety Policy (Highest Priority)',
@@ -1184,7 +1278,7 @@ export class CoworkRunner extends EventEmitter {
     workspaceRoot: string,
     cwd: string,
     confirmationMode: 'modal' | 'text',
-    memoryEnabled: boolean
+    memoryEnabled: boolean,
   ): string {
     const safetyPrompt = this.buildWorkspaceSafetyPrompt(workspaceRoot, cwd, confirmationMode);
     const windowsEncodingPrompt = this.buildWindowsEncodingPrompt();
@@ -1200,11 +1294,17 @@ export class CoworkRunner extends EventEmitter {
       memoryRecallPrompt.push(
         '- User memories are injected as <userMemories> facts and should be treated as stable personal context.',
         '- Use `memory_user_edits` only when the user explicitly asks to remember, update, list, or delete memory facts.',
-        '- Never write transient conversation facts, news content, or source citations into user memory unless the user explicitly asks.'
+        '- Never write transient conversation facts, news content, or source citations into user memory unless the user explicitly asks.',
       );
     }
     const trimmedBasePrompt = baseSystemPrompt?.trim();
-    return [safetyPrompt, windowsEncodingPrompt, windowsBundledRuntimePrompt, memoryRecallPrompt.join('\n'), trimmedBasePrompt]
+    return [
+      safetyPrompt,
+      windowsEncodingPrompt,
+      windowsBundledRuntimePrompt,
+      memoryRecallPrompt.join('\n'),
+      trimmedBasePrompt,
+    ]
       .filter((section): section is string => Boolean(section?.trim()))
       .join('\n\n');
   }
@@ -1217,9 +1317,7 @@ export class CoworkRunner extends EventEmitter {
   private buildPromptPrefix(): string {
     const localTimePrompt = this.buildLocalTimeContextPrompt();
     const userMemoriesXml = this.buildUserMemoriesXml();
-    return [localTimePrompt, userMemoriesXml]
-      .filter((section) => section?.trim())
-      .join('\n\n');
+    return [localTimePrompt, userMemoriesXml].filter(section => section?.trim()).join('\n\n');
   }
 
   private extractToolCommand(toolInput: Record<string, unknown>): string {
@@ -1253,7 +1351,7 @@ export class CoworkRunner extends EventEmitter {
   private buildSafetyQuestionInput(
     question: string,
     requestedToolName: string,
-    requestedToolInput: Record<string, unknown>
+    requestedToolInput: Record<string, unknown>,
   ): Record<string, unknown> {
     return {
       questions: [
@@ -1302,7 +1400,7 @@ export class CoworkRunner extends EventEmitter {
 
     return rawAnswer
       .split('|||')
-      .map((value) => value.trim())
+      .map(value => value.trim())
       .filter(Boolean)
       .includes(SAFETY_APPROVAL_ALLOW_OPTION);
   }
@@ -1313,7 +1411,7 @@ export class CoworkRunner extends EventEmitter {
     activeSession: ActiveSession,
     question: string,
     requestedToolName: string,
-    requestedToolInput: Record<string, unknown>
+    requestedToolInput: Record<string, unknown>,
   ): Promise<boolean> {
     const request: PermissionRequest = {
       requestId: uuidv4(),
@@ -1336,7 +1434,7 @@ export class CoworkRunner extends EventEmitter {
     signal: AbortSignal,
     activeSession: ActiveSession,
     toolName: string,
-    toolInput: Record<string, unknown>
+    toolInput: Record<string, unknown>,
   ): Promise<PermissionResult | null> {
     // 1. Non-Bash delete tools (e.g. dedicated 'rm' tool) → delete confirmation
     if (this.isDeleteOperation(toolName, toolInput)) {
@@ -1346,7 +1444,7 @@ export class CoworkRunner extends EventEmitter {
         activeSession,
         '即将执行删除操作，是否允许？',
         toolName,
-        toolInput
+        toolInput,
       );
       if (!approved) {
         return { behavior: 'deny', message: 'Delete operation denied by user.' };
@@ -1367,7 +1465,7 @@ export class CoworkRunner extends EventEmitter {
           activeSession,
           question,
           toolName,
-          toolInput
+          toolInput,
         );
         if (!approved) {
           return { behavior: 'deny', message: 'Dangerous command denied by user.' };
@@ -1392,7 +1490,7 @@ export class CoworkRunner extends EventEmitter {
 
   private async ensureWindowsPythonRuntimeForCommand(
     sessionId: string,
-    command: string
+    command: string,
   ): Promise<{ ok: boolean; reason?: string }> {
     if (process.platform !== 'win32' || !this.isPythonRelatedBashCommand(command)) {
       return { ok: true };
@@ -1406,8 +1504,11 @@ export class CoworkRunner extends EventEmitter {
       return { ok: true };
     }
 
-    const reason = runtimeResult.error
-      || (isPipCommand ? 'Bundled Python pip environment is unavailable.' : 'Bundled Python runtime is unavailable.');
+    const reason =
+      runtimeResult.error ||
+      (isPipCommand
+        ? 'Bundled Python pip environment is unavailable.'
+        : 'Bundled Python runtime is unavailable.');
     const summary = this.truncateCommandPreview(command, 140);
     coworkLog('ERROR', 'python-runtime', 'Windows python command blocked: runtime unavailable', {
       sessionId,
@@ -1433,7 +1534,7 @@ export class CoworkRunner extends EventEmitter {
       workspaceRoot?: string;
       confirmationMode?: 'modal' | 'text';
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
-    } = {}
+    } = {},
   ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const session = this.store.getSession(sessionId);
@@ -1466,7 +1567,11 @@ export class CoworkRunner extends EventEmitter {
     const preferredWorkspaceRoot = options.workspaceRoot?.trim()
       ? path.resolve(options.workspaceRoot)
       : this.inferWorkspaceRootFromSessionCwd(session.cwd);
-    const sessionCwd = this.resolveSessionCwdForExecution(sessionId, session.cwd, preferredWorkspaceRoot);
+    const sessionCwd = this.resolveSessionCwdForExecution(
+      sessionId,
+      session.cwd,
+      preferredWorkspaceRoot,
+    );
 
     // Store active session
     const activeSession: ActiveSession = {
@@ -1503,7 +1608,7 @@ export class CoworkRunner extends EventEmitter {
       this.normalizeWorkspaceRoot(activeSession.workspaceRoot, sessionCwd),
       sessionCwd,
       activeSession.confirmationMode,
-      this.store.getConfig().memoryEnabled
+      this.store.getConfig().memoryEnabled,
     );
 
     // Run claude-code using the SDK
@@ -1513,19 +1618,48 @@ export class CoworkRunner extends EventEmitter {
 
       // If the session already has messages (restarted after stop), inject
       // conversation history so the model retains context from prior turns.
+      // Apply session pruning if the context is approaching the model's limit.
       const currentSession = this.store.getSession(sessionId);
       if (currentSession && currentSession.messages.length > 0) {
+        const apiConfig = getCurrentApiConfig('local');
+        const modelId = apiConfig?.model || 'default';
+        const pruneCheck = shouldPruneSession(
+          currentSession.messages.map(m => ({ content: m.content, type: m.type })),
+          modelId,
+          effectiveSystemPrompt,
+          SESSION_PRUNING_THRESHOLD,
+        );
+        if (pruneCheck.needsPruning) {
+          console.log(
+            `[SessionPruning] session ${sessionId}: ${pruneCheck.estimatedTokens} estimated tokens ` +
+              `(${(pruneCheck.usageRatio * 100).toFixed(0)}% of ${pruneCheck.contextWindow} context window), pruning history`,
+          );
+        }
         effectivePrompt = this.injectLocalHistoryPrompt(sessionId, prompt, effectivePrompt);
       }
 
       setCoworkProxySessionId(sessionId);
-      await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      await this.runClaudeCode(
+        activeSession,
+        effectivePrompt,
+        sessionCwd,
+        effectiveSystemPrompt,
+        options.imageAttachments,
+      );
     } catch (error) {
       console.error('Cowork session error:', error);
     }
   }
 
-  async continueSession(sessionId: string, prompt: string, options: { systemPrompt?: string; skillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> } = {}): Promise<void> {
+  async continueSession(
+    sessionId: string,
+    prompt: string,
+    options: {
+      systemPrompt?: string;
+      skillIds?: string[];
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    } = {},
+  ): Promise<void> {
     this.stoppedSessions.delete(sessionId);
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
@@ -1575,7 +1709,11 @@ export class CoworkRunner extends EventEmitter {
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
-    const sessionCwd = this.resolveSessionCwdForExecution(sessionId, session.cwd, activeSession.workspaceRoot);
+    const sessionCwd = this.resolveSessionCwdForExecution(
+      sessionId,
+      session.cwd,
+      activeSession.workspaceRoot,
+    );
     if (session.cwd !== sessionCwd) {
       this.store.updateSession(sessionId, { cwd: sessionCwd });
     }
@@ -1589,7 +1727,7 @@ export class CoworkRunner extends EventEmitter {
     if (!options.skillIds?.length && baseSystemPrompt?.includes('<available_skills>')) {
       baseSystemPrompt = baseSystemPrompt.replace(
         /## Skills \(mandatory\)[\s\S]*?<\/available_skills>/,
-        '## Skills\nSkill already loaded for this session. Continue following its instructions.'
+        '## Skills\nSkill already loaded for this session. Continue following its instructions.',
       );
     }
 
@@ -1598,14 +1736,20 @@ export class CoworkRunner extends EventEmitter {
       this.normalizeWorkspaceRoot(activeSession.workspaceRoot, sessionCwd),
       sessionCwd,
       activeSession.confirmationMode,
-      this.store.getConfig().memoryEnabled
+      this.store.getConfig().memoryEnabled,
     );
 
     try {
       const promptPrefix = this.buildPromptPrefix();
       const effectivePrompt = promptPrefix ? `${promptPrefix}\n\n---\n\n${prompt}` : prompt;
       setCoworkProxySessionId(sessionId);
-      await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
+      await this.runClaudeCode(
+        activeSession,
+        effectivePrompt,
+        sessionCwd,
+        effectiveSystemPrompt,
+        options.imageAttachments,
+      );
     } catch (error) {
       console.error('Cowork continue error:', error);
     }
@@ -1664,7 +1808,7 @@ export class CoworkRunner extends EventEmitter {
     prompt: string,
     cwd: string,
     systemPrompt: string,
-    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>,
   ): Promise<void> {
     const { sessionId, abortController } = activeSession;
     const config = this.store.getConfig();
@@ -1705,13 +1849,33 @@ export class CoworkRunner extends EventEmitter {
     let stderrTail = '';
 
     // Log MCP-relevant environment for debugging
-    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: isPackaged=${app.isPackaged}, platform=${process.platform}, arch=${process.arch}`);
-    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_ELECTRON_PATH=${envVars.LOBSTERAI_ELECTRON_PATH || '(not set)'}`);
-    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: ELECTRON_RUN_AS_NODE=${envVars.ELECTRON_RUN_AS_NODE || '(not set)'}`);
-    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: NODE_PATH=${envVars.NODE_PATH || '(not set)'}`);
+    coworkLog(
+      'INFO',
+      'runClaudeCodeLocal',
+      `MCP env: isPackaged=${app.isPackaged}, platform=${process.platform}, arch=${process.arch}`,
+    );
+    coworkLog(
+      'INFO',
+      'runClaudeCodeLocal',
+      `MCP env: LOBSTERAI_ELECTRON_PATH=${envVars.LOBSTERAI_ELECTRON_PATH || '(not set)'}`,
+    );
+    coworkLog(
+      'INFO',
+      'runClaudeCodeLocal',
+      `MCP env: ELECTRON_RUN_AS_NODE=${envVars.ELECTRON_RUN_AS_NODE || '(not set)'}`,
+    );
+    coworkLog(
+      'INFO',
+      'runClaudeCodeLocal',
+      `MCP env: NODE_PATH=${envVars.NODE_PATH || '(not set)'}`,
+    );
     coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: HOME=${envVars.HOME || '(not set)'}`);
     coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: TMPDIR=${envVars.TMPDIR || '(not set)'}`);
-    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_NPM_BIN_DIR=${envVars.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`);
+    coworkLog(
+      'INFO',
+      'runClaudeCodeLocal',
+      `MCP env: LOBSTERAI_NPM_BIN_DIR=${envVars.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`,
+    );
     coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: claudeCodePath=${claudeCodePath}`);
     // Log full PATH split by delimiter
     const pathEntries = (envVars.PATH || '').split(path.delimiter);
@@ -1731,15 +1895,17 @@ export class CoworkRunner extends EventEmitter {
     // On Windows, check that git-bash is available before attempting to start.
     // Claude Code CLI requires git-bash for shell tool execution.
     if (process.platform === 'win32' && !envVars.CLAUDE_CODE_GIT_BASH_PATH) {
-      const bashResolutionDiagnostic = typeof envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR === 'string'
-        ? envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR.trim()
-        : '';
-      const errorMsg = 'Windows local execution requires a healthy Git Bash runtime, but no valid bash was resolved. '
-        + 'This may be caused by missing bundled PortableGit or a conflicting system bash that cannot run cygpath. '
-        + 'Please reinstall or upgrade to a correctly built version that includes resources/mingit. '
-        + 'Advanced fallback: set CLAUDE_CODE_GIT_BASH_PATH to your bash.exe path '
-        + '(e.g. C:\\Program Files\\Git\\bin\\bash.exe).'
-        + (bashResolutionDiagnostic ? ` Resolver diagnostic: ${bashResolutionDiagnostic}` : '');
+      const bashResolutionDiagnostic =
+        typeof envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR === 'string'
+          ? envVars.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR.trim()
+          : '';
+      const errorMsg =
+        'Windows local execution requires a healthy Git Bash runtime, but no valid bash was resolved. ' +
+        'This may be caused by missing bundled PortableGit or a conflicting system bash that cannot run cygpath. ' +
+        'Please reinstall or upgrade to a correctly built version that includes resources/mingit. ' +
+        'Advanced fallback: set CLAUDE_CODE_GIT_BASH_PATH to your bash.exe path ' +
+        '(e.g. C:\\Program Files\\Git\\bin\\bash.exe).' +
+        (bashResolutionDiagnostic ? ` Resolver diagnostic: ${bashResolutionDiagnostic}` : '');
       coworkLog('ERROR', 'runClaudeCodeLocal', errorMsg);
       this.handleError(sessionId, errorMsg);
       this.clearPendingPermissions(sessionId);
@@ -1787,7 +1953,7 @@ export class CoworkRunner extends EventEmitter {
       canUseTool: async (
         toolName: string,
         toolInput: unknown,
-        { signal }: { signal: AbortSignal }
+        { signal }: { signal: AbortSignal },
       ): Promise<PermissionResult> => {
         if (abortController.signal.aborted || signal.aborted) {
           return { behavior: 'deny', message: 'Session aborted' };
@@ -1801,7 +1967,10 @@ export class CoworkRunner extends EventEmitter {
 
         if (resolvedName === 'Bash') {
           const command = this.extractToolCommand(resolvedInput);
-          const pythonRuntimeCheck = await this.ensureWindowsPythonRuntimeForCommand(sessionId, command);
+          const pythonRuntimeCheck = await this.ensureWindowsPythonRuntimeForCommand(
+            sessionId,
+            command,
+          );
           if (!pythonRuntimeCheck.ok) {
             const reason = pythonRuntimeCheck.reason || 'Python runtime unavailable.';
             this.addSystemMessage(sessionId, reason);
@@ -1823,7 +1992,7 @@ export class CoworkRunner extends EventEmitter {
             signal,
             activeSession,
             resolvedName,
-            resolvedInput
+            resolvedInput,
           );
           if (policyResult) {
             return policyResult;
@@ -1849,13 +2018,12 @@ export class CoworkRunner extends EventEmitter {
         }
 
         if (result.behavior === 'deny') {
-          return result.message
-            ? result
-            : { behavior: 'deny', message: 'Permission denied' };
+          return result.message ? result : { behavior: 'deny', message: 'Permission denied' };
         }
 
         const updatedInput = result.updatedInput ?? resolvedInput;
-        const hasAnswers = updatedInput && typeof updatedInput === 'object' && 'answers' in updatedInput;
+        const hasAnswers =
+          updatedInput && typeof updatedInput === 'object' && 'answers' in updatedInput;
         if (!hasAnswers) {
           return { behavior: 'deny', message: 'No answers provided' };
         }
@@ -1877,15 +2045,16 @@ export class CoworkRunner extends EventEmitter {
       }) => {
         const isPackagedDarwin = app.isPackaged && process.platform === 'darwin';
         const useElectronShim =
-          process.platform === 'win32'
-          || isPackagedDarwin
-          || spawnOptions.env?.LOBSTERAI_NODE_SHIM_ACTIVE === '1';
+          process.platform === 'win32' ||
+          isPackagedDarwin ||
+          spawnOptions.env?.LOBSTERAI_NODE_SHIM_ACTIVE === '1';
         const spawnEnv: NodeJS.ProcessEnv = {
           ...(spawnOptions.env ?? {}),
           ELECTRON_RUN_AS_NODE: '1',
         };
         if (useElectronShim) {
-          spawnEnv.LOBSTERAI_ELECTRON_PATH = spawnOptions.env?.LOBSTERAI_ELECTRON_PATH || electronNodeRuntimePath;
+          spawnEnv.LOBSTERAI_ELECTRON_PATH =
+            spawnOptions.env?.LOBSTERAI_ELECTRON_PATH || electronNodeRuntimePath;
         } else {
           delete spawnEnv.LOBSTERAI_ELECTRON_PATH;
         }
@@ -1893,26 +2062,38 @@ export class CoworkRunner extends EventEmitter {
         let command = spawnOptions.command || 'node';
         const normalizedCommand = command.trim().toLowerCase();
         const commandBaseName = path.basename(command).toLowerCase();
-        const isNodeLikeCommand = normalizedCommand === 'node'
-          || normalizedCommand === 'node.exe'
-          || commandBaseName === 'node'
-          || commandBaseName === 'node.exe'
-          || commandBaseName === 'node.cmd'
-          || normalizedCommand.endsWith('\\node.cmd')
-          || normalizedCommand.endsWith('/node.cmd');
+        const isNodeLikeCommand =
+          normalizedCommand === 'node' ||
+          normalizedCommand === 'node.exe' ||
+          commandBaseName === 'node' ||
+          commandBaseName === 'node.exe' ||
+          commandBaseName === 'node.cmd' ||
+          normalizedCommand.endsWith('\\node.cmd') ||
+          normalizedCommand.endsWith('/node.cmd');
         if (process.platform === 'win32' && isNodeLikeCommand) {
           command = electronNodeRuntimePath;
           spawnEnv.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
-          coworkLog('INFO', 'runClaudeCodeLocal', `Rewrote Windows SDK command "${spawnOptions.command || 'node'}" to Electron runtime: ${electronNodeRuntimePath}`);
+          coworkLog(
+            'INFO',
+            'runClaudeCodeLocal',
+            `Rewrote Windows SDK command "${spawnOptions.command || 'node'}" to Electron runtime: ${electronNodeRuntimePath}`,
+          );
         } else if (isPackagedDarwin && isNodeLikeCommand) {
           command = electronNodeRuntimePath;
           spawnEnv.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
-          coworkLog('INFO', 'runClaudeCodeLocal', `Rewrote packaged macOS SDK command "${spawnOptions.command || 'node'}" to Electron helper runtime: ${electronNodeRuntimePath}`);
+          coworkLog(
+            'INFO',
+            'runClaudeCodeLocal',
+            `Rewrote packaged macOS SDK command "${spawnOptions.command || 'node'}" to Electron helper runtime: ${electronNodeRuntimePath}`,
+          );
         }
 
         if (isPackagedDarwin && command && path.isAbsolute(command)) {
           const commandCandidates = new Set<string>([command, path.resolve(command)]);
-          const appExecCandidates = new Set<string>([process.execPath, path.resolve(process.execPath)]);
+          const appExecCandidates = new Set<string>([
+            process.execPath,
+            path.resolve(process.execPath),
+          ]);
           try {
             commandCandidates.add(fs.realpathSync.native(command));
           } catch {
@@ -1923,11 +2104,17 @@ export class CoworkRunner extends EventEmitter {
           } catch {
             // Ignore realpath resolution errors.
           }
-          const pointsToAppExecutable = Array.from(commandCandidates).some((candidate) => appExecCandidates.has(candidate));
+          const pointsToAppExecutable = Array.from(commandCandidates).some(candidate =>
+            appExecCandidates.has(candidate),
+          );
           if (pointsToAppExecutable) {
             command = electronNodeRuntimePath;
             spawnEnv.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
-            coworkLog('WARN', 'runClaudeCodeLocal', 'SDK spawner command points to app executable; rewriting to Electron helper runtime');
+            coworkLog(
+              'WARN',
+              'runClaudeCodeLocal',
+              'SDK spawner command points to app executable; rewriting to Electron helper runtime',
+            );
           }
         }
         coworkLog('INFO', 'runClaudeCodeLocal', 'Using packaged custom SDK spawner', {
@@ -1936,15 +2123,19 @@ export class CoworkRunner extends EventEmitter {
         });
 
         const shouldInjectWindowsHideRequire =
-          process.platform === 'win32'
-          && Boolean(windowsHideInitScript)
-          && spawnOptions.args.length > 0
-          && /\.m?js$/i.test(path.basename(spawnOptions.args[0]));
+          process.platform === 'win32' &&
+          Boolean(windowsHideInitScript) &&
+          spawnOptions.args.length > 0 &&
+          /\.m?js$/i.test(path.basename(spawnOptions.args[0]));
         const effectiveSpawnArgs = shouldInjectWindowsHideRequire
           ? prependNodeRequireArg(spawnOptions.args, windowsHideInitScript as string)
           : spawnOptions.args;
         if (shouldInjectWindowsHideRequire) {
-          coworkLog('INFO', 'runClaudeCodeLocal', `Injected Windows hidden-subprocess preload: ${windowsHideInitScript}`);
+          coworkLog(
+            'INFO',
+            'runClaudeCodeLocal',
+            `Injected Windows hidden-subprocess preload: ${windowsHideInitScript}`,
+          );
         }
 
         const child = spawn(command, effectiveSpawnArgs, {
@@ -2022,7 +2213,7 @@ export class CoworkRunner extends EventEmitter {
                 },
               ],
             } as any;
-          }
+          },
         ),
         tool(
           'recent_chats',
@@ -2043,7 +2234,7 @@ export class CoworkRunner extends EventEmitter {
             return {
               content: [{ type: 'text', text }],
             } as any;
-          }
+          },
         ),
       ];
       if (config.memoryEnabled) {
@@ -2074,29 +2265,33 @@ export class CoworkRunner extends EventEmitter {
               try {
                 const result = this.runMemoryUserEditsTool(args);
                 return {
-                  content: [{
-                    type: 'text',
-                    text: result.text,
-                  }],
+                  content: [
+                    {
+                      type: 'text',
+                      text: result.text,
+                    },
+                  ],
                   isError: result.isError,
                 } as any;
               } catch (error) {
                 return {
-                  content: [{
-                    type: 'text',
-                    text: this.formatMemoryUserEditsResult({
-                      action: args.action,
-                      successCount: 0,
-                      failedCount: 1,
-                      changedIds: [],
-                      reason: error instanceof Error ? error.message : String(error),
-                    }),
-                  }],
+                  content: [
+                    {
+                      type: 'text',
+                      text: this.formatMemoryUserEditsResult({
+                        action: args.action,
+                        successCount: 0,
+                        failedCount: 1,
+                        changedIds: [],
+                        reason: error instanceof Error ? error.message : String(error),
+                      }),
+                    },
+                  ],
                   isError: true,
                 } as any;
               }
-            }
-          )
+            },
+          ),
         );
       }
       options.mcpServers = {
@@ -2112,114 +2307,168 @@ export class CoworkRunner extends EventEmitter {
       if (this.mcpServerProvider) {
         try {
           const enabledMcpServers = this.mcpServerProvider();
-          coworkLog('INFO', 'runClaudeCodeLocal', `MCP: ${enabledMcpServers.length} user-configured servers found`);
+          coworkLog(
+            'INFO',
+            'runClaudeCodeLocal',
+            `MCP: ${enabledMcpServers.length} user-configured servers found`,
+          );
           for (const server of enabledMcpServers) {
             const serverKey = server.name;
             // Skip if name conflicts with existing MCP servers (e.g., memory server)
-            if (options.mcpServers && serverKey in (options.mcpServers as Record<string, unknown>)) {
-              coworkLog('WARN', 'runClaudeCodeLocal', `MCP server name conflict: "${serverKey}", skipping user config`);
+            if (
+              options.mcpServers &&
+              serverKey in (options.mcpServers as Record<string, unknown>)
+            ) {
+              coworkLog(
+                'WARN',
+                'runClaudeCodeLocal',
+                `MCP server name conflict: "${serverKey}", skipping user config`,
+              );
               continue;
             }
             let serverConfig: Record<string, unknown>;
             switch (server.transportType) {
-              case 'stdio':
-                {
-                  const stdioCommand = server.command || '';
-                  let effectiveStdioCommand = stdioCommand;
-                  const stdioArgs = server.args || [];
-                  let effectiveStdioArgs = [...stdioArgs];
-                  let shouldInjectWindowsHideRequire = false;
-                  let stdioEnv = server.env && Object.keys(server.env).length > 0
-                    ? { ...server.env }
-                    : undefined;
+              case 'stdio': {
+                const stdioCommand = server.command || '';
+                let effectiveStdioCommand = stdioCommand;
+                const stdioArgs = server.args || [];
+                let effectiveStdioArgs = [...stdioArgs];
+                let shouldInjectWindowsHideRequire = false;
+                let stdioEnv =
+                  server.env && Object.keys(server.env).length > 0 ? { ...server.env } : undefined;
 
-                  if (process.platform === 'win32' && app.isPackaged && effectiveStdioCommand) {
-                    const normalizedCommand = effectiveStdioCommand.trim().toLowerCase();
-                    const npmBinDir = envVars.LOBSTERAI_NPM_BIN_DIR;
-                    const npxCliJs = npmBinDir ? path.join(npmBinDir, 'npx-cli.js') : '';
-                    const npmCliJs = npmBinDir ? path.join(npmBinDir, 'npm-cli.js') : '';
+                if (process.platform === 'win32' && app.isPackaged && effectiveStdioCommand) {
+                  const normalizedCommand = effectiveStdioCommand.trim().toLowerCase();
+                  const npmBinDir = envVars.LOBSTERAI_NPM_BIN_DIR;
+                  const npxCliJs = npmBinDir ? path.join(npmBinDir, 'npx-cli.js') : '';
+                  const npmCliJs = npmBinDir ? path.join(npmBinDir, 'npm-cli.js') : '';
 
-                    const withElectronNodeEnv = (base: Record<string, string> | undefined): Record<string, string> => ({
-                      ...(base || {}),
+                  const withElectronNodeEnv = (
+                    base: Record<string, string> | undefined,
+                  ): Record<string, string> => ({
+                    ...(base || {}),
+                    ELECTRON_RUN_AS_NODE: '1',
+                    LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
+                  });
+
+                  if (
+                    normalizedCommand === 'node' ||
+                    normalizedCommand === 'node.exe' ||
+                    normalizedCommand.endsWith('\\node.cmd') ||
+                    normalizedCommand.endsWith('/node.cmd')
+                  ) {
+                    effectiveStdioCommand = electronNodeRuntimePath;
+                    stdioEnv = withElectronNodeEnv(stdioEnv);
+                    shouldInjectWindowsHideRequire = true;
+                    coworkLog(
+                      'INFO',
+                      'runClaudeCodeLocal',
+                      `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime`,
+                    );
+                  } else if (
+                    (normalizedCommand === 'npx' ||
+                      normalizedCommand === 'npx.cmd' ||
+                      normalizedCommand.endsWith('\\npx.cmd') ||
+                      normalizedCommand.endsWith('/npx.cmd')) &&
+                    npxCliJs &&
+                    fs.existsSync(npxCliJs)
+                  ) {
+                    effectiveStdioCommand = electronNodeRuntimePath;
+                    effectiveStdioArgs = [npxCliJs, ...stdioArgs];
+                    stdioEnv = withElectronNodeEnv(stdioEnv);
+                    shouldInjectWindowsHideRequire = true;
+                    coworkLog(
+                      'INFO',
+                      'runClaudeCodeLocal',
+                      `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npx-cli.js`,
+                    );
+                  } else if (
+                    (normalizedCommand === 'npm' ||
+                      normalizedCommand === 'npm.cmd' ||
+                      normalizedCommand.endsWith('\\npm.cmd') ||
+                      normalizedCommand.endsWith('/npm.cmd')) &&
+                    npmCliJs &&
+                    fs.existsSync(npmCliJs)
+                  ) {
+                    effectiveStdioCommand = electronNodeRuntimePath;
+                    effectiveStdioArgs = [npmCliJs, ...stdioArgs];
+                    stdioEnv = withElectronNodeEnv(stdioEnv);
+                    shouldInjectWindowsHideRequire = true;
+                    coworkLog(
+                      'INFO',
+                      'runClaudeCodeLocal',
+                      `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npm-cli.js`,
+                    );
+                  }
+                }
+
+                if (
+                  process.platform === 'win32' &&
+                  shouldInjectWindowsHideRequire &&
+                  windowsHideInitScript
+                ) {
+                  effectiveStdioArgs = prependNodeRequireArg(
+                    effectiveStdioArgs,
+                    windowsHideInitScript,
+                  );
+                  coworkLog(
+                    'INFO',
+                    'runClaudeCodeLocal',
+                    `MCP "${serverKey}": injected Windows hidden-subprocess preload`,
+                  );
+                }
+
+                if (
+                  app.isPackaged &&
+                  process.platform === 'darwin' &&
+                  stdioCommand &&
+                  path.isAbsolute(stdioCommand)
+                ) {
+                  const commandCandidates = new Set<string>([
+                    stdioCommand,
+                    path.resolve(stdioCommand),
+                  ]);
+                  const appExecCandidates = new Set<string>([
+                    process.execPath,
+                    path.resolve(process.execPath),
+                    electronNodeRuntimePath,
+                    path.resolve(electronNodeRuntimePath),
+                  ]);
+
+                  try {
+                    commandCandidates.add(fs.realpathSync.native(stdioCommand));
+                  } catch {
+                    // Ignore realpath resolution errors.
+                  }
+
+                  try {
+                    appExecCandidates.add(fs.realpathSync.native(process.execPath));
+                  } catch {
+                    // Ignore realpath resolution errors.
+                  }
+                  try {
+                    appExecCandidates.add(fs.realpathSync.native(electronNodeRuntimePath));
+                  } catch {
+                    // Ignore realpath resolution errors.
+                  }
+
+                  const pointsToAppExecutable = Array.from(commandCandidates).some(candidate =>
+                    appExecCandidates.has(candidate),
+                  );
+                  if (pointsToAppExecutable) {
+                    effectiveStdioCommand = electronNodeRuntimePath;
+                    stdioEnv = {
+                      ...(stdioEnv || {}),
                       ELECTRON_RUN_AS_NODE: '1',
                       LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
-                    });
-
-                    if (
-                      normalizedCommand === 'node'
-                      || normalizedCommand === 'node.exe'
-                      || normalizedCommand.endsWith('\\node.cmd')
-                      || normalizedCommand.endsWith('/node.cmd')
-                    ) {
-                      effectiveStdioCommand = electronNodeRuntimePath;
-                      stdioEnv = withElectronNodeEnv(stdioEnv);
-                      shouldInjectWindowsHideRequire = true;
-                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime`);
-                    } else if (
-                      (normalizedCommand === 'npx' || normalizedCommand === 'npx.cmd' || normalizedCommand.endsWith('\\npx.cmd') || normalizedCommand.endsWith('/npx.cmd'))
-                      && npxCliJs
-                      && fs.existsSync(npxCliJs)
-                    ) {
-                      effectiveStdioCommand = electronNodeRuntimePath;
-                      effectiveStdioArgs = [npxCliJs, ...stdioArgs];
-                      stdioEnv = withElectronNodeEnv(stdioEnv);
-                      shouldInjectWindowsHideRequire = true;
-                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npx-cli.js`);
-                    } else if (
-                      (normalizedCommand === 'npm' || normalizedCommand === 'npm.cmd' || normalizedCommand.endsWith('\\npm.cmd') || normalizedCommand.endsWith('/npm.cmd'))
-                      && npmCliJs
-                      && fs.existsSync(npmCliJs)
-                    ) {
-                      effectiveStdioCommand = electronNodeRuntimePath;
-                      effectiveStdioArgs = [npmCliJs, ...stdioArgs];
-                      stdioEnv = withElectronNodeEnv(stdioEnv);
-                      shouldInjectWindowsHideRequire = true;
-                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": rewrote stdio command "${stdioCommand}" to Electron runtime + npm-cli.js`);
-                    }
+                    };
+                    coworkLog(
+                      'WARN',
+                      'runClaudeCodeLocal',
+                      `MCP "${serverKey}": command points to app executable; rewriting command to Electron helper runtime`,
+                    );
                   }
-
-                  if (process.platform === 'win32' && shouldInjectWindowsHideRequire && windowsHideInitScript) {
-                    effectiveStdioArgs = prependNodeRequireArg(effectiveStdioArgs, windowsHideInitScript);
-                    coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": injected Windows hidden-subprocess preload`);
-                  }
-
-                  if (app.isPackaged && process.platform === 'darwin' && stdioCommand && path.isAbsolute(stdioCommand)) {
-                    const commandCandidates = new Set<string>([stdioCommand, path.resolve(stdioCommand)]);
-                    const appExecCandidates = new Set<string>([
-                      process.execPath,
-                      path.resolve(process.execPath),
-                      electronNodeRuntimePath,
-                      path.resolve(electronNodeRuntimePath),
-                    ]);
-
-                    try {
-                      commandCandidates.add(fs.realpathSync.native(stdioCommand));
-                    } catch {
-                      // Ignore realpath resolution errors.
-                    }
-
-                    try {
-                      appExecCandidates.add(fs.realpathSync.native(process.execPath));
-                    } catch {
-                      // Ignore realpath resolution errors.
-                    }
-                    try {
-                      appExecCandidates.add(fs.realpathSync.native(electronNodeRuntimePath));
-                    } catch {
-                      // Ignore realpath resolution errors.
-                    }
-
-                    const pointsToAppExecutable = Array.from(commandCandidates).some((candidate) => appExecCandidates.has(candidate));
-                    if (pointsToAppExecutable) {
-                      effectiveStdioCommand = electronNodeRuntimePath;
-                      stdioEnv = {
-                        ...(stdioEnv || {}),
-                        ELECTRON_RUN_AS_NODE: '1',
-                        LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath,
-                      };
-                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command points to app executable; rewriting command to Electron helper runtime`);
-                    }
-                  }
+                }
 
                 serverConfig = {
                   type: 'stdio',
@@ -2227,9 +2476,17 @@ export class CoworkRunner extends EventEmitter {
                   args: effectiveStdioArgs,
                   env: stdioEnv && Object.keys(stdioEnv).length > 0 ? stdioEnv : undefined,
                 };
-                coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": stdio command="${effectiveStdioCommand}", args=${JSON.stringify(effectiveStdioArgs)}`);
+                coworkLog(
+                  'INFO',
+                  'runClaudeCodeLocal',
+                  `MCP "${serverKey}": stdio command="${effectiveStdioCommand}", args=${JSON.stringify(effectiveStdioArgs)}`,
+                );
                 if (stdioEnv && Object.keys(stdioEnv).length > 0) {
-                  coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": custom env vars: ${JSON.stringify(stdioEnv)}`);
+                  coworkLog(
+                    'INFO',
+                    'runClaudeCodeLocal',
+                    `MCP "${serverKey}": custom env vars: ${JSON.stringify(stdioEnv)}`,
+                  );
                 }
                 // Resolve command path to verify it's findable
                 if (effectiveStdioCommand) {
@@ -2237,7 +2494,7 @@ export class CoworkRunner extends EventEmitter {
                     coworkLog(
                       fs.existsSync(effectiveStdioCommand) ? 'INFO' : 'WARN',
                       'runClaudeCodeLocal',
-                      `MCP "${serverKey}": absolute command "${effectiveStdioCommand}" exists=${fs.existsSync(effectiveStdioCommand)}`
+                      `MCP "${serverKey}": absolute command "${effectiveStdioCommand}" exists=${fs.existsSync(effectiveStdioCommand)}`,
                     );
                   } else {
                     const whichCmd = process.platform === 'win32' ? 'where' : 'which';
@@ -2249,33 +2506,55 @@ export class CoworkRunner extends EventEmitter {
                         windowsHide: process.platform === 'win32',
                       });
                       if (resolveResult.status === 0 && resolveResult.stdout) {
-                        coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" resolves to: ${resolveResult.stdout.trim()}`);
+                        coworkLog(
+                          'INFO',
+                          'runClaudeCodeLocal',
+                          `MCP "${serverKey}": command "${effectiveStdioCommand}" resolves to: ${resolveResult.stdout.trim()}`,
+                        );
                       } else {
-                        coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${effectiveStdioCommand}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
+                        coworkLog(
+                          'WARN',
+                          'runClaudeCodeLocal',
+                          `MCP "${serverKey}": command "${effectiveStdioCommand}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`,
+                        );
                       }
                     } catch (e) {
-                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${effectiveStdioCommand}": ${e instanceof Error ? e.message : String(e)}`);
+                      coworkLog(
+                        'WARN',
+                        'runClaudeCodeLocal',
+                        `MCP "${serverKey}": failed to resolve command "${effectiveStdioCommand}": ${e instanceof Error ? e.message : String(e)}`,
+                      );
                     }
                   }
                 }
                 break;
-                }
+              }
               case 'sse':
                 serverConfig = {
                   type: 'sse',
                   url: server.url || '',
-                  headers: server.headers && Object.keys(server.headers).length > 0 ? server.headers : undefined,
+                  headers:
+                    server.headers && Object.keys(server.headers).length > 0
+                      ? server.headers
+                      : undefined,
                 };
                 break;
               case 'http':
                 serverConfig = {
                   type: 'http',
                   url: server.url || '',
-                  headers: server.headers && Object.keys(server.headers).length > 0 ? server.headers : undefined,
+                  headers:
+                    server.headers && Object.keys(server.headers).length > 0
+                      ? server.headers
+                      : undefined,
                 };
                 break;
               default:
-                coworkLog('WARN', 'runClaudeCodeLocal', `Unknown MCP transport type: "${server.transportType}", skipping`);
+                coworkLog(
+                  'WARN',
+                  'runClaudeCodeLocal',
+                  `Unknown MCP transport type: "${server.transportType}", skipping`,
+                );
                 continue;
             }
             options.mcpServers = {
@@ -2283,21 +2562,37 @@ export class CoworkRunner extends EventEmitter {
               [serverKey]: serverConfig,
             };
             userMcpServerCount += 1;
-            coworkLog('INFO', 'runClaudeCodeLocal', `Injected user MCP server: "${serverKey}" (${server.transportType})`);
+            coworkLog(
+              'INFO',
+              'runClaudeCodeLocal',
+              `Injected user MCP server: "${serverKey}" (${server.transportType})`,
+            );
           }
         } catch (error) {
-          coworkLog('WARN', 'runClaudeCodeLocal', `Failed to load user MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+          coworkLog(
+            'WARN',
+            'runClaudeCodeLocal',
+            `Failed to load user MCP servers: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       }
 
       // Log final MCP server config summary
       if (options.mcpServers) {
         const mcpKeys = Object.keys(options.mcpServers as Record<string, unknown>);
-        coworkLog('INFO', 'runClaudeCodeLocal', `MCP final config: ${mcpKeys.length} servers: [${mcpKeys.join(', ')}]`);
+        coworkLog(
+          'INFO',
+          'runClaudeCodeLocal',
+          `MCP final config: ${mcpKeys.length} servers: [${mcpKeys.join(', ')}]`,
+        );
         for (const key of mcpKeys) {
           const cfg = (options.mcpServers as Record<string, Record<string, unknown>>)[key];
           if (cfg && typeof cfg === 'object' && 'type' in cfg) {
-            coworkLog('INFO', 'runClaudeCodeLocal', `MCP server "${key}": type=${cfg.type}, command=${cfg.command || 'N/A'}, args=${JSON.stringify(cfg.args || [])}`);
+            coworkLog(
+              'INFO',
+              'runClaudeCodeLocal',
+              `MCP server "${key}": type=${cfg.type}, command=${cfg.command || 'N/A'}, args=${JSON.stringify(cfg.args || [])}`,
+            );
           }
         }
         // Dump full MCP config as JSON for complete debugging
@@ -2314,9 +2609,17 @@ export class CoworkRunner extends EventEmitter {
               }
             }
           }
-          coworkLog('INFO', 'runClaudeCodeLocal', `MCP full config dump: ${JSON.stringify(serializable, null, 2)}`);
+          coworkLog(
+            'INFO',
+            'runClaudeCodeLocal',
+            `MCP full config dump: ${JSON.stringify(serializable, null, 2)}`,
+          );
         } catch (e) {
-          coworkLog('WARN', 'runClaudeCodeLocal', `MCP config dump failed: ${e instanceof Error ? e.message : String(e)}`);
+          coworkLog(
+            'WARN',
+            'runClaudeCodeLocal',
+            `MCP config dump failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
       }
 
@@ -2365,15 +2668,23 @@ export class CoworkRunner extends EventEmitter {
       // Set up a startup timeout BEFORE calling query(): if no events arrive
       // within the timeout, abort. This covers both the query() call itself
       // (which spawns the subprocess) and the initial event wait.
-      const startupTimeoutMs = userMcpServerCount > 0
-        ? SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS
-        : SDK_STARTUP_TIMEOUT_MS;
-      coworkLog('INFO', 'runClaudeCodeLocal', `Using SDK startup timeout: ${startupTimeoutMs}ms (userMcpServers=${userMcpServerCount})`);
+      const startupTimeoutMs =
+        userMcpServerCount > 0 ? SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS : SDK_STARTUP_TIMEOUT_MS;
+      coworkLog(
+        'INFO',
+        'runClaudeCodeLocal',
+        `Using SDK startup timeout: ${startupTimeoutMs}ms (userMcpServers=${userMcpServerCount})`,
+      );
       startupTimer = setTimeout(() => {
-        coworkLog('ERROR', 'runClaudeCodeLocal', 'SDK startup timeout: no events received within timeout', {
-          timeoutMs: startupTimeoutMs,
-          userMcpServers: userMcpServerCount,
-        });
+        coworkLog(
+          'ERROR',
+          'runClaudeCodeLocal',
+          'SDK startup timeout: no events received within timeout',
+          {
+            timeoutMs: startupTimeoutMs,
+            userMcpServers: userMcpServerCount,
+          },
+        );
         if (!abortController.signal.aborted) {
           abortController.abort();
         }
@@ -2394,7 +2705,10 @@ export class CoworkRunner extends EventEmitter {
         }
         eventCount++;
         const eventPayload = event as Record<string, unknown> | null;
-        const eventType = eventPayload && typeof eventPayload === 'object' ? String(eventPayload.type ?? '') : typeof event;
+        const eventType =
+          eventPayload && typeof eventPayload === 'object'
+            ? String(eventPayload.type ?? '')
+            : typeof event;
         coworkLog('INFO', 'runClaudeCodeLocal', `Event #${eventCount}: type=${eventType}`);
         this.handleClaudeEvent(sessionId, event);
       }
@@ -2403,7 +2717,11 @@ export class CoworkRunner extends EventEmitter {
         clearTimeout(startupTimer);
         startupTimer = null;
       }
-      coworkLog('INFO', 'runClaudeCodeLocal', `Event iteration completed, total events: ${eventCount}`);
+      coworkLog(
+        'INFO',
+        'runClaudeCodeLocal',
+        `Event iteration completed, total events: ${eventCount}`,
+      );
 
       if (this.stoppedSessions.has(sessionId)) {
         this.store.updateSession(sessionId, { status: 'idle' });
@@ -2457,7 +2775,7 @@ export class CoworkRunner extends EventEmitter {
     prompt: string,
     cwd: string,
     systemPrompt: string,
-    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>
+    imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>,
   ): Promise<void> {
     const { sessionId } = activeSession;
     if (this.isSessionStopRequested(sessionId, activeSession)) {
@@ -2479,7 +2797,13 @@ export class CoworkRunner extends EventEmitter {
 
     activeSession.executionMode = 'local';
     this.store.updateSession(sessionId, { executionMode: 'local' });
-    await this.runClaudeCodeLocal(activeSession, effectivePrompt, resolvedCwd, systemPrompt, imageAttachments);
+    await this.runClaudeCodeLocal(
+      activeSession,
+      effectivePrompt,
+      resolvedCwd,
+      systemPrompt,
+      imageAttachments,
+    );
   }
 
   private resolveAssistantEventError(payload: Record<string, unknown>): string | null {
@@ -2572,7 +2896,10 @@ export class CoworkRunner extends EventEmitter {
 
     if (eventType === 'result') {
       // Log token usage for observability
-      const usage = (payload.usage ?? (payload.result && typeof payload.result === 'object' ? (payload.result as Record<string, unknown>).usage : undefined)) as Record<string, unknown> | undefined;
+      const usage = (payload.usage ??
+        (payload.result && typeof payload.result === 'object'
+          ? (payload.result as Record<string, unknown>).usage
+          : undefined)) as Record<string, unknown> | undefined;
       if (usage) {
         coworkLog('INFO', 'tokenUsage', 'Turn token usage', {
           sessionId,
@@ -2587,17 +2914,13 @@ export class CoworkRunner extends EventEmitter {
       if (subtype !== 'success') {
         const errors = Array.isArray(payload.errors)
           ? payload.errors
-            .filter((error) => typeof error === 'string')
-            .map((error) => (error as string).trim())
-            .filter((error) => error && error.toLowerCase() !== 'unknown')
+              .filter(error => typeof error === 'string')
+              .map(error => (error as string).trim())
+              .filter(error => error && error.toLowerCase() !== 'unknown')
           : [];
         const payloadError = this.normalizeSdkError(payload.error);
         const errorMessage =
-          errors.length > 0
-            ? errors.join('\n')
-            : payloadError
-              ? payloadError
-              : 'Claude run failed';
+          errors.length > 0 ? errors.join('\n') : payloadError ? payloadError : 'Claude run failed';
         this.handleError(sessionId, errorMessage);
         return;
       }
@@ -2663,9 +2986,11 @@ export class CoworkRunner extends EventEmitter {
     // Persist any pending streaming content before applying fallback assistant parsing.
     // This prevents losing streamed text when assistant event arrives before stop events.
     const hadPendingTextStreaming =
-      activeSession.currentStreamingMessageId !== null || activeSession.currentStreamingContent !== '';
+      activeSession.currentStreamingMessageId !== null ||
+      activeSession.currentStreamingContent !== '';
     const hadPendingThinkingStreaming =
-      activeSession.currentStreamingThinkingMessageId !== null || activeSession.currentStreamingThinking !== '';
+      activeSession.currentStreamingThinkingMessageId !== null ||
+      activeSession.currentStreamingThinking !== '';
     if (hadPendingTextStreaming || hadPendingThinkingStreaming) {
       this.finalizeStreamingContent(activeSession);
     }
@@ -2723,7 +3048,11 @@ export class CoworkRunner extends EventEmitter {
       const record = block as Record<string, unknown>;
       const blockType = String(record.type ?? '');
 
-      if (blockType === 'thinking' && typeof record.thinking === 'string' && record.thinking.trim()) {
+      if (
+        blockType === 'thinking' &&
+        typeof record.thinking === 'string' &&
+        record.thinking.trim()
+      ) {
         if (hasStreamedThinking || hadPendingThinkingStreaming) {
           continue;
         }
@@ -2747,9 +3076,10 @@ export class CoworkRunner extends EventEmitter {
         flushTextParts();
         const toolName = String(record.name ?? 'unknown');
         const toolInputRaw = record.input ?? {};
-        const toolInput = toolInputRaw && typeof toolInputRaw === 'object'
-          ? (toolInputRaw as Record<string, unknown>)
-          : { value: toolInputRaw };
+        const toolInput =
+          toolInputRaw && typeof toolInputRaw === 'object'
+            ? (toolInputRaw as Record<string, unknown>)
+            : { value: toolInputRaw };
         const toolUseId = typeof record.id === 'string' ? record.id : null;
 
         const message = this.store.addMessage(sessionId, {
@@ -2789,7 +3119,7 @@ export class CoworkRunner extends EventEmitter {
   private handleStreamEvent(
     sessionId: string,
     activeSession: ActiveSession,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
   ): void {
     // SDKPartialAssistantMessage structure:
     // { type: 'stream_event', event: BetaRawMessageStreamEvent, ... }
@@ -2806,10 +3136,15 @@ export class CoworkRunner extends EventEmitter {
       const blockType = String(contentBlock.type ?? '');
       if (blockType === 'thinking') {
         // Start a new thinking message for streaming
-        const initialThinkingRaw = typeof contentBlock.thinking === 'string' ? contentBlock.thinking : '';
-        const initialThinking = this.truncateLargeContent(initialThinkingRaw, STREAMING_THINKING_MAX_CHARS);
+        const initialThinkingRaw =
+          typeof contentBlock.thinking === 'string' ? contentBlock.thinking : '';
+        const initialThinking = this.truncateLargeContent(
+          initialThinkingRaw,
+          STREAMING_THINKING_MAX_CHARS,
+        );
         activeSession.currentStreamingThinking = initialThinking;
-        activeSession.currentStreamingThinkingTruncated = initialThinking.length < initialThinkingRaw.length;
+        activeSession.currentStreamingThinkingTruncated =
+          initialThinking.length < initialThinkingRaw.length;
         activeSession.lastStreamingThinkingUpdateAt = 0;
         activeSession.currentStreamingBlockType = 'thinking';
 
@@ -2863,7 +3198,7 @@ export class CoworkRunner extends EventEmitter {
           activeSession.currentStreamingThinking,
           delta.thinking,
           STREAMING_THINKING_MAX_CHARS,
-          activeSession.currentStreamingThinkingTruncated
+          activeSession.currentStreamingThinkingTruncated,
         );
         activeSession.currentStreamingThinking = next.content;
         activeSession.currentStreamingThinkingTruncated = next.truncated;
@@ -2873,10 +3208,17 @@ export class CoworkRunner extends EventEmitter {
           if (!next.changed) {
             return;
           }
-          const streamTick = this.shouldEmitStreamingUpdate(activeSession.lastStreamingThinkingUpdateAt);
+          const streamTick = this.shouldEmitStreamingUpdate(
+            activeSession.lastStreamingThinkingUpdateAt,
+          );
           if (streamTick.emit) {
             activeSession.lastStreamingThinkingUpdateAt = streamTick.now;
-            this.emit('messageUpdate', sessionId, activeSession.currentStreamingThinkingMessageId, activeSession.currentStreamingThinking);
+            this.emit(
+              'messageUpdate',
+              sessionId,
+              activeSession.currentStreamingThinkingMessageId,
+              activeSession.currentStreamingThinking,
+            );
           }
         } else {
           // No thinking message yet, create one
@@ -2898,7 +3240,7 @@ export class CoworkRunner extends EventEmitter {
           activeSession.currentStreamingContent,
           delta.text,
           STREAMING_TEXT_MAX_CHARS,
-          activeSession.currentStreamingTextTruncated
+          activeSession.currentStreamingTextTruncated,
         );
         activeSession.currentStreamingContent = next.content;
         activeSession.currentStreamingTextTruncated = next.truncated;
@@ -2909,10 +3251,17 @@ export class CoworkRunner extends EventEmitter {
           if (!next.changed) {
             return;
           }
-          const streamTick = this.shouldEmitStreamingUpdate(activeSession.lastStreamingTextUpdateAt);
+          const streamTick = this.shouldEmitStreamingUpdate(
+            activeSession.lastStreamingTextUpdateAt,
+          );
           if (streamTick.emit) {
             activeSession.lastStreamingTextUpdateAt = streamTick.now;
-            this.emit('messageUpdate', sessionId, activeSession.currentStreamingMessageId, activeSession.currentStreamingContent);
+            this.emit(
+              'messageUpdate',
+              sessionId,
+              activeSession.currentStreamingMessageId,
+              activeSession.currentStreamingContent,
+            );
           }
         } else {
           // No message yet, create one
@@ -2936,12 +3285,20 @@ export class CoworkRunner extends EventEmitter {
 
       if (blockType === 'thinking') {
         // Finalize thinking message
-        if (activeSession.currentStreamingThinkingMessageId && activeSession.currentStreamingThinking) {
+        if (
+          activeSession.currentStreamingThinkingMessageId &&
+          activeSession.currentStreamingThinking
+        ) {
           this.updateMessageMerged(sessionId, activeSession.currentStreamingThinkingMessageId, {
             content: activeSession.currentStreamingThinking,
             metadata: { isStreaming: false },
           });
-          this.emit('messageUpdate', sessionId, activeSession.currentStreamingThinkingMessageId, activeSession.currentStreamingThinking);
+          this.emit(
+            'messageUpdate',
+            sessionId,
+            activeSession.currentStreamingThinkingMessageId,
+            activeSession.currentStreamingThinking,
+          );
         }
         activeSession.currentStreamingThinkingMessageId = null;
         activeSession.currentStreamingThinking = '';
@@ -2954,7 +3311,12 @@ export class CoworkRunner extends EventEmitter {
             content: activeSession.currentStreamingContent,
             metadata: { isStreaming: false },
           });
-          this.emit('messageUpdate', sessionId, activeSession.currentStreamingMessageId, activeSession.currentStreamingContent);
+          this.emit(
+            'messageUpdate',
+            sessionId,
+            activeSession.currentStreamingMessageId,
+            activeSession.currentStreamingContent,
+          );
         }
         activeSession.currentStreamingMessageId = null;
         activeSession.currentStreamingContent = '';
@@ -2969,12 +3331,20 @@ export class CoworkRunner extends EventEmitter {
     // Handle message_stop - ensure everything is finalized
     if (eventType === 'message_stop') {
       // Finalize any pending thinking message
-      if (activeSession.currentStreamingThinkingMessageId && activeSession.currentStreamingThinking) {
+      if (
+        activeSession.currentStreamingThinkingMessageId &&
+        activeSession.currentStreamingThinking
+      ) {
         this.updateMessageMerged(sessionId, activeSession.currentStreamingThinkingMessageId, {
           content: activeSession.currentStreamingThinking,
           metadata: { isStreaming: false },
         });
-        this.emit('messageUpdate', sessionId, activeSession.currentStreamingThinkingMessageId, activeSession.currentStreamingThinking);
+        this.emit(
+          'messageUpdate',
+          sessionId,
+          activeSession.currentStreamingThinkingMessageId,
+          activeSession.currentStreamingThinking,
+        );
       }
       activeSession.currentStreamingThinkingMessageId = null;
       activeSession.currentStreamingThinking = '';
@@ -2987,7 +3357,12 @@ export class CoworkRunner extends EventEmitter {
           content: activeSession.currentStreamingContent,
           metadata: { isStreaming: false },
         });
-        this.emit('messageUpdate', sessionId, activeSession.currentStreamingMessageId, activeSession.currentStreamingContent);
+        this.emit(
+          'messageUpdate',
+          sessionId,
+          activeSession.currentStreamingMessageId,
+          activeSession.currentStreamingContent,
+        );
       }
       activeSession.currentStreamingMessageId = null;
       activeSession.currentStreamingContent = '';
@@ -3007,7 +3382,12 @@ export class CoworkRunner extends EventEmitter {
         content: activeSession.currentStreamingThinking,
         metadata: { isStreaming: false },
       });
-      this.emit('messageUpdate', sessionId, activeSession.currentStreamingThinkingMessageId, activeSession.currentStreamingThinking);
+      this.emit(
+        'messageUpdate',
+        sessionId,
+        activeSession.currentStreamingThinkingMessageId,
+        activeSession.currentStreamingThinking,
+      );
     }
     activeSession.currentStreamingThinkingMessageId = null;
     activeSession.currentStreamingThinking = '';
@@ -3033,7 +3413,7 @@ export class CoworkRunner extends EventEmitter {
   private waitForPermissionResponse(
     sessionId: string,
     requestId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<PermissionResult> {
     return new Promise(resolve => {
       let settled = false;
@@ -3084,10 +3464,7 @@ export class CoworkRunner extends EventEmitter {
   private addSystemMessage(sessionId: string, content: string): void {
     const session = this.store.getSession(sessionId);
     const lastMessage = session?.messages[session.messages.length - 1];
-    if (
-      lastMessage?.type === 'system'
-      && lastMessage.content.trim() === content.trim()
-    ) {
+    if (lastMessage?.type === 'system' && lastMessage.content.trim() === content.trim()) {
       return;
     }
     const message = this.store.addMessage(sessionId, {
@@ -3099,13 +3476,13 @@ export class CoworkRunner extends EventEmitter {
 
   private getMessageById(sessionId: string, messageId: string): CoworkMessage | undefined {
     const session = this.store.getSession(sessionId);
-    return session?.messages.find((message) => message.id === messageId);
+    return session?.messages.find(message => message.id === messageId);
   }
 
   private updateMessageMerged(
     sessionId: string,
     messageId: string,
-    updates: { content?: string; metadata?: CoworkMessage['metadata'] }
+    updates: { content?: string; metadata?: CoworkMessage['metadata'] },
   ): void {
     const existing = this.getMessageById(sessionId, messageId);
     const mergedMetadata = updates.metadata
@@ -3121,7 +3498,7 @@ export class CoworkRunner extends EventEmitter {
   private persistFinalResult(
     sessionId: string,
     activeSession: ActiveSession,
-    resultText: string
+    resultText: string,
   ): void {
     const safeResultText = this.truncateLargeContent(resultText, FINAL_RESULT_MAX_CHARS);
     const trimmed = safeResultText.trim();
@@ -3152,7 +3529,10 @@ export class CoworkRunner extends EventEmitter {
     // This catches the case where streaming is complete but hasAssistantTextOutput is set
     if (activeSession.hasAssistantTextOutput) {
       const session = this.store.getSession(sessionId);
-      const lastAssistant = session?.messages.slice().reverse().find((message) => message.type === 'assistant');
+      const lastAssistant = session?.messages
+        .slice()
+        .reverse()
+        .find(message => message.type === 'assistant');
       if (lastAssistant && lastAssistant.content?.trim() === trimmed) {
         // Content is the same, just update metadata
         this.updateMessageMerged(sessionId, lastAssistant.id, {
@@ -3163,7 +3543,10 @@ export class CoworkRunner extends EventEmitter {
     }
 
     const session = this.store.getSession(sessionId);
-    const lastAssistant = session?.messages.slice().reverse().find((message) => message.type === 'assistant');
+    const lastAssistant = session?.messages
+      .slice()
+      .reverse()
+      .find(message => message.type === 'assistant');
     const lastAssistantText = lastAssistant?.content?.trim() ?? '';
 
     // If the last assistant message is a streaming placeholder (empty or still marked streaming),
@@ -3201,7 +3584,7 @@ export class CoworkRunner extends EventEmitter {
 
     if (Array.isArray(value)) {
       const parts = value
-        .map((item) => {
+        .map(item => {
           if (typeof item === 'string') return item;
           if (item && typeof item === 'object') {
             const record = item as Record<string, unknown>;
