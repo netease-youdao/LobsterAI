@@ -2683,6 +2683,70 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:exportBatch', async (
+    event,
+    sessionIds: string[]
+  ) => {
+    try {
+      if (!sessionIds || sessionIds.length === 0) {
+        return { success: false, error: 'No sessions selected for export' };
+      }
+
+      const coworkStoreInstance = getCoworkStore();
+      const sessions = sessionIds
+        .map(id => coworkStoreInstance.getSession(id))
+        .filter(Boolean);
+
+      if (sessions.length === 0) {
+        return { success: false, error: 'No valid sessions found' };
+      }
+
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        sessionCount: sessions.length,
+        sessions: sessions.map(session => ({
+          id: session!.id,
+          title: session!.title,
+          agentId: session!.agentId,
+          status: session!.status,
+          createdAt: session!.createdAt,
+          updatedAt: session!.updatedAt,
+          messages: session!.messages.map(msg => ({
+            id: msg.id,
+            type: msg.type,
+            content: msg.content,
+            createdAt: msg.createdAt,
+          })),
+        })),
+      };
+
+      const content = JSON.stringify(exportData, null, 2);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const defaultName = `lobsterai-sessions-${timestamp}.json`;
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      const saveOptions = {
+        title: 'Export Sessions',
+        defaultPath: path.join(app.getPath('downloads'), defaultName),
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      };
+      const saveResult = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+        : await dialog.showSaveDialog(saveOptions);
+
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: true, canceled: true };
+      }
+
+      await fs.promises.writeFile(saveResult.filePath, content, 'utf-8');
+      return { success: true, canceled: false, path: saveResult.filePath, count: sessions.length };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to batch export sessions',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:pin', async (_event, options: { sessionId: string; pinned: boolean }) => {
     try {
       const coworkStoreInstance = getCoworkStore();
