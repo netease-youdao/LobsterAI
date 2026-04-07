@@ -25,7 +25,11 @@ interface AgentSettingsPanelProps {
   onSwitchAgent?: (agentId: string) => void;
 }
 
-const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClose, onSwitchAgent }) => {
+const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({
+  agentId,
+  onClose,
+  onSwitchAgent,
+}) => {
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const agents = useSelector((state: RootState) => state.agent.agents);
   const imStatus = useSelector((state: RootState) => state.im.status);
@@ -49,7 +53,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     if (!agentId) return;
     setActiveTab('basic');
     setShowDeleteConfirm(false);
-    window.electron?.agents?.get(agentId).then((a) => {
+    window.electron?.agents?.get(agentId).then(a => {
       if (a) {
         setAgent(a);
         setName(a.name);
@@ -61,7 +65,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       }
     });
     // Load IM config and status for bindings
-    imService.loadConfig().then((cfg) => {
+    imService.loadConfig().then(cfg => {
       if (cfg) {
         setImConfig(cfg);
         const bindings = cfg.settings?.platformAgentBindings || {};
@@ -95,7 +99,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
       // Persist IM bindings if changed
       const bindingsChanged =
         boundKeys.size !== initialBoundKeys.size ||
-        [...boundKeys].some((k) => !initialBoundKeys.has(k));
+        [...boundKeys].some(k => !initialBoundKeys.has(k));
       if (bindingsChanged && imConfig) {
         const currentBindings = { ...(imConfig.settings?.platformAgentBindings || {}) };
         // Remove old bindings for this agent
@@ -163,7 +167,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   /** Resolve agent name by id */
   const getAgentName = (aid: string): string | null => {
     if (!aid || aid === 'main') return null;
-    const agent = agents.find((a) => a.id === aid);
+    const agent = agents.find(a => a.id === aid);
     return agent?.name || aid;
   };
 
@@ -203,14 +207,17 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         >
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center">
-              <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
+              <img
+                src={logo}
+                alt={i18nService.t(platform)}
+                className="w-6 h-6 object-contain rounded"
+              />
             </div>
             <div>
-              <div className="text-sm font-medium text-foreground">
-                {i18nService.t(platform)}
-              </div>
+              <div className="text-sm font-medium text-foreground">{i18nService.t(platform)}</div>
               <div className="text-xs text-secondary/50">
-                {i18nService.t('agentIMNotConfiguredHint') || 'Please configure in Settings > IM Bots first'}
+                {i18nService.t('agentIMNotConfiguredHint') ||
+                  'Please configure in Settings > IM Bots first'}
               </div>
             </div>
           </div>
@@ -226,11 +233,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         {/* Platform header */}
         <div className="flex items-center gap-3 px-3 py-2.5 bg-surface-raised">
           <div className="flex h-8 w-8 items-center justify-center">
-            <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
+            <img
+              src={logo}
+              alt={i18nService.t(platform)}
+              className="w-6 h-6 object-contain rounded"
+            />
           </div>
-          <span className="text-sm font-semibold text-foreground">
-            {i18nService.t(platform)}
-          </span>
+          <span className="text-sm font-semibold text-foreground">{i18nService.t(platform)}</span>
         </div>
         {/* Instance list */}
         {connectedInstances.map((inst: any, idx: number) => {
@@ -250,20 +259,17 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
             >
               <div className="flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
-                <span className="text-sm text-foreground">
-                  {inst.instanceName}
-                </span>
+                <span className="text-sm text-foreground">{inst.instanceName}</span>
                 {boundToOther && otherAgentName && (
                   <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                    {(i18nService.t('agentIMBoundToOther') || '→ {agent}').replace('{agent}', otherAgentName)}
+                    {(i18nService.t('agentIMBoundToOther') || '→ {agent}').replace(
+                      '{agent}',
+                      otherAgentName,
+                    )}
                   </span>
                 )}
               </div>
-              {boundToOther ? (
-                <div className="w-9 h-5" />
-              ) : (
-                renderToggle(isBound)
-              )}
+              {boundToOther ? <div className="w-9 h-5" /> : renderToggle(isBound)}
             </div>
           );
         })}
@@ -286,33 +292,45 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         className={`flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors ${
           configured && !boundToOther
             ? 'hover:bg-surface-raised cursor-pointer'
-            : boundToOther ? 'opacity-55' : 'opacity-50'
+            : boundToOther
+              ? 'opacity-55'
+              : 'opacity-50'
         }`}
         onClick={() => configured && !boundToOther && handleToggleIMBinding(platform)}
       >
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center">
-            <img src={logo} alt={i18nService.t(platform)} className="w-6 h-6 object-contain rounded" />
+            <img
+              src={logo}
+              alt={i18nService.t(platform)}
+              className="w-6 h-6 object-contain rounded"
+            />
           </div>
           <div>
-            <div className="text-sm font-medium text-foreground">
-              {i18nService.t(platform)}
-            </div>
+            <div className="text-sm font-medium text-foreground">{i18nService.t(platform)}</div>
             {!configured && (
               <div className="text-xs text-secondary/50">
-                {i18nService.t('agentIMNotConfiguredHint') || 'Please configure in Settings > IM Bots first'}
+                {i18nService.t('agentIMNotConfiguredHint') ||
+                  'Please configure in Settings > IM Bots first'}
               </div>
             )}
           </div>
           {boundToOther && otherAgentName && (
             <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
-              {(i18nService.t('agentIMBoundToOther') || '→ {agent}').replace('{agent}', otherAgentName)}
+              {(i18nService.t('agentIMBoundToOther') || '→ {agent}').replace(
+                '{agent}',
+                otherAgentName,
+              )}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
           {configured ? (
-            boundToOther ? <div className="w-9 h-5" /> : renderToggle(isBound)
+            boundToOther ? (
+              <div className="w-9 h-5" />
+            ) : (
+              renderToggle(isBound)
+            )
           ) : (
             <span className="text-xs text-secondary/50">
               {i18nService.t('agentIMNotConfigured') || 'Not configured'}
@@ -324,179 +342,187 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   };
 
   return (
-    <Modal onClose={onClose} className="w-full max-w-2xl mx-4 rounded-xl shadow-xl bg-surface border border-border max-h-[80vh] flex flex-col">
-        {/* Header: agent icon + name + close */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">{icon || '🤖'}</span>
-            <h3 className="text-base font-semibold text-foreground">
-              {name || (i18nService.t('agentSettings') || 'Agent Settings')}
-            </h3>
-          </div>
-          <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-surface-raised">
-            <XMarkIcon className="h-5 w-5 text-secondary" />
+    <Modal
+      onClose={onClose}
+      className="w-full max-w-2xl mx-4 rounded-xl shadow-xl bg-surface border border-border max-h-[80vh] flex flex-col"
+    >
+      {/* Header: agent icon + name + close */}
+      <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">{icon || '🤖'}</span>
+          <h3 className="text-base font-semibold text-foreground">
+            {name || i18nService.t('agentSettings') || 'Agent Settings'}
+          </h3>
+        </div>
+        <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-surface-raised">
+          <XMarkIcon className="h-5 w-5 text-secondary" />
+        </button>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex border-b border-border px-5">
+        {tabs.map(tab => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
+              activeTab === tab.key ? 'text-primary' : 'text-secondary hover:text-foreground'
+            }`}
+          >
+            {tab.label}
+            {activeTab === tab.key && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
+            )}
           </button>
-        </div>
+        ))}
+      </div>
 
-        {/* Tab bar */}
-        <div className="flex border-b border-border px-5">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-                activeTab === tab.key
-                  ? 'text-primary'
-                  : 'text-secondary hover:text-foreground'
-              }`}
-            >
-              {tab.label}
-              {activeTab === tab.key && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
-              )}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab content */}
-        <div className="px-5 py-4 overflow-y-auto flex-1 min-h-[300px]">
-          {activeTab === 'basic' && (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">
-                  {i18nService.t('agentName') || 'Name'}
-                </label>
-                <div className="flex gap-2">
-                  <EmojiPicker value={icon} onChange={setIcon} />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="flex-1 px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">
-                  {i18nService.t('agentDescription') || 'Description'}
-                </label>
+      {/* Tab content */}
+      <div className="px-5 py-4 overflow-y-auto flex-1 min-h-[300px]">
+        {activeTab === 'basic' && (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-secondary mb-1">
+                {i18nService.t('agentName') || 'Name'} *
+              </label>
+              <div className="flex gap-2">
+                <EmojiPicker value={icon} onChange={setIcon} />
                 <input
                   type="text"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">
-                  {i18nService.t('systemPrompt') || 'System Prompt'}
-                </label>
-                <textarea
-                  value={systemPrompt}
-                  onChange={(e) => setSystemPrompt(e.target.value)}
-                  rows={4}
-                  className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm resize-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">
-                  {i18nService.t('agentIdentity') || 'Identity'}
-                </label>
-                <textarea
-                  value={identity}
-                  onChange={(e) => setIdentity(e.target.value)}
-                  rows={3}
-                  placeholder={i18nService.t('agentIdentityPlaceholder') || 'Identity description (IDENTITY.md)...'}
-                  className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm resize-none"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  className="flex-1 px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
                 />
               </div>
             </div>
-          )}
-
-          {activeTab === 'skills' && (
-            <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
-          )}
-
-          {activeTab === 'im' && (
             <div>
-              <p className="text-xs text-secondary/60 mb-4">
-                {i18nService.t('agentIMBindHint') || 'Select IM channels this Agent responds to'}
-              </p>
-              <div className="space-y-1">
-                {PlatformRegistry.platforms
-                  .filter((platform) => (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(platform))
-                  .map((platform) => {
-                    if (MULTI_INSTANCE_PLATFORMS.includes(platform)) {
-                      return renderMultiInstancePlatform(platform);
-                    }
-                    return renderSingleInstancePlatform(platform);
-                  })}
-              </div>
+              <label className="block text-sm font-medium text-secondary mb-1">
+                {i18nService.t('agentDescription') || 'Description'}
+              </label>
+              <input
+                type="text"
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
+              />
             </div>
-          )}
-        </div>
+            <div>
+              <label className="block text-sm font-medium text-secondary mb-1">
+                {i18nService.t('systemPrompt') || 'System Prompt'}
+              </label>
+              <textarea
+                value={systemPrompt}
+                onChange={e => setSystemPrompt(e.target.value)}
+                rows={4}
+                className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm resize-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-secondary mb-1">
+                {i18nService.t('agentIdentity') || 'Identity'}
+              </label>
+              <textarea
+                value={identity}
+                onChange={e => setIdentity(e.target.value)}
+                rows={3}
+                placeholder={
+                  i18nService.t('agentIdentityPlaceholder') ||
+                  'Identity description (IDENTITY.md)...'
+                }
+                className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm resize-none"
+              />
+            </div>
+          </div>
+        )}
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
+        {activeTab === 'skills' && (
+          <AgentSkillSelector selectedSkillIds={skillIds} onChange={setSkillIds} />
+        )}
+
+        {activeTab === 'im' && (
           <div>
-            {!isMainAgent && !showDeleteConfirm && (
+            <p className="text-xs text-secondary/60 mb-4">
+              {i18nService.t('agentIMBindHint') || 'Select IM channels this Agent responds to'}
+            </p>
+            <div className="space-y-1">
+              {PlatformRegistry.platforms
+                .filter(platform =>
+                  (getVisibleIMPlatforms(i18nService.getLanguage()) as readonly string[]).includes(
+                    platform,
+                  ),
+                )
+                .map(platform => {
+                  if (MULTI_INSTANCE_PLATFORMS.includes(platform)) {
+                    return renderMultiInstancePlatform(platform);
+                  }
+                  return renderSingleInstancePlatform(platform);
+                })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-5 py-4 border-t border-border">
+        <div>
+          {!isMainAgent && !showDeleteConfirm && (
+            <button
+              type="button"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+            >
+              <TrashIcon className="h-4 w-4" />
+              {i18nService.t('delete')}
+            </button>
+          )}
+          {showDeleteConfirm && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-red-500">{i18nService.t('confirmDelete')}</span>
               <button
                 type="button"
-                onClick={() => setShowDeleteConfirm(true)}
-                className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                onClick={handleDelete}
+                className="px-2 py-1 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600"
               >
-                <TrashIcon className="h-4 w-4" />
                 {i18nService.t('delete')}
               </button>
-            )}
-            {showDeleteConfirm && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-red-500">{i18nService.t('confirmDelete')}</span>
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  className="px-2 py-1 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600"
-                >
-                  {i18nService.t('delete')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="px-2 py-1 text-xs font-medium rounded text-secondary hover:bg-surface-raised"
-                >
-                  {i18nService.t('cancel')}
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="flex gap-2">
-            {onSwitchAgent && agentId !== currentAgentId && (
               <button
                 type="button"
-                onClick={() => onSwitchAgent(agentId)}
-                className="px-4 py-2 text-sm font-medium rounded-lg border border-primary text-primary hover:bg-primary/10 transition-colors"
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-2 py-1 text-xs font-medium rounded text-secondary hover:bg-surface-raised"
               >
-                {i18nService.t('switchToAgent') || 'Use this Agent'}
+                {i18nService.t('cancel')}
               </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
-            >
-              {i18nService.t('cancel') || 'Cancel'}
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={!name.trim() || saving}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {saving ? (i18nService.t('saving') || 'Saving...') : (i18nService.t('save') || 'Save')}
-            </button>
-          </div>
+            </div>
+          )}
         </div>
+        <div className="flex gap-2">
+          {onSwitchAgent && agentId !== currentAgentId && (
+            <button
+              type="button"
+              onClick={() => onSwitchAgent(agentId)}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-primary text-primary hover:bg-primary/10 transition-colors"
+            >
+              {i18nService.t('switchToAgent') || 'Use this Agent'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+          >
+            {i18nService.t('cancel') || 'Cancel'}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!name.trim() || saving}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-white hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {saving ? i18nService.t('saving') || 'Saving...' : i18nService.t('save') || 'Save'}
+          </button>
+        </div>
+      </div>
     </Modal>
   );
 };
