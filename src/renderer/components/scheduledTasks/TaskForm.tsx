@@ -227,6 +227,10 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       nextErrors.schedule = i18nService.t('scheduledTasksFormValidationWeekdayRequired');
     }
 
+    if (showConversationSelector && !form.notifyTo) {
+      nextErrors.notifyTo = i18nService.t('scheduledTasksFormValidationConversationRequired');
+    }
+
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -747,9 +751,12 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               ? i18nService.t('scheduledTasksFormCreate')
               : i18nService.t('scheduledTasksFormUpdate')}
         </button>
+        </div>
       </div>
-    </div>
-  );
-};
+      {errors.notifyTo && (
+        <p className="text-xs text-red-500 mt-1">{errors.notifyTo}</p>
+      )}
+    );
+  };
 
 export default TaskForm;
