@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import type { Platform } from '../shared/platform';
 
@@ -126,6 +127,15 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, state: { isMaximized: boolean; isFullscreen: boolean; isFocused: boolean }) => callback(state);
       ipcRenderer.on('window:state-changed', handler);
       return () => ipcRenderer.removeListener('window:state-changed', handler);
+    },
+  },
+  notification: {
+    send: (title: string, body: string, sessionId: string) =>
+      ipcRenderer.invoke('notification:send', { title, body, sessionId }),
+    onClicked: (callback: (sessionId: string) => void) => {
+      const handler = (_event: any, sessionId: string) => callback(sessionId);
+      ipcRenderer.on('notification:clicked', handler);
+      return () => ipcRenderer.removeListener('notification:clicked', handler);
     },
   },
   getApiConfig: () => ipcRenderer.invoke('get-api-config'),

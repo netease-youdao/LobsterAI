@@ -223,8 +223,9 @@ interface McpMarketplaceData {
   servers: McpMarketplaceServer[];
 }
 
-import type { Agent, PresetAgent } from './agent';
 import type { Platform } from '@shared/platform';
+
+import type { Agent, PresetAgent } from './agent';
 
 interface CreditItem {
   type: 'subscription' | 'boost' | 'free';
@@ -332,6 +333,10 @@ interface IElectronAPI {
     isMaximized: () => Promise<boolean>;
     showSystemMenu: (position: { x: number; y: number }) => void;
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
+  };
+  notification: {
+    send: (title: string, body: string, sessionId: string) => Promise<void>;
+    onClicked: (callback: (sessionId: string) => void) => () => void;
   };
   cowork: {
     startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; agentId?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
@@ -981,4 +986,4 @@ declare global {
   }
 }
 
-export {}; 
+export {};

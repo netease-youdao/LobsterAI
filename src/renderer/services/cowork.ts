@@ -1,36 +1,36 @@
+import { classifyErrorKey } from '../../common/coworkErrorClassify';
 import { store } from '../store';
 import {
-  setSessions,
-  setCurrentSession,
+  addMessage,
   addSession,
-  updateSessionStatus,
+  clearCurrentSession,
+  clearPendingPermissions,
   deleteSession as deleteSessionAction,
   deleteSessions as deleteSessionsAction,
-  addMessage,
-  updateMessageContent,
-  setStreaming,
-  setRemoteManaged,
-  updateSessionPinned,
-  updateSessionTitle,
-  enqueuePendingPermission,
   dequeuePendingPermission,
-  clearPendingPermissions,
+  enqueuePendingPermission,
   setConfig,
-  clearCurrentSession,
+  setCurrentSession,
+  setRemoteManaged,
+  setSessions,
+  setStreaming,
+  updateMessageContent,
+  updateSessionPinned,
+  updateSessionStatus,
+  updateSessionTitle,
 } from '../store/slices/coworkSlice';
 import type {
-  CoworkSession,
-  CoworkConfigUpdate,
   CoworkApiConfig,
-  CoworkUserMemoryEntry,
+  CoworkConfigUpdate,
+  CoworkContinueOptions,
   CoworkMemoryStats,
   CoworkPermissionResult,
-  OpenClawEngineStatus,
+  CoworkSession,
   CoworkStartOptions,
-  CoworkContinueOptions,
+  CoworkUserMemoryEntry,
+  OpenClawEngineStatus,
 } from '../types/cowork';
 import { i18nService } from './i18n';
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
 
 const classifyError = (error: string): string => {
   const key = classifyErrorKey(error);
@@ -139,12 +139,46 @@ class CoworkService {
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
+      // Send notification when window is hidden OR user is not viewing this session
+      const isWindowHidden = document.visibilityState === 'hidden';
+      const isViewingThisSession = store.getState().cowork.currentSessionId === sessionId;
+      if (isWindowHidden || !isViewingThisSession) {
+        try {
+          const state = store.getState().cowork;
+          const session = state.sessions.find(s => s.id === sessionId) ?? state.currentSession;
+          const title = session?.title?.trim() || i18nService.t('coworkNewSession');
+          void window.electron.notification.send(
+            i18nService.t('notificationTaskTitle').replace('{title}', title),
+            i18nService.t('notificationTaskCompleteBody'),
+            sessionId,
+          );
+        } catch {
+          // Silently ignore notification errors
+        }
+      }
     });
     this.streamListenerCleanups.push(completeCleanup);
 
     // Error listener
     const errorCleanup = cowork.onStreamError(({ sessionId, error }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
+      // Send error notification when window is hidden OR user is not viewing this session
+      const isWindowHidden = document.visibilityState === 'hidden';
+      const isViewingThisSession = store.getState().cowork.currentSessionId === sessionId;
+      if (isWindowHidden || !isViewingThisSession) {
+        try {
+          const state = store.getState().cowork;
+          const session = state.sessions.find(s => s.id === sessionId) ?? state.currentSession;
+          const title = session?.title?.trim() || i18nService.t('coworkNewSession');
+          void window.electron.notification.send(
+            i18nService.t('notificationTaskTitle').replace('{title}', title),
+            i18nService.t('notificationTaskErrorBody'),
+            sessionId,
+          );
+        } catch {
+          // Silently ignore notification errors
+        }
+      }
       // Surface the error as a visible message so the user knows what happened.
       if (error) {
         store.dispatch(addMessage({
@@ -159,6 +193,12 @@ class CoworkService {
       }
     });
     this.streamListenerCleanups.push(errorCleanup);
+
+    // Notification click listener - navigate to the session when user clicks a system notification
+    const notificationClickedCleanup = window.electron.notification.onClicked((sessionId: string) => {
+      window.dispatchEvent(new CustomEvent('cowork:notification:clicked', { detail: { sessionId } }));
+    });
+    this.streamListenerCleanups.push(notificationClickedCleanup);
 
     // Sessions changed listener (new channel sessions discovered by polling)
     const sessionsChangedCleanup = cowork.onSessionsChanged(() => {
