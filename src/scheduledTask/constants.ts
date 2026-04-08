@@ -37,6 +37,7 @@ export type DeliveryMode = typeof DeliveryMode[keyof typeof DeliveryMode];
 // ─── Delivery Channel (magic values) ────────────────────────────────────────
 export const DeliveryChannel = {
   Last: 'last',
+  Local: 'local',   // native macOS notification, no IM gateway delivery
 } as const;
 
 // ─── Session Target ─────────────────────────────────────────────────────────

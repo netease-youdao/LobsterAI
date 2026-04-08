@@ -1,4 +1,25 @@
 import { BrowserWindow } from 'electron';
+
+import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
+import { getNativeNotificationService } from '../main/nativeNotificationService';
+import { PlatformRegistry } from '../shared/platform';
+import type {
+  DeliveryMode as DeliveryModeType,
+  GatewayStatus as GatewayStatusType,
+  SessionTarget as SessionTargetType,
+  WakeMode as WakeModeType,
+} from './constants';
+import {
+  DeliveryChannel,
+  DeliveryMode,
+  GatewayStatus,
+  IpcChannel,
+  PayloadKind,
+  ScheduleKind,
+  SessionTarget,
+  TaskStatus,
+  WakeMode,
+} from './constants';
 import type {
   Schedule,
   ScheduledTask,
@@ -9,24 +30,6 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
 } from './types';
-import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
-import { PlatformRegistry } from '../shared/platform';
-import {
-  ScheduleKind,
-  PayloadKind,
-  DeliveryMode,
-  SessionTarget,
-  WakeMode,
-  TaskStatus,
-  GatewayStatus,
-  IpcChannel,
-} from './constants';
-import type {
-  SessionTarget as SessionTargetType,
-  WakeMode as WakeModeType,
-  DeliveryMode as DeliveryModeType,
-  GatewayStatus as GatewayStatusType,
-} from './constants';
 
 type GatewayClientLike = {
   request: <T = Record<string, unknown>>(
@@ -249,6 +252,14 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
     console.log('[CronJobService][toGatewayDelivery] no delivery, returning undefined');
     return undefined;
   }
+  // Local notification: macOS native only. Use mode='announce' (not 'none') so that
+  // if the gateway merges delivery on cron.update, a subsequent 不通知 update (mode='none')
+  // changes the mode field — the poll check requires BOTH channel='local' AND mode='announce',
+  // so stale channel='local' left by a gateway merge no longer triggers a notification.
+  if (delivery.channel === DeliveryChannel.Local) {
+    return { mode: DeliveryMode.Announce, channel: DeliveryChannel.Local } as GatewayDelivery;
+  }
+
   if (delivery.mode === DeliveryMode.None) {
     // Preserve channel/to even with mode='none' so IM notification target round-trips
     // through the gateway for the edit form to display.
@@ -291,11 +302,12 @@ export function mapGatewayTaskState(
     ? TaskStatus.Running
     : mapGatewayResultStatus(state.lastRunStatus ?? state.lastStatus);
 
-  // When delivery.mode is "none" and the gateway reports an error that is
-  // purely a delivery failure, downgrade to success.
+  // When delivery.mode is "none" (不通知) or the task uses local notification
+  // (mode='announce', channel='local' — gateway may fail to deliver to 'local'
+  // since it is not a real IM channel), downgrade a delivery-only error to success.
   if (
     lastStatus === TaskStatus.Error
-    && deliveryMode === DeliveryMode.None
+    && (deliveryMode === DeliveryMode.None || deliveryMode === DeliveryMode.Announce)
     && isDeliveryOnlyError({
       status: state.lastRunStatus ?? state.lastStatus,
       error: state.lastError,
@@ -426,6 +438,8 @@ export class CronJobService {
   private firstPollDone = false;
   /** Synchronous jobId → name cache, populated during polling. */
   private jobNameCache: Map<string, string> = new Map();
+  /** Synchronous jobId → delivery cache, populated on add/update/poll. */
+  private deliveryCache: Map<string, ScheduledTaskDelivery | undefined> = new Map();
   /** Job IDs currently running (non-null `runningAtMs`), updated during polling. */
   private runningJobIds: Set<string> = new Set();
 
@@ -442,6 +456,14 @@ export class CronJobService {
    */
   getJobNameSync(jobId: string): string | null {
     return this.jobNameCache.get(jobId) ?? null;
+  }
+
+  /**
+   * Look up a job's delivery config synchronously from the cache.
+   * Populated on addJob, updateJob, and the first poll after startup.
+   */
+  getDeliverySync(jobId: string): ScheduledTaskDelivery | undefined {
+    return this.deliveryCache.get(jobId);
   }
 
   hasRunningJobs(): boolean {
@@ -487,6 +509,7 @@ export class CronJobService {
     });
     const mapped = mapGatewayJob(job);
     this.jobNameCache.set(mapped.id, mapped.name);
+    this.deliveryCache.set(mapped.id, mapped.delivery);
     console.log('[CronJobService][addJob] created job id:', mapped.id, 'name:', mapped.name);
     return mapped;
   }
@@ -520,6 +543,7 @@ export class CronJobService {
     console.log('[CronJobService][updateJob] final patch:', JSON.stringify(patch, null, 2));
     const job = await client.request<GatewayJob>('cron.update', { id, patch });
     const mapped = mapGatewayJob(job);
+    this.deliveryCache.set(mapped.id, mapped.delivery);
     console.log('[CronJobService][updateJob] updated job id:', mapped.id, 'name:', mapped.name);
     return mapped;
   }
@@ -647,6 +671,7 @@ export class CronJobService {
     this.lastKnownStates.clear();
     this.lastKnownRunAtMs.clear();
     this.jobNameCache.clear();
+    this.deliveryCache.clear();
     this.runningJobIds.clear();
     this.firstPollDone = false;
   }
@@ -665,11 +690,15 @@ export class CronJobService {
       });
       const jobs = Array.isArray(result.jobs) ? result.jobs : [];
 
-      // Refresh jobId → name cache for synchronous lookups (used by session naming).
+      // Refresh jobId → name/delivery caches for synchronous lookups.
       this.jobNameCache.clear();
       this.runningJobIds.clear();
       for (const job of jobs) {
         this.jobNameCache.set(job.id, job.name);
+        // Populate delivery cache for tasks loaded from gateway on startup.
+        if (!this.deliveryCache.has(job.id)) {
+          this.deliveryCache.set(job.id, mapGatewayJob(job).delivery);
+        }
         if (job.state.runningAtMs) {
           this.runningJobIds.add(job.id);
         }

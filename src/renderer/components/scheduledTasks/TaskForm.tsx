@@ -530,6 +530,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
   const getChannelDisplayLabel = (channelValue: string): string => {
     if (channelValue === 'none') return i18nService.t('scheduledTasksFormNotifyChannelNone');
+    if (channelValue === 'local') return i18nService.t('scheduledTasksFormNotifyChannelLocal');
     // Use i18n translation for platform name (e.g. weixin �?'微信', feishu �?'飞书')
     const platform = PlatformRegistry.platformOfChannel(channelValue);
     if (platform) {

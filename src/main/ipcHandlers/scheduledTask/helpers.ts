@@ -1,4 +1,5 @@
 import { PlatformRegistry } from '../../../shared/platform';
+import { t } from '../../i18n';
 
 export interface ScheduledTaskHelperDeps {
   getIMGatewayManager: () => {
@@ -62,6 +63,9 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
   }
 
   const result: Array<{ value: string; label: string; accountId?: string }> = [];
+
+  // Local notification is listed first so it appears right below 不通知 in the dropdown.
+  result.push({ value: 'local', label: t('notifyChannelLocal') });
 
   for (const option of PlatformRegistry.channelOptions()) {
     const platform = PlatformRegistry.platformOfChannel(option.value);

@@ -258,6 +258,9 @@ export function formatPayloadLabel(payload: ScheduledTaskPayload): string {
  * e.g. 'feishu' → '飞书', 'openclaw-weixin' → '微信', 'moltbot-popo' → 'POPO'
  */
 function resolveChannelDisplayName(channel: string): string {
+  if (channel === 'local') {
+    return i18nService.t('scheduledTasksFormNotifyChannelLocal');
+  }
   const platform = PlatformRegistry.platformOfChannel(channel);
   if (platform) {
     return i18nService.t(platform) || PlatformRegistry.get(platform).label;
@@ -268,6 +271,11 @@ function resolveChannelDisplayName(channel: string): string {
 export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
   if (delivery.mode === 'none' && !delivery.channel) {
     return i18nService.t('scheduledTasksFormDeliveryModeNone');
+  }
+
+  // Local notification: display as a standalone label, not "播报摘要 · local".
+  if (delivery.channel === 'local') {
+    return i18nService.t('scheduledTasksFormNotifyChannelLocal');
   }
 
   if (delivery.mode === 'none' && delivery.channel) {

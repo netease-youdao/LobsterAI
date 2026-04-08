@@ -1,83 +1,79 @@
-import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
+import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { WebContents } from 'electron';
-import path from 'path';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, powerSaveBlocker,protocol, session, shell, systemPreferences } from 'electron';
 import fs from 'fs';
 import os from 'os';
-import { SqliteStore } from './sqliteStore';
-import { CoworkStore } from './coworkStore';
-import { AgentManager } from './agentManager';
-import { CoworkRunner } from './libs/coworkRunner';
-import {
-  ClaudeRuntimeAdapter,
-  CoworkEngineRouter,
-  OpenClawRuntimeAdapter,
-  type CoworkAgentEngine,
-} from './libs/agentEngine';
-import { SkillManager } from './skillManager';
-import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter, setAuthTokensGetter, setServerBaseUrlGetter, updateServerModelMetadata, clearServerModelMetadata } from './libs/claudeSettings';
-import { saveCoworkApiConfig } from './libs/coworkConfigStore';
-import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
-import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, registerProxyTokenRefresher } from './libs/coworkOpenAICompatProxy';
-import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
-import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
-import {
-  listPairingRequests,
-  approvePairingCode,
-  rejectPairingRequest,
-  readAllowFromStore,
-} from './im/imPairingStore';
-import { OpenClawConfigSync } from './libs/openclawConfigSync';
-import {
-  initCopilotTokenManager,
-  setCopilotTokenState,
-  clearCopilotTokenState,
-  refreshCopilotTokenNow,
-} from './libs/copilotTokenManager';
-import {
-  resolveMemoryFilePath,
-  readMemoryEntries,
-  addMemoryEntry,
-  updateMemoryEntry,
-  deleteMemoryEntry,
-  searchMemoryEntries,
-  migrateSqliteToMemoryMd,
-  syncMemoryFileOnWorkspaceChange,
-  readBootstrapFile,
-  writeBootstrapFile,
-  ensureDefaultIdentity,
-} from './libs/openclawMemoryFile';
-import {
-  OpenClawChannelSessionSync,
-  buildManagedSessionKey,
-  DEFAULT_MANAGED_AGENT_ID,
-} from './libs/openclawChannelSessionSync';
-import { IMGatewayManager, IMGatewayConfig } from './im';
-import type { Platform } from './im/types';
-import { APP_NAME } from './appConstants';
-import { getSkillServiceManager } from './skillServices';
-import { createTray, destroyTray, updateTrayMenu } from './trayManager';
-import { setLanguage, t } from './i18n';
-import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
-import { McpStore } from './mcpStore';
-import { migrateScheduledTasksToOpenclaw, migrateScheduledTaskRunsToOpenclaw } from '../scheduledTask/migrate';
+import path from 'path';
+
+import { DeliveryChannel } from '../scheduledTask/constants';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
+import { migrateScheduledTaskRunsToOpenclaw,migrateScheduledTasksToOpenclaw } from '../scheduledTask/migrate';
 import { PlatformRegistry } from '../shared/platform';
+import { AgentManager } from './agentManager';
+import { APP_NAME } from './appConstants';
+import { getAutoLaunchEnabled, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
+import { CoworkStore } from './coworkStore';
+import { setLanguage, t } from './i18n';
+import { IMGatewayConfig,IMGatewayManager } from './im';
+import {
+  approvePairingCode,
+  listPairingRequests,
+  readAllowFromStore,
+  rejectPairingRequest,
+} from './im/imPairingStore';
+import type { Platform } from './im/types';
 import {
   getCronJobService,
   initCronJobServiceManager,
-  registerScheduledTaskHandlers,
   initScheduledTaskHelpers,
+  registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
-import { McpServerManager } from './libs/mcpServerManager';
-import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
-import { McpBridgeServer } from './libs/mcpBridgeServer';
-import type { McpBridgeConfig } from './libs/openclawConfigSync';
-import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
-import { resolveEnterpriseConfigPath, syncEnterpriseConfig, mergeEnterpriseOpenclawConfig } from './libs/enterpriseConfigSync';
-import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
+import {
+  ClaudeRuntimeAdapter,
+  type CoworkAgentEngine,
+  CoworkEngineRouter,
+  OpenClawRuntimeAdapter,
+} from './libs/agentEngine';
+import { cancelActiveDownload,downloadUpdate, installUpdate } from './libs/appUpdateInstaller';
+import { clearServerModelMetadata,getCurrentApiConfig, resolveCurrentApiConfig, setAuthTokensGetter, setServerBaseUrlGetter, setStoreGetter, updateServerModelMetadata } from './libs/claudeSettings';
+import {
+  clearCopilotTokenState,
+  initCopilotTokenManager,
+  refreshCopilotTokenNow,
+  setCopilotTokenState,
+} from './libs/copilotTokenManager';
+import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { getCoworkLogPath } from './libs/coworkLogger';
+import { registerProxyTokenRefresher,startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy } from './libs/coworkOpenAICompatProxy';
+import { CoworkRunner } from './libs/coworkRunner';
+import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
+import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
+import { mergeEnterpriseOpenclawConfig,resolveEnterpriseConfigPath, syncEnterpriseConfig } from './libs/enterpriseConfigSync';
 import { exportLogsZip } from './libs/logExport';
+import { McpBridgeServer } from './libs/mcpBridgeServer';
+import { McpServerManager } from './libs/mcpServerManager';
+import {
+  buildManagedSessionKey,
+  DEFAULT_MANAGED_AGENT_ID,
+  OpenClawChannelSessionSync,
+} from './libs/openclawChannelSessionSync';
+import type { McpBridgeConfig } from './libs/openclawConfigSync';
+import { OpenClawConfigSync } from './libs/openclawConfigSync';
+import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
+import {
+  addMemoryEntry,
+  deleteMemoryEntry,
+  ensureDefaultIdentity,
+  migrateSqliteToMemoryMd,
+  readBootstrapFile,
+  readMemoryEntries,
+  resolveMemoryFilePath,
+  searchMemoryEntries,
+  syncMemoryFileOnWorkspaceChange,
+  updateMemoryEntry,
+  writeBootstrapFile,
+} from './libs/openclawMemoryFile';
+import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
@@ -85,6 +81,13 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { getLogFilePath, getRecentMainLogEntries,initLogger } from './logger';
+import { McpStore } from './mcpStore';
+import { getNativeNotificationService } from './nativeNotificationService';
+import { SkillManager } from './skillManager';
+import { getSkillServiceManager } from './skillServices';
+import { SqliteStore } from './sqliteStore';
+import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -1098,6 +1101,31 @@ const bindCoworkRuntimeForwarder = (): void => {
       }
     } catch {
       // ignore
+    }
+    // Native notification for session completion.
+    // For scheduled-task sessions: check delivery config — only notify when channel='local'.
+    // For regular cowork sessions: always notify.
+    try {
+      if (openClawRuntimeAdapter?.isScheduledTaskSession(sessionId)) {
+        const jobId = openClawRuntimeAdapter.getCronJobId(sessionId);
+        if (jobId) {
+          const delivery = getCronJobService()?.getDeliverySync(jobId);
+          if (delivery?.channel === DeliveryChannel.Local) {
+            const jobName = getCronJobService()?.getJobNameSync(jobId);
+            if (jobName) {
+              getNativeNotificationService().notifyScheduledTaskComplete(jobName);
+            }
+          }
+        }
+      } else {
+        const session = getCoworkStore().getSession(sessionId);
+        const title = session?.title;
+        if (title) {
+          getNativeNotificationService().notifyCoworkComplete(title);
+        }
+      }
+    } catch {
+      // ignore - notification is best-effort
     }
   });
 
