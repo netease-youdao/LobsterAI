@@ -219,14 +219,32 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     setValue(draftPrompt);
   }, [draftKey]); // intentionally omit draftPrompt to only trigger on session switch
 
+  // Track pending draft for flush-on-unmount
+  const pendingDraftRef = useRef<{ value: string; draftKey: string } | null>(null);
+
   useEffect(() => {
     if (value !== draftPrompt) {
+      pendingDraftRef.current = { value, draftKey };
       const timer = setTimeout(() => {
         dispatch(setDraftPrompt({ sessionId: draftKey, draft: value }));
+        pendingDraftRef.current = null;
       }, 300);
       return () => clearTimeout(timer);
+    } else {
+      pendingDraftRef.current = null;
     }
   }, [value, draftPrompt, dispatch, draftKey]);
+
+  // Flush unsaved draft immediately on unmount or draftKey change
+  useEffect(() => {
+    const ref = pendingDraftRef;
+    return () => {
+      if (ref.current) {
+        dispatch(setDraftPrompt({ sessionId: ref.current.draftKey, draft: ref.current.value }));
+        ref.current = null;
+      }
+    };
+  }, [draftKey, dispatch]);
 
   const handleSubmit = useCallback(async () => {
     if (showFolderSelector && !workingDirectory?.trim()) {
