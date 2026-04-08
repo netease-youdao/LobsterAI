@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const skillModule = require('../dist-electron/skillManager.js');
+const skillModule = require('../dist-electron/main/skillManager.js');
 const testUtils = skillModule.__skillManagerTestUtils;
 
 if (!testUtils) {

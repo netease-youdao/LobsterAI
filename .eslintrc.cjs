@@ -30,6 +30,7 @@ module.exports = {
     'build/',
     'SKILLs/**',
     'sandbox/**',
+    'vendor/**',
   ],
   rules: {
     'react-refresh/only-export-components': 'off',

@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ========== Stage 1: 变更检测 ==========
+  changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      renderer: ${{ steps.changes.outputs.renderer }}
+      main: ${{ steps.changes.outputs.main }}
+      skills: ${{ steps.changes.outputs.skills }}
+      scripts: ${{ steps.changes.outputs.scripts }}
+      docs: ${{ steps.changes.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            renderer:
+              - 'src/renderer/**'
+              - 'vite.config.ts'
+              - 'tsconfig.json'
+              - 'tailwind.config.js'
+              - 'postcss.config.js'
+            main:
+              - 'src/main/**'
+              - 'src/common/**'
+              - 'electron-tsconfig.json'
+              - 'src/main/preload.ts'
+            skills:
+              - 'SKILLs/**'
+            scripts:
+              - 'scripts/**'
+              - 'electron-builder.json'
+            docs:
+              - 'docs/**'
+              - '**/*.md'
+
+  # ========== Stage 2: 代码质量 (快速) ==========
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - run: npm install
+      - name: Lint changed files only
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FILES=$(git diff --name-only --diff-filter=ACMR origin/${BASE_REF}...HEAD -- '*.ts' '*.tsx')
+          elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            FILES=$(git diff --name-only --diff-filter=ACMR ${BEFORE_SHA}...HEAD -- '*.ts' '*.tsx')
+          else
+            echo "BEFORE_SHA unavailable, falling back to HEAD~1"
+            FILES=$(git diff --name-only --diff-filter=ACMR HEAD~1 -- '*.ts' '*.tsx')
+          fi
+          if [ -n "$FILES" ]; then
+            echo "Linting changed files:"
+            echo "$FILES"
+            echo "$FILES" | xargs -d '\n' npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0
+          else
+            echo "No TypeScript files changed, skipping lint"
+          fi
+
+  # ========== Stage 3: Renderer 构建 ==========
+  build-renderer:
+    needs: [changed-files, lint]
+    if: ${{ needs.changed-files.outputs.renderer == 'true' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - run: npm install
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: renderer-dist
+          path: dist/
+          retention-days: 1
+
+  # ========== Stage 4: Main 进程构建 ==========
+  build-main:
+    needs: [changed-files, lint]
+    if: ${{ needs.changed-files.outputs.main == 'true' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - run: npm install
+      - run: npm run compile:electron
+      - uses: actions/upload-artifact@v4
+        with:
+          name: main-dist
+          path: dist-electron/
+          retention-days: 1
+
+  # ========== Stage 5: Skill 构建 ==========
+  build-skills:
+    needs: changed-files
+    if: ${{ needs.changed-files.outputs.skills == 'true' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - run: npm install
+      - run: npm run build:skills
+
+  # ========== Stage 6: 测试 (Node.js 内置) ==========
+  test:
+    needs: [build-main]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+      - run: npm install
+      - run: npm test

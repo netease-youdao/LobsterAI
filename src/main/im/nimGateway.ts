@@ -9,7 +9,6 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { app } from 'electron';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const NIM = require('nim-web-sdk-ng/dist/nodejs/nim.js').default;
 import type { V2NIM } from 'nim-web-sdk-ng/dist/nodejs/nim';
 import {

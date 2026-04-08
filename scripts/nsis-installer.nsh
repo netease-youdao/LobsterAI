@@ -11,11 +11,38 @@
 !macroend
 
 !macro customInit
-  ; Best-effort: terminate a running app instance before install/uninstall
-  ; to avoid NSIS "app cannot be closed" errors during upgrades.
-  nsExec::ExecToLog 'taskkill /IM "${APP_EXECUTABLE_FILENAME}" /F /T'
+  ; ── Kill every process that might hold file handles in the install dir ──
+  ;
+  ; 1. LobsterAI.exe — the main app AND the OpenClaw gateway (ELECTRON_RUN_AS_NODE)
+  ; 2. node.exe whose binary lives inside the LobsterAI install tree
+  ;    (Web Search bridge server, MCP servers spawned with detached:true)
+  ;
+  ; Stop-Process -Force is equivalent to taskkill /F — the processes have no
+  ; chance to run before-quit cleanup, so file handles may linger briefly as
+  ; "ghost handles" in the Windows kernel. We poll until no matching process
+  ; remains, then force-remove the old install directory so that the old
+  ; uninstaller (which may lack our customUnInit fix) is never invoked.
+
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -Command "\
+    Stop-Process -Name LobsterAI -Force -ErrorAction SilentlyContinue;\
+    Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" } | Stop-Process -Force -ErrorAction SilentlyContinue;\
+    for ($$i = 0; $$i -lt 15; $$i++) {\
+      $$procs = @();\
+      $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
+      $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
+      if ($$procs.Count -eq 0) { break };\
+      Start-Sleep -Milliseconds 500;\
+    }"'
   Pop $0
-  Sleep 800
+
+  ; ── Remove old installation directory ──
+  ; After all processes are gone, ghost file handles may still linger for a
+  ; few seconds. RMDir /r will silently skip locked files but remove the rest
+  ; — including the old uninstaller exe. This prevents electron-builder from
+  ; invoking old-uninstaller.exe (which lacks our customUnInit and would show
+  ; an "app cannot be closed" dialog the user can never dismiss).
+  ; The new installer will lay down a complete fresh copy of all files.
+  RMDir /r "$INSTDIR"
 !macroend
 
 !macro customInstall
@@ -80,6 +107,26 @@
   FileClose $2
 
   SetDetailsPrint both
+!macroend
+
+!macro customUnInit
+  ; Kill all running app instances (main app + OpenClaw gateway + detached
+  ; node.exe services) before the uninstaller's built-in process check.
+  ; Without this, the uninstaller detects the OpenClaw gateway process
+  ; (also named LobsterAI.exe) and shows an "app cannot be closed" dialog
+  ; where even "Retry" never succeeds — because the gateway has no UI window
+  ; for the user to close.
+  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -Command "\
+    Stop-Process -Name LobsterAI -Force -ErrorAction SilentlyContinue;\
+    Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" } | Stop-Process -Force -ErrorAction SilentlyContinue;\
+    for ($$i = 0; $$i -lt 15; $$i++) {\
+      $$procs = @();\
+      $$procs += Get-Process -Name LobsterAI -ErrorAction SilentlyContinue;\
+      $$procs += Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"*LobsterAI*\" };\
+      if ($$procs.Count -eq 0) { break };\
+      Start-Sleep -Milliseconds 500;\
+    }"'
+  Pop $0
 !macroend
 
 !macro customUnInstall

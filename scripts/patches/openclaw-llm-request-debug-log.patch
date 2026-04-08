@@ -1,0 +1,336 @@
+diff --git a/src/agents/request-debug-logger.ts b/src/agents/request-debug-logger.ts
+new file mode 100644
+index 0000000000..1a58edf248
+--- /dev/null
++++ b/src/agents/request-debug-logger.ts
+@@ -0,0 +1,212 @@
++import type { StreamFn } from "@mariozechner/pi-agent-core";
++import type { Api, AssistantMessageEvent, Model } from "@mariozechner/pi-ai";
++import type { AssistantMessageEventStream } from "@mariozechner/pi-ai/dist/utils/event-stream.js";
++import { createSubsystemLogger } from "../logging/subsystem.js";
++import { parseBooleanValue } from "../utils/boolean.js";
++import { safeJsonStringify } from "../utils/safe-json.js";
++
++const log = createSubsystemLogger("agent/request-debug");
++
++let requestCounter = 0;
++
++function isEnabled(env: NodeJS.ProcessEnv): boolean {
++  return parseBooleanValue(env.OPENCLAW_LLM_REQUEST_DEBUG_LOG) ?? false;
++}
++
++function truncate(s: string, max: number): string {
++  return s.length <= max ? s : `${s.slice(0, max)}...(truncated, total ${s.length} chars)`;
++}
++
++function safeSerialize(value: unknown, maxChars = 8000): string {
++  const raw = safeJsonStringify(value) ?? String(value);
++  return truncate(raw, maxChars);
++}
++
++type OriginalFetch = typeof globalThis.fetch;
++
++const LLM_URL_PATTERNS = [
++  "api.anthropic.com",
++  "api.openai.com",
++  "generativelanguage.googleapis.com",
++  "aiplatform.googleapis.com",
++  "bedrock-runtime",
++  "/api/chat",
++  "/v1/chat",
++  "/v1/messages",
++  "/v1/responses",
++  "/v1beta/models",
++];
++
++function isLlmRelatedUrl(url: string): boolean {
++  return LLM_URL_PATTERNS.some((p) => url.includes(p));
++}
++
++function headersToRecord(headers: HeadersInit | undefined): Record<string, string> {
++  const result: Record<string, string> = {};
++  if (!headers) return result;
++  if (headers instanceof Headers) {
++    headers.forEach((value, key) => { result[key] = value; });
++    return result;
++  }
++  if (Array.isArray(headers)) {
++    for (const [key, value] of headers) {
++      result[key] = value;
++    }
++    return result;
++  }
++  return { ...(headers as Record<string, string>) };
++}
++
++function installFetchInterceptor(): () => void {
++  const originalFetch: OriginalFetch = globalThis.fetch;
++
++  const interceptedFetch: typeof globalThis.fetch = async (input, init) => {
++    const url =
++      typeof input === "string"
++        ? input
++        : input instanceof URL
++          ? input.toString()
++          : input instanceof Request
++            ? input.url
++            : String(input);
++
++    if (!isLlmRelatedUrl(url)) {
++      return originalFetch(input, init);
++    }
++
++    const reqId = ++requestCounter;
++    const requestHeaders = headersToRecord(
++      init?.headers ?? (input instanceof Request ? input.headers : undefined),
++    );
++    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
++
++    log.info(
++      `[http-request] #${reqId} ${safeJsonStringify({ method, url, headers: requestHeaders }) ?? ""}`,
++    );
++
++    const startTime = Date.now();
++    let response: Response;
++    try {
++      response = await originalFetch(input, init);
++    } catch (err) {
++      log.info(
++        `[http-error] #${reqId} elapsed=${Date.now() - startTime}ms error=${err instanceof Error ? err.message : String(err)}`,
++      );
++      throw err;
++    }
++
++    const elapsed = Date.now() - startTime;
++    const responseHeaders: Record<string, string> = {};
++    response.headers.forEach((value, key) => { responseHeaders[key] = value; });
++
++    log.info(
++      `[http-response] #${reqId} ${safeJsonStringify({ status: response.status, statusText: response.statusText, elapsed: `${elapsed}ms`, headers: responseHeaders }) ?? ""}`,
++    );
++
++    return response;
++  };
++
++  globalThis.fetch = interceptedFetch;
++
++  return () => {
++    if (globalThis.fetch === interceptedFetch) {
++      globalThis.fetch = originalFetch;
++    }
++  };
++}
++
++function wrapEventStream(
++  stream: AssistantMessageEventStream,
++  reqId: number,
++): AssistantMessageEventStream {
++  const originalIterator = stream[Symbol.asyncIterator].bind(stream);
++
++  const wrappedIterator = (): AsyncIterator<AssistantMessageEvent> => {
++    const iter = originalIterator();
++    return {
++      next: async () => {
++        const result = await iter.next();
++        if (!result.done && result.value) {
++          const event = result.value;
++          if (event.type === "done" || event.type === "error") {
++            const msg = "message" in event
++              ? (event as { message?: { content?: unknown; stopReason?: string; usage?: unknown; errorMessage?: string } }).message
++              : ("error" in event ? (event as { error?: { content?: unknown; stopReason?: string; usage?: unknown; errorMessage?: string } }).error : undefined);
++            log.info(`[llm-response] #${reqId} ${safeJsonStringify({
++              reqId,
++              eventType: event.type,
++              stopReason: msg?.stopReason ?? ("reason" in event ? (event as { reason?: string }).reason : undefined),
++              content: safeSerialize(msg?.content, 4000),
++              usage: msg?.usage,
++              errorMessage: msg?.errorMessage,
++            }) ?? ""}`);
++          }
++        }
++        return result;
++      },
++      return: iter.return?.bind(iter),
++      throw: iter.throw?.bind(iter),
++    };
++  };
++
++  (stream as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<AssistantMessageEvent> })[Symbol.asyncIterator] = wrappedIterator;
++  return stream;
++}
++
++export type RequestDebugLogger = {
++  enabled: true;
++  wrapStreamFn: (streamFn: StreamFn) => StreamFn;
++  dispose: () => void;
++};
++
++export function createRequestDebugLogger(params?: {
++  env?: NodeJS.ProcessEnv;
++}): RequestDebugLogger | null {
++  const env = params?.env ?? process.env;
++  if (!isEnabled(env)) {
++    return null;
++  }
++
++  log.info("LLM request debug logger enabled (fetch interceptor + stream wrapper active)");
++
++  const removeFetchInterceptor = installFetchInterceptor();
++
++  const wrapStreamFn: RequestDebugLogger["wrapStreamFn"] = (streamFn) => {
++    const wrapped: StreamFn = (model, context, options) => {
++      const reqId = ++requestCounter;
++      const modelRef = model as Model<Api> | undefined;
++
++      const nextOnPayload = (payload: unknown) => {
++        log.info(`[llm-request-body] #${reqId} ${safeJsonStringify({
++          reqId,
++          baseUrl: modelRef?.baseUrl ?? "(unknown)",
++          modelId: modelRef?.id,
++          api: (modelRef as { api?: string })?.api,
++          provider: (modelRef as { provider?: string })?.provider,
++          body: safeSerialize(payload),
++        }) ?? ""}`);
++        options?.onPayload?.(payload);
++      };
++
++      const result = streamFn(model, context, { ...options, onPayload: nextOnPayload });
++
++      if (result && typeof (result as Promise<AssistantMessageEventStream>).then === "function") {
++        return (result as Promise<AssistantMessageEventStream>).then((stream) =>
++          wrapEventStream(stream, reqId),
++        ) as ReturnType<StreamFn>;
++      }
++
++      return wrapEventStream(result as AssistantMessageEventStream, reqId);
++    };
++    return wrapped;
++  };
++
++  return {
++    enabled: true,
++    wrapStreamFn,
++    dispose: () => {
++      removeFetchInterceptor();
++      log.info("LLM request debug logger disposed");
++    },
++  };
++}
+diff --git a/src/agents/ollama-stream.ts b/src/agents/ollama-stream.ts
+index 5040b37737..ff17a55483 100644
+--- a/src/agents/ollama-stream.ts
++++ b/src/agents/ollama-stream.ts
+@@ -1,5 +1,6 @@
+ import { randomUUID } from "node:crypto";
+ import type { StreamFn } from "@mariozechner/pi-agent-core";
++import { parseBooleanValue } from "../utils/boolean.js";
+ import type {
+   AssistantMessage,
+   StopReason,
+@@ -446,6 +447,10 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
+           headers.Authorization = `Bearer ${options.apiKey}`;
+         }
+ 
++        if (parseBooleanValue(process.env.OPENCLAW_LLM_REQUEST_DEBUG_LOG)) {
++          log.info(`[ollama-request] url=${chatUrl} modelId=${model.id} headers=${JSON.stringify(headers)} bodyLength=${JSON.stringify(body).length} body=${JSON.stringify(body).slice(0, 8000)}`);
++        }
++
+         const response = await fetch(chatUrl, {
+           method: "POST",
+           headers,
+@@ -502,6 +507,10 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
+           id: model.id,
+         });
+ 
++        if (parseBooleanValue(process.env.OPENCLAW_LLM_REQUEST_DEBUG_LOG)) {
++          log.info(`[ollama-response] modelId=${model.id} stopReason=${assistantMessage.stopReason} contentLength=${accumulatedContent.length} content=${accumulatedContent.slice(0, 4000)} usage=${JSON.stringify({ input: finalResponse.prompt_eval_count, output: finalResponse.eval_count })}`);
++        }
++
+         const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
+           assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
+ 
+diff --git a/src/agents/openai-ws-stream.ts b/src/agents/openai-ws-stream.ts
+index b7449f3099..7e1718d892 100644
+--- a/src/agents/openai-ws-stream.ts
++++ b/src/agents/openai-ws-stream.ts
+@@ -23,6 +23,7 @@
+ 
+ import { randomUUID } from "node:crypto";
+ import type { StreamFn } from "@mariozechner/pi-agent-core";
++import { parseBooleanValue } from "../utils/boolean.js";
+ import type {
+   AssistantMessage,
+   Context,
+@@ -601,6 +602,10 @@ export function createOpenAIWebSocketStreamFn(
+       };
+       options?.onPayload?.(payload);
+ 
++      if (parseBooleanValue(process.env.OPENCLAW_LLM_REQUEST_DEBUG_LOG)) {
++        log.info(`[ws-request] transport=websocket url=wss://api.openai.com/v1/responses modelId=${model.id} payload=${JSON.stringify(payload).slice(0, 8000)}`);
++      }
++
+       try {
+         session.manager.send(payload as Parameters<OpenAIWebSocketManager["send"]>[0]);
+       } catch (sendErr) {
+@@ -663,14 +668,15 @@ export function createOpenAIWebSocketStreamFn(
+         const unsubscribe = session.manager.onMessage((event) => {
+           if (event.type === "response.completed") {
+             cleanup();
+-            // Update session state
+             session.lastContextLength = capturedContextLength;
+-            // Build and emit the assistant message
+             const assistantMsg = buildAssistantMessageFromResponse(event.response, {
+               api: model.api,
+               provider: model.provider,
+               id: model.id,
+             });
++            if (parseBooleanValue(process.env.OPENCLAW_LLM_REQUEST_DEBUG_LOG)) {
++              log.info(`[ws-response] modelId=${model.id} stopReason=${assistantMsg.stopReason} output=${JSON.stringify(event.response?.output ?? []).slice(0, 4000)} usage=${JSON.stringify(event.response?.usage ?? {})}`);
++            }
+             const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
+               assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
+             eventStream.push({ type: "done", reason, message: assistantMsg });
+diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
+index d1b158eee9..cd6641d949 100644
+--- a/src/agents/pi-embedded-runner/run/attempt.ts
++++ b/src/agents/pi-embedded-runner/run/attempt.ts
+@@ -31,6 +31,7 @@ import { resolveSessionAgentIds } from "../../agent-scope.js";
+ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+ import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
+ import { createCacheTrace } from "../../cache-trace.js";
++import { createRequestDebugLogger, type RequestDebugLogger } from "../../request-debug-logger.js";
+ import {
+   listChannelSupportedActions,
+   resolveChannelMessageToolHints,
+@@ -835,6 +836,7 @@ export async function runEmbeddedAttempt(
+     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
+     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+     let removeToolResultContextGuard: (() => void) | undefined;
++    let requestDebugLogger: RequestDebugLogger | null = null;
+     try {
+       await repairSessionFileIfNeeded({
+         sessionFile: params.sessionFile,
+@@ -1133,6 +1135,15 @@ export async function runEmbeddedAttempt(
+         );
+       }
+ 
++      requestDebugLogger = createRequestDebugLogger({
++        env: process.env,
++      });
++      if (requestDebugLogger) {
++        activeSession.agent.streamFn = requestDebugLogger.wrapStreamFn(
++          activeSession.agent.streamFn,
++        );
++      }
++
+       try {
+         const prior = await sanitizeSessionHistory({
+           messages: activeSession.messages,
+@@ -1709,6 +1720,7 @@ export async function runEmbeddedAttempt(
+       // synthetic "missing tool result" errors and causing silent agent failures.
+       // See: https://github.com/openclaw/openclaw/issues/8643
+       removeToolResultContextGuard?.();
++      requestDebugLogger?.dispose();
+       await flushPendingToolResultsAfterIdle({
+         agent: session?.agent,
+         sessionManager,

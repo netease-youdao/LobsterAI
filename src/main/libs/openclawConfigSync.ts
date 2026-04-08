@@ -3,10 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode, Agent } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig, IMSettings } from '../im/types';
-import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig, NeteaseBeeChanConfig } from '../im/types';
+import type { DingTalkOpenClawConfig, DingTalkInstanceConfig, FeishuInstanceConfig, QQInstanceConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig, NeteaseBeeChanConfig } from '../im/types';
 import { PlatformRegistry } from '../../shared/platform';
 import { ProviderName, OpenClawProviderId, OpenClawApi as OpenClawApiConst } from '../../shared/providers';
 import { resolveRawApiConfig, resolveAllProviderApiKeys, resolveAllEnabledProviderConfigs, getAllServerModelMetadata } from './claudeSettings';
+import { getCoworkOpenAICompatProxyBaseURL } from './coworkOpenAICompatProxy';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import type { McpToolManifestEntry } from './mcpServerManager';
@@ -49,12 +50,39 @@ const mapApiTypeToOpenClawApi = (
   providerName?: string,
   baseURL?: string,
 ): OpenClawProviderApi => {
+  // Qwen/DashScope Anthropic-compatible endpoint auto-injects web_search and
+  // web_extractor built-in tools that cannot be disabled from the client side,
+  // causing HTTP 400 errors. Force OpenAI format for any URL pointing to DashScope.
+  if (apiType === 'anthropic' && isDashScopeUrl(baseURL)) {
+    return 'openai-completions';
+  }
   if (apiType === 'openai') {
     return shouldUseOpenAIResponsesApi(providerName, baseURL)
       ? 'openai-responses'
       : 'openai-completions';
   }
   return 'anthropic-messages';
+};
+
+/**
+ * Detect DashScope (Qwen) URLs regardless of which provider the user configured.
+ */
+const isDashScopeUrl = (url?: string): boolean =>
+  !!url && /dashscope\.aliyuncs\.com/i.test(url);
+
+/**
+ * When a DashScope Anthropic URL is forced to OpenAI format, rewrite the base
+ * URL to the corresponding OpenAI-compatible endpoint so the request actually
+ * reaches the correct API server.
+ *
+ * dashscope.aliyuncs.com/apps/anthropic       → dashscope.aliyuncs.com/compatible-mode/v1
+ * coding.dashscope.aliyuncs.com/apps/anthropic → coding.dashscope.aliyuncs.com/v1
+ */
+const rewriteDashScopeAnthropicToOpenAI = (url: string): string => {
+  if (/coding\.dashscope\.aliyuncs\.com/i.test(url)) {
+    return url.replace(/\/apps\/anthropic\b/i, '/v1');
+  }
+  return url.replace(/\/apps\/anthropic\b/i, '/compatible-mode/v1');
 };
 
 const ensureDir = (dirPath: string): void => {
@@ -338,14 +366,6 @@ const normalizeBaseUrlPath = (rawBaseUrl: string, pathName: string): string => {
   }
 };
 
-const normalizeMoonshotBaseUrl = (rawBaseUrl: string): string => {
-  const trimmed = rawBaseUrl.trim();
-  if (!trimmed) {
-    return 'https://api.moonshot.cn/v1';
-  }
-  return normalizeBaseUrlPath(trimmed, '/v1');
-};
-
 /**
  * Strip the `/chat/completions` endpoint suffix from a base URL so that the
  * OpenClaw gateway can append its own path without duplication.
@@ -365,14 +385,6 @@ const stripChatCompletionsSuffix = (rawBaseUrl: string): string => {
   return normalized;
 };
 
-const normalizeKimiCodingBaseUrl = (rawBaseUrl: string): string => {
-  const trimmed = rawBaseUrl.trim();
-  if (!trimmed) {
-    return 'https://api.kimi.com/coding';
-  }
-  return normalizeBaseUrlPath(trimmed, '/coding');
-};
-
 const normalizeGeminiBaseUrl = (rawBaseUrl: string): string => {
   return normalizeBaseUrlPath(rawBaseUrl.trim() || 'https://generativelanguage.googleapis.com', '/v1beta');
 };
@@ -387,6 +399,17 @@ type ProviderDescriptor = {
   normalizeBaseUrl: (rawBaseUrl: string) => string;
   resolveApiKey?: (ctx: { apiKey: string; providerName: string }) => string;
   resolveSessionModelId?: (modelId: string) => string;
+  /**
+   * 动态计算 baseUrl，完全覆盖 normalizeBaseUrl 的结果。
+   * 用于 baseUrl 由运行时环境决定（如代理端口）而非用户配置的场景。
+   * 返回 null 表示降级使用 normalizeBaseUrl。
+   */
+  resolveRuntimeBaseUrl?: () => string | null;
+  /**
+   * 基于 modelId 动态计算 reasoning 标志。
+   * 优先级高于 modelDefaults.reasoning。
+   */
+  resolveModelReasoning?: (modelId: string, codingPlanEnabled: boolean) => boolean | undefined;
   modelDefaults?: Partial<{
     reasoning: boolean;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -411,23 +434,10 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     },
   },
 
-  [`${ProviderName.Moonshot}:codingPlan`]: {
-    providerId: OpenClawProviderId.KimiCoding,
-    resolveApi: () => OpenClawApiConst.AnthropicMessages as OpenClawProviderApi,
-    normalizeBaseUrl: normalizeKimiCodingBaseUrl,
-    resolveSessionModelId: () => 'k2p5',
-    modelDefaults: {
-      reasoning: true,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 256000,
-      maxTokens: 8192,
-    },
-  },
-
   [ProviderName.Moonshot]: {
     providerId: OpenClawProviderId.Moonshot,
-    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
-    normalizeBaseUrl: normalizeMoonshotBaseUrl,
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
     modelDefaults: {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 256000,
@@ -461,37 +471,31 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 
   [ProviderName.DeepSeek]: {
     providerId: OpenClawProviderId.DeepSeek,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
   [ProviderName.Qwen]: {
     providerId: OpenClawProviderId.Qwen,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
   [ProviderName.Zhipu]: {
     providerId: OpenClawProviderId.Zai,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
   [ProviderName.Volcengine]: {
     providerId: OpenClawProviderId.Volcengine,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
-    normalizeBaseUrl: stripChatCompletionsSuffix,
-  },
-
-  [`${ProviderName.Volcengine}:codingPlan`]: {
-    providerId: OpenClawProviderId.VolcenginePlan,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
   [ProviderName.Minimax]: {
     providerId: OpenClawProviderId.Minimax,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
@@ -509,13 +513,13 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 
   [ProviderName.Xiaomi]: {
     providerId: OpenClawProviderId.Xiaomi,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
   [ProviderName.OpenRouter]: {
     providerId: OpenClawProviderId.OpenRouter,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
 
@@ -524,11 +528,22 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
+
+  [ProviderName.Copilot]: {
+    providerId: OpenClawProviderId.LobsteraiCopilot,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+    resolveRuntimeBaseUrl: () => {
+      const proxyBase = getCoworkOpenAICompatProxyBaseURL('local');
+      return proxyBase ? `${proxyBase}/v1/copilot` : null;
+    },
+    resolveApiKey: () => 'copilot-via-proxy',
+  },
 };
 
 const DEFAULT_DESCRIPTOR: ProviderDescriptor = {
   providerId: OpenClawProviderId.Lobster,
-  resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
+  resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
   normalizeBaseUrl: stripChatCompletionsSuffix,
 };
 
@@ -564,11 +579,17 @@ export const buildProviderSelection = (options: {
   const providerName = options.providerName ?? '';
   const descriptor = resolveDescriptor(providerName, !!options.codingPlanEnabled);
 
-  const baseUrl = descriptor.normalizeBaseUrl(options.baseURL);
+  let baseUrl = descriptor.resolveRuntimeBaseUrl?.() ?? descriptor.normalizeBaseUrl(options.baseURL);
   const api = descriptor.resolveApi({
     apiType: options.apiType,
     baseURL: options.baseURL,
   });
+
+  // When DashScope Anthropic URL is forced to OpenAI format, rewrite the
+  // base URL to the corresponding OpenAI-compatible endpoint.
+  if (api === 'openai-completions' && options.apiType === 'anthropic' && isDashScopeUrl(baseUrl)) {
+    baseUrl = rewriteDashScopeAnthropicToOpenAI(baseUrl);
+  }
   const apiKey = descriptor.resolveApiKey
     ? descriptor.resolveApiKey({ apiKey: options.apiKey, providerName })
     : `\${${providerApiKeyEnvVar(providerName)}}`;
@@ -579,11 +600,10 @@ export const buildProviderSelection = (options: {
   const providerModelName = resolveModelDisplayName(sessionModelId, options.modelName);
   const modelInput: string[] = options.supportsImage ? ['text', 'image'] : ['text'];
 
-  // moonshot reasoning depends on modelId containing 'thinking'
-  const dynamicReasoning =
-    providerName === ProviderName.Moonshot && !options.codingPlanEnabled
-      ? options.modelId.includes('thinking')
-      : undefined;
+  // reasoning：descriptor 动态计算 > modelDefaults 静态值
+  const reasoning = descriptor.resolveModelReasoning
+    ? descriptor.resolveModelReasoning(options.modelId, !!options.codingPlanEnabled)
+    : descriptor.modelDefaults?.reasoning;
 
   return {
     providerId: descriptor.providerId,
@@ -601,11 +621,7 @@ export const buildProviderSelection = (options: {
           name: providerModelName,
           api,
           input: modelInput,
-          ...(dynamicReasoning !== undefined
-            ? { reasoning: dynamicReasoning }
-            : descriptor.modelDefaults?.reasoning !== undefined
-              ? { reasoning: descriptor.modelDefaults.reasoning }
-              : {}),
+          ...(reasoning !== undefined ? { reasoning } : {}),
           ...(descriptor.modelDefaults?.cost
             ? { cost: descriptor.modelDefaults.cost }
             : {}),
@@ -653,9 +669,9 @@ type OpenClawConfigSyncDeps = {
   isEnterprise: () => boolean;
   getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
   getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
-  getDingTalkConfig: () => DingTalkOpenClawConfig | null;
-  getFeishuConfig: () => FeishuOpenClawConfig | null;
-  getQQConfig: () => QQOpenClawConfig | null;
+  getDingTalkInstances: () => DingTalkInstanceConfig[];
+  getFeishuInstances: () => FeishuInstanceConfig[];
+  getQQInstances: () => QQInstanceConfig[];
   getWecomConfig: () => WecomOpenClawConfig | null;
   getPopoConfig: () => PopoOpenClawConfig | null;
   getNimConfig: () => NimConfig | null;
@@ -673,9 +689,9 @@ export class OpenClawConfigSync {
   private readonly isEnterprise: () => boolean;
   private readonly getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
   private readonly getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
-  private readonly getDingTalkConfig: () => DingTalkOpenClawConfig | null;
-  private readonly getFeishuConfig: () => FeishuOpenClawConfig | null;
-  private readonly getQQConfig: () => QQOpenClawConfig | null;
+  private readonly getDingTalkInstances: () => DingTalkInstanceConfig[];
+  private readonly getFeishuInstances: () => FeishuInstanceConfig[];
+  private readonly getQQInstances: () => QQInstanceConfig[];
   private readonly getWecomConfig: () => WecomOpenClawConfig | null;
   private readonly getPopoConfig: () => PopoOpenClawConfig | null;
   private readonly getNimConfig: () => NimConfig | null;
@@ -692,9 +708,9 @@ export class OpenClawConfigSync {
     this.isEnterprise = deps.isEnterprise;
     this.getTelegramOpenClawConfig = deps.getTelegramOpenClawConfig;
     this.getDiscordOpenClawConfig = deps.getDiscordOpenClawConfig;
-    this.getDingTalkConfig = deps.getDingTalkConfig;
-    this.getFeishuConfig = deps.getFeishuConfig;
-    this.getQQConfig = deps.getQQConfig;
+    this.getDingTalkInstances = deps.getDingTalkInstances;
+    this.getFeishuInstances = deps.getFeishuInstances;
+    this.getQQInstances = deps.getQQInstances;
     this.getWecomConfig = deps.getWecomConfig;
     this.getPopoConfig = deps.getPopoConfig;
     this.getNimConfig = deps.getNimConfig;
@@ -821,15 +837,22 @@ export class OpenClawConfigSync {
     const hasMcpBridgePlugin = isBundledPluginAvailable('mcp-bridge');
     const hasAskUserPlugin = isBundledPluginAvailable('ask-user-question');
 
-    const dingTalkConfig = this.getDingTalkConfig();
-    // DingTalk runs through OpenClaw plugin but still needs the gateway HTTP endpoint (chatCompletions)
-    const hasDingTalkOpenClaw = !!(dingTalkConfig?.enabled && dingTalkConfig.clientId);
+    // Detect if any provider uses Qwen/Aliyun DashScope URLs — OpenClaw auto-injects
+    // qwen-portal-auth plugin for these, so we must declare it to prevent config diff loops.
+    const hasQwenProvider = Object.values(allProvidersMap).some((p) => {
+      const url = (p as { baseUrl?: string }).baseUrl || '';
+      return url.includes('dashscope.aliyuncs.com') || url.includes('aliyuncs.com/compatible-mode');
+    });
 
-    const feishuConfig = this.getFeishuConfig();
+    const dingTalkInstances = this.getDingTalkInstances();
+    // DingTalk runs through OpenClaw plugin but still needs the gateway HTTP endpoint (chatCompletions)
+    const hasDingTalkOpenClaw = dingTalkInstances.some(i => i.enabled && i.clientId);
+
+    const feishuInstances = this.getFeishuInstances();
     // Feishu now runs fully through OpenClaw plugin, handled separately below like Telegram
     const hasFeishu = false; // Legacy in-line feishu channel disabled; OpenClaw plugin used instead
 
-    const qqConfig = this.getQQConfig();
+    const qqInstances = this.getQQInstances();
 
     const wecomConfig = this.getWecomConfig();
 
@@ -873,7 +896,7 @@ export class OpenClawConfigSync {
       },
       ...this.buildBindings(),
       session: {
-        dmScope: 'per-channel-peer',
+        dmScope: 'per-account-channel-peer',
       },
       commands: {
         ownerAllowFrom: MANAGED_OWNER_ALLOW_FROM,
@@ -912,9 +935,9 @@ export class OpenClawConfigSync {
               // When a channel is disabled in the UI, its plugin must also be
               // disabled so OpenClaw doesn't load it at all.
               const pluginEnabled = (() => {
-                if (id === 'dingtalk') return !!(dingTalkConfig?.enabled && dingTalkConfig.clientId);
-                if (id === 'feishu-openclaw-plugin') return !!(feishuConfig?.enabled && feishuConfig.appId);
-                if (id === 'qqbot') return !!(qqConfig?.enabled && qqConfig.appId);
+                if (id === 'dingtalk') return dingTalkInstances.some(i => i.enabled && i.clientId);
+                if (id === 'feishu-openclaw-plugin') return feishuInstances.some(i => i.enabled && i.appId);
+                if (id === 'openclaw-qqbot') return qqInstances.some(i => i.enabled && i.appId);
                 if (id === 'wecom-openclaw-plugin') return !!(wecomConfig?.enabled && wecomConfig.botId);
                 if (id === 'moltbot-popo') return !!(popoConfig?.enabled && popoConfig.appKey);
                 if (id === 'nim') return !!(nimConfig?.enabled && nimConfig.appKey && nimConfig.account && nimConfig.token);
@@ -933,6 +956,11 @@ export class OpenClawConfigSync {
             : {}),
           ...(hasAskUserPlugin
             ? { 'ask-user-question': { enabled: true } }
+            : {}),
+          // OpenClaw auto-injects qwen-portal-auth for Qwen/DashScope URLs; declare it
+          // explicitly so configSync doesn't remove it and trigger restart loops.
+          ...(hasQwenProvider
+            ? { 'qwen-portal-auth': { enabled: true } }
             : {}),
         };
 
@@ -1062,84 +1090,125 @@ export class OpenClawConfigSync {
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), discord: discordChannel };
     }
 
-    // Sync Feishu OpenClaw channel config (via feishu-openclaw-plugin)
-    if (feishuConfig?.enabled && feishuConfig.appId) {
-      const feishuChannel: Record<string, unknown> = {
+    // Sync Feishu OpenClaw channel config (via feishu-openclaw-plugin) — multi-instance via accounts
+    const enabledFeishuInstances = feishuInstances.filter(i => i.enabled && i.appId);
+    if (enabledFeishuInstances.length > 0) {
+      const buildFeishuAccountConfig = (inst: (typeof enabledFeishuInstances)[0], secretEnvVar: string): Record<string, unknown> => ({
         enabled: true,
-        appId: feishuConfig.appId,
-        appSecret: '${LOBSTER_FEISHU_APP_SECRET}',
-        domain: feishuConfig.domain || 'feishu',
-        dmPolicy: feishuConfig.dmPolicy || 'open',
+        name: inst.instanceName,
+        appId: inst.appId,
+        appSecret: `\${${secretEnvVar}}`,
+        domain: inst.domain || 'feishu',
+        dmPolicy: inst.dmPolicy || 'open',
         allowFrom: (() => {
-          const ids = feishuConfig.allowFrom?.length ? [...feishuConfig.allowFrom] : [];
-          if (feishuConfig.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
+          const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
+          if (inst.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
           return ids;
         })(),
-        groupPolicy: feishuConfig.groupPolicy || 'allowlist',
+        groupPolicy: inst.groupPolicy || 'allowlist',
         groupAllowFrom: (() => {
-          const ids = feishuConfig.groupAllowFrom?.length ? [...feishuConfig.groupAllowFrom] : [];
-          if (feishuConfig.groupPolicy === 'open' && !ids.includes('*')) ids.push('*');
+          const ids = inst.groupAllowFrom?.length ? [...inst.groupAllowFrom] : [];
+          if (inst.groupPolicy === 'open' && !ids.includes('*')) ids.push('*');
           return ids;
         })(),
-        groups: feishuConfig.groups && Object.keys(feishuConfig.groups).length > 0
-          ? feishuConfig.groups
+        groups: inst.groups && Object.keys(inst.groups).length > 0
+          ? inst.groups
           : { '*': { requireMention: true } },
-        historyLimit: feishuConfig.historyLimit || 50,
-        replyMode: feishuConfig.replyMode || 'auto',
-        mediaMaxMb: feishuConfig.mediaMaxMb || 30,
-      };
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), feishu: feishuChannel };
+        historyLimit: inst.historyLimit || 50,
+        replyMode: inst.replyMode || 'auto',
+        mediaMaxMb: inst.mediaMaxMb || 30,
+      });
+
+      // All instances go into `accounts` dict
+      const accounts: Record<string, unknown> = {};
+      for (let idx = 0; idx < enabledFeishuInstances.length; idx++) {
+        const inst = enabledFeishuInstances[idx];
+        const secretVar = idx === 0 ? 'LOBSTER_FEISHU_APP_SECRET' : `LOBSTER_FEISHU_APP_SECRET_${idx}`;
+        accounts[inst.instanceId.slice(0, 8)] = buildFeishuAccountConfig(inst, secretVar);
+      }
+
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), feishu: { accounts } };
     }
 
-    // Sync DingTalk OpenClaw channel config (via dingtalk-connector plugin)
-    if (dingTalkConfig?.enabled && dingTalkConfig.clientId) {
+    // Sync DingTalk OpenClaw channel config (via dingtalk-connector plugin) — multi-instance via accounts
+    const enabledDingTalkInstances = dingTalkInstances.filter(i => i.enabled && i.clientId);
+    if (enabledDingTalkInstances.length > 0) {
       const gatewayToken = this.engineManager.getGatewayToken();
-      const dingtalkChannel: Record<string, unknown> = {
+      const buildDingTalkAccountConfig = (inst: (typeof enabledDingTalkInstances)[0], secretEnvVar: string): Record<string, unknown> => ({
         enabled: true,
-        clientId: dingTalkConfig.clientId,
-        clientSecret: '${LOBSTER_DINGTALK_CLIENT_SECRET}',
-        dmPolicy: dingTalkConfig.dmPolicy || 'open',
+        name: inst.instanceName,
+        clientId: inst.clientId,
+        clientSecret: `\${${secretEnvVar}}`,
+        dmPolicy: inst.dmPolicy || 'open',
         allowFrom: (() => {
-          const ids = dingTalkConfig.allowFrom?.length ? [...dingTalkConfig.allowFrom] : [];
-          if (dingTalkConfig.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
+          const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
+          if (inst.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
           return ids;
         })(),
-        groupPolicy: dingTalkConfig.groupPolicy || 'open',
-        sessionTimeout: dingTalkConfig.sessionTimeout ?? 1800000,
-        separateSessionByConversation: dingTalkConfig.separateSessionByConversation ?? true,
-        groupSessionScope: dingTalkConfig.groupSessionScope || 'group',
-        sharedMemoryAcrossConversations: dingTalkConfig.sharedMemoryAcrossConversations ?? false,
-        ...(dingTalkConfig.gatewayBaseUrl ? { gatewayBaseUrl: dingTalkConfig.gatewayBaseUrl } : {}),
-        ...(gatewayToken ? { gatewayToken: '${LOBSTER_DINGTALK_GW_TOKEN}' } : {}),
-      };
+        groupPolicy: inst.groupPolicy || 'open',
+        sessionTimeout: inst.sessionTimeout ?? 1800000,
+        separateSessionByConversation: inst.separateSessionByConversation ?? true,
+        groupSessionScope: inst.groupSessionScope || 'group',
+        sharedMemoryAcrossConversations: inst.sharedMemoryAcrossConversations ?? false,
+        ...(inst.gatewayBaseUrl ? { gatewayBaseUrl: inst.gatewayBaseUrl } : {}),
+      });
+
+      // All instances go into `accounts` dict
+      const accounts: Record<string, unknown> = {};
+      for (let idx = 0; idx < enabledDingTalkInstances.length; idx++) {
+        const inst = enabledDingTalkInstances[idx];
+        const secretVar = idx === 0 ? 'LOBSTER_DINGTALK_CLIENT_SECRET' : `LOBSTER_DINGTALK_CLIENT_SECRET_${idx}`;
+        accounts[inst.instanceId.slice(0, 8)] = buildDingTalkAccountConfig(inst, secretVar);
+      }
+
+      const dingtalkChannel: Record<string, unknown> = { accounts };
+      // gatewayToken is shared (not per-instance)
+      if (gatewayToken) {
+        dingtalkChannel.gatewayToken = '${LOBSTER_DINGTALK_GW_TOKEN}';
+      }
+
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'dingtalk': dingtalkChannel };
     }
 
-    // Sync QQ OpenClaw channel config (via qqbot plugin)
-    if (qqConfig?.enabled && qqConfig.appId) {
-      const qqChannel: Record<string, unknown> = {
-        enabled: true,
-        appId: qqConfig.appId,
-        clientSecret: '${LOBSTER_QQ_CLIENT_SECRET}',
-        dmPolicy: qqConfig.dmPolicy || 'open',
-        allowFrom: (() => {
-          const ids = qqConfig.allowFrom?.length ? [...qqConfig.allowFrom] : [];
-          if (qqConfig.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
-          return ids;
-        })(),
-        groupPolicy: qqConfig.groupPolicy || 'open',
-        groupAllowFrom: (() => {
-          const ids = qqConfig.groupAllowFrom?.length ? [...qqConfig.groupAllowFrom] : [];
-          if (qqConfig.groupPolicy === 'open' && !ids.includes('*')) ids.push('*');
-          return ids;
-        })(),
-        historyLimit: qqConfig.historyLimit || 50,
-        markdownSupport: qqConfig.markdownSupport ?? true,
+    // Sync QQ OpenClaw channel config (via qqbot plugin) — multi-instance via accounts
+    const enabledQQInstances = qqInstances.filter(i => i.enabled && i.appId);
+    if (enabledQQInstances.length > 0) {
+      const buildQQAccountConfig = (inst: (typeof enabledQQInstances)[0], secretEnvVar: string): Record<string, unknown> => {
+        const account: Record<string, unknown> = {
+          enabled: true,
+          name: inst.instanceName,
+          appId: inst.appId,
+          clientSecret: `\${${secretEnvVar}}`,
+          dmPolicy: inst.dmPolicy || 'open',
+          allowFrom: (() => {
+            const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
+            if (inst.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
+            return ids;
+          })(),
+          groupPolicy: inst.groupPolicy || 'open',
+          groupAllowFrom: (() => {
+            const ids = inst.groupAllowFrom?.length ? [...inst.groupAllowFrom] : [];
+            if (inst.groupPolicy === 'open' && !ids.includes('*')) ids.push('*');
+            return ids;
+          })(),
+          historyLimit: inst.historyLimit || 50,
+          markdownSupport: inst.markdownSupport ?? true,
+        };
+        if (inst.imageServerBaseUrl) {
+          account.imageServerBaseUrl = inst.imageServerBaseUrl;
+        }
+        return account;
       };
-      if (qqConfig.imageServerBaseUrl) {
-        qqChannel.imageServerBaseUrl = qqConfig.imageServerBaseUrl;
+
+      // All instances go into `accounts` dict
+      const accounts: Record<string, unknown> = {};
+      for (let idx = 0; idx < enabledQQInstances.length; idx++) {
+        const inst = enabledQQInstances[idx];
+        const secretVar = idx === 0 ? 'LOBSTER_QQ_CLIENT_SECRET' : `LOBSTER_QQ_CLIENT_SECRET_${idx}`;
+        accounts[inst.instanceId.slice(0, 8)] = buildQQAccountConfig(inst, secretVar);
       }
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), qqbot: qqChannel };
+
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), qqbot: { accounts } };
     }
 
     // Sync WeCom OpenClaw channel config (via wecom-openclaw-plugin)
@@ -1249,19 +1318,28 @@ export class OpenClawConfigSync {
     // forcing those channels to restart when the binding changes.  OpenClaw
     // channel plugins capture their config at startup and never refresh it,
     // so bindings-only config changes (kind: "none" in the reload plan) are
-     // invisible to running plugins.  By touching the channel config we trigger
-     // a "channels.*" diff path which forces the plugin to restart.
-     const platformBindingsForSentinel = this.getIMSettings?.()?.platformAgentBindings;
-     if (platformBindingsForSentinel) {
-       // Map openclaw channel key → platform key
-      const channelToPlatform = PlatformRegistry;
-       const channels = (managedConfig.channels ?? {}) as Record<string, Record<string, unknown>>;
+    // invisible to running plugins.  By touching the channel config we trigger
+    // a "channels.*" diff path which forces the plugin to restart.
+    const platformBindingsForSentinel = this.getIMSettings?.()?.platformAgentBindings;
+    if (platformBindingsForSentinel) {
+      const channels = (managedConfig.channels ?? {}) as Record<string, Record<string, unknown>>;
       for (const channelKey of Object.keys(channels)) {
         if (!channels[channelKey] || typeof channels[channelKey] !== 'object') continue;
-        const platformKey = channelToPlatform.platformOfChannel(channelKey);
-        const boundAgentId = platformKey ? platformBindingsForSentinel[platformKey] : undefined;
-        if (boundAgentId && boundAgentId !== 'main') {
-          channels[channelKey]._agentBinding = boundAgentId;
+        const platformKey = PlatformRegistry.platformOfChannel(channelKey);
+        if (!platformKey) continue;
+        // Collect all bindings for this platform (platform-level + per-instance)
+        const bindingValues: string[] = [];
+        if (platformBindingsForSentinel[platformKey] && platformBindingsForSentinel[platformKey] !== 'main') {
+          bindingValues.push(platformBindingsForSentinel[platformKey]);
+        }
+        const prefix = `${platformKey}:`;
+        for (const key of Object.keys(platformBindingsForSentinel)) {
+          if (key.startsWith(prefix) && platformBindingsForSentinel[key] !== 'main') {
+            bindingValues.push(`${key}=${platformBindingsForSentinel[key]}`);
+          }
+        }
+        if (bindingValues.length > 0) {
+          channels[channelKey]._agentBinding = bindingValues.join(',');
         }
       }
     }
@@ -1360,26 +1438,42 @@ export class OpenClawConfigSync {
       env.LOBSTER_DC_BOT_TOKEN = dcConfig.botToken;
     }
 
-    // Feishu
-    const feishuConfig = this.getFeishuConfig();
-    if (feishuConfig?.enabled && feishuConfig.appSecret) {
-      env.LOBSTER_FEISHU_APP_SECRET = feishuConfig.appSecret;
+    // Feishu — per-instance secrets (must match sync() indexing: enabled instances only)
+    const feishuInstances = this.getFeishuInstances();
+    const enabledFeishu = feishuInstances.filter(i => i.enabled && i.appSecret);
+    for (let idx = 0; idx < enabledFeishu.length; idx++) {
+      if (idx === 0) {
+        env.LOBSTER_FEISHU_APP_SECRET = enabledFeishu[idx].appSecret;
+      } else {
+        env[`LOBSTER_FEISHU_APP_SECRET_${idx}`] = enabledFeishu[idx].appSecret;
+      }
     }
 
-    // DingTalk
-    const dingTalkConfig = this.getDingTalkConfig();
-    if (dingTalkConfig?.enabled && dingTalkConfig.clientSecret) {
-      env.LOBSTER_DINGTALK_CLIENT_SECRET = dingTalkConfig.clientSecret;
+    // DingTalk — per-instance secrets (must match sync() indexing: enabled instances only)
+    const dingTalkInstances = this.getDingTalkInstances();
+    const enabledDingTalk = dingTalkInstances.filter(i => i.enabled && i.clientSecret);
+    for (let idx = 0; idx < enabledDingTalk.length; idx++) {
+      if (idx === 0) {
+        env.LOBSTER_DINGTALK_CLIENT_SECRET = enabledDingTalk[idx].clientSecret;
+      } else {
+        env[`LOBSTER_DINGTALK_CLIENT_SECRET_${idx}`] = enabledDingTalk[idx].clientSecret;
+      }
     }
+    // Gateway token is shared (not per-instance)
     const gatewayToken = this.engineManager.getGatewayToken();
     if (gatewayToken) {
       env.LOBSTER_DINGTALK_GW_TOKEN = gatewayToken;
     }
 
-    // QQ
-    const qqConfig = this.getQQConfig();
-    if (qqConfig?.enabled && qqConfig.appSecret) {
-      env.LOBSTER_QQ_CLIENT_SECRET = qqConfig.appSecret;
+    // QQ — per-instance secrets (must match sync() indexing: enabled instances only)
+    const qqInstances = this.getQQInstances();
+    const enabledQQ = qqInstances.filter(i => i.enabled && i.appSecret);
+    for (let idx = 0; idx < enabledQQ.length; idx++) {
+      if (idx === 0) {
+        env.LOBSTER_QQ_CLIENT_SECRET = enabledQQ[idx].appSecret;
+      } else {
+        env[`LOBSTER_QQ_CLIENT_SECRET_${idx}`] = enabledQQ[idx].appSecret;
+      }
     }
 
     // WeCom
@@ -1722,13 +1816,45 @@ export class OpenClawConfigSync {
 
     const agents = this.getAgents?.() ?? [];
 
-    // Map openclaw channel name → platform key used in platformAgentBindings
-    const channelMap: Array<{ getter: () => { enabled: boolean } | null; channel: string; platform: string }> = [
-      { getter: () => this.getDingTalkConfig(), channel: 'dingtalk', platform: 'dingtalk' },
-      { getter: () => this.getFeishuConfig(), channel: 'feishu', platform: 'feishu' },
+    const bindings: Array<Record<string, unknown>> = [];
+
+    // Handle per-instance bindings for multi-instance platforms
+    const multiInstanceChannels: Record<string, { channel: string; getInstances: () => Array<{ instanceId: string; enabled: boolean }> }> = {
+      dingtalk: { channel: 'dingtalk', getInstances: () => this.getDingTalkInstances() },
+      feishu: { channel: 'feishu', getInstances: () => this.getFeishuInstances() },
+      qq: { channel: 'qqbot', getInstances: () => this.getQQInstances() },
+    };
+
+    for (const [platform, { channel, getInstances }] of Object.entries(multiInstanceChannels)) {
+      try {
+        const instances = getInstances();
+        for (const inst of instances) {
+          if (!inst.enabled) continue;
+          // Check for per-instance binding: `platform:instanceId`
+          const bindingKey = `${platform}:${inst.instanceId}`;
+          const agentId = platformBindings[bindingKey];
+          if (!agentId || agentId === 'main') continue;
+          const targetAgent = agents.find((a) => a.id === agentId && a.enabled);
+          if (!targetAgent) continue;
+          bindings.push({ agentId, match: { channel, accountId: inst.instanceId.slice(0, 8) } });
+        }
+        // Also check legacy platform-level binding
+        const platformAgentId = platformBindings[platform];
+        if (platformAgentId && platformAgentId !== 'main') {
+          const targetAgent = agents.find((a) => a.id === platformAgentId && a.enabled);
+          if (targetAgent && instances.some(i => i.enabled)) {
+            bindings.push({ agentId: platformAgentId, match: { channel } });
+          }
+        }
+      } catch {
+        // Skip platforms that fail to load config
+      }
+    }
+
+    // Handle single-instance platforms
+    const singleInstanceChannels: Array<{ getter: () => { enabled: boolean } | null; channel: string; platform: string }> = [
       { getter: () => this.getTelegramOpenClawConfig?.() ?? null, channel: 'telegram', platform: 'telegram' },
       { getter: () => this.getDiscordOpenClawConfig?.() ?? null, channel: 'discord', platform: 'discord' },
-      { getter: () => this.getQQConfig(), channel: 'qqbot', platform: 'qq' },
       { getter: () => this.getWecomConfig(), channel: 'wecom', platform: 'wecom' },
       { getter: () => this.getPopoConfig(), channel: 'moltbot-popo', platform: 'popo' },
       { getter: () => this.getNimConfig(), channel: 'nim', platform: 'nim' },
@@ -1736,12 +1862,10 @@ export class OpenClawConfigSync {
       { getter: () => this.getWeixinConfig(), channel: 'openclaw-weixin', platform: 'weixin' },
     ];
 
-    const bindings: Array<Record<string, unknown>> = [];
-    for (const { getter, channel, platform } of channelMap) {
+    for (const { getter, channel, platform } of singleInstanceChannels) {
       const agentId = platformBindings[platform];
       if (!agentId || agentId === 'main') continue;
 
-      // Verify the target agent actually exists and is enabled
       const targetAgent = agents.find((a) => a.id === agentId && a.enabled);
       if (!targetAgent) continue;
 

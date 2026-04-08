@@ -1,6 +1,7 @@
 import React from 'react';
 import { i18nService } from '../../services/i18n';
 import type { AppUpdateInfo, AppUpdateDownloadProgress } from '../../services/appUpdate';
+import Modal from '../common/Modal';
 
 export type UpdateModalState = 'info' | 'downloading' | 'installing' | 'error';
 
@@ -41,21 +42,8 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   const currentLog = changeLog?.[lang] ?? { title: '', content: [] };
   const isDismissible = modalState === 'info' || modalState === 'error';
 
-  const handleBackdropClick = () => {
-    if (isDismissible) {
-      onCancel();
-    }
-  };
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
-      onClick={handleBackdropClick}
-    >
-      <div
-        className="modal-content w-full max-w-md mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={isDismissible ? onCancel : () => {}} overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop" className="modal-content w-full max-w-md mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Info state - shows changelog and Update/Cancel buttons */}
         {modalState === 'info' && (
           <>
@@ -214,8 +202,7 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 };
 

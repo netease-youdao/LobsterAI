@@ -88,6 +88,7 @@ export class IMCoworkHandler extends EventEmitter {
   private readonly onPermissionRequest = this.handlePermissionRequest.bind(this);
   private readonly onComplete = this.handleComplete.bind(this);
   private readonly onError = this.handleError.bind(this);
+  private readonly onSessionStopped = this.handleSessionStopped.bind(this);
 
   constructor(options: IMCoworkHandlerOptions) {
     super();
@@ -144,6 +145,7 @@ export class IMCoworkHandler extends EventEmitter {
     this.coworkRuntime.on('permissionRequest', this.onPermissionRequest);
     this.coworkRuntime.on('complete', this.onComplete);
     this.coworkRuntime.on('error', this.onError);
+    this.coworkRuntime.on('sessionStopped', this.onSessionStopped);
   }
 
   /**
@@ -323,7 +325,8 @@ export class IMCoworkHandler extends EventEmitter {
       throw new Error(`IM 工作目录不存在或无效: ${resolvedWorkspaceRoot}`);
     }
 
-    // Resolve the agent bound to this platform
+    // Resolve the agent bound to this platform (single-instance platforms only;
+    // multi-instance platforms route through OpenClaw channel session sync)
     const imSettings = this.imStore.getIMSettings();
     const agentId = imSettings.platformAgentBindings?.[platform] || 'main';
 
@@ -520,6 +523,13 @@ export class IMCoworkHandler extends EventEmitter {
       || message.includes('bad_response_status_code')
       || message.includes('invalid chat setting')
       || message.includes('signature: field required')
+      || message.includes('too long')
+      || message.includes('context length')
+      || message.includes('range of input length')
+      || message.includes('payload too large')
+      || message.includes('entity too large')
+      || message.includes('maximum context length')
+      || message.includes('超过') || message.includes('上限')
     );
   }
 
@@ -903,6 +913,18 @@ export class IMCoworkHandler extends EventEmitter {
     }
   }
 
+  private handleSessionStopped(sessionId: string): void {
+    if (!this.ensureTrackedSession(sessionId)) return;
+
+    this.clearPendingPermissionsBySessionId(sessionId);
+    const accumulator = this.messageAccumulators.get(sessionId);
+    if (!accumulator) return;
+
+    const partialReply = this.formatReply(sessionId, accumulator.messages);
+    this.cleanupAccumulator(sessionId);
+    accumulator.resolve?.(partialReply || t('imSessionStoppedReply'));
+  }
+
   /**
    * Clean up accumulator
    */
@@ -1007,5 +1029,6 @@ export class IMCoworkHandler extends EventEmitter {
     this.coworkRuntime.off('permissionRequest', this.onPermissionRequest);
     this.coworkRuntime.off('complete', this.onComplete);
     this.coworkRuntime.off('error', this.onError);
+    this.coworkRuntime.off('sessionStopped', this.onSessionStopped);
   }
 }

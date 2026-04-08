@@ -36,7 +36,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Timeout hint
     taskTimedOut: '[任务超时] 任务因超过最大允许时长而被自动停止。你可以继续对话以从中断处继续。',
+    imSessionStoppedReply: '任务已被手动停止。你可以继续发送消息开始新的对话。',
 
+    // OAuth flow messages
+    qwenOAuthRequestingDeviceCode: '正在请求设备授权码...',
+    qwenOAuthOpeningBrowser: '正在打开浏览器进行授权...',
+    qwenOAuthWaitingForUser: '等待用户授权...',
+    qwenOAuthSuccess: 'OAuth 授权成功',
+    qwenOAuthFailed: 'OAuth 授权失败',
+    qwenOAuthTimeout: 'OAuth 授权超时',
     // Thinking-only hint
     taskThinkingOnly: '[模型未输出内容] 模型已完成思考但未生成可见回复。你可以继续对话，让模型重新输出结果。',
 
@@ -67,6 +75,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
+    skillErrInvalidSource: '无效的技能来源。支持 owner/repo、仓库链接、npm 包名、ClawHub 链接或 GitHub tree/blob 链接。',
+    skillErrClawhubNotFound: '在 ClawHub 上未找到该技能，请检查链接是否正确。',
+    skillErrClawhubDownloadFailed: '从 ClawHub 下载技能失败，请稍后重试。',
 
     // Auth quota
     authPlanFree: '免费',
@@ -103,6 +114,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imQqMentionHint: '频道中需 @机器人 触发对话，也支持私信和群聊。',
     imQqAuthPassed: 'QQ 鉴权通过（AccessToken 已获取）。',
     imQqAccessTokenFailed: '获取 AccessToken 失败',
+    imQqFillAppIdSecret: '请补全 AppID 和 AppSecret 后重新测试连通性。',
+    imQqAuthFailed: 'QQ 鉴权失败: {error}',
+    imQqCheckAppIdSecret: '请检查 AppID 和 AppSecret 是否正确，且机器人权限已开通。',
 
     // Telegram
     imTelegramMissingBotToken: '缺少必要配置项: botToken',
@@ -197,7 +211,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Timeout hint
     taskTimedOut: '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
+    imSessionStoppedReply: 'The task was manually stopped. You can send a new message to start a fresh conversation.',
 
+    // OAuth flow messages
+    qwenOAuthRequestingDeviceCode: 'Requesting device authorization code...',
+    qwenOAuthOpeningBrowser: 'Opening browser for authorization...',
+    qwenOAuthWaitingForUser: 'Waiting for user authorization...',
+    qwenOAuthSuccess: 'OAuth authorization successful',
+    qwenOAuthFailed: 'OAuth authorization failed',
+    qwenOAuthTimeout: 'OAuth authorization timeout',
     // Thinking-only hint
     taskThinkingOnly: '[No output] The model finished thinking but did not generate a visible reply. You can continue the conversation to ask it to output the result.',
 
@@ -228,6 +250,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
+    skillErrInvalidSource: 'Invalid skill source. Use owner/repo, repo URL, npm package spec, ClawHub URL, or a GitHub tree/blob URL.',
+    skillErrClawhubNotFound: 'Skill not found on ClawHub. Please check the URL.',
+    skillErrClawhubDownloadFailed: 'Failed to download skill from ClawHub. Please try again later.',
 
     // Auth quota
     authPlanFree: 'Free',
@@ -264,6 +289,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imQqMentionHint: '@mention the bot in channels to start a conversation. Direct messages and group chats are also supported.',
     imQqAuthPassed: 'QQ authentication passed (AccessToken obtained).',
     imQqAccessTokenFailed: 'Failed to obtain AccessToken',
+    imQqFillAppIdSecret: 'Please provide the AppID and AppSecret and test connectivity again.',
+    imQqAuthFailed: 'QQ authentication failed: {error}',
+    imQqCheckAppIdSecret: 'Please check that the AppID and AppSecret are correct and that bot permissions are enabled.',
 
     // Telegram
     imTelegramMissingBotToken: 'Missing required configuration: botToken',

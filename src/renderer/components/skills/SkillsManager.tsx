@@ -1,34 +1,64 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { useDispatch, useSelector } from 'react-redux';
+import { ArrowPathIcon } from '@heroicons/react/20/solid';
 import {
   ArrowDownTrayIcon,
   CheckCircleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { ArrowPathIcon } from '@heroicons/react/20/solid';
-import SearchIcon from '../icons/SearchIcon';
-import PlusCircleIcon from '../icons/PlusCircleIcon';
-import UploadIcon from '../icons/UploadIcon';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useDispatch, useSelector } from 'react-redux';
+
+import { i18nService } from '../../services/i18n';
+import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
+import { RootState } from '../../store';
+import { setSkills } from '../../store/slices/skillSlice';
+import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
+import Modal from '../common/Modal';
+import ErrorMessage from '../ErrorMessage';
 import FolderOpenIcon from '../icons/FolderOpenIcon';
 import LinkIcon from '../icons/LinkIcon';
+import PencilSquareIcon from '../icons/PencilSquareIcon';
+import PlusCircleIcon from '../icons/PlusCircleIcon';
 import PuzzleIcon from '../icons/PuzzleIcon';
+import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
-import { i18nService } from '../../services/i18n';
-import { skillService, resolveLocalizedText, compareVersions } from '../../services/skill';
-import { setSkills } from '../../store/slices/skillSlice';
-import { RootState } from '../../store';
-import { Skill, MarketplaceSkill, MarketTag } from '../../types/skill';
-import ErrorMessage from '../ErrorMessage';
+import UploadIcon from '../icons/UploadIcon';
 import SkillSecurityReport from './SkillSecurityReport';
 
 type SkillTab = 'installed' | 'marketplace';
+type ImportSourceType = 'github' | 'clawhub';
+
+const importSourceTypes: ImportSourceType[] = ['github', 'clawhub'];
+
+const importTabConfig: Record<ImportSourceType, {
+  tabLabelKey: string;
+  descriptionKey: string;
+  urlLabelKey: string;
+  placeholderKey: string;
+  examplesKey: string;
+}> = {
+  github: {
+    tabLabelKey: 'githubTabLabel',
+    descriptionKey: 'githubImportDescription',
+    urlLabelKey: 'githubImportUrlLabel',
+    placeholderKey: 'githubSkillPlaceholder',
+    examplesKey: 'githubImportExamples',
+  },
+  clawhub: {
+    tabLabelKey: 'clawhubTabLabel',
+    descriptionKey: 'clawhubImportDescription',
+    urlLabelKey: 'clawhubImportUrlLabel',
+    placeholderKey: 'clawhubSkillPlaceholder',
+    examplesKey: 'clawhubImportExamples',
+  },
+};
 
 interface SkillsManagerProps {
   readOnly?: boolean;
+  onCreateByChat?: () => void;
 }
 
-const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
+const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat }) => {
   const dispatch = useDispatch();
   const skills = useSelector((state: RootState) => state.skill.skills);
 
@@ -37,7 +67,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
   const [skillActionError, setSkillActionError] = useState('');
   const [isDownloadingSkill, setIsDownloadingSkill] = useState(false);
   const [isAddSkillMenuOpen, setIsAddSkillMenuOpen] = useState(false);
-  const [isGithubImportOpen, setIsGithubImportOpen] = useState(false);
+  const [isRemoteImportOpen, setIsRemoteImportOpen] = useState(false);
+  const [importTab, setImportTab] = useState<ImportSourceType>('github');
   const [activeTab, setActiveTab] = useState<SkillTab>('installed');
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [marketTags, setMarketTags] = useState<MarketTag[]>([]);
@@ -62,7 +93,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
-  const githubImportInputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -124,20 +155,20 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
   }, [isAddSkillMenuOpen]);
 
   useEffect(() => {
-    if (!isGithubImportOpen) return;
+    if (!isRemoteImportOpen) return;
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setIsGithubImportOpen(false);
+        setIsRemoteImportOpen(false);
       }
     };
 
     document.addEventListener('keydown', handleEscape);
-    setTimeout(() => githubImportInputRef.current?.focus(), 0);
+    setTimeout(() => importInputRef.current?.focus(), 0);
     return () => {
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [isGithubImportOpen]);
+  }, [isRemoteImportOpen, importTab]);
 
   useEffect(() => {
     const hasOpenDialog = selectedSkill || selectedMarketplaceSkill;
@@ -250,7 +281,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
     }
     // Security audit returned — show report modal
     if (result.auditReport && result.pendingInstallId) {
-      setIsGithubImportOpen(false);
+      setIsRemoteImportOpen(false);
       setSecurityReport(result.auditReport);
       setPendingInstallId(result.pendingInstallId);
       return;
@@ -260,7 +291,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
     }
     setSkillDownloadSource('');
     setIsAddSkillMenuOpen(false);
-    setIsGithubImportOpen(false);
+    setIsRemoteImportOpen(false);
   };
 
   const handleUploadSkillZip = async () => {
@@ -282,15 +313,62 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
     }
   };
 
-  const handleOpenGithubImport = () => {
+  const handleOpenRemoteImport = () => {
     setIsAddSkillMenuOpen(false);
     setSkillActionError('');
-    setIsGithubImportOpen(true);
+    setSkillDownloadSource('');
+    setIsRemoteImportOpen(true);
   };
 
-  const handleImportFromGithub = async () => {
+  const handleCreateByChat = () => {
+    setIsAddSkillMenuOpen(false);
+    const skillCreator = skills.find(s => s.id === 'skill-creator');
+
+    if (!skillCreator) {
+      // Not installed → switch to marketplace tab and search
+      setActiveTab('marketplace');
+      setSkillSearchQuery('skill-creator');
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotInstalled') }));
+      return;
+    }
+
+    if (!skillCreator.enabled) {
+      // Installed but disabled → switch to installed tab and search
+      setActiveTab('installed');
+      setSkillSearchQuery('skill-creator');
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('skillCreatorNotEnabled') }));
+      return;
+    }
+
+    onCreateByChat?.();
+  };
+
+  const handleImportFromDialog = async () => {
     if (isDownloadingSkill) return;
-    await handleAddSkillFromSource(skillDownloadSource);
+    const trimmed = skillDownloadSource.trim();
+    if (!trimmed) return;
+
+    // Validate URL matches the selected tab
+    try {
+      const url = new URL(trimmed);
+      const host = url.hostname.toLowerCase();
+      if (importTab === 'clawhub' && host !== 'clawhub.ai' && host !== 'www.clawhub.ai') {
+        setSkillActionError(i18nService.t('importSourceMismatchClawhub'));
+        return;
+      }
+      if (importTab === 'github' && !host.includes('github.com') && !host.includes('github.io')) {
+        setSkillActionError(i18nService.t('importSourceMismatchGithub'));
+        return;
+      }
+    } catch {
+      // Not a URL (e.g. "owner/repo" shorthand for GitHub) — only allow on GitHub tab
+      if (importTab === 'clawhub') {
+        setSkillActionError(i18nService.t('importSourceMismatchClawhub'));
+        return;
+      }
+    }
+
+    await handleAddSkillFromSource(trimmed);
   };
 
   const getSkillInstallStatus = (marketplaceSkill: MarketplaceSkill): 'not_installed' | 'installed' | 'update_available' => {
@@ -442,7 +520,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
       setInstallingSkillId(null);
       setSkillDownloadSource('');
       setIsAddSkillMenuOpen(false);
-      setIsGithubImportOpen(false);
+      setIsRemoteImportOpen(false);
     }
   };
 
@@ -454,7 +532,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
         </p>
       </div>
 
-      {skillActionError && (
+      {skillActionError && !isRemoteImportOpen && (
         <ErrorMessage
           message={skillActionError}
           onClose={() => setSkillActionError('')}
@@ -511,11 +589,19 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
               </button>
               <button
                 type="button"
-                onClick={handleOpenGithubImport}
+                onClick={handleOpenRemoteImport}
                 className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-foreground hover:bg-surface-raised transition-colors"
               >
                 <LinkIcon className="h-4 w-4 text-secondary" />
-                <span>{i18nService.t('importFromGithub')}</span>
+                <span>{i18nService.t('remoteImport')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateByChat}
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-foreground hover:bg-surface-raised transition-colors"
+              >
+                <PencilSquareIcon className="h-4 w-4 text-secondary" />
+                <span>{i18nService.t('createSkillByChat')}</span>
               </button>
             </div>
           )}
@@ -809,14 +895,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
       )}
 
       {selectedMarketplaceSkill && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setSelectedMarketplaceSkill(null)}
-        >
-          <div
-            className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <Modal onClose={() => setSelectedMarketplaceSkill(null)} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg bg-background flex items-center justify-center flex-shrink-0">
@@ -913,19 +992,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
                 </button>
               ) : null;
             })()}
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
       {selectedSkill && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setSelectedSkill(null)}
-        >
-          <div
-            className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <Modal onClose={() => setSelectedSkill(null)} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg bg-background flex items-center justify-center flex-shrink-0">
@@ -1030,19 +1101,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
                 />
               </div>
             </div>
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
       {skillPendingDelete && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={handleCancelDeleteSkill}
-        >
-          <div
-            className="w-full max-w-sm mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-5"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <Modal onClose={handleCancelDeleteSkill} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-sm mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-5">
             <div className="text-lg font-semibold text-foreground">
               {i18nService.t('deleteSkill')}
             </div>
@@ -1072,51 +1135,61 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
                 {i18nService.t('confirmDelete')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
-      {isGithubImportOpen && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setIsGithubImportOpen(false)}
-        >
-          <div
-            className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6"
-            onClick={(event) => event.stopPropagation()}
-          >
+      {isRemoteImportOpen && createPortal(
+        <Modal onClose={() => { setIsRemoteImportOpen(false); setSkillActionError(''); }} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6">
             <div className="flex items-start justify-between">
-              <div>
-                <div className="text-lg font-semibold text-foreground">
-                  {i18nService.t('githubImportTitle')}
-                </div>
-                <p className="mt-1 text-sm text-secondary">
-                  {i18nService.t('githubImportDescription')}
-                </p>
+              <div className="text-lg font-semibold text-foreground">
+                {i18nService.t('remoteImportTitle')}
               </div>
               <button
                 type="button"
-                onClick={() => setIsGithubImportOpen(false)}
+                onClick={() => { setIsRemoteImportOpen(false); setSkillActionError(''); }}
                 className="p-1.5 rounded-lg text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
               >
                 <XMarkIcon className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="mt-5 space-y-3">
+            <div className="mt-4 flex items-center gap-1 border-b border-border">
+              {importSourceTypes.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => { setImportTab(type); setSkillDownloadSource(''); setSkillActionError(''); }}
+                  className={`px-3 py-1.5 text-sm font-medium transition-colors relative ${
+                    importTab === type
+                      ? 'text-foreground'
+                      : 'text-secondary hover:text-foreground'
+                  }`}
+                >
+                  {i18nService.t(importTabConfig[type].tabLabelKey)}
+                  {importTab === type && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <p className="text-sm text-secondary">
+                {i18nService.t(importTabConfig[importTab].descriptionKey)}
+              </p>
               <div className="text-xs font-semibold tracking-wide text-secondary">
-                {i18nService.t('githubImportUrlLabel')}
+                {i18nService.t(importTabConfig[importTab].urlLabelKey)}
               </div>
               <input
-                ref={githubImportInputRef}
+                ref={importInputRef}
                 type="text"
                 value={skillDownloadSource}
                 onChange={(e) => setSkillDownloadSource(e.target.value)}
-                placeholder={i18nService.t('githubSkillPlaceholder')}
+                placeholder={i18nService.t(importTabConfig[importTab].placeholderKey)}
                 className="w-full px-3 py-2.5 text-sm rounded-xl bg-background text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
               />
               <p className="text-xs text-secondary">
-                {i18nService.t('githubImportExamples')}
+                {i18nService.t(importTabConfig[importTab].examplesKey)}
               </p>
               {skillActionError && (
                 <div className="text-xs text-red-500">
@@ -1125,15 +1198,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
               )}
               <button
                 type="button"
-                onClick={handleImportFromGithub}
+                onClick={handleImportFromDialog}
                 disabled={isDownloadingSkill || !skillDownloadSource.trim()}
                 className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
               >
                 {isDownloadingSkill ? i18nService.t('importingSkill') : i18nService.t('importSkill')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       , document.body)}
 
       {securityReport && (

@@ -341,7 +341,7 @@ export class OpenClawEngineManager extends EventEmitter {
         }
       }
 
-      this.stopGatewayProcess(this.gatewayProcess);
+      await this.stopGatewayProcess(this.gatewayProcess);
       this.gatewayProcess = null;
     }
 
@@ -540,7 +540,9 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     if (this.gatewayProcess) {
-      this.stopGatewayProcess(this.gatewayProcess);
+      console.log('[OpenClaw] stopping gateway process...');
+      await this.stopGatewayProcess(this.gatewayProcess);
+      console.log('[OpenClaw] gateway process stopped');
       this.gatewayProcess = null;
     }
 
@@ -1195,24 +1197,52 @@ export class OpenClawEngineManager extends EventEmitter {
     });
   }
 
-  private stopGatewayProcess(child: GatewayProcess): void {
+  private stopGatewayProcess(child: GatewayProcess): Promise<void> {
     this.expectedGatewayExits.add(child);
 
-    try {
-      child.kill();
-    } catch {
-      // ignore
-    }
+    return new Promise<void>((resolve) => {
+      // Already exited — resolve immediately.
+      if ('exitCode' in child && child.exitCode !== null) {
+        resolve();
+        return;
+      }
 
-    setTimeout(() => {
+      const timeoutMs = 5_000;
+      let settled = false;
+
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(forceTimer);
+        resolve();
+      };
+
+      // Listen for exit (ChildProcess) or exit (UtilityProcess).
+      child.once('exit', done);
+
+      // First attempt: graceful kill.
       try {
-        if ('pid' in child && typeof child.pid === 'number') {
-          child.kill();
-        }
+        child.kill();
       } catch {
         // ignore
       }
-    }, 1200);
+
+      // Fallback: force-kill after 1.2s if still alive, then hard-timeout at 5s.
+      const forceTimer = setTimeout(() => {
+        try {
+          if ('pid' in child && typeof child.pid === 'number') {
+            child.kill();
+          }
+        } catch {
+          // ignore
+        }
+        // Guarantee we don't block shutdown forever.
+        setTimeout(done, 2_000);
+      }, 1_200);
+
+      // Hard timeout: always resolve within timeoutMs.
+      setTimeout(done, timeoutMs);
+    });
   }
 
   // Workaround: Electron utilityProcess V8 isolate reports getTimezoneOffset()=0.

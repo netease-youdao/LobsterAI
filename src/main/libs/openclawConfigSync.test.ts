@@ -129,21 +129,9 @@ const stripChatCompletionsSuffix = (rawBaseUrl: string): string => {
 const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
   [ProviderName.Moonshot]: {
     providerId: OpenClawProviderId.Moonshot,
-    resolveApi: () => OpenClawApi.OpenAICompletions as OpenClawProviderApi,
+    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
     normalizeBaseUrl: stripChatCompletionsSuffix,
     modelDefaults: {
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 256000,
-      maxTokens: 8192,
-    },
-  },
-  [`${ProviderName.Moonshot}:codingPlan`]: {
-    providerId: OpenClawProviderId.KimiCoding,
-    resolveApi: () => OpenClawApi.AnthropicMessages as OpenClawProviderApi,
-    normalizeBaseUrl: stripChatCompletionsSuffix,
-    resolveSessionModelId: () => 'k2p5',
-    modelDefaults: {
-      reasoning: true,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 256000,
       maxTokens: 8192,
@@ -182,11 +170,6 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
   },
   [ProviderName.Volcengine]: {
     providerId: OpenClawProviderId.Volcengine,
-    resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
-    normalizeBaseUrl: stripChatCompletionsSuffix,
-  },
-  [`${ProviderName.Volcengine}:codingPlan`]: {
-    providerId: OpenClawProviderId.VolcenginePlan,
     resolveApi: ({ apiType }) => mapApiTypeToOpenClawApi(apiType),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
@@ -268,19 +251,17 @@ describe('resolveDescriptor', () => {
   test('moonshot without codingPlan uses moonshot providerId', () => {
     const d = resolveDescriptor(ProviderName.Moonshot, false);
     expect(d.providerId).toBe(OpenClawProviderId.Moonshot);
-    expect(d.resolveApi({ apiType: undefined, baseURL: '' })).toBe(OpenClawApi.OpenAICompletions);
+    expect(d.resolveApi({ apiType: 'openai', baseURL: '' })).toBe(OpenClawApi.OpenAICompletions);
+    expect(d.resolveApi({ apiType: 'anthropic', baseURL: '' })).toBe(OpenClawApi.AnthropicMessages);
   });
 
-  test('moonshot with codingPlan uses kimi-coding providerId', () => {
+  test('moonshot with codingPlan falls back to moonshot providerId', () => {
     const d = resolveDescriptor(ProviderName.Moonshot, true);
-    expect(d.providerId).toBe(OpenClawProviderId.KimiCoding);
-    expect(d.resolveApi({ apiType: undefined, baseURL: '' })).toBe(OpenClawApi.AnthropicMessages);
-    expect(d.resolveSessionModelId!('any-model')).toBe('k2p5');
+    expect(d.providerId).toBe(OpenClawProviderId.Moonshot);
   });
 
-  test('moonshot codingPlan has model defaults', () => {
-    const d = resolveDescriptor(ProviderName.Moonshot, true);
-    expect(d.modelDefaults?.reasoning).toBe(true);
+  test('moonshot has model defaults', () => {
+    const d = resolveDescriptor(ProviderName.Moonshot, false);
     expect(d.modelDefaults?.contextWindow).toBe(256000);
     expect(d.modelDefaults?.maxTokens).toBe(8192);
   });
@@ -319,9 +300,9 @@ describe('resolveDescriptor', () => {
     expect(d.providerId).toBe(OpenClawProviderId.OpenAI);
   });
 
-  test('volcengine with codingPlan uses volcengine-plan providerId', () => {
+  test('volcengine with codingPlan falls back to volcengine providerId', () => {
     const d = resolveDescriptor(ProviderName.Volcengine, true);
-    expect(d.providerId).toBe(OpenClawProviderId.VolcenginePlan);
+    expect(d.providerId).toBe(OpenClawProviderId.Volcengine);
   });
 
   test('volcengine without codingPlan uses volcengine providerId', () => {

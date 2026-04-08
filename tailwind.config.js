@@ -36,6 +36,13 @@ export default {
           '0%': { transform: 'translateX(-100%)' },
           '100%': { transform: 'translateX(100%)' },
         },
+        shake: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '20%': { transform: 'translateX(-3px)' },
+          '40%': { transform: 'translateX(3px)' },
+          '60%': { transform: 'translateX(-2px)' },
+          '80%': { transform: 'translateX(2px)' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.2s ease-out',
@@ -43,6 +50,7 @@ export default {
         'fade-in-down': 'fade-in-down 0.2s ease-out',
         'scale-in': 'scale-in 0.2s ease-out',
         shimmer: 'shimmer 1.5s infinite',
+        shake: 'shake 0.4s ease-in-out',
       },
       transitionTimingFunction: {
         smooth: 'cubic-bezier(0.4, 0, 0.2, 1)',

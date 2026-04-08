@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.4.1",
+  "version": "2026.4.3",
   "openclaw": {
     "version": "v2026.3.2",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -14,7 +14,7 @@
       {
         "id": "dingtalk",
         "npm": "@soimy/dingtalk",
-        "version": "3.3.0"
+        "version": "3.4.0"
       },
       {
         "id": "feishu-openclaw-plugin",
@@ -22,9 +22,9 @@
         "version": "2026.3.8"
       },
       {
-        "id": "qqbot",
-        "npm": "@sliverp/qqbot",
-        "version": "1.5.3"
+        "id": "openclaw-qqbot",
+        "npm": "@tencent-connect/openclaw-qqbot",
+        "version": "1.6.4"
       },
       {
         "id": "wecom-openclaw-plugin",
@@ -44,7 +44,7 @@
         "optional": true
       },
       {
-        "id": "nim",
+        "id": "openclaw-nim",
         "npm": "openclaw-nim",
         "version": "0.3.1"
       },
@@ -62,10 +62,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint": "eslint src/",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
     "test": "vitest run",
+    "pretest": "npm rebuild better-sqlite3",
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
+    "precompile:electron": "electron-builder install-app-deps",
     "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json",
     "build:skill:tech-news": "node scripts/build-skill-tech-news.js",
     "build:skill:email": "cd SKILLs/imap-smtp-email && npm install --production",
@@ -119,6 +124,7 @@
     "@reduxjs/toolkit": "^2.2.1",
     "@types/uuid": "^10.0.0",
     "@wecom/wecom-aibot-sdk": "^0.1.0",
+    "better-sqlite3": "^12.8.0",
     "bufferutil": "^4.1.0",
     "cheerio": "^1.2.0",
     "cron-parser": "^5.5.0",
@@ -141,7 +147,6 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "sql.js": "^1.13.0",
     "tar": "^7.5.11",
     "utf-8-validate": "^6.0.6",
     "uuid": "^11.1.0",
@@ -154,7 +159,10 @@
     }
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.5.0",
+    "@commitlint/config-conventional": "^20.5.0",
     "@tailwindcss/typography": "^0.5.16",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/dompurify": "^3.0.5",
     "@types/extract-zip": "^2.0.1",
     "@types/js-yaml": "^4.0.9",
@@ -162,10 +170,9 @@
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@types/react-syntax-highlighter": "^15.5.13",
-    "@types/sql.js": "^1.4.9",
     "@types/yazl": "^3.3.0",
-    "@typescript-eslint/eslint-plugin": "^8.56.0",
-    "@typescript-eslint/parser": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^8.57.1",
+    "@typescript-eslint/parser": "^8.57.1",
     "@vitejs/plugin-react": "^4.2.1",
     "7zip-bin": "^5.2.0",
     "autoprefixer": "^10.4.17",
@@ -174,11 +181,17 @@
     "electron": "40.2.1",
     "electron-builder": "^24.12.0",
     "esbuild": "^0.21.5",
-    "eslint": "^8.56.0",
-    "eslint-plugin-react-hooks": "^4.6.0",
-    "eslint-plugin-react-refresh": "^0.4.5",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.26",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "globals": "^17.4.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
     "patch-package": "^8.0.1",
     "postcss": "^8.4.35",
+    "prettier": "^3.8.1",
     "rimraf": "^5.0.5",
     "rss-parser": "^3.13.0",
     "tailwindcss": "^3.4.1",
