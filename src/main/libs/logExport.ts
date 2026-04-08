@@ -16,7 +16,9 @@ export type ExportLogsZipResult = {
   missingEntries: string[];
 };
 
-const EXPORT_TIMEOUT_MS = 30_000;
+// Increased from 30 s to 2 minutes to accommodate slow disks and network
+// filesystems. The hard limit still exists so the UI never hangs indefinitely.
+const EXPORT_TIMEOUT_MS = 120_000;
 
 export async function exportLogsZip(input: ExportLogsZipInput): Promise<ExportLogsZipResult> {
   const zipFile = new yazl.ZipFile();
@@ -26,7 +28,7 @@ export async function exportLogsZip(input: ExportLogsZipInput): Promise<ExportLo
   // pipeline() can reject immediately instead of hanging until timeout.
   // Cast needed because @types/yazl types outputStream as NodeJS.ReadableStream,
   // but the runtime value is a PassThrough which has destroy().
-  zipFile.on('error', (err) => {
+  zipFile.on('error', err => {
     (zipFile.outputStream as unknown as { destroy(err: Error): void }).destroy(err as Error);
   });
 
@@ -45,7 +47,17 @@ export async function exportLogsZip(input: ExportLogsZipInput): Promise<ExportLo
         const { size } = stat;
         if (size > 0) {
           const readStream = fs.createReadStream(entry.filePath, { start: 0, end: size - 1 });
-          zipFile.addReadStream(readStream, entry.archiveName);
+          // Forward ReadStream errors to the ZipFile so pipeline() rejects
+          // immediately instead of hanging until timeout. yazl's internal
+          // .pipe() chain does not propagate ReadStream errors: if a ReadStream
+          // emits 'error', compressedSizeCounter never fires its 'end' event,
+          // pumpEntries stalls, and outputStream never ends — causing a hang.
+          readStream.on('error', err => zipFile.emit('error', err));
+          // Use stored mode (compress: false) to avoid CPU-intensive DEFLATE
+          // compression. At the default level-6 DEFLATE, compressing many large
+          // log files serially can easily exceed the timeout on slow machines.
+          // Log files are for debugging; export speed matters more than size.
+          zipFile.addReadStream(readStream, entry.archiveName, { compress: false });
         } else {
           zipFile.addBuffer(Buffer.alloc(0), entry.archiveName);
         }
@@ -77,7 +89,11 @@ export async function exportLogsZip(input: ExportLogsZipInput): Promise<ExportLo
     outputStream.destroy();
     pipelinePromise.catch(() => {});
     // Remove the partial zip so users don't find a corrupt file on disk.
-    try { fs.unlinkSync(input.outputPath); } catch { /* ignore cleanup errors */ }
+    try {
+      fs.unlinkSync(input.outputPath);
+    } catch {
+      /* ignore cleanup errors */
+    }
     throw err;
   } finally {
     clearTimeout(timer);
