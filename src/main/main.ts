@@ -78,6 +78,7 @@ import { resolveEnterpriseConfigPath, syncEnterpriseConfig, mergeEnterpriseOpenc
 import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
+import { requestWindowAttention } from './windowAttention';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
@@ -1085,6 +1086,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
       win.webContents.send('cowork:stream:complete', { sessionId, claudeSessionId });
+      requestWindowAttention(win);
     });
     // If session used a server model, notify renderer to refresh quota
     try {
@@ -1108,6 +1110,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
       win.webContents.send('cowork:stream:error', { sessionId, error });
+      requestWindowAttention(win);
     });
   });
 
@@ -4532,7 +4535,13 @@ if (!gotTheLock) {
     mainWindow.on('unmaximize', forwardWindowState);
     mainWindow.on('enter-full-screen', forwardWindowState);
     mainWindow.on('leave-full-screen', forwardWindowState);
-    mainWindow.on('focus', forwardWindowState);
+    mainWindow.on('focus', () => {
+      forwardWindowState();
+      // Stop taskbar flashing when the user brings the window to front (Windows only).
+      if (process.platform === 'win32') {
+        mainWindow?.flashFrame(false);
+      }
+    });
     mainWindow.on('blur', forwardWindowState);
 
     // 等待内容加载完成后再显示窗口
