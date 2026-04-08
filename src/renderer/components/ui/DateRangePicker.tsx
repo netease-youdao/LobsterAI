@@ -302,7 +302,7 @@ const DateRangePicker: React.FC<DateRangePickerProps> = ({
   const hasRange = startDate || endDate;
   const displayLabel = hasRange
     ? `${startDate || '...'} → ${endDate || '...'}`
-    : i18nService.t('scheduledTasksHistoryTimeRange');
+    : i18nService.t('scheduledTasksHistoryDateRange');
 
   const startPlaceholder = i18nService.getLanguage() === 'zh' ? '开始日期' : 'Start date';
   const endPlaceholder = i18nService.getLanguage() === 'zh' ? '结束日期' : 'End date';
