@@ -1417,6 +1417,7 @@ export class OpenClawConfigSync {
     // never changes env vars and avoids gateway process restarts.
     const allApiKeys = resolveAllProviderApiKeys();
     for (const [envSuffix, apiKey] of Object.entries(allApiKeys)) {
+      console.info(`[OpenClawConfigSync] set secret env var LOBSTER_APIKEY_${envSuffix} for provider ${envSuffix}`);
       env[`LOBSTER_APIKEY_${envSuffix}`] = apiKey;
     }
     // Legacy fallback: keep LOBSTER_PROVIDER_API_KEY set to a stable value so stale
@@ -2020,7 +2021,7 @@ export class OpenClawConfigSync {
    * user sets up a model in the UI.
    */
   private writeMinimalConfig(configPath: string, _reason: string): OpenClawConfigSyncResult {
-    const minimalConfig: Record<string, unknown> = {
+    const baseMinimalConfig: Record<string, unknown> = {
       gateway: {
         mode: 'local',
       },
@@ -2030,7 +2031,6 @@ export class OpenClawConfigSync {
       // configures an API model and a full config sync runs.
     };
 
-    const nextContent = `${JSON.stringify(minimalConfig, null, 2)}\n`;
     let currentContent = '';
     try {
       currentContent = fs.readFileSync(configPath, 'utf8');
@@ -2038,25 +2038,34 @@ export class OpenClawConfigSync {
       currentContent = '';
     }
 
-    // If the file already has a meaningful config (from a previous sync or
-    // user configuration), don't downgrade it to the minimal version.
-    // Check for models (API configured), plugin entries (IM channels like
-    // DingTalk/WeCom), or gateway.mode already set.
-    if (currentContent && currentContent !== nextContent) {
+    // Build the config to write: start from the base minimal config, then
+    // selectively preserve non-provider sections from the existing file.
+    // Critically, we do NOT preserve existing.models — it may contain
+    // ${LOBSTER_APIKEY_X} placeholders for providers that are no longer
+    // configured, causing the gateway to fail to start because those env
+    // vars are no longer injected.
+    let mergedConfig: Record<string, unknown> = { ...baseMinimalConfig };
+    if (currentContent) {
       try {
         const existing = JSON.parse(currentContent);
-        if (
-          existing.models?.providers ||
-          existing.plugins?.entries ||
-          existing.gateway?.mode
-        ) {
-          // Already has a config with substance — keep it.
-          return { ok: true, changed: false, configPath };
+        // Preserve IM channel plugin entries — these reference their own env
+        // vars (${LOBSTER_TG_BOT_TOKEN} etc.) that are still injected when
+        // the corresponding IM channels remain enabled.
+        if (existing.plugins) {
+          mergedConfig.plugins = existing.plugins;
         }
+        // Preserve non-default gateway settings (e.g. custom port).
+        if (existing.gateway && existing.gateway.mode !== 'local') {
+          mergedConfig.gateway = existing.gateway;
+        }
+        // existing.models is intentionally NOT preserved — it references
+        // ${LOBSTER_APIKEY_*} env vars that may no longer be set.
       } catch {
-        // Malformed JSON — overwrite with minimal config.
+        // Malformed JSON — overwrite with base minimal config.
       }
     }
+
+    const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
 
     if (currentContent === nextContent) {
       return { ok: true, changed: false, configPath };
