@@ -30,7 +30,15 @@ import IMSettings from './im/IMSettings';
 import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
-import { defaultConfig, type AppConfig, getVisibleProviders, isCustomProvider, getCustomProviderDefaultName,getProviderDisplayName } from '../config';
+import {
+  CUSTOM_PROVIDER_KEYS,
+  defaultConfig,
+  type AppConfig,
+  getVisibleProviders,
+  isCustomProvider,
+  getCustomProviderDefaultName,
+  getProviderDisplayName,
+} from '../config';
 import {
   OpenAIIcon,
   DeepSeekIcon,
@@ -67,12 +75,6 @@ interface SettingsProps extends SettingsOpenOptions {
     disableUpdate?: boolean;
   } | null;
 }
-
-
-const CUSTOM_PROVIDER_KEYS = [
-  'custom_0', 'custom_1', 'custom_2', 'custom_3', 'custom_4',
-  'custom_5', 'custom_6', 'custom_7', 'custom_8', 'custom_9',
-] as const;
 
 const providerKeys = [
   'openai',

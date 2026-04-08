@@ -337,6 +337,11 @@ export const CONFIG_KEYS = {
 // Provider lists derived from ProviderRegistry — single source of truth
 export const CHINA_PROVIDERS = [...ProviderRegistry.idsByRegion('china')] as const;
 export const GLOBAL_PROVIDERS = ProviderRegistry.idsByRegion('global');
+export const CUSTOM_PROVIDER_MAX_COUNT = 20;
+export const CUSTOM_PROVIDER_KEYS = Array.from(
+  { length: CUSTOM_PROVIDER_MAX_COUNT },
+  (_, index) => `custom_${index}`,
+) as ReadonlyArray<`custom_${number}`>;
 
 export const getVisibleProviders = (language: 'zh' | 'en'): readonly string[] => {
   if (language === 'zh') {
