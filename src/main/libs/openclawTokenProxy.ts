@@ -67,10 +67,23 @@ export function getOpenClawTokenProxyPort(): number | null {
   return proxyPort;
 }
 
+const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
+
 function collectRequestBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let totalBytes = 0;
+
+    req.on('data', (chunk: Buffer) => {
+      totalBytes += chunk.byteLength;
+      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+        req.destroy();
+        reject(new Error(`Request body too large (limit: ${MAX_REQUEST_BODY_BYTES} bytes)`));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
