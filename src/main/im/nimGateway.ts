@@ -913,7 +913,7 @@ export class NimGateway extends EventEmitter {
         : senderId;
       // For team messages, fetch the real group name via V2NIMTeamService.
       // conversationId format: {appId}|{type}|{teamId}, type=2 for team, 3 for superTeam.
-      const teamTypeNum = sessionType === 'superTeam' ? 2 : 1;
+      const teamTypeNum = sessionType === 'superTeam' ? 3 : 2;
       const groupName = isTeam
         ? await this.fetchTeamName(targetId, teamTypeNum, targetId)
         : undefined;
