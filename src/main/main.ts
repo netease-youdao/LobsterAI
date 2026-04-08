@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker, safeStorage } from 'electron';
 import type { WebContents } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -1912,18 +1912,55 @@ if (!gotTheLock) {
   // ── Auth IPC handlers ──
 
   /**
-   * Helper: Persist auth tokens into the kv store.
+   * Helper: Persist auth tokens into the kv store, encrypted with safeStorage when available.
+   *
+   * Key layout:
+   *   auth_tokens_encrypted  — base64-encoded ciphertext (safeStorage path)
+   *   auth_tokens            — plain-text fallback (safeStorage unavailable)
+   *
+   * On first read after upgrade, plain-text tokens are migrated to encrypted
+   * storage automatically so existing sessions are not interrupted.
    */
+  const SAFE_TOKEN_KEY = 'auth_tokens_encrypted';
+  const LEGACY_TOKEN_KEY = 'auth_tokens';
+
   const saveAuthTokens = (accessToken: string, refreshToken: string) => {
-    getStore().set('auth_tokens', { accessToken, refreshToken });
+    if (safeStorage.isEncryptionAvailable()) {
+      const cipher = safeStorage.encryptString(JSON.stringify({ accessToken, refreshToken }));
+      getStore().set(SAFE_TOKEN_KEY, cipher.toString('base64'));
+      getStore().delete(LEGACY_TOKEN_KEY);
+    } else {
+      getStore().set(LEGACY_TOKEN_KEY, { accessToken, refreshToken });
+    }
   };
 
   const getAuthTokens = (): { accessToken: string; refreshToken: string } | null => {
-    return getStore().get<{ accessToken: string; refreshToken: string }>('auth_tokens') || null;
+    if (safeStorage.isEncryptionAvailable()) {
+      const stored = getStore().get<string>(SAFE_TOKEN_KEY);
+      if (stored) {
+        try {
+          const plain = safeStorage.decryptString(Buffer.from(stored, 'base64'));
+          return JSON.parse(plain) as { accessToken: string; refreshToken: string };
+        } catch (e) {
+          console.error('[Auth] Failed to decrypt auth tokens, clearing corrupted data:', e);
+          getStore().delete(SAFE_TOKEN_KEY);
+          return null;
+        }
+      }
+      // Migration: re-encrypt any existing plain-text tokens on first read after upgrade.
+      const legacy = getStore().get<{ accessToken: string; refreshToken: string }>(LEGACY_TOKEN_KEY);
+      if (legacy?.accessToken && legacy?.refreshToken) {
+        saveAuthTokens(legacy.accessToken, legacy.refreshToken);
+        return legacy;
+      }
+      return null;
+    }
+    return getStore().get<{ accessToken: string; refreshToken: string }>(LEGACY_TOKEN_KEY) || null;
   };
 
   const clearAuthTokens = () => {
-    getStore().delete('auth_tokens');
+    getStore().delete(LEGACY_TOKEN_KEY);
+    getStore().delete(SAFE_TOKEN_KEY);
   };
 
   /**
