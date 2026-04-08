@@ -28,6 +28,11 @@ function formatLocalClock(date: Date): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function extractClockFromIsoWithOffset(value: string): string | null {
+  const match = value.match(/T(\d{2}:\d{2})(?::\d{2})?(?:[zZ]|[+-]\d{2}:\d{2})$/u);
+  return match?.[1] ?? null;
+}
+
 function normalizeReminderBody(value: string): string {
   return value
     .trim()
@@ -62,8 +67,9 @@ function buildSystemEventText(body: string): string {
   return `⏰ 提醒：${body}`;
 }
 
-function formatConfirmationText(delayLabel: string, runAt: Date, body: string): string {
-  return `好的，已设置好提醒！${delayLabel}（${formatLocalClock(runAt)}）会提醒你${body}。`;
+function formatConfirmationText(delayLabel: string, scheduleAt: string, runAt: Date, body: string): string {
+  const clockText = extractClockFromIsoWithOffset(scheduleAt) ?? formatLocalClock(runAt);
+  return `好的，已设置好提醒！${delayLabel}（${clockText}）会提醒你${body}。`;
 }
 
 const SCHEDULED_TASK_CANDIDATE_RE =
@@ -212,10 +218,10 @@ export function normalizeDetectedScheduledTaskRequest(
     delayMs: Math.max(0, runAt.getTime() - now.getTime()),
     delayLabel,
     runAt,
-    scheduleAt: toLocalIsoWithOffset(runAt),
+    scheduleAt,
     taskName,
     payloadText,
-    confirmationText: formatConfirmationText(delayLabel, runAt, reminderBody),
+    confirmationText: formatConfirmationText(delayLabel, scheduleAt, runAt, reminderBody),
   };
 }
 
