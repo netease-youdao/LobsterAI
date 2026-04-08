@@ -908,6 +908,18 @@ export class IMCoworkHandler extends EventEmitter {
     this.clearPendingPermissionsBySessionId(sessionId);
     const accumulator = this.messageAccumulators.get(sessionId);
     if (accumulator) {
+      // For cron-triggered background deliveries, relay failure notification to IM
+      // so the user is aware the scheduled task failed (symmetric with success path).
+      if (accumulator.backgroundDelivery && this.sendAsyncReply) {
+        const errorText = `⚠️ Scheduled task execution failed: ${error}`;
+        void this.sendAsyncReply(
+          accumulator.backgroundDelivery.platform,
+          accumulator.backgroundDelivery.conversationId,
+          errorText,
+        ).catch((sendErr) => {
+          console.error('[IMCoworkHandler] Failed to relay scheduled task error notification:', sendErr);
+        });
+      }
       this.cleanupAccumulator(sessionId);
       accumulator.reject?.(new Error(error));
     }
