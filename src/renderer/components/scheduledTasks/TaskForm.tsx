@@ -90,7 +90,7 @@ function createFormState(task?: ScheduledTask): FormState {
     weekdays: planInfo.weekdays,
     monthDay: planInfo.monthDay,
     payloadText: task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message,
-    notifyChannel: task.delivery.channel || 'none',
+    notifyChannel: task.delivery.mode !== 'none' ? (task.delivery.channel || 'none') : 'none',
     notifyTo: task.delivery.to || '',
     notifyAccountId: task.delivery.accountId,
     modelId: task.payload.kind === 'agentTurn' ? (task.payload.model ?? '') : '',
@@ -151,9 +151,14 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
   const isAdvanced = form.planType === 'advanced';
   const showConversationSelector = isIMChannel(form.notifyChannel);
 
+  // Re-initialize the form only when switching to a different task (id change).
+  // Do NOT depend on the full task object: Redux status/state updates (updateTaskState,
+  // setTasks after refresh) create new object references without changing the saved
+  // delivery configuration, which would silently reset the user's in-progress edits.
   useEffect(() => {
     setForm(createFormState(task));
-  }, [task]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -229,6 +234,10 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       nextErrors.schedule = i18nService.t('scheduledTasksFormValidationWeekdayRequired');
     }
 
+    if (form.notifyChannel !== 'none' && isIMChannel(form.notifyChannel) && !form.notifyTo) {
+      nextErrors.notifyTo = i18nService.t('scheduledTasksFormValidationConversationRequired');
+    }
+
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -268,7 +277,10 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       if (mode === 'create') {
         await scheduledTaskService.createTask(input);
       } else if (task) {
-        await scheduledTaskService.updateTaskById(task.id, input);
+        // Explicitly clear sessionKey so that IM-bot-initiated tasks (which carry a
+        // sessionKey pointing to the original channel) switch to using the delivery
+        // object the user just configured, rather than routing via the old sessionKey.
+        await scheduledTaskService.updateTaskById(task.id, { ...input, sessionKey: null });
       }
       onSaved();
     } catch (err: unknown) {
@@ -710,6 +722,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       {errors.schedule && <p className={errorClass}>{errors.schedule}</p>}
 
       {renderNotifyRow()}
+      {errors.notifyTo && <p className={errorClass}>{errors.notifyTo}</p>}
 
       {submitError && (
         <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/40">

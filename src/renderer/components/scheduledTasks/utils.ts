@@ -266,14 +266,8 @@ function resolveChannelDisplayName(channel: string): string {
 }
 
 export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
-  if (delivery.mode === 'none' && !delivery.channel) {
+  if (delivery.mode === 'none') {
     return i18nService.t('scheduledTasksFormDeliveryModeNone');
-  }
-
-  if (delivery.mode === 'none' && delivery.channel) {
-    const channelName = resolveChannelDisplayName(delivery.channel);
-    const toLabel = delivery.to ? ` -> ${delivery.to}` : '';
-    return `${channelName}${toLabel}`;
   }
 
   if (delivery.mode === 'webhook') {
