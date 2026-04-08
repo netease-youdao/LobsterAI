@@ -107,7 +107,13 @@ export class McpBridgeServer {
 
     return new Promise((resolve, reject) => {
       const srv = http.createServer((req, res) => {
-        this.handleRequest(req, res);
+        this.handleRequest(req, res).catch((err) => {
+          log('ERROR', `Unhandled request error: ${err instanceof Error ? err.message : String(err)}`);
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Internal server error' }));
+          }
+        });
       });
 
       srv.on('error', (err) => {
