@@ -107,7 +107,7 @@ interface ProviderExportEntry {
   enabled: boolean;
   apiKey: PasswordEncryptedPayload;
   baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai' | 'gemini';
+  apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
   codingPlanEnabled?: boolean;
   models?: Model[];
 }
@@ -186,9 +186,8 @@ const providerLinks: Partial<Record<ProviderType, { website: string; apiKey?: st
 
 const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'github-copilot';
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
-const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
-  value === 'openai' ? 'openai' : 'anthropic'
-);
+const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' | 'auto' =>
+  value === 'openai' ? 'openai' : value === 'auto' ? 'auto' : 'anthropic';
 const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
 const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
 const ABOUT_USER_COMMUNITY_URL = 'https://lobsterai.youdao.com/#/about';
@@ -284,23 +283,22 @@ const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' 
   }
   return null;
 };
-const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' | 'gemini' => (
-  getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value)
-);
+const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' | 'gemini' | 'auto' =>
+  getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value);
 const shouldShowApiFormatSelector = (provider: string): boolean => (
   getFixedApiFormatForProvider(provider) === null
 );
 const getProviderDefaultBaseUrl = (
   provider: ProviderType,
-  apiFormat: 'anthropic' | 'openai' | 'gemini'
+  apiFormat: 'anthropic' | 'openai' | 'gemini' | 'auto'
 ): string | null => {
-  if (apiFormat === 'gemini') return null;
+  if (apiFormat === 'gemini' || apiFormat === 'auto') return null;
   return ProviderRegistry.getSwitchableBaseUrl(provider, apiFormat) ?? null;
 };
 const resolveBaseUrl = (
   provider: ProviderType,
   baseUrl: string,
-  apiFormat: 'anthropic' | 'openai' | 'gemini'
+  apiFormat: 'anthropic' | 'openai' | 'gemini' | 'auto'
 ): string => {
   if (baseUrl.trim()) {
     if (shouldAutoSwitchProviderBaseUrl(provider, baseUrl) && (apiFormat === 'anthropic' || apiFormat === 'openai')) {
@@ -1185,8 +1183,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           apiFormat: nextApiFormat,
         };
 
-        // Only auto-switch URL when current value is still a known default URL.
-        if (shouldAutoSwitchProviderBaseUrl(provider, prev[provider].baseUrl)) {
+        // Only auto-switch URL when format is concrete (not 'auto') and
+        // current value is still a known default URL.
+        if (
+          nextApiFormat !== 'auto' &&
+          shouldAutoSwitchProviderBaseUrl(provider, prev[provider].baseUrl)
+        ) {
           const defaultBaseUrl = getProviderDefaultBaseUrl(provider, nextApiFormat);
           if (defaultBaseUrl) {
             nextProviderConfig.baseUrl = defaultBaseUrl;
@@ -2028,11 +2030,25 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       // - other openai-compatible providers: /v1/chat/completions
       const useAnthropicFormat = effectiveApiFormat === 'anthropic';
 
-      if (useAnthropicFormat) {
+      // Helper: check if a response indicates a successful connection
+      const isSuccessResponse = (
+        resp: Awaited<ReturnType<typeof window.electron.api.fetch>>,
+      ): boolean => {
+        if (resp.ok) return true;
+        const data = resp.data || {};
+        const errorMsg = data.error?.message || data.message || '';
+        return (
+          typeof errorMsg === 'string' &&
+          errorMsg.toLowerCase().includes('model output limit was reached')
+        );
+      };
+
+      // Helper: send Anthropic-format probe
+      const sendAnthropicProbe = () => {
         const anthropicUrl = normalizedBaseUrl.endsWith('/v1')
           ? `${normalizedBaseUrl}/messages`
           : `${normalizedBaseUrl}/v1/messages`;
-        response = await window.electron.api.fetch({
+        return window.electron.api.fetch({
           url: anthropicUrl,
           method: 'POST',
           headers: {
@@ -2046,7 +2062,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             messages: [{ role: 'user', content: 'Hi' }],
           }),
         });
-      } else {
+      };
+
+      // Helper: send OpenAI-format probe
+      const sendOpenAIProbe = () => {
         const useResponsesApi = shouldUseOpenAIResponsesForProvider(testingProvider);
         const openaiUrl = useResponsesApi
           ? buildOpenAIResponsesUrl(normalizedBaseUrl)
@@ -2081,27 +2100,47 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             openAIRequestBody.max_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
           }
         }
-        response = await window.electron.api.fetch({
+        return window.electron.api.fetch({
           url: openaiUrl,
           method: 'POST',
           headers,
           body: JSON.stringify(openAIRequestBody),
         });
-      }
+      };
 
-      if (response.ok) {
-        enableProvider(testingProvider);
-        showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
+      // Auto-detect: try Anthropic first, then OpenAI
+      if (effectiveApiFormat === 'auto') {
+        const anthropicResponse = await sendAnthropicProbe();
+        if (isSuccessResponse(anthropicResponse)) {
+          handleProviderConfigChange(testingProvider, 'apiFormat', 'anthropic');
+          enableProvider(testingProvider);
+          showTestResultModal({ success: true, message: i18nService.t('detectedAnthropicFormat') }, testingProvider);
+        } else {
+          const openaiResponse = await sendOpenAIProbe();
+          if (isSuccessResponse(openaiResponse)) {
+            handleProviderConfigChange(testingProvider, 'apiFormat', 'openai');
+            enableProvider(testingProvider);
+            showTestResultModal({ success: true, message: i18nService.t('detectedOpenAIFormat') }, testingProvider);
+          } else {
+            showTestResultModal({ success: false, message: i18nService.t('autoDetectFailed') }, testingProvider);
+          }
+        }
       } else {
-        const data = response.data || {};
-        // 提取错误信息
-        const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
-        if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
+        // Explicit format: single-format test
+        if (effectiveApiFormat === 'anthropic') {
+          response = await sendAnthropicProbe();
+        } else {
+          response = await sendOpenAIProbe();
+        }
+
+        if (isSuccessResponse(response)) {
           enableProvider(testingProvider);
           showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
-          return;
+        } else {
+          const data = response.data || {};
+          const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
+          showTestResultModal({ success: false, message: errorMessage }, testingProvider);
         }
-        showTestResultModal({ success: false, message: errorMessage }, testingProvider);
       }
     } catch (err) {
       showTestResultModal({
@@ -3545,7 +3584,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       (() => {
                         // Coding plan override: delegate to ProviderRegistry (50e20b76)
                         const fmt = getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat);
-                        if (fmt !== 'gemini') {
+                        if (fmt !== 'gemini' && fmt !== 'auto') {
                           const cpUrl = (providers[activeProvider] as { codingPlanEnabled?: boolean }).codingPlanEnabled
                             ? ProviderRegistry.getCodingPlanUrl(activeProvider, fmt)
                             : undefined;
@@ -3637,7 +3676,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                         type="radio"
                         name={`${activeProvider}-apiFormat`}
                         value="anthropic"
-                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) !== 'openai'}
+                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) === 'anthropic'}
                         onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'anthropic')}
                         className="h-3.5 w-3.5 text-claude-accent focus:ring-claude-accent dark:bg-claude-darkSurface bg-claude-surface disabled:opacity-50"
                       />
@@ -3656,6 +3695,19 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       />
                       <span className="ml-2 text-xs text-foreground">
                         {i18nService.t('apiFormatOpenAI')}
+                      </span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name={`${activeProvider}-apiFormat`}
+                        value="auto"
+                        checked={getEffectiveApiFormat(activeProvider, providers[activeProvider].apiFormat) === 'auto'}
+                        onChange={() => handleProviderConfigChange(activeProvider, 'apiFormat', 'auto')}
+                        className="h-3.5 w-3.5 text-primary focus:ring-primary bg-surface"
+                      />
+                      <span className="ml-2 text-xs text-foreground">
+                        {i18nService.t('apiFormatAuto')}
                       </span>
                     </label>
                   </div>

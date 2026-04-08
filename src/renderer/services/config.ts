@@ -45,13 +45,16 @@ const normalizeProviderBaseUrl = (providerKey: string, baseUrl: unknown): string
   return 'https://generativelanguage.googleapis.com/v1beta';
 };
 
-const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'anthropic' | 'openai' | 'gemini' => {
+const normalizeProviderApiFormat = (providerKey: string, apiFormat: unknown): 'anthropic' | 'openai' | 'gemini' | 'auto' => {
   const fixed = getFixedProviderApiFormat(providerKey);
   if (fixed) {
     return fixed;
   }
   if (apiFormat === 'openai') {
     return 'openai';
+  }
+  if (apiFormat === 'auto') {
+    return 'auto';
   }
   return 'anthropic';
 };

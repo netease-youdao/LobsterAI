@@ -24,7 +24,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       // API 协议格式：anthropic 为 Anthropic 兼容，openai 为 OpenAI 兼容
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -35,7 +35,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -46,7 +46,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       /** 是否启用 Moonshot Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -59,7 +59,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       /** 是否启用 GLM Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -72,7 +72,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       /** OAuth auth type: 'apikey' (default) or 'oauth' (MiniMax Portal OAuth) */
       authType?: 'apikey' | 'oauth';
       /** OAuth refresh token for automatic token renewal */
@@ -89,7 +89,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -100,7 +100,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       /** 是否启用 Qwen Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       /** OAuth 凭据 */
@@ -124,7 +124,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -135,7 +135,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -146,7 +146,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -157,7 +157,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       /** 是否启用 Volcengine Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -170,7 +170,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -181,7 +181,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -203,7 +203,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       models?: Array<{
         id: string;
         name: string;
@@ -225,7 +225,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
       codingPlanEnabled?: boolean;
       oauthCredentials?: {
         access: string;
@@ -275,7 +275,7 @@ const buildDefaultProviders = (): AppConfig['providers'] => {
     enabled: boolean;
     apiKey: string;
     baseUrl: string;
-    apiFormat?: 'anthropic' | 'openai' | 'gemini';
+    apiFormat?: 'anthropic' | 'openai' | 'gemini' | 'auto';
     codingPlanEnabled?: boolean;
     models?: Array<{ id: string; name: string; supportsImage?: boolean }>;
   }> = {};

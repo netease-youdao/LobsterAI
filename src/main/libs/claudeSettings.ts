@@ -21,7 +21,7 @@ type ProviderConfig = {
   enabled: boolean;
   apiKey: string;
   baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai' | 'native';
+  apiFormat?: 'anthropic' | 'openai' | 'auto' | 'native';
   codingPlanEnabled?: boolean;
   models?: ProviderModel[];
 };
