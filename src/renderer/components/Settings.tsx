@@ -1800,6 +1800,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       setNewModelId('');
       setNewModelSupportsImage(false);
       setModelFormError(null);
+      setIsTestResultModalOpen(false);
+      setTestResult(null);
+    }
+    if (tab !== 'coworkMemory' && showMemoryModal) {
+      resetCoworkMemoryEditor();
     }
     setActiveTab(tab);
   };
