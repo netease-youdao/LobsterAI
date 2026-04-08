@@ -23,7 +23,7 @@ const SYNTAX_HIGHLIGHTER_STYLE = {
   margin: 0,
   borderRadius: 0,
 };
-const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file']);
+const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel']);
 
 const encodeFileUrl = (url: string): string => {
   const encoded = encodeURI(url);
