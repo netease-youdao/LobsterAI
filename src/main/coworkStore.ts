@@ -313,6 +313,7 @@ export interface Agent {
   isDefault: boolean;
   source: AgentSource;
   presetId: string;
+  sidebarPinned: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -339,6 +340,7 @@ export interface UpdateAgentRequest {
   icon?: string;
   skillIds?: string[];
   enabled?: boolean;
+  sidebarPinned?: boolean;
 }
 
 const COWORK_AGENT_ENGINE = 'openclaw';
@@ -1881,6 +1883,7 @@ export class CoworkStore {
       is_default: number;
       source: string;
       preset_id: string;
+      sidebar_pinned: number;
       created_at: number;
       updated_at: number;
     }
@@ -1906,6 +1909,7 @@ export class CoworkStore {
       is_default: number;
       source: string;
       preset_id: string;
+      sidebar_pinned: number;
       created_at: number;
       updated_at: number;
     }
@@ -1997,6 +2001,10 @@ export class CoworkStore {
       setClauses.push('enabled = ?');
       values.push(updates.enabled ? 1 : 0);
     }
+    if (updates.sidebarPinned !== undefined) {
+      setClauses.push('sidebar_pinned = ?');
+      values.push(updates.sidebarPinned ? 1 : 0);
+    }
 
     values.push(id);
     this.db.prepare(`UPDATE agents SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
@@ -2023,6 +2031,7 @@ export class CoworkStore {
     is_default: number;
     source: string;
     preset_id: string;
+    sidebar_pinned: number;
     created_at: number;
     updated_at: number;
   }): Agent {
@@ -2045,6 +2054,7 @@ export class CoworkStore {
       isDefault: Boolean(row.is_default),
       source: row.source as AgentSource,
       presetId: row.preset_id,
+      sidebarPinned: Boolean(row.sidebar_pinned),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
