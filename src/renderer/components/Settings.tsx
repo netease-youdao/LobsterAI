@@ -10,7 +10,7 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ArrowTopRightOnSquareIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import TrashIcon from './icons/TrashIcon';
@@ -51,6 +51,29 @@ import {
 } from './icons/providers';
 
 type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
+
+const SETTINGS_SEARCH_LEXICON_KEY = {
+  general: 'settingsSearchLexiconGeneral',
+  coworkAgentEngine: 'settingsSearchLexiconCoworkAgentEngine',
+  model: 'settingsSearchLexiconModel',
+  im: 'settingsSearchLexiconIm',
+  email: 'settingsSearchLexiconEmail',
+  coworkMemory: 'settingsSearchLexiconCoworkMemory',
+  coworkAgent: 'settingsSearchLexiconCoworkAgent',
+  shortcuts: 'settingsSearchLexiconShortcuts',
+  about: 'settingsSearchLexiconAbout',
+} as const satisfies Record<TabType, string>;
+
+const tabMatchesSettingsSearch = (tab: { key: TabType; label: string }, rawQuery: string): boolean => {
+  const q = rawQuery.trim().toLowerCase().normalize('NFKC');
+  if (!q) {
+    return true;
+  }
+  const lex = i18nService.t(SETTINGS_SEARCH_LEXICON_KEY[tab.key]);
+  const haystack = `${tab.label} ${lex}`.toLowerCase().normalize('NFKC');
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return tokens.every((token) => haystack.includes(token));
+};
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -507,6 +530,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [themeId, setThemeId] = useState<string>(themeService.getThemeId());
   const [language, setLanguage] = useState<LanguageType>('zh');
+  const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
@@ -2323,6 +2347,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     return sidebarTabs.find(t => t.key === activeTab)?.label ?? '';
   }, [activeTab, sidebarTabs]);
 
+  const filteredSidebarTabs = useMemo(() => {
+    const q = settingsSearchQuery.trim();
+    if (!q) {
+      return sidebarTabs;
+    }
+    return sidebarTabs.filter((tab) => tabMatchesSettingsSearch(tab, q));
+  }, [sidebarTabs, settingsSearchQuery, language]);
+
+  useEffect(() => {
+    if (filteredSidebarTabs.length === 0) {
+      return;
+    }
+    const stillVisible = filteredSidebarTabs.some((t) => t.key === activeTab);
+    if (!stillVisible) {
+      setActiveTab(filteredSidebarTabs[0].key);
+    }
+  }, [filteredSidebarTabs, activeTab]);
+
   const renderTabContent = () => {
     switch(activeTab) {
       case 'general':
@@ -3986,24 +4028,54 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       >
         {/* Left sidebar */}
         <div className="w-[220px] shrink-0 flex flex-col bg-surface-raised border-r border-border rounded-l-2xl overflow-y-auto">
-          <div className="px-5 pt-5 pb-3">
+          <div className="px-5 pt-5 pb-2">
             <h2 className="text-lg font-semibold text-foreground">{i18nService.t('settings')}</h2>
           </div>
+          <div className="px-3 pb-2">
+            <div className="relative">
+              <MagnifyingGlassIcon
+                className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary"
+                aria-hidden
+              />
+              <input
+                type="search"
+                value={settingsSearchQuery}
+                onChange={(e) => setSettingsSearchQuery(e.target.value)}
+                placeholder={i18nService.t('settingsSearchPlaceholder')}
+                aria-label={i18nService.t('settingsSearchAriaLabel')}
+                className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-8 text-sm text-foreground placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              {settingsSearchQuery ? (
+                <button
+                  type="button"
+                  onClick={() => setSettingsSearchQuery('')}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-secondary hover:bg-surface-hover hover:text-foreground"
+                  aria-label={i18nService.t('settingsSearchClear')}
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              ) : null}
+            </div>
+          </div>
           <nav className="flex flex-col gap-0.5 px-3 pb-4">
-            {sidebarTabs.map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => handleTabChange(tab.key)}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
-                  activeTab === tab.key
-                    ? 'bg-primary-muted text-primary'
-                    : 'text-secondary hover:text-foreground hover:bg-surface-raised'
-                }`}
-              >
-                {tab.icon}
-                <span>{tab.label}</span>
-              </button>
-            ))}
+            {filteredSidebarTabs.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-secondary">{i18nService.t('settingsSearchNoResults')}</p>
+            ) : (
+              filteredSidebarTabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => handleTabChange(tab.key)}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
+                    activeTab === tab.key
+                      ? 'bg-primary-muted text-primary'
+                      : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+                  }`}
+                >
+                  {tab.icon}
+                  <span>{tab.label}</span>
+                </button>
+              ))
+            )}
           </nav>
         </div>
 
