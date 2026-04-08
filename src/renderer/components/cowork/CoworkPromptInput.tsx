@@ -149,6 +149,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
 
+    // Sent prompt history for Up/Down arrow navigation
+    const sentHistoryRef = useRef<string[]>([]);
+    const historyIndexRef = useRef(-1);
+
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const folderButtonRef = useRef<HTMLButtonElement>(null);
     const dragDepthRef = useRef(0);
@@ -325,6 +329,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
     const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
     if (result === false) return;
+    // Record in history for Up/Down navigation (keep last 50, deduplicate adjacent)
+    if (trimmedValue) {
+      const prev = sentHistoryRef.current[0];
+      if (prev !== trimmedValue) {
+        sentHistoryRef.current = [trimmedValue, ...sentHistoryRef.current.slice(0, 49)];
+      }
+    }
+    historyIndexRef.current = -1;
     setValue('');
     dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
     dispatch(clearDraftAttachments(draftKey));
@@ -381,6 +393,64 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       if (!event.shiftKey) {
         event.preventDefault();
         document.execCommand('insertText', false, '\n');
+      }
+    }
+
+    // Up/Down arrow keys to navigate sent prompt history (only when textarea is single-line or at boundary)
+    if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      const history = sentHistoryRef.current;
+      if (history.length === 0) return;
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      if (event.key === 'ArrowUp') {
+        // Only navigate up when cursor is on the first line (or value is empty)
+        const cursorPos = textarea.selectionStart;
+        const textBeforeCursor = value.slice(0, cursorPos);
+        const isOnFirstLine = !textBeforeCursor.includes('\n');
+        if (!isOnFirstLine) return;
+
+        const nextIndex = historyIndexRef.current + 1;
+        if (nextIndex < history.length) {
+          event.preventDefault();
+          historyIndexRef.current = nextIndex;
+          const historyValue = history[nextIndex];
+          setValue(historyValue);
+          dispatch(setDraftPrompt({ sessionId: draftKey, draft: historyValue }));
+          // Move cursor to end after state update
+          requestAnimationFrame(() => {
+            if (textareaRef.current) {
+              const len = historyValue.length;
+              textareaRef.current.setSelectionRange(len, len);
+            }
+          });
+        }
+      } else {
+        // ArrowDown: navigate forward in history
+        const cursorPos = textarea.selectionStart;
+        const textAfterCursor = value.slice(cursorPos);
+        const isOnLastLine = !textAfterCursor.includes('\n');
+        if (!isOnLastLine) return;
+
+        event.preventDefault();
+        const prevIndex = historyIndexRef.current - 1;
+        if (prevIndex >= 0) {
+          historyIndexRef.current = prevIndex;
+          const historyValue = history[prevIndex];
+          setValue(historyValue);
+          dispatch(setDraftPrompt({ sessionId: draftKey, draft: historyValue }));
+          requestAnimationFrame(() => {
+            if (textareaRef.current) {
+              const len = historyValue.length;
+              textareaRef.current.setSelectionRange(len, len);
+            }
+          });
+        } else {
+          // Back to empty / current draft
+          historyIndexRef.current = -1;
+          setValue('');
+          dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
+        }
       }
     }
   };
