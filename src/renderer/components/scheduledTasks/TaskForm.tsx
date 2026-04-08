@@ -244,7 +244,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       const input: ScheduledTaskInput = {
         name: form.name.trim(),
         description: '',
-        enabled: true,
+        enabled: mode === 'create' ? true : (task?.enabled ?? true),
         schedule,
         sessionTarget: 'isolated',
         wakeMode: 'now',
