@@ -382,9 +382,9 @@ const SidebarAgentList: React.FC<{
   const enabledAgents = agents.filter((a) => a.enabled);
 
   const handleSwitch = async (agentId: string) => {
+    onShowCowork();
     if (agentId === currentAgentId) return;
     agentService.switchAgent(agentId);
-    onShowCowork();
     onSessionsLoadingChange(true);
     try {
       await coworkService.loadSessions(agentId);
