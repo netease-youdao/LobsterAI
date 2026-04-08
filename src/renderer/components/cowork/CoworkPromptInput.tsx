@@ -1,8 +1,12 @@
-import { ExclamationTriangleIcon,PhotoIcon } from '@heroicons/react/24/outline';
-import { FolderIcon,PaperAirplaneIcon, StopIcon } from '@heroicons/react/24/solid';
-import React, { useCallback,useEffect, useRef, useState } from 'react';
-import { useDispatch,useSelector } from 'react-redux';
-
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { PaperAirplaneIcon, StopIcon, FolderIcon } from '@heroicons/react/24/solid';
+import { PhotoIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import PaperClipIcon from '../icons/PaperClipIcon';
+import XMarkIcon from '../icons/XMarkIcon';
+import ModelSelector from '../ModelSelector';
+import FolderSelectorPopover from './FolderSelectorPopover';
+import { SkillsButton } from '../skills';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -734,13 +738,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </button>
                 )}
                 {!remoteManaged && (
-                  <>
-                    <SkillsButton
-                      onSelectSkill={handleSelectSkill}
-                      onManageSkills={handleManageSkills}
-                    />
-                    <ActiveSkillBadge />
-                  </>
+                  <SkillsButton
+                    onManageSkills={handleManageSkills}
+                  />
                 )}
               </div>
               <div className="flex items-center gap-2">
