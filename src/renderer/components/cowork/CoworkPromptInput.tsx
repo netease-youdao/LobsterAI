@@ -607,7 +607,31 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     <div className="relative">
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
-          {attachments.map((attachment) => (
+          {attachments.map((attachment) =>
+            attachment.isImage && attachment.dataUrl ? (
+              /* Image attachment — thumbnail card */
+              <div
+                key={attachment.path}
+                className="group relative h-16 w-16 flex-shrink-0 rounded-lg border border-border bg-surface overflow-hidden"
+                title={attachment.path}
+              >
+                <img
+                  src={attachment.dataUrl}
+                  alt={attachment.name}
+                  className="h-full w-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleRemoveAttachment(attachment.path)}
+                  className="absolute -right-1.5 -top-1.5 hidden group-hover:flex h-5 w-5 items-center justify-center rounded-full bg-foreground/80 text-background shadow-sm"
+                  aria-label={i18nService.t('coworkAttachmentRemove')}
+                  title={i18nService.t('coworkAttachmentRemove')}
+                >
+                  <XMarkIcon className="h-3 w-3" />
+                </button>
+              </div>
+            ) : (
+              /* Non-image or image without dataUrl — pill badge */
               <div
                 key={attachment.path}
                 className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-foreground max-w-full"
@@ -629,7 +653,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   <XMarkIcon className="h-3 w-3" />
                 </button>
               </div>
-          ))}
+            ),
+          )}
         </div>
       )}
       {imageVisionHint && (
