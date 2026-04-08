@@ -797,6 +797,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
   }, []);
 
+  // Cancel any ongoing GitHub Copilot OAuth polling when Settings is closed,
+  // preventing background polling and ensuring the token is not silently discarded.
+  useEffect(() => {
+    return () => {
+      if (copilotAuthStatus === 'awaiting_user' || copilotAuthStatus === 'polling') {
+        void window.electron.githubCopilot.cancelPolling().catch(() => {/* ignore cleanup errors */});
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [copilotAuthStatus]);
+
   useEffect(() => {
     let active = true;
     void coworkService.getOpenClawEngineStatus().then((status) => {
