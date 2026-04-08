@@ -1565,7 +1565,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     ignoreNextBlurRef.current = true;
     const nextTitle = renameValue.trim();
     if (nextTitle && nextTitle !== currentSession.title) {
-      await coworkService.renameSession(currentSession.id, nextTitle);
+      try {
+        await coworkService.renameSession(currentSession.id, nextTitle);
+      } catch (error) {
+        console.error('[CoworkSessionDetail] failed to rename session:', error);
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: i18nService.t('renameConversationFailed'),
+        }));
+        setIsRenaming(false);
+        return;
+      }
     }
     setIsRenaming(false);
   };

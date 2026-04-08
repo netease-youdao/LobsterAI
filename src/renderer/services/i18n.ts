@@ -219,6 +219,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     createNewChat: '新建对话',
     deleteConversation: '删除对话',
     renameConversation: '重命名',
+    renameConversationFailed: '重命名失败，请重试',
     moveToProject: '移至项目',
     pinConversation: '置顶聊天',
     unpinConversation: '取消置顶',
@@ -251,7 +252,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     folderIconWork: '工作',
     folderIconCode: '代码',
     folderIconIdea: '灵感',
-    
+
     // 聊天窗口
     sendMessage: '发送消息',
     typeMessage: '询问任何问题...',
@@ -281,17 +282,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imageLimitReached: '最多上传 10 张图片',
     imageReadError: '读取图片失败',
     imageInputNotSupported: '当前模型不支持图像输入',
-    
+
     // 模型选择
     selectModel: '选择模型',
-    
+
     // 错误提示
     errorOccurred: '发生错误',
     tryAgain: '请重试',
     networkError: '网络错误',
     apiKeyRequired: '需要设置API密钥',
     configureApiKey: '请在设置中配置您的API密钥',
-    
+
     // 初始化
     initializationError: '初始化应用程序失败。请检查您的配置。',
     apiKeyNotConfigured: 'API密钥未配置。请在设置中设置您的API密钥。',
@@ -1297,7 +1298,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     user: 'User',
     login: 'Login',
     inDevelopment: 'In development',
-    
+
     // Settings
     settings: 'Settings',
     general: 'General',
@@ -1324,7 +1325,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     themeColor: 'Color Themes',
     chinese: 'Chinese',
     english: 'English',
-    
+
     // API Settings
     apiKey: 'API Key',
     apiKeyPlaceholder: 'Enter your API Key',
@@ -1339,7 +1340,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     currentModel: 'Current Model',
     availableModels: 'Available Models',
     modelSwitchHint: 'You can switch models in the chat interface',
-    
+
     // Model Provider Settings
     enabled: 'Enabled',
     disabled: 'Disabled',
@@ -1447,7 +1448,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     passwordMismatch: 'Passwords do not match',
     passwordTooShort: 'Password must be at least 4 characters',
     wrongPassword: 'Wrong password, please try again',
-    
+
     // Shortcuts
     keyboardShortcuts: 'Keyboard Shortcuts',
     shortcutNotSet: 'Not set',
@@ -1483,20 +1484,21 @@ const translations: Record<LanguageType, Record<string, string>> = {
     planFree: 'Free',
     planAdvanced: 'Advanced',
     planPro: 'Pro',
-    
+
     // Error Messages
     failedToLoadSettings: 'Failed to load settings',
     failedToSaveSettings: 'Failed to save settings',
-    
+
     // Loading State
     loading: 'Loading...',
-    
+
     // Sidebar
     conversations: 'Conversations',
     noConversations: 'No conversations',
     createNewChat: 'New Chat',
     deleteConversation: 'Delete Conversation',
     renameConversation: 'Rename',
+    renameConversationFailed: 'Rename failed, please try again',
     moveToProject: 'Move to project',
     pinConversation: 'Pin chat',
     unpinConversation: 'Unpin chat',
