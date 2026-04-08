@@ -1,27 +1,14 @@
-import type { IMMediaAttachment, IMMessage } from './types';
-import { IMChatHandler } from './imChatHandler';
-import { buildOpenClawLocalTimeContextPrompt } from '../libs/openclawLocalTimeContextPrompt';
 import {
-  parseSimpleScheduledReminderText,
   parseLegacyScheduledReminderSystemMessage,
   parseScheduledReminderPrompt,
+  parseSimpleScheduledReminderText,
 } from '../../scheduledTask/reminderText';
+import { buildOpenClawLocalTimeContextPrompt } from '../libs/openclawLocalTimeContextPrompt';
+import { IMChatHandler } from './imChatHandler';
+import type { IMMediaAttachment, IMMessage } from './types';
 
 function pad(value: number): string {
   return String(value).padStart(2, '0');
-}
-
-function formatUtcOffset(date: Date): string {
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const absMinutes = Math.abs(offsetMinutes);
-  const hours = Math.floor(absMinutes / 60);
-  const minutes = absMinutes % 60;
-  return `${sign}${pad(hours)}:${pad(minutes)}`;
-}
-
-function toLocalIsoWithOffset(date: Date): string {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${formatUtcOffset(date)}`;
 }
 
 function formatLocalClock(date: Date): string {
