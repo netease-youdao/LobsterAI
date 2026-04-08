@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { agentService } from '../../services/agent';
+import { coworkService } from '../../services/cowork';
 import { imService } from '../../services/im';
 import { i18nService } from '../../services/i18n';
 import { XMarkIcon } from '@heroicons/react/24/outline';
@@ -88,6 +89,7 @@ const AgentCreateModal: React.FC<AgentCreateModalProps> = ({ isOpen, onClose }) 
           await imService.saveAndSyncConfig();
         }
         agentService.switchAgent(agent.id);
+        await coworkService.loadSessions(agent.id);
         onClose();
         resetForm();
       }
