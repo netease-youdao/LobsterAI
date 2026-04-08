@@ -369,6 +369,18 @@ class CoworkService {
     return false;
   }
 
+  async exportSessionsBatch(sessionIds: string[]): Promise<{ success: boolean; canceled?: boolean; count?: number }> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.exportSessionsBatch) return { success: false };
+
+    const result = await cowork.exportSessionsBatch(sessionIds);
+    return {
+      success: result.success,
+      canceled: result.canceled,
+      count: result.count,
+    };
+  }
+
   async setSessionPinned(sessionId: string, pinned: boolean): Promise<boolean> {
     const cowork = window.electron?.cowork;
     if (!cowork?.setSessionPinned) return false;
