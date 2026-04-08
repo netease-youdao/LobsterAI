@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
 import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
@@ -309,7 +309,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
     onRespond(buildQuestionAnswerResult(questions[0].question, optionLabel));
   };
 
-  const handleApprove = () => {
+  const handleApprove = useCallback(() => {
     if (isConfirmMode) {
       handleConfirmModeSelect(confirmModeButtons?.primary.label ?? questions[0].options[0].label);
       return;
@@ -331,14 +331,43 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
       behavior: 'allow',
       updatedInput: toolInput && typeof toolInput === 'object' ? toolInput : {},
     });
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConfirmMode, isQuestionTool, isComplete, confirmModeButtons, questions, toolInput, answers, onRespond]);
 
-  const handleDeny = () => {
+  const handleDeny = useCallback(() => {
     onRespond({
       behavior: 'deny',
       message: 'Permission denied',
     });
-  };
+  }, [onRespond]);
+
+  // Keyboard shortcuts: Enter = primary action, Escape = deny/cancel.
+  // For destructive operations Enter is intentionally disabled so users
+  // cannot accidentally approve a dangerous command with a quick keystroke.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Let the event propagate normally inside text inputs / textareas
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDeny();
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        // Do NOT allow Enter to approve destructive operations
+        if (!isQuestionTool && dangerLevel === 'destructive') return;
+        if (!isComplete) return;
+        e.preventDefault();
+        handleApprove();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isComplete, dangerLevel, isQuestionTool, handleApprove, handleDeny]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
