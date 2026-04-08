@@ -406,12 +406,26 @@ const IMSettings: React.FC = () => {
   const handlePopoChange = (update: Partial<PopoOpenClawConfig>) => {
     dispatch(setPopoConfig(update));
   };
+
+  /** When POPO is enabled, AES Key must be non-empty before persisting (issue #1504). */
+  const persistPopoIfValid = async (next: PopoOpenClawConfig): Promise<boolean> => {
+    if (next.enabled && !next.aesKey?.trim()) {
+      window.dispatchEvent(
+        new CustomEvent('app:showToast', { detail: i18nService.t('imPopoAesKeyRequired') }),
+      );
+      await imService.loadConfig();
+      return false;
+    }
+    await imService.persistConfig({ popo: next });
+    return true;
+  };
+
   const handleSavePopoConfig = async (override?: Partial<PopoOpenClawConfig>) => {
     if (!configLoaded) return;
     const configToSave = override
       ? { ...popoConfig, ...override }
       : popoConfig;
-    await imService.persistConfig({ popo: configToSave });
+    await persistPopoIfValid(configToSave);
   };
 
   const handleWecomQuickSetup = async () => {
@@ -545,7 +559,8 @@ const IMSettings: React.FC = () => {
 
     // For POPO, save popo config directly (OpenClaw mode)
     if (activePlatform === 'popo') {
-      await imService.persistConfig({ popo: popoConfig });
+      const ok = await persistPopoIfValid(popoConfig);
+      if (!ok) return;
       return;
     }
 
@@ -668,6 +683,12 @@ const IMSettings: React.FC = () => {
 
       if (platform === 'popo') {
         const newEnabled = !popoConfig.enabled;
+        if (newEnabled && !popoConfig.aesKey?.trim()) {
+          window.dispatchEvent(
+            new CustomEvent('app:showToast', { detail: i18nService.t('imPopoAesKeyRequired') }),
+          );
+          return;
+        }
         const success = await imService.updateConfig({ popo: { ...popoConfig, enabled: newEnabled } });
         if (success) {
           dispatch(setPopoConfig({ enabled: newEnabled }));
@@ -2992,7 +3013,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...popoConfig.allowFrom, id];
                             handlePopoChange({ allowFrom: newIds });
                             setPopoAllowedUserIdInput('');
-                            void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                            void persistPopoIfValid({ ...popoConfig, allowFrom: newIds });
                           }
                         }
                       }}
@@ -3007,7 +3028,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...popoConfig.allowFrom, id];
                           handlePopoChange({ allowFrom: newIds });
                           setPopoAllowedUserIdInput('');
-                          void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                          void persistPopoIfValid({ ...popoConfig, allowFrom: newIds });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -3028,7 +3049,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = popoConfig.allowFrom.filter((uid) => uid !== id);
                               handlePopoChange({ allowFrom: newIds });
-                              void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                              void persistPopoIfValid({ ...popoConfig, allowFrom: newIds });
                             }}
                             className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -3078,7 +3099,7 @@ const IMSettings: React.FC = () => {
                             const newIds = [...popoConfig.groupAllowFrom, id];
                             handlePopoChange({ groupAllowFrom: newIds });
                             setPopoGroupAllowIdInput('');
-                            void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                            void persistPopoIfValid({ ...popoConfig, groupAllowFrom: newIds });
                           }
                         }
                       }}
@@ -3093,7 +3114,7 @@ const IMSettings: React.FC = () => {
                           const newIds = [...popoConfig.groupAllowFrom, id];
                           handlePopoChange({ groupAllowFrom: newIds });
                           setPopoGroupAllowIdInput('');
-                          void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                          void persistPopoIfValid({ ...popoConfig, groupAllowFrom: newIds });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -3114,7 +3135,7 @@ const IMSettings: React.FC = () => {
                             onClick={() => {
                               const newIds = popoConfig.groupAllowFrom.filter((gid) => gid !== id);
                               handlePopoChange({ groupAllowFrom: newIds });
-                              void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                              void persistPopoIfValid({ ...popoConfig, groupAllowFrom: newIds });
                             }}
                             className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
