@@ -10,6 +10,7 @@ import type { IMStore } from '../im/imStore';
 import type { Platform } from '../im/types';
 import { PlatformRegistry } from '../../shared/platform';
 import { t } from '../i18n';
+import { session } from '@electron/remote';
 
 
 const LOBSTERAI_SESSION_PREFIX = 'lobsterai:';
@@ -104,6 +105,19 @@ export function parseChannelSessionKey(sessionKey: string): { platform: Platform
     if (parts.length >= 4) {
       let platform = PlatformRegistry.platformOfChannel(parts[2]);
       if (platform) {
+        // Detect per-account-channel-peer format:
+        //   agent:{agentId}:{channel}:{accountId}:{peerKind}:{peerId}
+        // vs per-channel-peer format:
+        //   agent:{agentId}:{channel}:{peerKind}:{peerId}
+        // If parts[3] is a peer kind ('direct','group','channel'), it's per-channel-peer.
+        // Otherwise parts[3] is an accountId — keep it in conversationId so that
+        // different accounts with the same peerId get separate sessions.
+        const peerKinds = new Set(['direct', 'group', 'channel']);
+        if (parts.length >= 6 && !peerKinds.has(parts[3])) {
+          // per-account-channel-peer: include accountId in conversationId for isolation
+          const conversationId = parts.slice(3).join(':');
+          if (conversationId) return { platform, conversationId };
+        }
         const conversationId = parts.slice(3).join(':');
         if (conversationId) return { platform, conversationId };
       }
@@ -144,6 +158,72 @@ export function extractAgentIdFromKey(sessionKey: string): string | null {
   const secondColon = sessionKey.indexOf(':', 6); // skip "agent:"
   if (secondColon <= 6) return null;
   return sessionKey.slice(6, secondColon);
+}
+
+/**
+ * Extract the accountId from a gateway session key (for multi-instance platforms).
+ * Key format: "agent:{agentId}:{channel}:{accountId}:{peerKind}:{peerId}"
+ * Returns null if the key doesn't contain an accountId.
+ */
+export function extractAccountIdFromKey(sessionKey: string): string | null {
+  if (!sessionKey.startsWith('agent:')) return null;
+
+  // Try JSON SessionContext format first
+  const jsonIdx = sessionKey.indexOf(':{');
+  if (jsonIdx > 0) {
+    const jsonStr = sessionKey.slice(jsonIdx + 1);
+    try {
+      const ctx = JSON.parse(jsonStr);
+      if (ctx && typeof ctx.accountid === 'string') {
+        return ctx.accountid;
+      }
+    } catch {
+      // Not valid JSON
+    }
+    return null;
+  }
+
+  const parts = sessionKey.split(':');
+  if (parts.length < 6) return null;
+  // agent:{agentId}:{channel}:{accountId}:{peerKind}:{peerId}
+  const peerKinds = new Set(['direct', 'group', 'channel']);
+  if (!peerKinds.has(parts[3])) {
+    // parts[3] is accountId (not a peerKind)
+    return parts[3];
+  }
+  return null;
+}
+
+const MULTI_INSTANCE_PLATFORMS = new Set<Platform>(['dingtalk', 'feishu', 'qq']);
+
+/**
+ * Resolve the agent binding for a platform, supporting per-instance bindings.
+ * Checks for composite key `platform:instanceId` first (matching by accountId prefix),
+ * then falls back to platform-level key, then 'main'.
+ */
+export function resolveAgentBinding(
+  bindings: Record<string, string> | undefined,
+  platform: Platform,
+  accountId?: string | null,
+): string {
+  if (!bindings) return 'main';
+
+  // For multi-instance platforms, try per-instance binding first
+  if (MULTI_INSTANCE_PLATFORMS.has(platform) && accountId) {
+    // Scan bindings for a key like `platform:instanceId` where instanceId starts with accountId
+    const prefix = `${platform}:`;
+    for (const key of Object.keys(bindings)) {
+      if (key.startsWith(prefix)) {
+        const instanceId = key.slice(prefix.length);
+        if (instanceId.startsWith(accountId)) {
+          return bindings[key];
+        }
+      }
+    }
+  }
+
+  // Fallback: platform-level binding (legacy or single-instance)
+  return bindings[platform] || 'main';
 }
 
 /** Match OpenClaw main agent session keys like "agent:main:main" or "agent:secondary:main". */
@@ -232,7 +312,8 @@ export class OpenClawChannelSessionSync {
     const keyAgentId = extractAgentIdFromKey(sessionKey);
     if (!keyAgentId) return true; // Legacy key without agentId — allow
     const imSettings = this.imStore.getIMSettings();
-    const currentAgentId = imSettings.platformAgentBindings?.[parsed.platform] || 'main';
+    const accountId = extractAccountIdFromKey(sessionKey);
+    const currentAgentId = resolveAgentBinding(imSettings.platformAgentBindings, parsed.platform, accountId);
     return keyAgentId === currentAgentId;
   }
 
@@ -286,7 +367,8 @@ export class OpenClawChannelSessionSync {
         // When platformAgentBindings changes, the mapping's agentId becomes stale.
         // Create a new session for the new agent and update the mapping.
         const imSettings = this.imStore.getIMSettings();
-        const currentAgentId = imSettings.platformAgentBindings?.[parsed.platform] || 'main';
+        const accountId = extractAccountIdFromKey(sessionKey);
+        const currentAgentId = resolveAgentBinding(imSettings.platformAgentBindings, parsed.platform, accountId);
         if (existingMapping.agentId !== currentAgentId) {
           console.log('[ChannelSessionSync] agent binding changed:', existingMapping.agentId, '→', currentAgentId, '— creating new session');
           const titlePrefix = getChannelTitlePrefix(parsed.platform);
@@ -329,7 +411,8 @@ export class OpenClawChannelSessionSync {
     const cwd = this.getDefaultCwd();
     // Look up the per-platform agent binding so the session is filed under the correct agent.
     const imSettings = this.imStore.getIMSettings();
-    const agentId = imSettings.platformAgentBindings?.[parsed.platform] || 'main';
+    const accountId = extractAccountIdFromKey(sessionKey);
+    const agentId = resolveAgentBinding(imSettings.platformAgentBindings, parsed.platform, accountId);
     console.log('[ChannelSessionSync] creating new cowork session: title=', title, 'cwd=', cwd, 'agentId=', agentId);
 
     const session = this.coworkStore.createSession(title, cwd, '', 'local', [], agentId);

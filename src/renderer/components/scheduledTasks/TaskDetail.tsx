@@ -26,6 +26,7 @@ interface TaskDetailProps {
 const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const dispatch = useDispatch();
   const runs = useSelector((state: RootState) => state.scheduledTask.runs[task.id] ?? []);
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
 
   useEffect(() => {
     void scheduledTaskService.loadRuns(task.id);
@@ -34,6 +35,13 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
   const statusLabel = i18nService.t(getStatusLabelKey(task.state.lastStatus));
   const statusTone = getStatusTone(task.state.lastStatus);
   const promptText = task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message;
+  const taskModelRef = task.payload.kind === 'agentTurn' ? task.payload.model : undefined;
+  const taskModelLabel = taskModelRef
+    ? (() => {
+        const bareId = taskModelRef.includes('/') ? taskModelRef.slice(taskModelRef.indexOf('/') + 1) : taskModelRef;
+        return availableModels.find((m) => m.id === bareId)?.name ?? bareId;
+      })()
+    : undefined;
 
   const sectionClass = 'rounded-lg border border-border p-4';
   const sectionTitleClass = 'text-sm font-semibold text-foreground mb-3';
@@ -100,6 +108,12 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             <div className={labelClass}>{i18nService.t('scheduledTasksDetailNotify')}</div>
             <div className={valueClass}>{formatDeliveryLabel(task.delivery)}</div>
           </div>
+          {taskModelLabel && (
+            <div>
+              <div className={labelClass}>{i18nService.t('scheduledTasksDetailModel')}</div>
+              <div className={valueClass}>{taskModelLabel}</div>
+            </div>
+          )}
           {task.sessionKey && (
             <div className="col-span-2">
               <div className={labelClass}>{i18nService.t('scheduledTasksSessionKey')}</div>

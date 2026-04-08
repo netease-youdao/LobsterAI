@@ -133,10 +133,12 @@ const createSync = (tmpDir, appConfig, options = {}) => {
       systemPrompt: options.systemPrompt ?? '',
       executionMode: options.executionMode ?? 'auto',
     }),
-    getDingTalkConfig: () => null,
-    getFeishuConfig: () => null,
-    getQQConfig: () => options.qqConfig ?? null,
+    getDingTalkInstances: () => options.dingTalkInstances ?? [],
+    getFeishuInstances: () => options.feishuInstances ?? [],
+    getQQInstances: () => options.qqInstances ?? [],
     getWecomConfig: () => null,
+    getPopoConfig: () => options.popoConfig ?? null,
+    getNimConfig: () => options.nimConfig ?? null,
     getSkillsPrompt: () => null,
   });
 };
@@ -170,7 +172,7 @@ test('sync writes native moonshot provider config and migrates matching managed 
   assert.equal(config.models.providers.moonshot.baseUrl, 'https://api.moonshot.cn/v1');
   assert.equal(config.models.providers.moonshot.api, 'openai-completions');
   assert.equal(config.agents.defaults.model.primary, 'moonshot/kimi-k2.5');
-  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client']);
+  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client', '*']);
   assert.deepEqual(config.tools.deny, ['web_search']);
   assert.equal(config.tools.web.search.enabled, false);
   assert.equal(config.browser.enabled, true);
@@ -209,7 +211,7 @@ test('sync maps moonshot coding plan sessions to kimi-coding model refs', (t) =>
   assert.equal(config.models.providers['kimi-coding'].baseUrl, 'https://api.kimi.com/coding');
   assert.equal(config.models.providers['kimi-coding'].api, 'anthropic-messages');
   assert.equal(config.agents.defaults.model.primary, 'kimi-coding/k2p5');
-  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client']);
+  assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client', '*']);
 
   const sessionStore = JSON.parse(fs.readFileSync(path.join(sessionsDir, 'sessions.json'), 'utf8'));
   assert.equal(sessionStore['agent:main:lobsterai:current-session'].modelProvider, 'kimi-coding');
@@ -271,7 +273,7 @@ test('sync writes scheduled-task policy into managed AGENTS.md for native channe
   assert.match(agentsMd, /## Every Session/);
   assert.match(agentsMd, /Read `SOUL\.md`/);
   assert.match(agentsMd, /Read `USER\.md`/);
-  assert.match(agentsMd, /If in MAIN SESSION.*Also read `MEMORY\.md`/s);
+  assert.match(agentsMd, /main session.*read `MEMORY\.md`/is);
   assert.match(agentsMd, /## Scheduled Tasks/);
   assert.match(agentsMd, /## Web Search/);
   assert.match(agentsMd, /Built-in `web_search` is disabled in this workspace\./);
@@ -357,7 +359,9 @@ test('sync disables legacy qqbot-cron skill so QQ reminders use native cron', (t
   setElectronPaths(tmpDir);
 
   const sync = createSync(tmpDir, createAppConfig(), {
-    qqConfig: {
+    qqInstances: [{
+      instanceId: 'default',
+      instanceName: 'Default',
       enabled: true,
       appId: 'qq-app-id',
       appSecret: 'qq-app-secret',
@@ -369,7 +373,7 @@ test('sync disables legacy qqbot-cron skill so QQ reminders use native cron', (t
       markdownSupport: true,
       imageServerBaseUrl: '',
       debug: false,
-    },
+    }],
   });
   const result = sync.sync('test-qq-native-cron');
 

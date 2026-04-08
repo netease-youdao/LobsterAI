@@ -1,0 +1,107 @@
+name: OpenClaw Integration Check
+
+on:
+  push:
+    paths:
+      - 'package.json'
+      - 'scripts/ensure-openclaw-version.cjs'
+      - 'scripts/**openclaw*'
+  pull_request:
+    paths:
+      - 'package.json'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  check-openclaw-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      
+      - name: Check OpenClaw Version Format
+        run: |
+          VERSION=$(node -p "require('./package.json').openclaw.version")
+          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid OpenClaw version format: $VERSION"
+            echo "Expected format: vX.Y.Z (e.g., v2026.3.2)"
+            exit 1
+          fi
+          echo "✓ OpenClaw version format valid: $VERSION"
+      
+      - name: Validate OpenClaw Repository
+        run: |
+          REPO=$(node -p "require('./package.json').openclaw.repo")
+          if [[ ! $REPO =~ ^https://github\.com/.+/.+\.git$ ]]; then
+            echo "❌ Invalid OpenClaw repository URL: $REPO"
+            exit 1
+          fi
+          echo "✓ OpenClaw repository URL valid: $REPO"
+      
+      - name: Validate OpenClaw Plugins
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            
+            if (!pkg.openclaw.plugins || !Array.isArray(pkg.openclaw.plugins)) {
+              console.error('❌ Invalid openclaw.plugins configuration: must be an array');
+              process.exit(1);
+            }
+            
+            console.log('✓ OpenClaw plugins configuration valid');
+            console.log('  Total plugins:', pkg.openclaw.plugins.length);
+            
+            // Validate each plugin
+            let hasError = false;
+            pkg.openclaw.plugins.forEach((plugin, index) => {
+              if (!plugin.id) {
+                console.error('❌ Plugin at index ' + index + ' missing \"id\" field');
+                hasError = true;
+              }
+              if (!plugin.npm) {
+                console.error('❌ Plugin at index ' + index + ' missing \"npm\" field');
+                hasError = true;
+              }
+              if (!plugin.version) {
+                console.error('❌ Plugin at index ' + index + ' missing \"version\" field');
+                hasError = true;
+              }
+            });
+            
+            if (hasError) {
+              process.exit(1);
+            }
+            
+            console.log('✓ All plugins have required fields');
+          "
+      
+      - name: Check OpenClaw Scripts Exist
+        run: |
+          SCRIPTS=(
+            "scripts/ensure-openclaw-version.cjs"
+            "scripts/apply-openclaw-patches.cjs"
+            "scripts/bundle-openclaw-gateway.cjs"
+            "scripts/ensure-openclaw-plugins.cjs"
+            "scripts/sync-local-openclaw-extensions.cjs"
+            "scripts/precompile-openclaw-extensions.cjs"
+            "scripts/prune-openclaw-runtime.cjs"
+            "scripts/run-build-openclaw-runtime.cjs"
+            "scripts/sync-openclaw-runtime-current.cjs"
+          )
+          
+          MISSING=0
+          for script in "${SCRIPTS[@]}"; do
+            if [ -f "$script" ]; then
+              echo "✓ $script"
+            else
+              echo "⚠ $script not found"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          
+          if [ $MISSING -gt 0 ]; then
+            echo "⚠ $MISSING OpenClaw scripts missing (this may be expected for new projects)"
+          fi

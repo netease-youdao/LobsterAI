@@ -1,0 +1,48 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          # Issues
+          days-before-issue-stale: 60
+          days-before-issue-close: 14
+          stale-issue-label: "stale"
+          stale-issue-message: |
+            This issue has been inactive for 60 days. It will be automatically closed in 14 days unless there is new activity.
+
+            If this issue is still relevant, please leave a comment or update it to keep it open. Thank you!
+          close-issue-message: |
+            This issue was automatically closed due to inactivity. Feel free to reopen it if the problem persists.
+
+          # Pull Requests
+          days-before-pr-stale: 30
+          days-before-pr-close: 14
+          stale-pr-label: "stale"
+          stale-pr-message: |
+            This pull request has been inactive for 30 days. It will be automatically closed in 14 days unless there is new activity.
+
+            If you're still working on this, please leave a comment or push new commits to keep it open. Thank you!
+          close-pr-message: |
+            This pull request was automatically closed due to inactivity. Feel free to reopen it if you'd like to continue.
+
+          # Exempt labels
+          exempt-issue-labels: "pinned,security,bug,enhancement"
+          exempt-pr-labels: "pinned,security,work-in-progress,wip"
+
+          # Only label, don't close draft PRs
+          exempt-draft-pr: true
+
+          operations-per-run: 100

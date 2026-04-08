@@ -6,6 +6,7 @@ import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
 import ListChecksIcon from '../icons/ListChecksIcon';
 import { i18nService } from '../../services/i18n';
+import Modal from '../common/Modal';
 
 interface CoworkSessionItemProps {
   session: CoworkSessionSummary;
@@ -427,14 +428,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
 
       {/* Delete Confirmation Modal */}
       {showConfirmDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={handleCancelDelete}
-        >
-          <div
-            className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <Modal onClose={handleCancelDelete} className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden">
             {/* Header */}
             <div className="flex items-center gap-3 px-5 py-4">
               <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/30">
@@ -467,8 +461,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                 {i18nService.t('deleteSession')}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

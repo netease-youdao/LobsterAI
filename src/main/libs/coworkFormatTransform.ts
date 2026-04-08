@@ -418,6 +418,11 @@ export function buildOpenAIChatCompletionsURL(baseURL: string): string {
     return `${normalized}/v1beta/openai/chat/completions`;
   }
 
+  // GitHub Copilot uses /chat/completions directly (no /v1 prefix)
+  if (normalized.includes('githubcopilot.com')) {
+    return `${normalized}/chat/completions`;
+  }
+
   // Handle /v1, /v4 etc. versioned paths
   if (/\/v\d+$/.test(normalized)) {
     return `${normalized}/chat/completions`;
