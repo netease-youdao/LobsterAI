@@ -95,7 +95,12 @@ READVER
 PATCHES_DIR="$ELECTRON_ROOT/scripts/patches/$DESIRED_VERSION"
 PATCH_HASH=""
 if [[ -d "$PATCHES_DIR" ]]; then
-  PATCH_HASH=$(cat "$PATCHES_DIR"/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)
+  if command -v sha256sum &>/dev/null; then
+    PATCH_HASH=$(cat "$PATCHES_DIR"/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)
+  else
+    # macOS fallback: shasum -a 256 (sha256sum is not available on macOS by default)
+    PATCH_HASH=$(cat "$PATCHES_DIR"/*.patch 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+  fi
 fi
 
 if [[ -n "$DESIRED_VERSION" && "${OPENCLAW_FORCE_BUILD:-}" != "1" ]]; then
