@@ -83,6 +83,14 @@ export class IMCoworkHandler extends EventEmitter {
   private imSessionIds: Set<string> = new Set();
   private sessionConversationMap: Map<string, { conversationId: string; platform: Platform }> = new Map();
   private pendingPermissionByConversation: Map<string, PendingIMPermission> = new Map();
+
+  // Per-conversation async mutex that serializes message processing.
+  // Without this, two messages arriving simultaneously for the same
+  // conversation can race through getOrCreateCoworkSession() and create
+  // duplicate cowork sessions (the second overwrites the mapping, orphaning
+  // the first).  Sequential messages also replace the active accumulator,
+  // silently dropping the in-flight response for the earlier message.
+  private conversationLocks: Map<string, Promise<unknown>> = new Map();
   private readonly onMessage = this.handleMessage.bind(this);
   private readonly onMessageUpdate = this.handleMessageUpdate.bind(this);
   private readonly onPermissionRequest = this.handlePermissionRequest.bind(this);
@@ -152,6 +160,43 @@ export class IMCoworkHandler extends EventEmitter {
    * Process an incoming IM message using CoworkRuntime
    */
   async processMessage(message: IMMessage): Promise<string> {
+    // Serialize processing per conversation so that concurrent messages
+    // for the same IM thread don't race through session creation or
+    // replace each other's response accumulators.
+    return this.withConversationLock(
+      message.conversationId,
+      message.platform,
+      () => this.processMessageUnlocked(message)
+    );
+  }
+
+  /**
+   * Serialize async work per IM conversation.  Concurrent calls for the
+   * same conversation are queued; each waits for the previous one to
+   * settle before executing.
+   */
+  private async withConversationLock<T>(
+    conversationId: string,
+    platform: Platform,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const key = `${platform}:${conversationId}`;
+    const prev = this.conversationLocks.get(key) ?? Promise.resolve();
+    // Chain after the previous call regardless of its outcome.
+    const current = prev.then(fn, fn);
+    this.conversationLocks.set(key, current);
+    try {
+      return await current;
+    } finally {
+      // Clean up the map entry once the chain has fully drained,
+      // so we don't leak entries for inactive conversations.
+      if (this.conversationLocks.get(key) === current) {
+        this.conversationLocks.delete(key);
+      }
+    }
+  }
+
+  private async processMessageUnlocked(message: IMMessage): Promise<string> {
     const pendingPermissionReply = await this.handlePendingPermissionReply(message);
     if (pendingPermissionReply !== null) {
       return pendingPermissionReply;
@@ -1010,7 +1055,7 @@ export class IMCoworkHandler extends EventEmitter {
       if (accumulator.timeoutId) {
         clearTimeout(accumulator.timeoutId);
       }
-      accumulator.reject(new Error('Handler destroyed'));
+      accumulator.reject?.(new Error('Handler destroyed'));
     });
     this.messageAccumulators.clear();
     this.imSessionIds.clear();
