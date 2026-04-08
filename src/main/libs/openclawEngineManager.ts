@@ -1,11 +1,12 @@
-import { app, utilityProcess, type UtilityProcess } from 'electron';
-import { spawn, type ChildProcess } from 'child_process';
+import { type ChildProcess,spawn } from 'child_process';
 import crypto from 'crypto';
+import { app, type UtilityProcess,utilityProcess } from 'electron';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
-import { getElectronNodeRuntimePath, ensureElectronNodeShim, getSkillsRoot } from './coworkUtil';
+
+import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
@@ -302,6 +303,13 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   async startGateway(): Promise<OpenClawEngineStatus> {
+    // Fast path: gateway status is authoritative — driven by process exit events and
+    // WebSocket disconnect callbacks (notifyGatewayDisconnected), so phase='running'
+    // reliably means the gateway is reachable.
+    if (this.status.phase === 'running' && isGatewayProcessAlive(this.gatewayProcess)) {
+      console.log('[OpenClaw] startGateway: fast path — status=running & process alive');
+      return this.getStatus();
+    }
     if (this.startGatewayPromise) {
       console.log('[OpenClaw] startGateway: already in progress, reusing existing promise');
       return this.startGatewayPromise;
@@ -1351,6 +1359,42 @@ export class OpenClawEngineManager extends EventEmitter {
       if (this.shutdownRequested) return;
       void this.startGateway();
     }, delay);
+  }
+
+  /**
+   * Called by OpenClawRuntimeAdapter when the WebSocket connection to the gateway
+   * drops unexpectedly (after a successful handshake). Transitions status to 'error'
+   * so that the Fast Path in startGateway() will correctly fall through to a full
+   * health check / restart cycle instead of returning stale 'running' state.
+   */
+  notifyGatewayDisconnected(): void {
+    if (this.status.phase === 'running') {
+      console.warn('[OpenClaw] notifyGatewayDisconnected: WebSocket disconnected unexpectedly, resetting status to error');
+      this.setStatus({
+        phase: 'error',
+        version: this.status.version,
+        message: 'Gateway WebSocket connection lost.',
+        canRetry: true,
+      });
+    }
+  }
+
+  /**
+   * Called by OpenClawRuntimeAdapter when the WebSocket connection to the gateway
+   * is successfully re-established after a disconnect. Transitions status back to
+   * 'running' so the Fast Path works correctly again.
+   */
+  notifyGatewayReconnected(): void {
+    if (this.status.phase !== 'running') {
+      const port = this.gatewayPort ?? this.readGatewayPort();
+      console.log(`[OpenClaw] notifyGatewayReconnected: WebSocket reconnected, restoring status to running (port=${port ?? 'unknown'})`);
+      this.setStatus({
+        phase: 'running',
+        version: this.status.version,
+        message: port ? `OpenClaw gateway is running on loopback:${port}.` : 'OpenClaw gateway is running.',
+        canRetry: false,
+      });
+    }
   }
 
   private setStatus(next: OpenClawEngineStatus): void {

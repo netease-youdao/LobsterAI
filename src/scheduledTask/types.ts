@@ -1,8 +1,8 @@
 import type {
   DeliveryMode,
   SessionTarget,
-  WakeMode,
   TaskStatus,
+  WakeMode,
 } from './constants';
 
 export interface ScheduleAt {
@@ -90,6 +90,8 @@ export interface ScheduledTaskRun {
 
 export interface ScheduledTaskRunWithName extends ScheduledTaskRun {
   taskName: string;
+  agentId: string | null;
+  agentMessage: string;
 }
 
 export interface ScheduledTaskInput {

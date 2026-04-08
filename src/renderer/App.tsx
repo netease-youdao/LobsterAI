@@ -1,37 +1,38 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { RootState, store } from './store';
-import Settings, { type SettingsOpenOptions } from './components/Settings';
-import Sidebar from './components/Sidebar';
-import Toast from './components/Toast';
-import WindowTitleBar from './components/window/WindowTitleBar';
-import { CoworkView } from './components/cowork';
-import { SkillsView } from './components/skills';
-import { ScheduledTasksView } from './components/scheduledTasks';
-import { McpView } from './components/mcp';
+import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import { useDispatch,useSelector } from 'react-redux';
+
 import AgentsView from './components/agent/AgentsView';
+import { CoworkView } from './components/cowork';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
-import { configService } from './services/config';
-import { apiService } from './services/api';
-import { themeService } from './services/theme';
-import { coworkService } from './services/cowork';
-import { authService } from './services/auth';
-import { scheduledTaskService } from './services/scheduledTask';
-import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
-import { defaultConfig, getProviderDisplayName } from './config';
-import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
-import { clearSelection } from './store/slices/quickActionSlice';
-import { setDraftPrompt } from './store/slices/coworkSlice';
-import type { ApiConfig } from './services/api';
-import type { CoworkPermissionResult } from './types/cowork';
-import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
-import { i18nService } from './services/i18n';
-import { matchesShortcut } from './services/shortcuts';
+import { McpView } from './components/mcp';
+import PrivacyDialog from './components/PrivacyDialog';
+import { ScheduledTasksView } from './components/scheduledTasks';
+import Settings, { type SettingsOpenOptions } from './components/Settings';
+import Sidebar from './components/Sidebar';
+import { SkillsView } from './components/skills';
+import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
-import PrivacyDialog from './components/PrivacyDialog';
+import WindowTitleBar from './components/window/WindowTitleBar';
+import { defaultConfig, getProviderDisplayName } from './config';
+import type { ApiConfig } from './services/api';
+import { apiService } from './services/api';
+import { type AppUpdateDownloadProgress, type AppUpdateInfo, checkForAppUpdate, UPDATE_HEARTBEAT_INTERVAL_MS,UPDATE_POLL_INTERVAL_MS } from './services/appUpdate';
+import { authService } from './services/auth';
+import { configService } from './services/config';
+import { coworkService } from './services/cowork';
+import { i18nService } from './services/i18n';
+import { scheduledTaskService } from './services/scheduledTask';
+import { matchesShortcut } from './services/shortcuts';
+import { themeService } from './services/theme';
+import { RootState, store } from './store';
+import { setDraftPrompt } from './store/slices/coworkSlice';
+import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
+import { clearSelection } from './store/slices/quickActionSlice';
+import type { CoworkPermissionResult } from './types/cowork';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -40,6 +41,7 @@ const App: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<'info' | 'success'>('info');
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
@@ -304,8 +306,9 @@ const App: React.FC = () => {
     setMainView('cowork');
   }, [dispatch]);
 
-  const showToast = useCallback((message: string) => {
+  const showToast = useCallback((message: string, variant: 'info' | 'success' = 'info') => {
     setToastMessage(message);
+    setToastVariant(variant);
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current);
     }
@@ -515,8 +518,10 @@ const App: React.FC = () => {
   // Listen for toast events from child components
   useEffect(() => {
     const handler = (e: Event) => {
-      const message = (e as CustomEvent<string>).detail;
-      if (message) showToast(message);
+      const detail = (e as CustomEvent).detail;
+      const variant: 'info' | 'success' = typeof detail === 'object' && detail?.variant === 'success' ? 'success' : 'info';
+      const text: string = typeof detail === 'string' ? detail : (detail?.message ?? '');
+      if (text) showToast(text, variant);
     };
     window.addEventListener('app:showToast', handler);
     return () => window.removeEventListener('app:showToast', handler);
@@ -673,7 +678,11 @@ const App: React.FC = () => {
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
       {toastMessage && (
-        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
+        <Toast
+          message={toastMessage}
+          variant={toastVariant}
+          onClose={toastVariant === 'info' ? () => setToastMessage(null) : undefined}
+        />
       )}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar
@@ -779,4 +788,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+export default App;

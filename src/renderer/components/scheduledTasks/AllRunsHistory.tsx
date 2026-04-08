@@ -1,31 +1,191 @@
-import React, { useEffect, useState } from 'react';
+import { ClockIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { RootState } from '../../store';
-import { scheduledTaskService } from '../../services/scheduledTask';
-import { i18nService } from '../../services/i18n';
-import type { ScheduledTaskRunWithName } from '../../../scheduledTask/types';
-import { ClockIcon } from '@heroicons/react/24/outline';
-import RunSessionModal from './RunSessionModal';
-import { formatDateTime, formatDuration } from './utils';
 
-const statusConfig: Record<string, { label: string; color: string }> = {
-  success: { label: 'scheduledTasksStatusSuccess', color: 'text-green-500' },
-  error: { label: 'scheduledTasksStatusError', color: 'text-red-500' },
-  skipped: { label: 'scheduledTasksStatusSkipped', color: 'text-yellow-500' },
-  running: { label: 'scheduledTasksStatusRunning', color: 'text-blue-500' },
+import type { ScheduledTaskRunWithName } from '../../../scheduledTask/types';
+import { i18nService } from '../../services/i18n';
+import { scheduledTaskService } from '../../services/scheduledTask';
+import { RootState } from '../../store';
+import DateRangePicker from '../ui/DateRangePicker';
+import RunSessionModal from './RunSessionModal';
+import {
+  formatDateGroup,
+  formatDuration,
+  getAgentInfo,
+  getStatusLabelKey,
+} from './utils';
+
+const PAGE_SIZE = 50;
+
+/* ------------------------------------------------------------------ */
+/*  HistoryRunRow                                                     */
+/* ------------------------------------------------------------------ */
+
+interface HistoryRunRowProps {
+  run: ScheduledTaskRunWithName;
+  onViewSession: (run: ScheduledTaskRunWithName) => void;
+}
+
+const HistoryRunRow: React.FC<HistoryRunRowProps> = ({ run, onViewSession }) => {
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const isError = run.status === 'error';
+  const hasSession = run.sessionId || run.sessionKey;
+  const statusLabel = i18nService.t(getStatusLabelKey(run.status));
+  const agentInfo = getAgentInfo(run.agentId, agents);
+
+  const startedDate = new Date(run.startedAt);
+  const timeStr = `${startedDate.getHours().toString().padStart(2, '0')}:${startedDate.getMinutes().toString().padStart(2, '0')}:${startedDate.getSeconds().toString().padStart(2, '0')}`;
+
+  return (
+    <div
+      className={`rounded-xl border border-border bg-surface p-3 transition-colors ${
+        hasSession ? 'hover:border-primary cursor-pointer' : ''
+      }`}
+      onClick={() => onViewSession(run)}
+    >
+      {/* Row 1: clock + task name | time + status */}
+      <div className="flex items-start gap-3">
+        <ClockIcon className="w-5 h-5 text-secondary shrink-0 mt-2" />
+        <span className="text-sm font-medium text-foreground truncate flex-1 min-w-0">
+          {run.taskName}
+        </span>
+        <div className="shrink-0 flex items-center gap-2 text-xs text-secondary whitespace-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>
+          <span>{i18nService.t('scheduledTasksLastRunTime')} {timeStr}</span>
+          <span className={`font-medium ${
+            isError
+              ? 'text-destructive'
+              : run.status === 'success'
+                ? 'text-success'
+                : run.status === 'running'
+                  ? 'text-primary'
+                  : 'text-warning'
+          }`}>
+            {statusLabel}
+            {run.status === 'running' && (
+              <svg className="w-3 h-3 animate-spin text-primary inline-block ml-0.5" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
+              </svg>
+            )}
+          </span>
+        </div>
+      </div>
+
+      {/* Row 2: agent message (left) | agent + duration (right) */}
+      <div className="flex items-center gap-3 mt-1 pl-8">
+        <p className="text-xs text-secondary truncate flex-1 min-w-0" title={run.agentMessage || ''}>
+          {run.agentMessage || '\u00A0'}
+        </p>
+        <div className="shrink-0 flex items-center gap-1 text-xs text-secondary whitespace-nowrap">
+          <span className="shrink-0">{agentInfo.icon}</span>
+          <span>{agentInfo.name}</span>
+          {run.durationMs !== null && (
+            <>
+              <span className="mx-0.5">·</span>
+              <span>{formatDuration(run.durationMs)}</span>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };
+
+/* ------------------------------------------------------------------ */
+/*  AllRunsHistory                                                    */
+/* ------------------------------------------------------------------ */
 
 const AllRunsHistory: React.FC = () => {
   const allRuns = useSelector((state: RootState) => state.scheduledTask.allRuns);
+  const agents = useSelector((state: RootState) => state.agent.agents);
   const [viewingRun, setViewingRun] = useState<ScheduledTaskRunWithName | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // Avoid lint warning for unused 'agents' — it's used in HistoryRunRow via selector
+  void agents;
+
+  // Initial load
   useEffect(() => {
-    scheduledTaskService.loadAllRuns(50);
+    scheduledTaskService.loadAllRuns(PAGE_SIZE);
   }, []);
 
-  const handleLoadMore = () => {
-    scheduledTaskService.loadAllRuns(50, allRuns.length);
-  };
+  // Track whether there's more data
+  useEffect(() => {
+    setHasMore(allRuns.length > 0 && allRuns.length % PAGE_SIZE === 0);
+  }, [allRuns.length]);
+
+  // Load more callback
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    await scheduledTaskService.loadAllRuns(PAGE_SIZE, allRuns.length);
+    setLoadingMore(false);
+  }, [loadingMore, hasMore, allRuns.length]);
+
+  // Infinite scroll with IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          void loadMore();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore]);
+
+  // Filter runs
+  const filteredRuns = useMemo(() => {
+    let runs = allRuns;
+
+    // Name filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      runs = runs.filter((r) => r.taskName.toLowerCase().includes(q));
+    }
+
+    // Date range filter
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      runs = runs.filter((r) => new Date(r.startedAt) >= start);
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      runs = runs.filter((r) => new Date(r.startedAt) <= end);
+    }
+
+    return runs;
+  }, [allRuns, searchQuery, startDate, endDate]);
+
+  // Group by date
+  const groupedRuns = useMemo(() => {
+    const groups = new Map<string, ScheduledTaskRunWithName[]>();
+    for (const run of filteredRuns) {
+      const date = new Date(run.startedAt);
+      const key = formatDateGroup(date);
+      const group = groups.get(key);
+      if (group) {
+        group.push(run);
+      } else {
+        groups.set(key, [run]);
+      }
+    }
+    return groups;
+  }, [filteredRuns]);
 
   const handleViewSession = (run: ScheduledTaskRunWithName) => {
     if (run.sessionId || run.sessionKey) {
@@ -33,84 +193,87 @@ const AllRunsHistory: React.FC = () => {
     }
   };
 
-  if (allRuns.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 px-6">
-        <ClockIcon className="h-12 w-12 text-secondary/40 mb-4" />
-        <p className="text-sm font-medium text-secondary">
-          {i18nService.t('scheduledTasksHistoryEmpty')}
-        </p>
-      </div>
-    );
-  }
+  const handleClearDateRange = () => {
+    setStartDate('');
+    setEndDate('');
+  };
 
   return (
-    <div>
-      {/* Column Headers */}
-      <div className="grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-2 border-b border-border-subtle">
-        <div className="text-xs font-medium text-secondary">
-          {i18nService.t('scheduledTasksHistoryColTitle')}
+    <div className="flex flex-col gap-3" ref={scrollContainerRef}>
+      {/* Search bar + Date range picker */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1 relative">
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-secondary" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={i18nService.t('scheduledTasksHistorySearchPlaceholder')}
+            className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-surface border border-border text-foreground placeholder:text-secondary focus:outline-none focus:border-primary transition-colors"
+          />
         </div>
-        <div className="text-xs font-medium text-secondary">
-          {i18nService.t('scheduledTasksHistoryColTime')}
-        </div>
-        <div className="text-xs font-medium text-secondary">
-          {i18nService.t('scheduledTasksHistoryColStatus')}
-        </div>
+        <DateRangePicker
+          startDate={startDate}
+          endDate={endDate}
+          onStartDateChange={setStartDate}
+          onEndDateChange={setEndDate}
+          onClear={handleClearDateRange}
+        />
       </div>
 
-      {/* Run rows */}
-      {allRuns.map((run) => {
-        const cfg = statusConfig[run.status] || { label: '', color: '' };
-        const hasSession = run.sessionId || run.sessionKey;
-        return (
-          <div
-            key={run.id}
-            className={`grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-3 border-b border-border-subtle transition-colors ${
-              hasSession
-                ? 'hover:bg-surface-raised/50 cursor-pointer'
-                : ''
-            }`}
-            onClick={() => handleViewSession(run)}
-          >
-            {/* Task title */}
-            <div className="text-sm text-foreground truncate">
-              {run.taskName}
-              {run.status === 'running' && (
-                <svg className="inline-block w-3 h-3 ml-1.5 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
-                  <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
-                </svg>
-              )}
-            </div>
-
-            {/* Run time + duration */}
-            <div className="text-sm text-secondary truncate">
-              {formatDateTime(new Date(run.startedAt))}
-              {run.durationMs !== null && (
-                <span className="ml-1.5 text-xs opacity-70">({formatDuration(run.durationMs)})</span>
-              )}
-            </div>
-
-            {/* Status */}
-            <div className={`text-sm font-medium ${cfg.color}`}>
-              {i18nService.t(cfg.label)}
-            </div>
-          </div>
-        );
-      })}
-
-      {/* Load more */}
-      {allRuns.length >= 50 && allRuns.length % 50 === 0 && (
-        <button
-          type="button"
-          onClick={handleLoadMore}
-          className="w-full py-3 text-sm text-primary hover:text-primary-hover transition-colors"
-        >
-          {i18nService.t('scheduledTasksLoadMore')}
-        </button>
+      {/* Empty state */}
+      {allRuns.length === 0 && !loadingMore && (
+        <div className="flex flex-col items-center justify-center py-16 px-6">
+          <ClockIcon className="h-12 w-12 text-secondary/40 mb-4" />
+          <p className="text-sm font-medium text-secondary">
+            {i18nService.t('scheduledTasksHistoryEmpty')}
+          </p>
+        </div>
       )}
 
+      {/* No filter results */}
+      {allRuns.length > 0 && filteredRuns.length === 0 && (
+        <div className="flex items-center justify-center py-12">
+          <p className="text-sm text-secondary">
+            {i18nService.t('scheduledTasksHistoryNoResults')}
+          </p>
+        </div>
+      )}
+
+      {/* Grouped run records */}
+      {Array.from(groupedRuns.entries()).map(([dateLabel, runs]) => (
+        <div key={dateLabel}>
+          <h3 className="text-sm font-semibold text-foreground mb-2">{dateLabel}</h3>
+          <div className="flex flex-col gap-2">
+            {runs.map((run) => (
+              <HistoryRunRow key={run.id} run={run} onViewSession={handleViewSession} />
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {/* Infinite scroll sentinel */}
+      <div ref={sentinelRef} className="h-1" />
+
+      {/* Loading spinner */}
+      {loadingMore && (
+        <div className="flex items-center justify-center py-4">
+          <svg className="animate-spin h-5 w-5 text-primary" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+            <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
+          </svg>
+          <span className="ml-2 text-sm text-secondary">{i18nService.t('scheduledTasksLoadingMore')}</span>
+        </div>
+      )}
+
+      {/* No more data indicator */}
+      {!hasMore && allRuns.length > 0 && filteredRuns.length > 0 && (
+        <div className="text-center py-3 text-xs text-secondary">
+          {i18nService.t('scheduledTasksNoMoreData')}
+        </div>
+      )}
+
+      {/* Session modal */}
       {viewingRun && (
         <RunSessionModal
           sessionId={viewingRun.sessionId}

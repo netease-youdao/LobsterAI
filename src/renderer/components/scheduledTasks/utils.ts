@@ -22,7 +22,7 @@ const WEEKDAY_KEYS = [
 ] as const;
 
 /**
- * Pad a number to 2 digits, e.g. 5 → "05".
+ * Pad a number to 2 digits, e.g. 5 �?"05".
  */
 function pad2(n: number): string {
   return n.toString().padStart(2, '0');
@@ -226,7 +226,7 @@ export function formatScheduleLabel(schedule: Schedule): string {
 
 /**
  * Locale-aware date-time formatting.
- * Chinese → 24-hour clock; English → 12-hour clock with AM/PM.
+ * Chinese �?24-hour clock; English �?12-hour clock with AM/PM.
  */
 export function formatDateTime(date: Date): string {
   const lang = i18nService.getLanguage();
@@ -255,7 +255,7 @@ export function formatPayloadLabel(payload: ScheduledTaskPayload): string {
 
 /**
  * Resolve a channel name to a user-friendly display name via i18n + PlatformRegistry.
- * e.g. 'feishu' → '飞书', 'openclaw-weixin' → '微信', 'moltbot-popo' → 'POPO'
+ * e.g. 'feishu' �?'飞书', 'openclaw-weixin' �?'微信', 'moltbot-popo' �?'POPO'
  */
 function resolveChannelDisplayName(channel: string): string {
   const platform = PlatformRegistry.platformOfChannel(channel);
@@ -396,10 +396,10 @@ export function getTaskPromptText(task: ScheduledTask): string {
 }
 
 export function getStatusTone(status: TaskLastStatus): string {
-  if (status === 'success') return 'text-green-500';
-  if (status === 'error') return 'text-red-500';
-  if (status === 'skipped') return 'text-yellow-500';
-  if (status === 'running') return 'text-blue-500';
+  if (status === 'success') return 'text-success';
+  if (status === 'error') return 'text-destructive';
+  if (status === 'skipped') return 'text-warning';
+  if (status === 'running') return 'text-primary';
   return 'text-secondary';
 }
 
@@ -409,4 +409,61 @@ export function getStatusLabelKey(status: TaskLastStatus): string {
   if (status === 'skipped') return 'scheduledTasksStatusSkipped';
   if (status === 'running') return 'scheduledTasksStatusRunning';
   return 'scheduledTasksStatusIdle';
+}
+
+/**
+ * Format a Date into a locale-aware date group header.
+ * zh: "2026年04月04日"  en: "April 04, 2026"
+ */
+export function formatDateGroup(date: Date): string {
+  const lang = i18nService.getLanguage();
+  if (lang === 'zh') {
+    const y = date.getFullYear();
+    const m = pad2(date.getMonth() + 1);
+    const d = pad2(date.getDate());
+    return `${y}年${m}月${d}日`;
+  }
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+  });
+}
+
+/**
+ * Format a timestamp as a relative time string.
+ */
+export function formatRelativeTime(timestampMs: number | null): string {
+  if (timestampMs === null || !Number.isFinite(timestampMs)) return '-';
+  const now = Date.now();
+  const diff = now - timestampMs;
+  const date = new Date(timestampMs);
+  const lang = i18nService.getLanguage();
+  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  if (diff < 60_000) return lang === 'zh' ? '刚刚' : 'just now';
+  if (diff < 3_600_000) { const mins = Math.floor(diff / 60_000); return lang === 'zh' ? `${mins} 分钟前` : `${mins} min ago`; }
+  const today = new Date(now); today.setHours(0,0,0,0);
+  const dateDay = new Date(timestampMs); dateDay.setHours(0,0,0,0);
+  const dayDiff = Math.round((today.getTime() - dateDay.getTime()) / 86_400_000);
+  if (dayDiff === 0) return lang === 'zh' ? `今天 ${time}` : `Today ${time}`;
+  if (dayDiff === 1) return lang === 'zh' ? `昨天 ${time}` : `Yesterday ${time}`;
+  if (dayDiff < 7) return lang === 'zh' ? `${dayDiff} 天前 ${time}` : `${dayDiff} days ago ${time}`;
+  const y = date.getFullYear(); const m = pad2(date.getMonth() + 1); const d = pad2(date.getDate());
+  return `${y}/${m}/${d} ${time}`;
+}
+
+/**
+ * Resolve agent display info (icon + name) from an agentId.
+ */
+export function getAgentInfo(
+  agentId: string | null,
+  agents: { id: string; name: string; icon: string; isDefault?: boolean }[],
+): { icon: string; name: string } {
+  if (agentId) {
+    const agent = agents.find((a) => a.id === agentId);
+    if (agent) return { icon: agent.icon || (agent.id === 'main' ? '🦞' : '🤖'), name: agent.name };
+  }
+  const defaultAgent = agents.find((a) => a.isDefault);
+  if (defaultAgent) return { icon: defaultAgent.icon || (defaultAgent.id === 'main' ? '🦞' : '🤖'), name: defaultAgent.name };
+  return { icon: '🤖', name: 'Agent' };
 }

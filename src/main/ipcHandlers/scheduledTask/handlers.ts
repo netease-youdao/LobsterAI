@@ -1,12 +1,13 @@
 import { ipcMain } from 'electron';
+
 import {
-  IpcChannel as ScheduledTaskIpc,
   DeliveryMode as STDeliveryMode,
-  SessionTarget as STSessionTarget,
+  IpcChannel as ScheduledTaskIpc,
   PayloadKind as STPayloadKind,
+  SessionTarget as STSessionTarget,
 } from '../../../scheduledTask/constants';
-import { PlatformRegistry } from '../../../shared/platform';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
+import { PlatformRegistry } from '../../../shared/platform';
 import { listScheduledTaskChannels } from './helpers';
 
 export interface ScheduledTaskHandlerDeps {
@@ -154,25 +155,18 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     }
   });
 
-  ipcMain.handle(ScheduledTaskIpc.RunManually, async (_event, id: string) => {
-    try {
-      await getCronJobService().runJob(id);
-      return { success: true };
-    } catch (error) {
+  ipcMain.handle(ScheduledTaskIpc.RunManually, (_event, id: string) => {
+    getCronJobService().runJob(id).catch((error: unknown) => {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error(`[IPC] Manual run failed for ${id}:`, msg);
-      return { success: false, error: msg };
-    }
+      console.error(`[IPC] Manual run failed for task ${id}:`, msg);
+    });
+    return { success: true };
   });
 
   ipcMain.handle(ScheduledTaskIpc.Stop, async (_event, _id: string) => {
-    try {
-      // OpenClaw doesn't expose a direct stop API for running cron jobs
-      // The job will complete or timeout on its own
-      return { success: true, result: false };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to stop task' };
-    }
+    // OpenClaw doesn't expose a direct stop API for running cron jobs
+    // The job will complete or timeout on its own
+    return { success: true, result: false };
   });
 
   ipcMain.handle(ScheduledTaskIpc.ListRuns, async (_event, taskId: string, limit?: number, offset?: number) => {
