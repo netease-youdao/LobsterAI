@@ -95,7 +95,7 @@ interface MonthGridProps {
   selectedStart: string;
   selectedEnd: string;
   hoverDate: Date | null;
-  onDateClick: (date: Date) => void;
+  onDateClick: (date: Date, isCurrentMonth: boolean) => void;
   onDateHover: (date: Date | null) => void;
 }
 
@@ -168,22 +168,22 @@ const MonthGrid: React.FC<MonthGridProps> = ({
       <div className="grid grid-cols-7 gap-0">
         {days.map((date, idx) => {
           const isCurrentMonth = date.getMonth() === month;
-          const isToday = isSameDay(date, today);
+          const isToday = isSameDay(date, today) && isCurrentMonth;
           const inRange = isInRange(date);
-          const isStart = isRangeStart(date);
-          const isEnd = isRangeEnd(date);
+          const isStart = isRangeStart(date) && isCurrentMonth;
+          const isEnd = isRangeEnd(date) && isCurrentMonth;
           const isSelected = isStart || isEnd;
 
           return (
             <button
               key={idx}
               type="button"
-              onClick={() => onDateClick(date)}
+              onClick={() => onDateClick(date, isCurrentMonth)}
               onMouseEnter={() => onDateHover(date)}
               onMouseLeave={() => onDateHover(null)}
               className={`
                 h-8 w-8 text-xs flex items-center justify-center transition-colors relative
-                ${!isCurrentMonth ? 'text-secondary/40' : 'text-foreground'}
+                ${!isCurrentMonth ? 'text-gray-300 dark:text-gray-600' : 'text-foreground'}
                 ${isToday && !isSelected ? 'border border-primary rounded' : ''}
                 ${isSelected ? 'bg-primary text-white rounded-md z-10' : ''}
                 ${inRange && !isSelected ? 'bg-primary/10' : ''}
@@ -270,8 +270,16 @@ const DateRangePicker: React.FC<DateRangePickerProps> = ({
   const nextYear = () => setViewYear((y) => y + 1);
 
   // Handle date selection
-  const handleDateClick = (date: Date) => {
+  const handleDateClick = (date: Date, isCurrentMonth: boolean) => {
     const dateStr = toDateStr(date);
+    const clickedYear = date.getFullYear();
+    const clickedMonth = date.getMonth();
+
+    // If clicked a gray date (not current month), auto-navigate to that month
+    if (!isCurrentMonth) {
+      setViewYear(clickedYear);
+      setViewMonth(clickedMonth);
+    }
 
     if (!selecting) {
       // First click: set start
@@ -296,6 +304,10 @@ const DateRangePicker: React.FC<DateRangePickerProps> = ({
     onClear();
     setSelecting(false);
     setHoverDate(null);
+    // Reset view to current month
+    const today = new Date();
+    setViewYear(today.getFullYear());
+    setViewMonth(today.getMonth());
   };
 
   // Display label
