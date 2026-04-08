@@ -124,3 +124,35 @@ export const matchesShortcut = (event: KeyboardEvent, shortcut?: string): boolea
 
   return true;
 };
+
+/**
+ * Format a shortcut string into human-readable key labels.
+ * On macOS, Ctrl is rendered as ⌘ (meta/cmd); on other platforms as Ctrl.
+ * Returns an array of label strings, e.g. ['Ctrl', 'N'] or ['⌘', 'N'].
+ */
+export const formatShortcutLabels = (shortcut: string | undefined, isMac: boolean): string[] => {
+  const parsed = parseShortcut(shortcut);
+  if (!parsed) return [];
+
+  const parts: string[] = [];
+
+  if (parsed.commandOrControl) {
+    parts.push(isMac ? '⌘' : 'Ctrl');
+  } else if (parsed.ctrl) {
+    parts.push(isMac ? '⌃' : 'Ctrl');
+  }
+  if (parsed.alt) parts.push(isMac ? '⌥' : 'Alt');
+  if (parsed.shift) parts.push(isMac ? '⇧' : 'Shift');
+  if (parsed.meta && !parsed.commandOrControl) parts.push(isMac ? '⌘' : 'Win');
+
+  // Uppercase single characters; keep special keys as-is
+  const key = parsed.key;
+  if (key.length === 1) {
+    parts.push(key.toUpperCase());
+  } else {
+    // Capitalize first letter for display
+    parts.push(key.charAt(0).toUpperCase() + key.slice(1));
+  }
+
+  return parts;
+};

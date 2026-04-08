@@ -9,6 +9,9 @@ import { RootState } from '../store';
 import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
+import { configService } from '../services/config';
+import { defaultConfig } from '../config';
+import { formatShortcutLabels } from '../services/shortcuts';
 import CoworkSessionList from './cowork/CoworkSessionList';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
 import LoginButton from './LoginButton';
@@ -21,6 +24,24 @@ import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import TrashIcon from './icons/TrashIcon';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import UserGroupIcon from './icons/UserGroupIcon';
+
+/** Renders a row of small kbd-style labels for a keyboard shortcut. */
+const ShortcutBadge: React.FC<{ shortcut: string | undefined; isMac: boolean }> = ({ shortcut, isMac }) => {
+  const labels = formatShortcutLabels(shortcut, isMac);
+  if (labels.length === 0) return null;
+  return (
+    <span className="ml-auto flex items-center gap-0.5 opacity-50 group-hover:opacity-70 transition-opacity pointer-events-none">
+      {labels.map((label, i) => (
+        <kbd
+          key={i}
+          className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded text-[10px] font-mono font-medium bg-surface-raised border border-border text-secondary leading-none"
+        >
+          {label}
+        </kbd>
+      ))}
+    </span>
+  );
+};
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -62,6 +83,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const isMac = window.electron.platform === 'darwin';
+
+  // Derive active shortcuts (merge defaults + user overrides)
+  const activeShortcuts = (() => {
+    const config = configService.getConfig();
+    return { ...defaultConfig.shortcuts, ...(config.shortcuts ?? {}) } as Record<string, string>;
+  })();
 
   useEffect(() => {
     const handleSearch = () => {
@@ -167,7 +194,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onNewChat}
-            className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+            className={`group w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
               activeView === 'cowork'
                 ? 'bg-primary/10 text-primary hover:bg-primary/20'
                 : 'text-secondary hover:text-foreground hover:bg-surface-raised'
@@ -175,6 +202,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           >
             <ComposeIcon className="h-4 w-4" />
             {i18nService.t('newChat')}
+            <ShortcutBadge shortcut={activeShortcuts.newChat} isMac={isMac} />
           </button>
           <button
             type="button"
@@ -182,10 +210,11 @@ const Sidebar: React.FC<SidebarProps> = ({
               onShowCowork();
               setIsSearchOpen(true);
             }}
-            className="w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
+            className="group w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
           >
             <SearchIcon className="h-4 w-4" />
             {i18nService.t('search')}
+            <ShortcutBadge shortcut={activeShortcuts.search} isMac={isMac} />
           </button>
           <button
             type="button"
