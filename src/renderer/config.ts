@@ -16,6 +16,8 @@ export interface AppConfig {
     }>;
     defaultModel: string;
     defaultModelProvider?: string;
+    failoverModel?: string;
+    failoverModelProvider?: string;
   };
   // 多模型提供商配置
   providers?: {
@@ -270,14 +272,17 @@ export interface AppConfig {
 }
 
 const buildDefaultProviders = (): AppConfig['providers'] => {
-  const providers: Record<string, {
-    enabled: boolean;
-    apiKey: string;
-    baseUrl: string;
-    apiFormat?: 'anthropic' | 'openai' | 'gemini';
-    codingPlanEnabled?: boolean;
-    models?: Array<{ id: string; name: string; supportsImage?: boolean }>;
-  }> = {};
+  const providers: Record<
+    string,
+    {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      codingPlanEnabled?: boolean;
+      models?: Array<{ id: string; name: string; supportsImage?: boolean }>;
+    }
+  > = {};
 
   for (const id of ProviderRegistry.providerIds) {
     const def = ProviderRegistry.get(id)!;
@@ -301,9 +306,7 @@ export const defaultConfig: AppConfig = {
     baseUrl: 'https://api.deepseek.com/anthropic',
   },
   model: {
-    availableModels: [
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
-    ],
+    availableModels: [{ id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }],
     defaultModel: 'deepseek-reasoner',
     defaultModelProvider: 'deepseek',
   },
@@ -320,7 +323,7 @@ export const defaultConfig: AppConfig = {
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
-  }
+  },
 };
 
 // 配置存储键
@@ -365,9 +368,10 @@ export const getProviderDisplayName = (
   providerConfig?: Record<string, unknown>,
 ): string => {
   if (isCustomProvider(providerKey)) {
-    const name = providerConfig && typeof providerConfig.displayName === 'string'
-      ? providerConfig.displayName
-      : '';
+    const name =
+      providerConfig && typeof providerConfig.displayName === 'string'
+        ? providerConfig.displayName
+        : '';
     return name || getCustomProviderDefaultName(providerKey);
   }
   return providerKey.charAt(0).toUpperCase() + providerKey.slice(1);
