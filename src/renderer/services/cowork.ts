@@ -12,6 +12,7 @@ import {
   setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
+  updateSessionColor,
   enqueuePendingPermission,
   dequeuePendingPermission,
   clearPendingPermissions,
@@ -397,6 +398,20 @@ class CoworkService {
     }
 
     console.error('Failed to rename session:', result.error);
+    return false;
+  }
+
+  async setSessionColor(sessionId: string, color: string | null): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.setSessionColor) return false;
+
+    const result = await cowork.setSessionColor({ sessionId, color });
+    if (result.success) {
+      store.dispatch(updateSessionColor({ sessionId, color }));
+      return true;
+    }
+
+    console.error('[coworkService] Failed to set session color:', result.error);
     return false;
   }
 

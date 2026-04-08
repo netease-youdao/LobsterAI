@@ -276,6 +276,17 @@ const coworkSlice = createSlice({
       }
     },
 
+    updateSessionColor(state, action: PayloadAction<{ sessionId: string; color: string | null }>) {
+      const { sessionId, color } = action.payload;
+      const sessionIndex = state.sessions.findIndex(s => s.id === sessionId);
+      if (sessionIndex !== -1) {
+        state.sessions[sessionIndex].color = color;
+      }
+      if (state.currentSession?.id === sessionId) {
+        state.currentSession.color = color;
+      }
+    },
+
     enqueuePendingPermission(state, action: PayloadAction<CoworkPermissionRequest>) {
       const alreadyQueued = state.pendingPermissions.some(
         (permission) => permission.requestId === action.payload.requestId
@@ -355,6 +366,7 @@ export const {
   setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
+  updateSessionColor,
   enqueuePendingPermission,
   dequeuePendingPermission,
   clearPendingPermissions,

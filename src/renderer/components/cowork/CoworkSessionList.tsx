@@ -17,6 +17,7 @@ interface CoworkSessionListProps {
   onDeleteSession: (sessionId: string) => void;
   onTogglePin: (sessionId: string, pinned: boolean) => void;
   onRenameSession: (sessionId: string, title: string) => void;
+  onSetColor: (sessionId: string, color: string | null) => void;
   onToggleSelection: (sessionId: string) => void;
   onEnterBatchMode: (sessionId: string) => void;
 }
@@ -32,6 +33,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
   onDeleteSession,
   onTogglePin,
   onRenameSession,
+  onSetColor,
   onToggleSelection,
   onEnterBatchMode,
 }) => {
@@ -94,6 +96,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           onDelete={() => onDeleteSession(session.id)}
           onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
           onRename={(title) => onRenameSession(session.id, title)}
+          onSetColor={(color) => onSetColor(session.id, color)}
           onToggleSelection={() => onToggleSelection(session.id)}
           onEnterBatchMode={() => onEnterBatchMode(session.id)}
         />

@@ -99,6 +99,10 @@ const Sidebar: React.FC<SidebarProps> = ({
     await coworkService.renameSession(sessionId, title);
   };
 
+  const handleSetColor = async (sessionId: string, color: string | null) => {
+    await coworkService.setSessionColor(sessionId, color);
+  };
+
   const handleEnterBatchMode = useCallback((sessionId: string) => {
     setIsBatchMode(true);
     setSelectedIds(new Set([sessionId]));
@@ -267,6 +271,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           onDeleteSession={handleDeleteSession}
           onTogglePin={handleTogglePin}
           onRenameSession={handleRenameSession}
+          onSetColor={handleSetColor}
           onToggleSelection={handleToggleSelection}
           onEnterBatchMode={handleEnterBatchMode}
         />
@@ -280,6 +285,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onDeleteSession={handleDeleteSession}
         onTogglePin={handleTogglePin}
         onRenameSession={handleRenameSession}
+        onSetColor={handleSetColor}
       />
       {isBatchMode ? (
         <div className="px-3 pb-3 pt-1 flex items-center justify-between">

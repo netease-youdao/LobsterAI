@@ -155,6 +155,7 @@ export interface CoworkSessionSummary {
   title: string;
   status: CoworkSessionStatus;
   pinned: boolean;
+  color?: string | null;
   agentId?: string;
   createdAt: number;
   updatedAt: number;

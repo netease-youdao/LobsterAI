@@ -8,6 +8,20 @@ import ListChecksIcon from '../icons/ListChecksIcon';
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
 
+const SESSION_COLORS = [
+  { id: 'red', bg: '#ef4444', label: 'Red' },
+  { id: 'orange', bg: '#f97316', label: 'Orange' },
+  { id: 'yellow', bg: '#eab308', label: 'Yellow' },
+  { id: 'green', bg: '#22c55e', label: 'Green' },
+  { id: 'blue', bg: '#3b82f6', label: 'Blue' },
+  { id: 'purple', bg: '#a855f7', label: 'Purple' },
+  { id: 'pink', bg: '#ec4899', label: 'Pink' },
+];
+
+export const SESSION_COLOR_MAP: Record<string, string> = Object.fromEntries(
+  SESSION_COLORS.map(c => [c.id, c.bg])
+);
+
 interface CoworkSessionItemProps {
   session: CoworkSessionSummary;
   hasUnread: boolean;
@@ -19,6 +33,7 @@ interface CoworkSessionItemProps {
   onDelete: () => void;
   onTogglePin: (pinned: boolean) => void;
   onRename: (title: string) => void;
+  onSetColor: (color: string | null) => void;
   onToggleSelection: () => void;
   onEnterBatchMode: () => void;
 }
@@ -98,11 +113,13 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   onDelete,
   onTogglePin,
   onRename,
+  onSetColor,
   onToggleSelection,
   onEnterBatchMode,
 }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -212,6 +229,18 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     onEnterBatchMode();
   };
 
+  const handleColorClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowColorPicker(true);
+    setMenuPosition(null);
+  };
+
+  const handleColorSelect = (e: React.MouseEvent, colorId: string | null) => {
+    e.stopPropagation();
+    onSetColor(colorId);
+    setShowColorPicker(false);
+  };
+
   useEffect(() => {
     if (!menuPosition) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -240,7 +269,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
 
   useEffect(() => {
     if (!menuPosition) return;
-    const menuHeight = showConfirmDelete ? 112 : (showBatchOption ? 156 : 120);
+    const menuHeight = showConfirmDelete ? 112 : (showBatchOption ? 192 : 156);
     const position = calculateMenuPosition(menuHeight);
     if (position && (position.x !== menuPosition.x || position.y !== menuPosition.y)) {
       setMenuPosition(position);
@@ -259,6 +288,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const actionLabel = i18nService.t('coworkSessionActions');
   const renameLabel = i18nService.t('renameConversation');
   const deleteLabel = i18nService.t('deleteSession');
+  const colorLabel = i18nService.t('coworkSessionSetColor');
   const relativeTime = formatRelativeTime(session.updatedAt);
   const showRunningIndicator = session.status === 'running';
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
@@ -268,6 +298,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     const items = [
       { key: 'rename', label: renameLabel, onClick: handleRenameClick, tone: 'neutral' as const },
       { key: 'pin', label: pinButtonLabel, onClick: handleTogglePin, tone: 'neutral' as const },
+      { key: 'color', label: colorLabel, onClick: handleColorClick, tone: 'neutral' as const },
       { key: 'delete', label: deleteLabel, onClick: handleDeleteClick, tone: 'danger' as const },
     ];
     if (showBatchOption) {
@@ -276,8 +307,10 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     return items;
   }, [
     batchLabel,
+    colorLabel,
     deleteLabel,
     handleBatchClick,
+    handleColorClick,
     handleDeleteClick,
     handleRenameClick,
     handleTogglePin,
@@ -320,7 +353,15 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <div className={`flex items-center mb-1 ${showStatusIndicator ? 'gap-2' : 'gap-0'}`}>
+          <div className={`flex items-center mb-1 ${(showStatusIndicator || session.color) ? 'gap-2' : 'gap-0'}`}>
+            {/* Color indicator dot */}
+            {session.color && !showStatusIndicator && (
+              <span
+                className="block w-2 h-2 rounded-full flex-shrink-0"
+                style={{ backgroundColor: SESSION_COLOR_MAP[session.color] ?? session.color }}
+                title={i18nService.t('coworkSessionSetColor')}
+              />
+            )}
             {/* Status indicator */}
             {showStatusIndicator && (
               <span
@@ -419,11 +460,54 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                   className={`h-4 w-4 ${session.pinned ? 'opacity-60' : ''}`}
                 />
               )}
+              {item.key === 'color' && (
+                <span
+                  className="block w-4 h-4 rounded-full border border-border flex-shrink-0"
+                  style={session.color ? { backgroundColor: SESSION_COLOR_MAP[session.color] ?? session.color } : {}}
+                />
+              )}
               {item.key === 'delete' && <TrashIcon className="h-4 w-4" />}
               {item.label}
             </button>
           ))}
         </div>
+      )}
+
+      {/* Color Picker Modal */}
+      {showColorPicker && (
+        <Modal
+          onClose={() => setShowColorPicker(false)}
+          className="w-full max-w-xs mx-4 bg-surface rounded-2xl shadow-xl overflow-hidden"
+        >
+          <div className="px-5 py-4">
+            <h2 className="text-sm font-semibold text-foreground mb-3">
+              {i18nService.t('coworkSessionSetColor')}
+            </h2>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {SESSION_COLORS.map(color => (
+                <button
+                  key={color.id}
+                  type="button"
+                  onClick={(e) => handleColorSelect(e, color.id)}
+                  className={`w-7 h-7 rounded-full border-2 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-primary ${
+                    session.color === color.id ? 'border-foreground' : 'border-transparent'
+                  }`}
+                  style={{ backgroundColor: color.bg }}
+                  title={color.label}
+                />
+              ))}
+            </div>
+            {session.color && (
+              <button
+                type="button"
+                onClick={(e) => handleColorSelect(e, null)}
+                className="text-xs text-secondary hover:text-foreground transition-colors"
+              >
+                {i18nService.t('coworkSessionClearColor')}
+              </button>
+            )}
+          </div>
+        </Modal>
       )}
 
       {/* Delete Confirmation Modal */}
