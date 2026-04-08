@@ -664,6 +664,23 @@ let openClawStatusForwarderBound = false;
 let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
+let activeSessionCount = 0;
+let autoSleepBlockerId: number | null = null;
+
+function acquireAutoSleepBlock(): void {
+  activeSessionCount += 1;
+  if (activeSessionCount === 1 && autoSleepBlockerId === null) {
+    autoSleepBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+  }
+}
+
+function releaseAutoSleepBlock(): void {
+  activeSessionCount = Math.max(0, activeSessionCount - 1);
+  if (activeSessionCount === 0 && autoSleepBlockerId !== null) {
+    powerSaveBlocker.stop(autoSleepBlockerId);
+    autoSleepBlockerId = null;
+  }
+}
 
 const initStore = async (): Promise<SqliteStore> => {
   if (!storeInitPromise) {
@@ -1174,6 +1191,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('complete', (sessionId: string, claudeSessionId: string | null) => {
+    releaseAutoSleepBlock();
     const windows = BrowserWindow.getAllWindows();
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
@@ -1195,6 +1213,7 @@ const bindCoworkRuntimeForwarder = (): void => {
   });
 
   runtime.on('error', (sessionId: string, error: string) => {
+    releaseAutoSleepBlock();
     // Mark session as error in store so the .catch() fallback can detect duplicates.
     try { getCoworkStore().updateSession(sessionId, { status: 'error' }); } catch { /* ignore */ }
     const windows = BrowserWindow.getAllWindows();
@@ -2628,6 +2647,7 @@ if (!gotTheLock) {
 
       // Start the session asynchronously (skip initial user message since we already added it)
       const runtime = getCoworkEngineRouter();
+      acquireAutoSleepBlock();
       runtime.startSession(session.id, options.prompt, {
         skipInitialUserMessage: true,
         systemPrompt,
@@ -2726,6 +2746,7 @@ if (!gotTheLock) {
     try {
       const runtime = getCoworkEngineRouter();
       runtime.stopSession(sessionId);
+      releaseAutoSleepBlock();
       return { success: true };
     } catch (error) {
       return {
