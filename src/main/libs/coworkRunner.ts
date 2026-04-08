@@ -232,6 +232,10 @@ export class CoworkRunner extends EventEmitter {
   private activeSessions: Map<string, ActiveSession> = new Map();
   private pendingPermissions: Map<string, PendingPermission> = new Map();
   private stoppedSessions: Set<string> = new Set();
+
+  // Cache for buildUserMemoriesXml — invalidated on any memory mutation and after TTL expires
+  private memoriesXmlCache: { xml: string; builtAt: number } | null = null;
+  private static readonly MEMORIES_CACHE_TTL_MS = 5_000;
   private turnMemoryQueue: QueuedTurnMemoryUpdate[] = [];
   private turnMemoryQueueKeys: Set<string> = new Set();
   private lastTurnMemoryKeyBySession: Map<string, string> = new Map();
@@ -330,6 +334,9 @@ export class CoworkRunner extends EventEmitter {
             userMessageId: job.userMessageId,
             assistantMessageId: job.assistantMessageId,
           });
+          if (result.created > 0 || result.deleted > 0) {
+            this.invalidateMemoriesCache();
+          }
           coworkLog('INFO', 'memory:turnUpdateAsync', 'Applied turn memory updates asynchronously', {
             sessionId: job.sessionId,
             queueSize: this.turnMemoryQueue.length,
@@ -364,10 +371,27 @@ export class CoworkRunner extends EventEmitter {
       .replace(/'/g, '&apos;');
   }
 
+  /** Invalidate the memories XML cache, e.g. after any add/update/delete operation. */
+  private invalidateMemoriesCache(): void {
+    this.memoriesXmlCache = null;
+  }
+
   private buildUserMemoriesXml(): string {
+    const now = Date.now();
+
+    // Return cached result if still fresh
+    if (
+      this.memoriesXmlCache !== null &&
+      now - this.memoriesXmlCache.builtAt < CoworkRunner.MEMORIES_CACHE_TTL_MS
+    ) {
+      return this.memoriesXmlCache.xml;
+    }
+
     const config = this.store.getConfig();
     if (!config.memoryEnabled) {
-      return '<userMemories></userMemories>';
+      const xml = '<userMemories></userMemories>';
+      this.memoriesXmlCache = { xml, builtAt: now };
+      return xml;
     }
 
     const memories = this.store.listUserMemories({
@@ -378,7 +402,9 @@ export class CoworkRunner extends EventEmitter {
     });
 
     if (memories.length === 0) {
-      return '<userMemories></userMemories>';
+      const xml = '<userMemories></userMemories>';
+      this.memoriesXmlCache = { xml, builtAt: now };
+      return xml;
     }
 
     const MAX_ITEM_CHARS = 200;
@@ -394,7 +420,9 @@ export class CoworkRunner extends EventEmitter {
       lines.push(line);
       totalChars += line.length;
     }
-    return `<userMemories>\n${lines.join('\n')}\n</userMemories>`;
+    const xml = `<userMemories>\n${lines.join('\n')}\n</userMemories>`;
+    this.memoriesXmlCache = { xml, builtAt: now };
+    return xml;
   }
 
   private formatChatSearchOutput(records: Array<{
@@ -569,6 +597,7 @@ export class CoworkRunner extends EventEmitter {
         confidence: args.confidence,
         isExplicit: args.is_explicit ?? true,
       });
+      this.invalidateMemoriesCache();
       return {
         text: this.formatMemoryUserEditsResult({
           action: 'add',
@@ -628,6 +657,7 @@ export class CoworkRunner extends EventEmitter {
           isError: true,
         };
       }
+      this.invalidateMemoriesCache();
       return {
         text: this.formatMemoryUserEditsResult({
           action: 'update',
@@ -653,6 +683,9 @@ export class CoworkRunner extends EventEmitter {
     }
 
     const deleted = this.store.deleteUserMemory(args.id.trim());
+    if (deleted) {
+      this.invalidateMemoriesCache();
+    }
     return {
       text: this.formatMemoryUserEditsResult({
         action: 'delete',
