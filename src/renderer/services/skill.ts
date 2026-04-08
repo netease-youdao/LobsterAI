@@ -1,4 +1,4 @@
-import { Skill, MarketplaceSkill, MarketTag, LocalSkillInfo, LocalizedText } from '../types/skill';
+import { Skill, MarketplaceSkill, MarketTag, LocalSkillInfo, LocalizedText, SkillUsageStat } from '../types/skill';
 import { getSkillStoreUrl } from './endpoints';
 import { i18nService } from './i18n';
 
@@ -260,6 +260,18 @@ class SkillService {
     const marketDesc = this.marketplaceSkillDescriptions.get(skillId);
     if (marketDesc != null) return resolveLocalizedText(marketDesc);
     return fallback;
+  }
+
+  async getUsageStats(): Promise<SkillUsageStat[]> {
+    try {
+      const result = await window.electron.skills.getUsageStats();
+      if (result.success && result.stats) {
+        return result.stats;
+      }
+      return [];
+    } catch {
+      return [];
+    }
   }
 }
 

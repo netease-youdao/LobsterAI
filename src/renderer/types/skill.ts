@@ -40,3 +40,9 @@ export interface MarketplaceSkill {
     author?: string;        // Author name
   };
 }
+
+export interface SkillUsageStat {
+  skillId: string;
+  useCount: number;
+  lastUsedAt: number;
+}

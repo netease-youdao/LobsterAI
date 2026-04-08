@@ -12,7 +12,7 @@ import { i18nService } from '../../services/i18n';
 import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
-import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
+import { MarketplaceSkill, MarketTag, Skill, SkillUsageStat } from '../../types/skill';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import FolderOpenIcon from '../icons/FolderOpenIcon';
@@ -26,7 +26,7 @@ import UploadIcon from '../icons/UploadIcon';
 import Tooltip from '../ui/Tooltip';
 import SkillSecurityReport from './SkillSecurityReport';
 
-type SkillTab = 'installed' | 'marketplace';
+type SkillTab = 'installed' | 'marketplace' | 'recent';
 type ImportSourceType = 'github' | 'clawhub';
 
 const importSourceTypes: ImportSourceType[] = ['github', 'clawhub'];
@@ -91,6 +91,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     currentSkillVersion: string;
   } | null>(null);
   const upgradeCancelledRef = useRef(false);
+  const [usageStats, setUsageStats] = useState<SkillUsageStat[]>([]);
+  const [isLoadingUsage, setIsLoadingUsage] = useState(false);
+  const [recentSortBy, setRecentSortBy] = useState<'recent' | 'count'>('recent');
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
@@ -128,6 +131,18 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     });
     return () => { isActive = false; };
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'recent') return;
+    let cancelled = false;
+    setIsLoadingUsage(true);
+    skillService.getUsageStats().then((stats) => {
+      if (cancelled) return;
+      setUsageStats(stats);
+      setIsLoadingUsage(false);
+    });
+    return () => { cancelled = true; };
+  }, [activeTab]);
 
   useEffect(() => {
     if (!isAddSkillMenuOpen) return;
@@ -217,6 +232,13 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     const locale = i18nService.getLanguage() === 'zh' ? 'zh-CN' : 'en-US';
     return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(date);
   };
+
+  const sortedUsageStats = useMemo(() => {
+    if (recentSortBy === 'count') {
+      return [...usageStats].sort((a, b) => b.useCount - a.useCount || b.lastUsedAt - a.lastUsedAt);
+    }
+    return usageStats; // already ordered by lastUsedAt desc from DAO
+  }, [usageStats, recentSortBy]);
 
   const handleToggleSkill = async (skillId: string) => {
     const targetSkill = skills.find(skill => skill.id === skillId);
@@ -647,6 +669,20 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               activeTab === 'marketplace' ? 'bg-primary' : 'bg-transparent'
             }`} />
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('recent')}
+            className={`px-4 py-2 text-sm font-medium transition-colors relative ${
+              activeTab === 'recent'
+                ? 'text-foreground'
+                : 'text-secondary hover:hover:text-foreground'
+            }`}
+          >
+            {i18nService.t('skillRecent')}
+            <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
+              activeTab === 'recent' ? 'bg-primary' : 'bg-transparent'
+            }`} />
+          </button>
           {updatableSkills.length > 0 && (
             <div className="ml-auto pr-1 pb-1">
               <button
@@ -913,6 +949,88 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             ))}
           </div>
             )}
+          </>
+        )
+      )}
+
+      {activeTab === 'recent' && (
+        isLoadingUsage ? (
+          <div className="text-center py-12 text-sm text-secondary">
+            {i18nService.t('downloadingSkill')}
+          </div>
+        ) : usageStats.length === 0 ? (
+          <div className="text-center py-8 text-sm text-secondary">
+            {i18nService.t('skillRecentEmpty')}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-1.5 mb-3">
+              <button
+                type="button"
+                onClick={() => setRecentSortBy('recent')}
+                className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                  recentSortBy === 'recent'
+                    ? 'bg-primary text-white'
+                    : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
+                }`}
+              >
+                {i18nService.t('skillSortRecent')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecentSortBy('count')}
+                className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                  recentSortBy === 'count'
+                    ? 'bg-primary text-white'
+                    : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
+                }`}
+              >
+                {i18nService.t('skillSortCount')}
+              </button>
+            </div>
+          <div className="grid grid-cols-2 gap-3">
+            {sortedUsageStats.map((stat) => {
+              const skill = skills.find(s => s.id === stat.skillId);
+              if (!skill) return null;
+              return (
+                <div
+                  key={skill.id}
+                  className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary cursor-pointer"
+                  onClick={() => setSelectedSkill(skill)}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
+                        <PuzzleIcon className="h-4 w-4 text-secondary" />
+                      </div>
+                      <span className="text-sm font-medium text-foreground truncate">
+                        {skill.name}
+                      </span>
+                    </div>
+                    <span className="ml-2 flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                      ×{stat.useCount}
+                    </span>
+                  </div>
+
+                  <Tooltip
+                    content={skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
+                    position="bottom"
+                    maxWidth="360px"
+                    className="block w-full"
+                  >
+                    <p className="text-xs text-secondary line-clamp-2 mb-2">
+                      {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
+                    </p>
+                  </Tooltip>
+
+                  <div className="flex items-center justify-between text-[10px] text-secondary">
+                    <span>{i18nService.t('skillUsageCount').replace('{count}', String(stat.useCount))}</span>
+                    <span>{formatSkillDate(stat.lastUsedAt)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
           </>
         )
       )}
