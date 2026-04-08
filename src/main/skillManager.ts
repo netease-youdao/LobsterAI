@@ -1507,6 +1507,21 @@ export class SkillManager {
     ].join('\n');
   }
 
+  /**
+   * Markdown block appended to system prompts so the model does not read or follow skills
+   * the user disabled (still on disk for OpenClaw / routing edge cases).
+   */
+  buildDisabledSkillsPolicyPrompt(): string | null {
+    const disabled = this.listSkills().filter(s => !s.enabled);
+    if (disabled.length === 0) return null;
+    const lines = disabled.map(s => `- \`${s.id}\`: ${s.skillPath}`);
+    return [
+      '## Disabled skills (LobsterAI policy)',
+      'These skills are turned off in the app. Do not read their SKILL.md files at the paths below, do not follow their workflows, and refuse or redirect if the user asks you to use them.',
+      ...lines,
+    ].join('\n');
+  }
+
   setSkillEnabled(id: string, enabled: boolean): SkillRecord[] {
     const state = this.loadSkillStateMap();
     state[id] = { enabled };

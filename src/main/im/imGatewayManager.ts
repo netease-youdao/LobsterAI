@@ -89,6 +89,7 @@ export class IMGatewayManager extends EventEmitter {
   private coworkHandler: IMCoworkHandler | null = null;
   private getLLMConfig: (() => Promise<any>) | null = null;
   private getSkillsPrompt: (() => Promise<string | null>) | null = null;
+  private getDisabledSkillsPolicyPrompt: (() => string | null) | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
   private isOpenClawEngine: (() => boolean) | null = null;
   private syncOpenClawConfig: (() => Promise<void>) | null = null;
@@ -184,9 +185,11 @@ export class IMGatewayManager extends EventEmitter {
   initialize(options: {
     getLLMConfig: () => Promise<any>;
     getSkillsPrompt?: () => Promise<string | null>;
+    getDisabledSkillsPolicyPrompt?: () => string | null;
   }): void {
     this.getLLMConfig = options.getLLMConfig;
     this.getSkillsPrompt = options.getSkillsPrompt ?? null;
+    this.getDisabledSkillsPolicyPrompt = options.getDisabledSkillsPolicyPrompt ?? null;
 
     // Set up message handlers for gateways
     this.setupMessageHandlers();
@@ -301,6 +304,7 @@ export class IMGatewayManager extends EventEmitter {
     this.chatHandler = new IMChatHandler({
       getLLMConfig: this.getLLMConfig,
       getSkillsPrompt: this.getSkillsPrompt || undefined,
+      getDisabledSkillsPolicyPrompt: this.getDisabledSkillsPolicyPrompt || undefined,
       imSettings,
     });
 
@@ -325,6 +329,7 @@ export class IMGatewayManager extends EventEmitter {
         coworkStore: this.coworkStore,
         imStore: this.imStore,
         getSkillsPrompt: this.getSkillsPrompt || undefined,
+        getDisabledSkillsPolicyPrompt: this.getDisabledSkillsPolicyPrompt || undefined,
         detectScheduledTaskRequest,
         createScheduledTask: this.createScheduledTask || undefined,
         sendAsyncReply: async (platform, conversationId, text) => {

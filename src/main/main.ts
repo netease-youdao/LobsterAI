@@ -1586,6 +1586,7 @@ const getIMGatewayManager = () => {
       getSkillsPrompt: async () => {
         return getSkillManager().buildAutoRoutingPrompt();
       },
+      getDisabledSkillsPolicyPrompt: () => getSkillManager().buildDisabledSkillsPolicyPrompt(),
     });
 
     // Forward IM events to renderer
@@ -1614,15 +1615,33 @@ const getIMGatewayManager = () => {
   return imGatewayManager;
 };
 
+const DISABLED_SKILLS_POLICY_MARKER = '## Disabled skills (LobsterAI policy)';
+
+function stripDisabledSkillsPolicyFromPrompt(text: string): string {
+  const idx = text.indexOf(DISABLED_SKILLS_POLICY_MARKER);
+  if (idx < 0) return text;
+  return text.slice(0, idx).trimEnd();
+}
+
 function mergeCoworkSystemPrompt(
   engine: CoworkAgentEngine,
   systemPrompt?: string,
 ): string | undefined {
+  const trimmed = stripDisabledSkillsPolicyFromPrompt(systemPrompt?.trim() || '');
   const sections = [
     buildScheduledTaskEnginePrompt(engine),
-    systemPrompt?.trim() || '',
+    trimmed,
   ].filter(Boolean);
-  return sections.length > 0 ? sections.join('\n\n') : undefined;
+  let merged = sections.length > 0 ? sections.join('\n\n') : undefined;
+  try {
+    const policy = getSkillManager().buildDisabledSkillsPolicyPrompt();
+    if (policy) {
+      merged = merged ? `${merged}\n\n${policy}` : policy;
+    }
+  } catch {
+    // SkillManager may be unavailable during unusual init ordering
+  }
+  return merged?.trim() || undefined;
 }
 
 // 获取正确的预加载脚本路径

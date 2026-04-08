@@ -54,6 +54,7 @@ export interface IMCoworkHandlerOptions {
   coworkStore: CoworkStore;
   imStore: IMStore;
   getSkillsPrompt?: () => Promise<string | null>;
+  getDisabledSkillsPolicyPrompt?: () => string | null;
   detectScheduledTaskRequest?: IMScheduledTaskRequestDetector;
   createScheduledTask?: (params: {
     sessionId: string;
@@ -68,6 +69,7 @@ export class IMCoworkHandler extends EventEmitter {
   private coworkStore: CoworkStore;
   private imStore: IMStore;
   private getSkillsPrompt?: () => Promise<string | null>;
+  private getDisabledSkillsPolicyPrompt?: () => string | null;
   private detectScheduledTaskRequest?: IMScheduledTaskRequestDetector;
   private createScheduledTask?: (params: {
     sessionId: string;
@@ -96,6 +98,7 @@ export class IMCoworkHandler extends EventEmitter {
     this.coworkStore = options.coworkStore;
     this.imStore = options.imStore;
     this.getSkillsPrompt = options.getSkillsPrompt;
+    this.getDisabledSkillsPolicyPrompt = options.getDisabledSkillsPolicyPrompt;
     this.detectScheduledTaskRequest = options.detectScheduledTaskRequest;
     this.createScheduledTask = options.createScheduledTask;
     this.sendAsyncReply = options.sendAsyncReply;
@@ -396,6 +399,17 @@ export class IMCoworkHandler extends EventEmitter {
       const skillsPrompt = await this.getSkillsPrompt();
       if (skillsPrompt) {
         sections.push(skillsPrompt);
+      }
+    }
+
+    if (this.getDisabledSkillsPolicyPrompt) {
+      try {
+        const policy = this.getDisabledSkillsPolicyPrompt();
+        if (policy) {
+          sections.push(policy);
+        }
+      } catch {
+        // Non-critical
       }
     }
 

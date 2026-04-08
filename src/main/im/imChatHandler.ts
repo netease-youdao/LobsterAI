@@ -21,6 +21,7 @@ interface LLMConfig {
 export interface IMChatHandlerOptions {
   getLLMConfig: () => Promise<LLMConfig | null>;
   getSkillsPrompt?: () => Promise<string | null>;
+  getDisabledSkillsPolicyPrompt?: () => string | null;
   imSettings: IMSettings;
 }
 
@@ -29,6 +30,18 @@ export class IMChatHandler {
 
   constructor(options: IMChatHandlerOptions) {
     this.options = options;
+  }
+
+  private appendDisabledSkillsPolicy(systemPrompt: string): string {
+    const fn = this.options.getDisabledSkillsPolicyPrompt;
+    if (!fn) return systemPrompt;
+    try {
+      const policy = fn();
+      if (!policy?.trim()) return systemPrompt;
+      return systemPrompt ? `${systemPrompt}\n\n${policy}` : policy;
+    } catch {
+      return systemPrompt;
+    }
   }
 
   /**
@@ -51,6 +64,8 @@ export class IMChatHandler {
           : skillsPrompt;
       }
     }
+
+    systemPrompt = this.appendDisabledSkillsPolicy(systemPrompt);
 
     // Append IM media sending instruction
     const mediaInstruction = buildIMMediaInstruction(this.options.imSettings);
@@ -297,6 +312,8 @@ export class IMChatHandler {
           : skillsPrompt;
       }
     }
+
+    systemPrompt = this.appendDisabledSkillsPolicy(systemPrompt);
 
     // For now, use non-streaming and yield once
     // TODO: Implement actual streaming for better UX
