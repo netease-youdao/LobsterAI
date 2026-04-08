@@ -10,7 +10,7 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ArrowTopRightOnSquareIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import TrashIcon from './icons/TrashIcon';
@@ -97,6 +97,59 @@ type ProviderType = (typeof providerKeys)[number];
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
 type Model = NonNullable<ProviderConfig['models']>[number];
+
+const PROVIDERS_SUPPORTING_MODELS_API = new Set<ProviderType>([
+  'openai',
+  'deepseek',
+  'moonshot',
+  'zhipu',
+  'qwen',
+  'gemini',
+  'openrouter',
+  'stepfun',
+  'minimax',
+  'xiaomi',
+  'ollama',
+  ...CUSTOM_PROVIDER_KEYS,
+]);
+
+const buildModelsEndpointUrl = (
+  provider: ProviderType,
+  config: ProviderConfig,
+): string | null => {
+  if (!PROVIDERS_SUPPORTING_MODELS_API.has(provider)) return null;
+
+  const effectiveFormat = getEffectiveApiFormat(provider, config.apiFormat);
+
+  let base: string;
+
+  if ((effectiveFormat === 'openai' || effectiveFormat === 'gemini') && config.baseUrl?.trim()) {
+    base = config.baseUrl.trim().replace(/\/+$/, '');
+  } else {
+    const openaiDefault = ProviderRegistry.getSwitchableBaseUrl(provider, 'openai');
+    if (openaiDefault) {
+      base = openaiDefault.replace(/\/+$/, '');
+    } else if (config.baseUrl?.trim()) {
+      base = config.baseUrl.trim().replace(/\/+$/, '');
+    } else {
+      return null;
+    }
+  }
+
+  if (base.endsWith('/chat/completions')) {
+    base = base.slice(0, -'/chat/completions'.length).replace(/\/+$/, '');
+  }
+
+  if (!base) return null;
+
+  if (/\/v\d+$/.test(base)) {
+    return `${base}/models`;
+  }
+  return `${base}/v1/models`;
+};
+
+const formatFetchedModelName = (id: string): string =>
+  id.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 type ProviderConnectionTestResult = {
   success: boolean;
   message: string;
@@ -648,6 +701,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [newModelId, setNewModelId] = useState('');
   const [newModelSupportsImage, setNewModelSupportsImage] = useState(false);
   const [modelFormError, setModelFormError] = useState<string | null>(null);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [fetchModelsError, setFetchModelsError] = useState<string | null>(null);
 
   // About tab
   const [appVersion, setAppVersion] = useState('');
@@ -1169,8 +1224,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setNewModelId('');
     setNewModelSupportsImage(false);
     setModelFormError(null);
+    setFetchModelsError(null);
     setActiveProvider(provider);
-    // 切换 provider 时清除测试结果
     setIsTestResultModalOpen(false);
     setTestResult(null);
   };
@@ -1836,7 +1891,66 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     e.stopPropagation();
   };
 
-  // Handlers for model operations
+  const handleFetchModels = async () => {
+    const fetchingProvider = activeProvider;
+    const providerConfig = providers[fetchingProvider];
+
+    if (!PROVIDERS_SUPPORTING_MODELS_API.has(fetchingProvider)) return;
+    if (providerRequiresApiKey(fetchingProvider) && !providerConfig.apiKey?.trim()) {
+      setFetchModelsError(i18nService.t('apiKeyRequired'));
+      return;
+    }
+
+    const url = buildModelsEndpointUrl(fetchingProvider, providerConfig);
+    if (!url) return;
+
+    setIsFetchingModels(true);
+    setFetchModelsError(null);
+
+    try {
+      const headers: Record<string, string> = {};
+      if (fetchingProvider !== 'ollama' && providerConfig.apiKey) {
+        headers.Authorization = `Bearer ${providerConfig.apiKey}`;
+      }
+
+      const response = await window.electron.api.fetch({ url, method: 'GET', headers });
+
+      if (!response.ok) {
+        const errMsg = (response.data as any)?.error?.message || `${response.status}`;
+        throw new Error(errMsg);
+      }
+
+      const items: any[] = Array.isArray((response.data as any)?.data) ? (response.data as any).data : [];
+      const fetched = items
+        .filter((item: any) => typeof item?.id === 'string' && item.id)
+        .map((item: any) => ({ id: item.id as string, name: formatFetchedModelName(item.id as string) }));
+
+      if (fetched.length === 0) {
+        setFetchModelsError(i18nService.t('fetchModelsEmpty'));
+        return;
+      }
+
+      const existingById = new Map((providerConfig.models ?? []).map(m => [m.id, m]));
+      const updatedModels = fetched.map(m => ({
+        id: m.id,
+        name: existingById.get(m.id)?.name ?? m.name,
+        supportsImage: existingById.get(m.id)?.supportsImage ?? false,
+      }));
+
+      setProviders(prev => ({
+        ...prev,
+        [fetchingProvider]: { ...prev[fetchingProvider], models: updatedModels },
+      }));
+      setIsAddingModel(false);
+      setIsEditingModel(false);
+      setEditingModelId(null);
+    } catch (err) {
+      setFetchModelsError(err instanceof Error ? err.message : i18nService.t('fetchModelsFailed'));
+    } finally {
+      setIsFetchingModels(false);
+    }
+  };
+
   const handleAddModel = () => {
     setIsAddingModel(true);
     setIsEditingModel(false);
@@ -3797,15 +3911,32 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   <h3 className="text-xs font-medium text-foreground">
                     {i18nService.t('availableModels')}
                   </h3>
-                  <button
-                    type="button"
-                    onClick={handleAddModel}
-                    className="inline-flex items-center text-xs text-primary hover:text-primary-hover"
-                  >
-                    <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
-                    {i18nService.t('addModel')}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {PROVIDERS_SUPPORTING_MODELS_API.has(activeProvider) && (
+                      <button
+                        type="button"
+                        onClick={handleFetchModels}
+                        disabled={isFetchingModels || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey?.trim())}
+                        className="inline-flex items-center text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title={i18nService.t('fetchModels')}
+                      >
+                        <ArrowPathIcon className={`h-3.5 w-3.5 mr-1 ${isFetchingModels ? 'animate-spin' : ''}`} />
+                        {isFetchingModels ? i18nService.t('fetchingModels') : i18nService.t('fetchModels')}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleAddModel}
+                      className="inline-flex items-center text-xs text-primary hover:text-primary-hover"
+                    >
+                      <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
+                      {i18nService.t('addModel')}
+                    </button>
+                  </div>
                 </div>
+                {fetchModelsError && (
+                  <p className="text-[11px] text-red-500 dark:text-red-400 mb-1.5">{fetchModelsError}</p>
+                )}
 
                 {/* Models List */}
                 <div className="space-y-1.5 max-h-60 overflow-y-auto">
