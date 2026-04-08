@@ -9,6 +9,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // 通用
     save: '保存',
     cancel: '取消',
+    confirm: '确认',
     saving: '保存中...',
     delete: '删除',
     create: '创建',
@@ -169,6 +170,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     passwordMismatch: '两次输入的密码不一致',
     passwordTooShort: '密码长度至少为4位',
     wrongPassword: '密码错误，请检查后重试',
+    exportPasswordPrompt: '请输入导出加密密码（用于保护 API 密钥）',
+    importPasswordPrompt: '请输入导入解密密码（导出时设置的密码）',
     
     // 快捷键
     keyboardShortcuts: '键盘快捷键',
@@ -1318,6 +1321,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Common
     save: 'Save',
     cancel: 'Cancel',
+    confirm: 'Confirm',
     saving: 'Saving...',
     delete: 'Delete',
     create: 'Create',
@@ -1478,6 +1482,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     passwordMismatch: 'Passwords do not match',
     passwordTooShort: 'Password must be at least 4 characters',
     wrongPassword: 'Wrong password, please try again',
+    exportPasswordPrompt: 'Enter a password to encrypt your API keys for export',
+    importPasswordPrompt: 'Enter the password used when exporting this file',
     
     // Shortcuts
     keyboardShortcuts: 'Keyboard Shortcuts',
