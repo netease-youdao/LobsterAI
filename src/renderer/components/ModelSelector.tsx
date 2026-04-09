@@ -1,11 +1,15 @@
-import { CheckIcon,ChevronDownIcon } from '@heroicons/react/24/outline';
+import { CheckIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import React from 'react';
-import { useDispatch,useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { i18nService } from '../services/i18n';
 import { RootState } from '../store';
 import type { Model } from '../store/slices/modelSlice';
-import { getModelIdentityKey,isSameModelIdentity, setSelectedModel } from '../store/slices/modelSlice';
+import {
+  getModelIdentityKey,
+  isSameModelIdentity,
+  setSelectedModel,
+} from '../store/slices/modelSlice';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down';
@@ -32,7 +36,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const controlled = onChange !== undefined;
   const globalSelectedModel = useSelector((state: RootState) => state.model.selectedModel);
-  const selectedModel = controlled ? value ?? null : globalSelectedModel;
+  const selectedModel = controlled ? (value ?? null) : globalSelectedModel;
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
 
   // 点击外部区域关闭下拉框
@@ -70,9 +74,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   }
 
-  const dropdownPositionClass = dropdownDirection === 'up'
-    ? 'bottom-full mb-1'
-    : 'top-full mt-1';
+  const dropdownPositionClass = dropdownDirection === 'up' ? 'bottom-full mb-1' : 'top-full mt-1';
 
   const serverModels = availableModels.filter(m => m.isServerModel);
   const userModels = availableModels.filter(m => !m.isServerModel);
@@ -88,8 +90,8 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       type="button"
       key={getModelIdentityKey(model)}
       onClick={() => handleModelSelect(model)}
-      className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
-        isSelected(model) ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+      className={`w-full px-4 py-2.5 text-left text-foreground hover:bg-surface-raised flex items-center justify-between transition-colors ${
+        isSelected(model) ? 'bg-surface-raised/50' : ''
       }`}
     >
       <div className="flex flex-col">
@@ -101,13 +103,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             </span>
           )}
         </div>
-        {model.provider && (
-          <span className="text-xs text-secondary">{model.provider}</span>
-        )}
+        {model.provider && <span className="text-xs text-secondary">{model.provider}</span>}
       </div>
-      {isSelected(model) && (
-        <CheckIcon className="h-4 w-4 text-claude-accent" />
-      )}
+      {isSelected(model) && <CheckIcon className="h-4 w-4 text-primary" />}
     </button>
   );
 
@@ -125,22 +123,24 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-surface-raised text-foreground transition-colors cursor-pointer ${isOpen ? 'bg-surface-raised' : ''}`}
       >
         <span className="font-medium text-sm">{selectedModel?.name ?? defaultLabel ?? ''}</span>
-        <ChevronDownIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+        <ChevronDownIcon className="h-4 w-4 text-secondary" />
       </button>
 
       {isOpen && (
-        <div className={`absolute ${dropdownPositionClass} w-60 bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}>
+        <div
+          className={`absolute ${dropdownPositionClass} w-60 bg-surface rounded-xl popover-enter shadow-popover z-50 border-border border overflow-hidden`}
+        >
           <div className="max-h-64 overflow-y-auto">
             {defaultLabel && (
               <button
                 type="button"
                 onClick={() => handleModelSelect(null)}
-                className={`w-full px-4 py-2.5 text-left dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover flex items-center justify-between transition-colors ${
-                  !selectedModel ? 'dark:bg-claude-darkSurfaceHover/50 bg-claude-surfaceHover/50' : ''
+                className={`w-full px-4 py-2.5 text-left text-foreground hover:bg-surface-raised flex items-center justify-between transition-colors ${
+                  !selectedModel ? 'bg-surface-raised/50' : ''
                 }`}
               >
                 <span className="text-sm">{defaultLabel}</span>
-                {!selectedModel && <CheckIcon className="h-4 w-4 text-claude-accent" />}
+                {!selectedModel && <CheckIcon className="h-4 w-4 text-primary" />}
               </button>
             )}
             {hasBothGroups ? (

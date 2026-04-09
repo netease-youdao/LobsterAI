@@ -95,12 +95,22 @@ function greedyDiff(oldLines: string[], newLines: string[]): DiffLine[] {
 
       if (foundOld >= 0 && (foundNew < 0 || foundOld <= foundNew)) {
         for (let k = 0; k < foundOld; k++) {
-          result.push({ type: 'removed', text: oldLines[oi + k], oldLineNo: oi + k + 1, newLineNo: null });
+          result.push({
+            type: 'removed',
+            text: oldLines[oi + k],
+            oldLineNo: oi + k + 1,
+            newLineNo: null,
+          });
         }
         oi += foundOld;
       } else if (foundNew >= 0) {
         for (let k = 0; k < foundNew; k++) {
-          result.push({ type: 'added', text: newLines[ni + k], oldLineNo: null, newLineNo: ni + k + 1 });
+          result.push({
+            type: 'added',
+            text: newLines[ni + k],
+            oldLineNo: null,
+            newLineNo: ni + k + 1,
+          });
         }
         ni += foundNew;
       } else {
@@ -145,8 +155,8 @@ const LINE_COLORS: Record<DiffLineType, { bg: string; text: string; gutter: stri
   },
   context: {
     bg: '',
-    text: 'dark:text-claude-darkTextSecondary text-claude-textSecondary',
-    gutter: 'dark:text-claude-darkTextSecondary/40 text-claude-textSecondary/40',
+    text: 'text-secondary',
+    gutter: 'text-secondary/40',
   },
 };
 
@@ -213,14 +223,12 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
   if (diffLines.length === 0) return null;
 
   return (
-    <div className="rounded-lg overflow-hidden border dark:border-claude-darkBorder border-claude-border">
+    <div className="rounded-lg overflow-hidden border border-border">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-1.5 dark:bg-claude-darkSurface bg-claude-surfaceInset border-b dark:border-claude-darkBorder border-claude-border">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-surface-inset border-b border-border">
         <div className="flex items-center gap-2 min-w-0">
           {filePath && (
-            <span className="text-[11px] font-mono dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">
-              {filePath}
-            </span>
+            <span className="text-[11px] font-mono text-secondary truncate">{filePath}</span>
           )}
           <span className="flex items-center gap-1.5 text-[10px] flex-shrink-0">
             {stats.added > 0 && (
@@ -238,8 +246,8 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
             onClick={() => setViewMode('unified')}
             className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
               viewMode === 'unified'
-                ? 'bg-white dark:bg-claude-darkSurfaceHover shadow-sm dark:text-claude-darkText text-claude-text'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                ? 'bg-white dark:bg-surface-raised shadow-sm text-foreground'
+                : 'text-secondary hover:text-foreground'
             }`}
           >
             Unified
@@ -249,8 +257,8 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
             onClick={() => setViewMode('split')}
             className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
               viewMode === 'split'
-                ? 'bg-white dark:bg-claude-darkSurfaceHover shadow-sm dark:text-claude-darkText text-claude-text'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                ? 'bg-white dark:bg-surface-raised shadow-sm text-foreground'
+                : 'text-secondary hover:text-foreground'
             }`}
           >
             Split
@@ -288,23 +296,35 @@ const DiffView: React.FC<DiffViewProps> = ({ oldStr, newStr, filePath }) => {
           <table className="w-full text-xs font-mono border-collapse table-fixed">
             <tbody>
               {splitPairs.map((pair, idx) => {
-                const leftColors = pair.left ? LINE_COLORS[pair.left.type === 'context' ? 'context' : 'removed'] : LINE_COLORS.context;
-                const rightColors = pair.right ? LINE_COLORS[pair.right.type === 'context' ? 'context' : 'added'] : LINE_COLORS.context;
+                const leftColors = pair.left
+                  ? LINE_COLORS[pair.left.type === 'context' ? 'context' : 'removed']
+                  : LINE_COLORS.context;
+                const rightColors = pair.right
+                  ? LINE_COLORS[pair.right.type === 'context' ? 'context' : 'added']
+                  : LINE_COLORS.context;
                 return (
                   <tr key={idx}>
                     {/* Left (old) */}
-                    <td className={`select-none text-right px-2 py-0 w-8 ${leftColors.gutter} ${pair.left ? leftColors.bg : ''}`}>
+                    <td
+                      className={`select-none text-right px-2 py-0 w-8 ${leftColors.gutter} ${pair.left ? leftColors.bg : ''}`}
+                    >
                       {pair.left?.oldLineNo ?? ''}
                     </td>
-                    <td className={`px-2 py-0 w-1/2 whitespace-pre-wrap break-all border-r dark:border-claude-darkBorder/50 border-claude-border/50 ${pair.left ? `${leftColors.bg} ${leftColors.text}` : 'dark:bg-claude-darkSurfaceInset/50 bg-claude-surfaceInset/50'}`}>
-                      {pair.left ? (pair.left.text || '\u00A0') : '\u00A0'}
+                    <td
+                      className={`px-2 py-0 w-1/2 whitespace-pre-wrap break-all border-r border-border/50 ${pair.left ? `${leftColors.bg} ${leftColors.text}` : 'bg-surface-inset/50'}`}
+                    >
+                      {pair.left ? pair.left.text || '\u00A0' : '\u00A0'}
                     </td>
                     {/* Right (new) */}
-                    <td className={`select-none text-right px-2 py-0 w-8 ${rightColors.gutter} ${pair.right ? rightColors.bg : ''}`}>
+                    <td
+                      className={`select-none text-right px-2 py-0 w-8 ${rightColors.gutter} ${pair.right ? rightColors.bg : ''}`}
+                    >
                       {pair.right?.newLineNo ?? ''}
                     </td>
-                    <td className={`px-2 py-0 w-1/2 whitespace-pre-wrap break-all ${pair.right ? `${rightColors.bg} ${rightColors.text}` : 'dark:bg-claude-darkSurfaceInset/50 bg-claude-surfaceInset/50'}`}>
-                      {pair.right ? (pair.right.text || '\u00A0') : '\u00A0'}
+                    <td
+                      className={`px-2 py-0 w-1/2 whitespace-pre-wrap break-all ${pair.right ? `${rightColors.bg} ${rightColors.text}` : 'bg-surface-inset/50'}`}
+                    >
+                      {pair.right ? pair.right.text || '\u00A0' : '\u00A0'}
                     </td>
                   </tr>
                 );
@@ -337,9 +357,29 @@ export function extractDiffFromToolInput(
   const normalized = toolName.toLowerCase().replace(/[\s_]+/g, '');
 
   if (normalized === 'edit' || normalized === 'editfile') {
-    const filePath = extractString(toolInput, ['file_path', 'path', 'filePath', 'target_file', 'targetFile']);
-    const oldStr = extractString(toolInput, ['old_str', 'old_string', 'old_text', 'oldStr', 'oldText', 'search']);
-    const newStr = extractString(toolInput, ['new_str', 'new_string', 'new_text', 'newStr', 'newText', 'replace']);
+    const filePath = extractString(toolInput, [
+      'file_path',
+      'path',
+      'filePath',
+      'target_file',
+      'targetFile',
+    ]);
+    const oldStr = extractString(toolInput, [
+      'old_str',
+      'old_string',
+      'old_text',
+      'oldStr',
+      'oldText',
+      'search',
+    ]);
+    const newStr = extractString(toolInput, [
+      'new_str',
+      'new_string',
+      'new_text',
+      'newStr',
+      'newText',
+      'replace',
+    ]);
 
     if (oldStr !== null && newStr !== null) {
       return [{ filePath: filePath ?? undefined, oldStr, newStr }];
@@ -348,15 +388,33 @@ export function extractDiffFromToolInput(
   }
 
   if (normalized === 'multiedit') {
-    const filePath = extractString(toolInput, ['file_path', 'path', 'filePath', 'target_file', 'targetFile']);
+    const filePath = extractString(toolInput, [
+      'file_path',
+      'path',
+      'filePath',
+      'target_file',
+      'targetFile',
+    ]);
     const edits = toolInput.edits ?? toolInput.changes ?? toolInput.operations;
     if (Array.isArray(edits)) {
       const diffs: DiffData[] = [];
       for (const edit of edits) {
         if (edit && typeof edit === 'object') {
           const rec = edit as Record<string, unknown>;
-          const oldStr = extractString(rec, ['old_str', 'old_string', 'old_text', 'oldStr', 'search']);
-          const newStr = extractString(rec, ['new_str', 'new_string', 'new_text', 'newStr', 'replace']);
+          const oldStr = extractString(rec, [
+            'old_str',
+            'old_string',
+            'old_text',
+            'oldStr',
+            'search',
+          ]);
+          const newStr = extractString(rec, [
+            'new_str',
+            'new_string',
+            'new_text',
+            'newStr',
+            'replace',
+          ]);
           if (oldStr !== null && newStr !== null) {
             diffs.push({ filePath: filePath ?? undefined, oldStr, newStr });
           }

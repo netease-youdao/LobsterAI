@@ -46,12 +46,8 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
       return b.createdAt - a.createdAt;
     };
 
-    const pinnedSessions = sessions
-      .filter((session) => session.pinned)
-      .sort(sortByRecentActivity);
-    const unpinnedSessions = sessions
-      .filter((session) => !session.pinned)
-      .sort(sortByRecentActivity);
+    const pinnedSessions = sessions.filter(session => session.pinned).sort(sortByRecentActivity);
+    const unpinnedSessions = sessions.filter(session => !session.pinned).sort(sortByRecentActivity);
     return [...pinnedSessions, ...unpinnedSessions];
   }, [sessions]);
 
@@ -59,20 +55,36 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
     if (isLoading) {
       return (
         <div className="flex items-center justify-center py-10">
-          <svg className="animate-spin h-6 w-6 dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          <svg
+            className="animate-spin h-6 w-6 text-secondary/60"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
         </div>
       );
     }
     return (
       <div className="flex flex-col items-center justify-center py-10 px-4">
-        <ChatBubbleLeftRightIcon className="h-10 w-10 dark:text-claude-darkTextSecondary/40 text-claude-textSecondary/40 mb-3" />
-        <p className="text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary mb-1">
+        <ChatBubbleLeftRightIcon className="h-10 w-10 text-secondary/40 mb-3" />
+        <p className="text-sm font-medium text-secondary mb-1">
           {i18nService.t('coworkNoSessions')}
         </p>
-        <p className="text-xs dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 text-center">
+        <p className="text-xs text-secondary/70 text-center">
           {i18nService.t('coworkNoSessionsHint')}
         </p>
       </div>
@@ -81,7 +93,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
 
   return (
     <div className="space-y-2">
-      {sortedSessions.map((session) => (
+      {sortedSessions.map(session => (
         <CoworkSessionItem
           key={session.id}
           session={session}
@@ -92,8 +104,8 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           showBatchOption={showBatchOption}
           onSelect={() => onSelectSession(session.id)}
           onDelete={() => onDeleteSession(session.id)}
-          onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
-          onRename={(title) => onRenameSession(session.id, title)}
+          onTogglePin={pinned => onTogglePin(session.id, pinned)}
+          onRename={title => onRenameSession(session.id, title)}
           onToggleSelection={() => onToggleSelection(session.id)}
           onEnterBatchMode={() => onEnterBatchMode(session.id)}
         />
