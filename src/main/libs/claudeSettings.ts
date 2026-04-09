@@ -387,14 +387,20 @@ export function getCurrentApiConfig(target: OpenAICompatProxyTarget = 'local'): 
 export function resolveRawApiConfig(): ApiConfigResolution {
   const sqliteStore = getStore();
   if (!sqliteStore) {
+    console.debug('[ClaudeSettings] resolveRawApiConfig: store is null, storeGetter not set yet');
     return { config: null, error: 'Store is not initialized.' };
   }
   const appConfig = sqliteStore.get<AppConfig>('app_config');
   if (!appConfig) {
+    console.debug('[ClaudeSettings] resolveRawApiConfig: app_config not found in store');
     return { config: null, error: 'Application config not found.' };
   }
   const { matched, error } = resolveMatchedProvider(appConfig);
   if (!matched) {
+    const providerKeys = Object.keys(appConfig.providers ?? {});
+    const defaultModel = appConfig.model?.defaultModel;
+    const defaultProvider = appConfig.model?.defaultModelProvider;
+    console.debug(`[ClaudeSettings] resolveRawApiConfig: no matched provider, error=${error}, providers=[${providerKeys.join(',')}], defaultModel=${defaultModel}, defaultProvider=${defaultProvider}`);
     return { config: null, error };
   }
   let apiKey = matched.providerConfig.apiKey?.trim() || '';

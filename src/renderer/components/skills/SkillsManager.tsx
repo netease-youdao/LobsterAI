@@ -542,11 +542,6 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
 
       {/* Sticky toolbar: Description + Search + Tabs + Tag pills */}
       <div className="sticky top-0 z-10 bg-claude-bg dark:bg-claude-darkBg pb-4 space-y-4 shadow-sm">
-        {/* Description */}
-        <p className="text-sm text-secondary">
-          {i18nService.t('skillsDescription')}
-        </p>
-
         {/* Search + Add button */}
         <div className="flex items-center gap-3">
         <div className="relative flex-1">

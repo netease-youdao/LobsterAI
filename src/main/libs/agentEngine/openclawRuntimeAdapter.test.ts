@@ -126,8 +126,8 @@ test('reconcileWithHistory: missing assistant message — triggers replace', asy
   ]);
 });
 
-test('reconcileWithHistory: duplicate messages locally — triggers replace', async () => {
-  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
+test('reconcileWithHistory: duplicate messages locally — skips replace to preserve local history', async () => {
+  const { session, store, getReplaceCallCount } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
     { id: 'msg-2', type: 'assistant', content: 'Hi there', timestamp: 2, metadata: {} },
     { id: 'msg-3', type: 'assistant', content: 'Hi there', timestamp: 3, metadata: {} }, // duplicate
@@ -147,9 +147,9 @@ test('reconcileWithHistory: duplicate messages locally — triggers replace', as
 
   await adapter.reconcileWithHistory(session.id, 'managed:session-1');
 
-  expect(getReplaceCallCount()).toBe(1);
-  const args = getLastReplaceArgs()!;
-  expect(args.authoritative.length).toBe(2);
+  // Gateway has fewer entries than local — skip replace to avoid data loss
+  expect(getReplaceCallCount()).toBe(0);
+  expect(session.messages.length).toBe(3);
 });
 
 test('reconcileWithHistory: content mismatch — triggers replace', async () => {
@@ -200,6 +200,32 @@ test('reconcileWithHistory: preserves tool messages', async () => {
   await adapter.reconcileWithHistory(session.id, 'managed:session-1');
 
   expect(getReplaceCallCount()).toBe(0);
+});
+
+test('reconcileWithHistory: gateway has fewer entries — skips replace to preserve local history', async () => {
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'Hi there', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'user', content: 'How are you?', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: 'I am fine', timestamp: 4, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: 'How are you?' },
+        { role: 'assistant', content: 'I am fine' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(0);
+  expect(session.messages.length).toBe(4);
 });
 
 test('reconcileWithHistory: empty history — sets cursor to 0', async () => {
