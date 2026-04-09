@@ -428,11 +428,10 @@ export class SqliteStore {
 
     try {
       migrate();
+      this.set(USER_MEMORIES_MIGRATION_KEY, '1');
     } catch (error) {
-      console.warn('Failed to migrate legacy MEMORY.md entries:', error);
+      console.error('[SqliteStore] legacy MEMORY.md migration failed, will retry on next launch:', error);
     }
-
-    this.set(USER_MEMORIES_MIGRATION_KEY, '1');
   }
 
   private migrateFromElectronStore(userDataPath: string) {
