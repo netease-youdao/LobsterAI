@@ -207,7 +207,7 @@ const McpManager: React.FC = () => {
 
   const handleOpenEditForm = (server: McpServerConfig) => {
     setEditingServer(server);
-    setInstallingRegistry(null);
+    setInstallingRegistry(getRegistryEntryForServer(server) ?? null);
     setIsFormOpen(true);
   };
 
@@ -325,10 +325,6 @@ const McpManager: React.FC = () => {
           </div>
         </div>
       )}
-      {/* Description */}
-      <p className="text-sm text-secondary">
-        {i18nService.t('mcpDescription')}
-      </p>
 
       {actionError && (
         <ErrorMessage
@@ -360,49 +356,77 @@ const McpManager: React.FC = () => {
         </div>
       )}
 
-      {/* Search */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1">
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
-          <input
-            type="text"
-            placeholder={i18nService.t('searchMcpServers')}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
-          />
-        </div>
-      </div>
+      {/* Sticky toolbar: Description + Search + Tabs + Category pills */}
+      <div className="sticky top-0 z-10 bg-claude-bg dark:bg-claude-darkBg pb-4 space-y-4 shadow-sm">
+        {/* Description */}
+        <p className="text-sm text-secondary">
+          {i18nService.t('mcpDescription')}
+        </p>
 
-      {/* Tabs */}
-      <div className="flex items-center border-b border-border">
-        <button type="button" onClick={() => setActiveTab('installed')} className={tabClass('installed')}>
-          {i18nService.t('mcpInstalled')}
-          {servers.length > 0 && (
-            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
-              {servers.length}
-            </span>
-          )}
-          <div className={tabIndicatorClass('installed')} />
-        </button>
-        <button type="button" onClick={() => setActiveTab('marketplace')} className={tabClass('marketplace')}>
-          {i18nService.t('mcpMarketplace')}
-          {marketplaceCount > 0 && (
-            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
-              {marketplaceCount}
-            </span>
-          )}
-          <div className={tabIndicatorClass('marketplace')} />
-        </button>
-        <button type="button" onClick={() => setActiveTab('custom')} className={tabClass('custom')}>
-          {i18nService.t('mcpCustom')}
-          {customCount > 0 && (
-            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
-              {customCount}
-            </span>
-          )}
-          <div className={tabIndicatorClass('custom')} />
-        </button>
+        {/* Search */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
+            <input
+              type="text"
+              placeholder={i18nService.t('searchMcpServers')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex items-center border-b border-border">
+          <button type="button" onClick={() => setActiveTab('installed')} className={tabClass('installed')}>
+            {i18nService.t('mcpInstalled')}
+            {servers.length > 0 && (
+              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
+                {servers.length}
+              </span>
+            )}
+            <div className={tabIndicatorClass('installed')} />
+          </button>
+          <button type="button" onClick={() => setActiveTab('marketplace')} className={tabClass('marketplace')}>
+            {i18nService.t('mcpMarketplace')}
+            {marketplaceCount > 0 && (
+              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
+                {marketplaceCount}
+              </span>
+            )}
+            <div className={tabIndicatorClass('marketplace')} />
+          </button>
+          <button type="button" onClick={() => setActiveTab('custom')} className={tabClass('custom')}>
+            {i18nService.t('mcpCustom')}
+            {customCount > 0 && (
+              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
+                {customCount}
+              </span>
+            )}
+            <div className={tabIndicatorClass('custom')} />
+          </button>
+        </div>
+
+        {/* Category filter pills (Marketplace only) */}
+        {activeTab === 'marketplace' && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {dynamicCategories.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => setActiveCategory(cat.id)}
+                className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                  activeCategory === cat.id
+                    ? 'bg-primary text-white'
+                    : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
+                }`}
+              >
+                {(i18nService.getLanguage() === 'zh' ? cat.name_zh : cat.name_en) || i18nService.t(cat.key)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div>
@@ -509,24 +533,6 @@ const McpManager: React.FC = () => {
       {/* ── Tab: Marketplace ────────────────────────────── */}
       {activeTab === 'marketplace' && (
         <div>
-          {/* Category filter pills */}
-          <div className="flex items-center gap-1.5 mb-4 flex-wrap">
-            {dynamicCategories.map((cat) => (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => setActiveCategory(cat.id)}
-                className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                  activeCategory === cat.id
-                    ? 'bg-primary text-white'
-                    : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
-                }`}
-              >
-                {(i18nService.getLanguage() === 'zh' ? cat.name_zh : cat.name_en) || i18nService.t(cat.key)}
-              </button>
-            ))}
-          </div>
-
           <div className="grid grid-cols-2 gap-3">
             {filteredMarketplace.length === 0 ? (
               <div className="col-span-2 text-center py-12 text-sm text-secondary">

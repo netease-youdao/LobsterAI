@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, store } from './store';
+import {
+  selectCurrentSessionId,
+  selectFirstPendingPermission,
+} from './store/selectors/coworkSelectors';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import Toast from './components/Toast';
@@ -56,9 +60,8 @@ const App: React.FC = () => {
   const hasInitialized = useRef(false);
   const dispatch = useDispatch();
   const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
-  const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
-  const pendingPermissions = useSelector((state: RootState) => state.cowork.pendingPermissions);
-  const pendingPermission = pendingPermissions[0] ?? null;
+  const currentSessionId = useSelector(selectCurrentSessionId);
+  const pendingPermission = useSelector(selectFirstPendingPermission);
   const isWindows = window.electron.platform === 'win32';
 
   const waitWithTimeout = useCallback(
@@ -607,7 +610,7 @@ const App: React.FC = () => {
     );
   }, [pendingPermission, handlePermissionResponse]);
 
-  const isOverlayActive = showSettings || showUpdateModal || pendingPermissions.length > 0;
+  const isOverlayActive = showSettings || showUpdateModal || pendingPermission !== null;
   const updateBadge = updateInfo ? (
     <AppUpdateBadge
       latestVersion={updateInfo.latestVersion}

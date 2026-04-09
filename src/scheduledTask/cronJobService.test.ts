@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'vitest';
-import { mapGatewayRun, mapGatewayTaskState } from './cronJobService';
+import { mapGatewayJob, mapGatewayRun, mapGatewayTaskState } from './cronJobService';
 import { DeliveryMode, GatewayStatus, TaskStatus } from './constants';
 
 describe('mapGatewayRun', () => {
@@ -67,6 +67,45 @@ describe('mapGatewayRun', () => {
     });
     expect(run.status).toBe(TaskStatus.Error);
     expect(run.error).toBe('timeout');
+  });
+});
+
+describe('mapGatewayJob', () => {
+  test('keeps native cron fields without legacy wrappers', () => {
+    const job = mapGatewayJob({
+      id: 'job-1',
+      name: 'Morning brief',
+      description: 'Send a summary',
+      enabled: true,
+      schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'Asia/Shanghai' },
+      sessionTarget: 'isolated',
+      wakeMode: 'now',
+      payload: { kind: 'agentTurn', message: 'Summarize updates', timeoutSeconds: 45 },
+      delivery: { mode: 'announce', channel: 'last', to: 'chat-1' },
+      agentId: 'agent-42',
+      sessionKey: 'session-1',
+      state: {
+        nextRunAtMs: 100,
+        lastRunAtMs: 90,
+        lastRunStatus: 'skipped',
+      },
+      createdAtMs: 1_700_000_000_000,
+      updatedAtMs: 1_700_000_100_000,
+    });
+
+    expect(job.schedule.kind).toBe('cron');
+    expect((job.schedule as { expr: string }).expr).toBe('0 9 * * *');
+    expect((job.schedule as { tz: string }).tz).toBe('Asia/Shanghai');
+    expect(job.payload.kind).toBe('agentTurn');
+    expect((job.payload as { timeoutSeconds: number }).timeoutSeconds).toBe(45);
+    expect(job.delivery).toEqual({
+      mode: 'announce',
+      channel: 'last',
+      to: 'chat-1',
+    });
+    expect(job.agentId).toBe('agent-42');
+    expect(job.sessionKey).toBe('session-1');
+    expect(job.state.lastStatus).toBe('skipped');
   });
 });
 

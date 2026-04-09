@@ -1,3 +1,6 @@
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import { ShareIcon } from '@heroicons/react/20/solid';
 import {
   CheckIcon,
@@ -6,16 +9,19 @@ import {
   PhotoIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
-import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { useDispatch,useSelector } from 'react-redux';
-
+import {
+  selectCurrentSession,
+  selectIsStreaming,
+  selectRemoteManaged,
+  selectLastMessageContent,
+  selectCurrentMessagesLength,
+} from '../../store/selectors/coworkSelectors';
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
 import { setActiveSkillIds } from '../../store/slices/skillSlice';
-import type { CoworkImageAttachment,CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import type { CoworkMessage, CoworkMessageMetadata, CoworkImageAttachment } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
 import Modal from '../common/Modal';
@@ -84,6 +90,186 @@ const domRectToCaptureRect = (rect: DOMRect): CaptureRect => ({
   width: Math.max(0, Math.round(rect.width)),
   height: Math.max(0, Math.round(rect.height)),
 });
+
+/** Format a date as "YYYY年MM月DD日" for the export header. */
+const formatExportDate = (ts: number): string => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日`;
+};
+
+/** Draw a rounded-rectangle path (for card clipping / filling). */
+const roundRectPath = (
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+) => {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+};
+
+/**
+ * Compose a final export canvas with a rounded-card layout:
+ *   outer background → rounded card → header (title + date) → content → footer (logo + tagline)
+ */
+const composeExportCanvas = async (
+  contentCanvas: HTMLCanvasElement,
+  title: string,
+  createdAt: number,
+): Promise<HTMLCanvasElement> => {
+  const isDark = document.documentElement.classList.contains('dark');
+  const dpr = window.devicePixelRatio || 1;
+  const fontStack = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+
+  const contentW = contentCanvas.width;   // CSS px
+  const contentH = contentCanvas.height;  // CSS px
+
+  // ── Layout constants (CSS px) ──
+  const outerPadX = 24;          // horizontal breathing room around card
+  const outerPadTop = 28;        // top breathing room
+  const outerPadBottom = 28;     // bottom breathing room
+  const cardRadius = 16;         // card corner radius
+  const cardInnerPadX = 28;      // text indent inside card
+  const headerHeight = 80;       // header area inside card
+  const footerHeight = 80;       // footer area inside card
+  const dividerThick = 1;
+  const logoCssSize = 34;
+
+  // ── Colors ──
+  const outerBg = isDark ? '#111111' : '#f0f0f0';
+  const cardBg = isDark ? '#1e1e1e' : '#ffffff';
+  const cardShadowColor = isDark ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.08)';
+  const titleColor = isDark ? '#eeeeee' : '#1a1a1a';
+  const dateColor = isDark ? '#888888' : '#999999';
+  const dividerColor = isDark ? '#2a2a2a' : '#ebebeb';
+  const brandColor = isDark ? '#e0e0e0' : '#1a1a1a';
+  const subtitleColor = isDark ? '#888888' : '#888888';
+
+  // ── Compute dimensions ──
+  const cardW = contentW;
+  const cardH = headerHeight + dividerThick + contentH + dividerThick + footerHeight;
+  const totalW = cardW + outerPadX * 2;
+  const totalH = cardH + outerPadTop + outerPadBottom;
+
+  const final = document.createElement('canvas');
+  final.width = Math.round(totalW * dpr);
+  final.height = Math.round(totalH * dpr);
+  const ctx = final.getContext('2d');
+  if (!ctx) throw new Error('Canvas context unavailable');
+  ctx.scale(dpr, dpr);
+
+  // ── Outer background ──
+  ctx.fillStyle = outerBg;
+  ctx.fillRect(0, 0, totalW, totalH);
+
+  // ── Card shadow ──
+  ctx.save();
+  ctx.shadowColor = cardShadowColor;
+  ctx.shadowBlur = 24;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 4;
+  ctx.fillStyle = cardBg;
+  roundRectPath(ctx, outerPadX, outerPadTop, cardW, cardH, cardRadius);
+  ctx.fill();
+  ctx.restore();
+
+  // ── Clip to card bounds so content doesn't bleed past rounded corners ──
+  ctx.save();
+  roundRectPath(ctx, outerPadX, outerPadTop, cardW, cardH, cardRadius);
+  ctx.clip();
+
+  // card-local origin helpers
+  const cx = outerPadX;           // card left
+  const cy = outerPadTop;         // card top
+
+  // ── Header ──
+  const titleFontSize = 17;
+  const dateFontSize = 12;
+  ctx.textBaseline = 'middle';
+
+  // Title
+  ctx.fillStyle = titleColor;
+  ctx.font = `600 ${titleFontSize}px ${fontStack}`;
+  const maxTitleW = cardW - cardInnerPadX * 2;
+  let displayTitle = title || 'Cowork Session';
+  if (ctx.measureText(displayTitle).width > maxTitleW) {
+    while (displayTitle.length > 1 && ctx.measureText(displayTitle + '…').width > maxTitleW) {
+      displayTitle = displayTitle.slice(0, -1);
+    }
+    displayTitle += '…';
+  }
+  const headerCenterY = cy + headerHeight / 2;
+  ctx.fillText(displayTitle, cx + cardInnerPadX, headerCenterY - dateFontSize / 2 - 3);
+
+  // Date
+  ctx.fillStyle = dateColor;
+  ctx.font = `400 ${dateFontSize}px ${fontStack}`;
+  ctx.fillText(formatExportDate(createdAt), cx + cardInnerPadX, headerCenterY + titleFontSize / 2 + 3);
+
+  // ── Top divider ──
+  ctx.fillStyle = dividerColor;
+  ctx.fillRect(cx + cardInnerPadX, cy + headerHeight, cardW - cardInnerPadX * 2, dividerThick);
+
+  // ── Content ──
+  const contentY = cy + headerHeight + dividerThick;
+  ctx.drawImage(contentCanvas, cx, contentY, contentW, contentH);
+
+  // ── Bottom divider ──
+  const bottomDivY = contentY + contentH;
+  ctx.fillStyle = dividerColor;
+  ctx.fillRect(cx + cardInnerPadX, bottomDivY, cardW - cardInnerPadX * 2, dividerThick);
+
+  // ── Footer ──
+  const footerTop = bottomDivY + dividerThick;
+  const footerCenterY = footerTop + footerHeight / 2;
+
+  // Load logo
+  const logoImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load logo'));
+    img.src = 'logo.png';
+  });
+
+  // Logo with rounded clipping
+  const logoX = cx + cardInnerPadX;
+  const logoY = footerCenterY - logoCssSize / 2;
+  const logoRadius = 8;
+  ctx.save();
+  roundRectPath(ctx, logoX, logoY, logoCssSize, logoCssSize, logoRadius);
+  ctx.clip();
+  ctx.drawImage(logoImg, logoX, logoY, logoCssSize, logoCssSize);
+  ctx.restore();
+
+  // Re-clip to card (previous clip was consumed by logo)
+  ctx.save();
+  roundRectPath(ctx, outerPadX, outerPadTop, cardW, cardH, cardRadius);
+  ctx.clip();
+
+  // Brand text
+  const textX = logoX + logoCssSize + 12;
+  const brandFontSize = 13;
+  const taglineFontSize = 11;
+
+  ctx.fillStyle = brandColor;
+  ctx.font = `600 ${brandFontSize}px ${fontStack}`;
+  ctx.fillText('LobsterAI — 全场景个人助理 Agent', textX, footerCenterY - taglineFontSize / 2 - 2);
+
+  ctx.fillStyle = subtitleColor;
+  ctx.font = `400 ${taglineFontSize}px ${fontStack}`;
+  ctx.fillText('7×24 小时帮你干活的全场景个人助理，由网易有道开发', textX, footerCenterY + brandFontSize / 2 + 3);
+
+  ctx.restore(); // card clip
+
+  return final;
+};
 
 // PushPinIcon component for pin/unpin functionality
 const PushPinIcon: React.FC<React.SVGProps<SVGSVGElement> & { slashed?: boolean }> = ({
@@ -1388,9 +1574,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
-  const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
-  const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
-  const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
+  const currentSession = useSelector(selectCurrentSession);
+  const isStreaming = useSelector(selectIsStreaming);
+  const remoteManaged = useSelector(selectRemoteManaged);
+  const lastMessageContent = useSelector(selectLastMessageContent);
+  const messagesLength = useSelector(selectCurrentMessagesLength);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1808,7 +1996,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               contentOffset += drawableHeight;
             }
 
-            const pngDataUrl = canvas.toDataURL('image/png');
+            // Compose final canvas with branded header and footer
+            const finalCanvas = await composeExportCanvas(
+              canvas,
+              currentSession.title,
+              currentSession.createdAt,
+            );
+
+            const pngDataUrl = finalCanvas.toDataURL('image/png');
             const base64Index = pngDataUrl.indexOf(',');
             if (base64Index < 0) {
               throw new Error('Failed to encode export image');
@@ -1959,8 +2154,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     currentRailIndexRef.current = railIndex;
     setCurrentRailIndex(railIndex);
   }, []);
-  const lastMessage = currentSession?.messages?.[currentSession.messages.length - 1];
-  const lastMessageContent = lastMessage?.content;
+
+  // lastMessageContent and messagesLength are now sourced from memoized
+  // selectors (selectLastMessageContent / selectCurrentMessagesLength)
+  // so there is no need to derive them from currentSession here.
 
   const resolveLocalFilePath = useCallback((href: string, text: string) => {
     const hrefValue = typeof href === 'string' ? href.trim() : '';
@@ -2087,7 +2284,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       currentRailIndexRef.current = lastRail;
       setCurrentRailIndex(lastRail);
     }
-  }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
+  }, [messagesLength, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
 
 
   if (!currentSession) {

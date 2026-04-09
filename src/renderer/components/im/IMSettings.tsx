@@ -2896,7 +2896,7 @@ const IMSettings: React.FC = () => {
                 </div>
               </div>
               {popoConfig.aesKey && popoConfig.aesKey.length !== 32 && (
-                <p className="text-xs text-amber-500">AES Key {i18nService.t('lang') === 'zh' ? '需要为 32 个字符' : 'must be 32 characters'}（{i18nService.t('lang') === 'zh' ? '当前' : 'current'} {popoConfig.aesKey.length}）</p>
+                <p className="text-xs text-amber-500">AES Key {i18nService.t('imPopoAesKeyLengthWarning')}（{i18nService.t('imPopoAesKeyLengthCurrent')} {popoConfig.aesKey.length}）</p>
               )}
             </div>
 
@@ -2917,7 +2917,7 @@ const IMSettings: React.FC = () => {
                     value={popoConfig.webhookBaseUrl}
                     onChange={(e) => handlePopoChange({ webhookBaseUrl: e.target.value })}
                     onBlur={() => void handleSavePopoConfig()}
-                    placeholder={localIp ? `http://${localIp}` : (i18nService.t('lang') === 'zh' ? '外部域名（可选，不填则自动检测本机 IP）' : 'External domain (optional, auto-detects local IP)')}
+                    placeholder={localIp ? `http://${localIp}` : i18nService.t('imPopoWebhookPlaceholder')}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                   />
                 </div>
@@ -2997,7 +2997,7 @@ const IMSettings: React.FC = () => {
                         }
                       }}
                       className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                      placeholder={i18nService.t('lang') === 'zh' ? '输入用户 ID 后回车添加' : 'Enter user ID and press Enter'}
+                      placeholder={i18nService.t('imPopoUserIdPlaceholder')}
                     />
                     <button
                       type="button"
@@ -3083,7 +3083,7 @@ const IMSettings: React.FC = () => {
                         }
                       }}
                       className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                      placeholder={i18nService.t('lang') === 'zh' ? '输入群组 ID 后回车添加' : 'Enter group ID and press Enter'}
+                      placeholder={i18nService.t('imPopoGroupIdPlaceholder')}
                     />
                     <button
                       type="button"

@@ -16,6 +16,20 @@ import { SearchResponse } from './search/types';
 type SearchEngine = 'google' | 'bing';
 type SearchEnginePreference = SearchEngine | 'auto';
 
+const ALLOWED_URL_SCHEMES = ['http:', 'https:'];
+
+function validateNavigationUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid URL: ${url}`);
+  }
+  if (!ALLOWED_URL_SCHEMES.includes(parsed.protocol)) {
+    throw new Error(`Blocked URL scheme "${parsed.protocol}" — only http/https allowed`);
+  }
+}
+
 function decodeJsonRequestBody(raw: Buffer): string {
   if (raw.length === 0) {
     return '';
@@ -118,9 +132,22 @@ export class BridgeServer {
 
     // CORS for localhost only
     this.app.use((req, res, next) => {
-      res.header('Access-Control-Allow-Origin', 'http://127.0.0.1:*');
-      res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE');
+      const origin = req.headers.origin;
+      const isLocalhost = origin && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin);
+
+      if (isLocalhost) {
+        res.header('Access-Control-Allow-Origin', origin);
+      }
+
+      res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
       res.header('Access-Control-Allow-Headers', 'Content-Type');
+      res.header('Vary', 'Origin');
+
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+        return;
+      }
+
       next();
     });
 
@@ -440,6 +467,8 @@ export class BridgeServer {
         return;
       }
 
+      validateNavigationUrl(url);
+
       const content = await this.bingSearch.getResultContent(connectionId, url);
 
       res.json({
@@ -466,6 +495,8 @@ export class BridgeServer {
         });
         return;
       }
+
+      validateNavigationUrl(url);
 
       const page = await this.playwrightManager.getPage(connectionId);
       await navigate(page, { url, waitUntil, timeout });

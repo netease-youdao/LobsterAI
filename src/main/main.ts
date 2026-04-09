@@ -1,83 +1,79 @@
-import { app, BrowserWindow, ipcMain, session, nativeTheme, dialog, shell, nativeImage, systemPreferences, Menu, protocol, net, powerMonitor, powerSaveBlocker } from 'electron';
+import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import type { WebContents } from 'electron';
-import path from 'path';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, powerSaveBlocker, protocol, session, shell } from 'electron';
 import fs from 'fs';
 import os from 'os';
-import { SqliteStore } from './sqliteStore';
-import { CoworkStore } from './coworkStore';
-import { AgentManager } from './agentManager';
-import { CoworkRunner } from './libs/coworkRunner';
-import {
-  ClaudeRuntimeAdapter,
-  CoworkEngineRouter,
-  OpenClawRuntimeAdapter,
-  type CoworkAgentEngine,
-} from './libs/agentEngine';
-import { SkillManager } from './skillManager';
-import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter, setAuthTokensGetter, setServerBaseUrlGetter, updateServerModelMetadata, clearServerModelMetadata } from './libs/claudeSettings';
-import { saveCoworkApiConfig } from './libs/coworkConfigStore';
-import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
-import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, registerProxyTokenRefresher } from './libs/coworkOpenAICompatProxy';
-import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
-import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
-import {
-  listPairingRequests,
-  approvePairingCode,
-  rejectPairingRequest,
-  readAllowFromStore,
-} from './im/imPairingStore';
-import { OpenClawConfigSync } from './libs/openclawConfigSync';
-import {
-  initCopilotTokenManager,
-  setCopilotTokenState,
-  clearCopilotTokenState,
-  refreshCopilotTokenNow,
-} from './libs/copilotTokenManager';
-import {
-  resolveMemoryFilePath,
-  readMemoryEntries,
-  addMemoryEntry,
-  updateMemoryEntry,
-  deleteMemoryEntry,
-  searchMemoryEntries,
-  migrateSqliteToMemoryMd,
-  syncMemoryFileOnWorkspaceChange,
-  readBootstrapFile,
-  writeBootstrapFile,
-  ensureDefaultIdentity,
-} from './libs/openclawMemoryFile';
-import {
-  OpenClawChannelSessionSync,
-  buildManagedSessionKey,
-  DEFAULT_MANAGED_AGENT_ID,
-} from './libs/openclawChannelSessionSync';
-import { IMGatewayManager, IMGatewayConfig } from './im';
-import type { Platform } from './im/types';
-import { APP_NAME } from './appConstants';
-import { getSkillServiceManager } from './skillServices';
-import { createTray, destroyTray, updateTrayMenu } from './trayManager';
-import { setLanguage, t } from './i18n';
-import { isAutoLaunched, getAutoLaunchEnabled, setAutoLaunchEnabled } from './autoLaunchManager';
-import { McpStore } from './mcpStore';
-import { migrateScheduledTasksToOpenclaw, migrateScheduledTaskRunsToOpenclaw } from '../scheduledTask/migrate';
+import path from 'path';
+
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
+import { migrateScheduledTaskRunsToOpenclaw, migrateScheduledTasksToOpenclaw } from '../scheduledTask/migrate';
 import { PlatformRegistry } from '../shared/platform';
+import { AgentManager } from './agentManager';
+import { APP_NAME } from './appConstants';
+import { getAutoLaunchEnabled, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
+import { CoworkStore } from './coworkStore';
+import { setLanguage, t } from './i18n';
+import { IMGatewayConfig, IMGatewayManager } from './im';
+import {
+  approvePairingCode,
+  listPairingRequests,
+  readAllowFromStore,
+  rejectPairingRequest,
+} from './im/imPairingStore';
+import type { DingTalkInstanceConfig, FeishuInstanceConfig, Platform, QQInstanceConfig } from './im/types';
 import {
   getCronJobService,
   initCronJobServiceManager,
-  registerScheduledTaskHandlers,
   initScheduledTaskHelpers,
+  registerScheduledTaskHandlers,
 } from './ipcHandlers/scheduledTask';
-import { McpServerManager } from './libs/mcpServerManager';
-import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
-import { McpBridgeServer } from './libs/mcpBridgeServer';
-import type { McpBridgeConfig } from './libs/openclawConfigSync';
-import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
-import { resolveEnterpriseConfigPath, syncEnterpriseConfig, mergeEnterpriseOpenclawConfig } from './libs/enterpriseConfigSync';
-import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
+import {
+  ClaudeRuntimeAdapter,
+  type CoworkAgentEngine,
+  CoworkEngineRouter,
+  OpenClawRuntimeAdapter,
+} from './libs/agentEngine';
+import { cancelActiveDownload, downloadUpdate, installUpdate } from './libs/appUpdateInstaller';
+import { clearServerModelMetadata, getCurrentApiConfig, resolveAllEnabledProviderConfigs, resolveCurrentApiConfig, resolveRawApiConfig, setAuthTokensGetter, setServerBaseUrlGetter, setStoreGetter, updateServerModelMetadata } from './libs/claudeSettings';
+import {
+  clearCopilotTokenState,
+  initCopilotTokenManager,
+  refreshCopilotTokenNow,
+  setCopilotTokenState,
+} from './libs/copilotTokenManager';
+import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { getCoworkLogPath } from './libs/coworkLogger';
+import { registerProxyTokenRefresher, startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy } from './libs/coworkOpenAICompatProxy';
+import { CoworkRunner } from './libs/coworkRunner';
+import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
+import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
+import { mergeEnterpriseOpenclawConfig, resolveEnterpriseConfigPath, syncEnterpriseConfig } from './libs/enterpriseConfigSync';
 import { exportLogsZip } from './libs/logExport';
+import { McpBridgeServer } from './libs/mcpBridgeServer';
+import { McpServerManager } from './libs/mcpServerManager';
+import { resolveQualifiedAgentModelRef } from './libs/openclawAgentModels';
+import {
+  buildManagedSessionKey,
+  DEFAULT_MANAGED_AGENT_ID,
+  OpenClawChannelSessionSync,
+} from './libs/openclawChannelSessionSync';
+import type { McpBridgeConfig } from './libs/openclawConfigSync';
+import { buildProviderSelection, OpenClawConfigSync } from './libs/openclawConfigSync';
+import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
+import {
+  addMemoryEntry,
+  deleteMemoryEntry,
+  ensureDefaultIdentity,
+  migrateSqliteToMemoryMd,
+  readBootstrapFile,
+  readMemoryEntries,
+  resolveMemoryFilePath,
+  searchMemoryEntries,
+  syncMemoryFileOnWorkspaceChange,
+  updateMemoryEntry,
+  writeBootstrapFile,
+} from './libs/openclawMemoryFile';
+import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
@@ -85,6 +81,13 @@ import {
   restoreOriginalProxyEnv,
   setSystemProxyEnabled,
 } from './libs/systemProxy';
+import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
+import type { McpServerFormData } from './mcpStore';
+import { McpStore } from './mcpStore';
+import { SkillManager } from './skillManager';
+import { getSkillServiceManager } from './skillServices';
+import { SqliteStore } from './sqliteStore';
+import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 
 // 设置应用程序名称
 app.name = APP_NAME;
@@ -118,6 +121,88 @@ const MIME_EXTENSION_MAP: Record<string, string> = {
 const sanitizeExportFileName = (value: string): string => {
   const sanitized = value.replace(INVALID_FILE_NAME_PATTERN, ' ').replace(/\s+/g, ' ').trim();
   return sanitized || 'cowork-session';
+};
+
+const resolveDefaultAgentModelRef = (): string => {
+  const apiResolution = resolveRawApiConfig();
+  const config = apiResolution.config;
+  if (!config?.model?.trim()) {
+    return '';
+  }
+
+  return buildProviderSelection({
+    apiKey: config.apiKey,
+    baseURL: config.baseURL,
+    modelId: config.model.trim(),
+    apiType: config.apiType,
+    providerName: apiResolution.providerMetadata?.providerName,
+    codingPlanEnabled: apiResolution.providerMetadata?.codingPlanEnabled,
+    supportsImage: apiResolution.providerMetadata?.supportsImage,
+    modelName: apiResolution.providerMetadata?.modelName,
+  }).primaryModel;
+};
+
+const buildAvailableOpenClawProviders = (): Record<string, { models: Array<{ id: string }> }> => {
+  const providerMap: Record<string, { models: Array<{ id: string }> }> = {};
+
+  for (const provider of resolveAllEnabledProviderConfigs()) {
+    for (const model of provider.models) {
+      const selection = buildProviderSelection({
+        apiKey: provider.apiKey,
+        baseURL: provider.baseURL,
+        modelId: model.id,
+        apiType: provider.apiType,
+        providerName: provider.providerName,
+        codingPlanEnabled: provider.codingPlanEnabled,
+        supportsImage: model.supportsImage,
+        modelName: model.name,
+      });
+
+      if (!providerMap[selection.providerId]) {
+        providerMap[selection.providerId] = { models: [] };
+      }
+      if (!providerMap[selection.providerId].models.some((entry) => entry.id === selection.sessionModelId)) {
+        providerMap[selection.providerId].models.push({ id: selection.sessionModelId });
+      }
+    }
+  }
+
+  return providerMap;
+};
+
+const migrateAgentModelRefs = (): number => {
+  const defaultModelRef = resolveDefaultAgentModelRef();
+  if (!defaultModelRef) return 0;
+
+  const availableProviders = buildAvailableOpenClawProviders();
+  const agents = getAgentManager().listAgents();
+  let changed = 0;
+
+  for (const agent of agents) {
+    const normalizedModel = agent.model.trim();
+    if (!normalizedModel) continue;
+
+    const qualification = resolveQualifiedAgentModelRef({
+      agentModel: normalizedModel,
+      availableProviders,
+    });
+
+    if (qualification.status === 'ambiguous') {
+      console.warn(
+        `[Main] Skipped ambiguous agent model migration for "${agent.id}" because "${qualification.modelId}" matches multiple providers: ${qualification.providerIds.join(', ')}`,
+      );
+      continue;
+    }
+
+    if (qualification.status !== 'qualified' || qualification.primaryModel === normalizedModel) {
+      continue;
+    }
+
+    getCoworkStore().updateAgent(agent.id, { model: qualification.primaryModel });
+    changed += 1;
+  }
+
+  return changed;
 };
 
 const sanitizeAttachmentFileName = (value?: string): string => {
@@ -220,16 +305,17 @@ const sanitizeIpcPayload = (value: unknown, depth = 0, seen?: WeakSet<object>): 
   return String(value);
 };
 
-const sanitizeCoworkMessageForIpc = (message: any): any => {
+const sanitizeCoworkMessageForIpc = (message: unknown): unknown => {
   if (!message || typeof message !== 'object') {
     return message;
   }
+  const messageRecord = message as { metadata?: unknown; content?: unknown };
 
   // Preserve imageAttachments in metadata as-is (base64 data can be very large
   // and must not be truncated by the generic sanitizer).
   let sanitizedMetadata: unknown;
-  if (message.metadata && typeof message.metadata === 'object') {
-    const { imageAttachments, ...rest } = message.metadata as Record<string, unknown>;
+  if (messageRecord.metadata && typeof messageRecord.metadata === 'object') {
+    const { imageAttachments, ...rest } = messageRecord.metadata as Record<string, unknown>;
     const sanitizedRest = sanitizeIpcPayload(rest) as Record<string, unknown> | undefined;
     sanitizedMetadata = {
       ...(sanitizedRest && typeof sanitizedRest === 'object' ? sanitizedRest : {}),
@@ -243,20 +329,21 @@ const sanitizeCoworkMessageForIpc = (message: any): any => {
 
   return {
     ...message,
-    content: typeof message.content === 'string'
-      ? truncateIpcString(message.content, IPC_MESSAGE_CONTENT_MAX_CHARS)
+    content: typeof messageRecord.content === 'string'
+      ? truncateIpcString(messageRecord.content, IPC_MESSAGE_CONTENT_MAX_CHARS)
       : '',
     metadata: sanitizedMetadata,
   };
 };
 
-const sanitizePermissionRequestForIpc = (request: any): any => {
+const sanitizePermissionRequestForIpc = (request: unknown): unknown => {
   if (!request || typeof request !== 'object') {
     return request;
   }
+  const requestRecord = request as { toolInput?: unknown };
   return {
     ...request,
-    toolInput: sanitizeIpcPayload(request.toolInput ?? {}),
+    toolInput: sanitizeIpcPayload(requestRecord.toolInput ?? {}),
   };
 };
 
@@ -417,11 +504,14 @@ const checkCalendarPermission = async (): Promise<string> => {
       await execAsync('osascript -l JavaScript -e \'Application("Calendar").name()\'', { timeout: 5000 });
       console.log('[Permissions] macOS Calendar access: authorized');
       return 'authorized';
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const stderr = typeof error === 'object' && error && 'stderr' in error
+        ? String((error as { stderr?: unknown }).stderr ?? '')
+        : '';
       // Check if it's a permission error
-      if (error.stderr?.includes('不能获取对象') ||
-          error.stderr?.includes('not authorized') ||
-          error.stderr?.includes('Permission denied')) {
+      if (stderr.includes('不能获取对象') ||
+          stderr.includes('not authorized') ||
+          stderr.includes('Permission denied')) {
         console.log('[Permissions] macOS Calendar access: not-determined (needs permission)');
         return 'not-determined';
       }
@@ -448,7 +538,7 @@ const checkCalendarPermission = async (): Promise<string> => {
       await execAsync('powershell -Command "' + checkScript + '"', { timeout: 10000 });
       console.log('[Permissions] Windows Outlook is available');
       return 'authorized';
-    } catch (error) {
+    } catch {
       console.log('[Permissions] Windows Outlook not available or not accessible');
       return 'not-determined';
     }
@@ -1037,10 +1127,13 @@ const bindCoworkRuntimeForwarder = (): void => {
   if (coworkRuntimeForwarderBound) return;
   const runtime = getCoworkEngineRouter();
 
-  runtime.on('message', (sessionId: string, message: any) => {
+  runtime.on('message', (sessionId: string, message: unknown) => {
     const safeMessage = sanitizeCoworkMessageForIpc(message);
     const windows = BrowserWindow.getAllWindows();
-    console.log('[CoworkForwarder] forwarding message: sessionId=', sessionId, 'type=', message?.type, 'windowCount=', windows.length);
+    const messageType = typeof message === 'object' && message && 'type' in message
+      ? (message as { type?: unknown }).type
+      : undefined;
+    console.log('[CoworkForwarder] forwarding message: sessionId=', sessionId, 'type=', messageType, 'windowCount=', windows.length);
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
       try {
@@ -1064,7 +1157,7 @@ const bindCoworkRuntimeForwarder = (): void => {
     });
   });
 
-  runtime.on('permissionRequest', (sessionId: string, request: any) => {
+  runtime.on('permissionRequest', (sessionId: string, request: unknown) => {
     if (runtime.getSessionConfirmationMode(sessionId) === 'text') {
       return;
     }
@@ -1268,7 +1361,7 @@ const startMcpBridge = (): Promise<McpBridgeConfig | null> => {
 /**
  * Stop the MCP Bridge: server manager + HTTP callback.
  */
-const stopMcpBridge = async (): Promise<void> => {
+const _stopMcpBridge = async (): Promise<void> => {
   try {
     if (mcpServerManager) {
       await mcpServerManager.stopServers();
@@ -1451,12 +1544,23 @@ const getIMGatewayManager = () => {
     // Initialize with LLM config provider
     imGatewayManager.initialize({
       getLLMConfig: async () => {
-        const appConfig = sqliteStore.get<any>('app_config');
+        type LlmProviderConfig = {
+          enabled?: boolean;
+          apiKey?: string;
+          baseUrl?: string;
+          models?: Array<{ id: string }>;
+        };
+        type LlmAppConfig = {
+          providers?: Record<string, LlmProviderConfig>;
+          api?: { key?: string; baseUrl?: string };
+          model?: { defaultModel?: string };
+        };
+        const appConfig = sqliteStore.get<LlmAppConfig>('app_config');
         if (!appConfig) return null;
 
         // Find first enabled provider
         const providers = appConfig.providers || {};
-        for (const [providerName, providerConfig] of Object.entries(providers) as [string, any][]) {
+        for (const [providerName, providerConfig] of Object.entries(providers)) {
           if (providerConfig.enabled && providerConfig.apiKey) {
             const model = providerConfig.models?.[0]?.id;
             return {
@@ -1863,7 +1967,7 @@ if (!gotTheLock) {
     try {
       if (enabled) {
         if (preventSleepBlockerId === null || !powerSaveBlocker.isStarted(preventSleepBlockerId)) {
-          preventSleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+          preventSleepBlockerId = powerSaveBlocker.start('prevent-app-suspension');
         }
       } else {
         if (preventSleepBlockerId !== null && powerSaveBlocker.isStarted(preventSleepBlockerId)) {
@@ -2356,7 +2460,7 @@ if (!gotTheLock) {
     headers?: Record<string, string>;
   }) => {
     try {
-      getMcpStore().createServer(data as any);
+      getMcpStore().createServer(data as McpServerFormData);
       const servers = getMcpStore().listServers();
       // Trigger async MCP bridge refresh (don't await — let UI show DB result immediately)
       refreshMcpBridge().catch(err => console.error('[McpBridge] background refresh error:', err));
@@ -2377,7 +2481,7 @@ if (!gotTheLock) {
     headers?: Record<string, string>;
   }) => {
     try {
-      getMcpStore().updateServer(id, data as any);
+      getMcpStore().updateServer(id, data as Partial<McpServerFormData>);
       const servers = getMcpStore().listServers();
       refreshMcpBridge().catch(err => console.error('[McpBridge] background refresh error:', err));
       return { success: true, servers };
@@ -2518,8 +2622,6 @@ if (!gotTheLock) {
         metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
 
-      const runner = getCoworkRunner();
-
       // Update session status to 'running' before starting async task
       // This ensures the frontend receives the correct status immediately
       coworkStoreInstance.updateSession(session.id, { status: 'running' });
@@ -2535,18 +2637,22 @@ if (!gotTheLock) {
         imageAttachments: options.imageAttachments,
         agentId: options.agentId,
       }).catch(error => {
-        console.error('Cowork session error:', error);
-        // The engine router already emits an 'error' event (handled at line ~990)
-        // which sends cowork:stream:error to the renderer. Only send here if the
-        // session hasn't been marked as error yet, to avoid duplicate messages.
-        const existing = coworkStoreInstance.getSession(session.id);
-        if (existing?.status === 'error') return;
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const windows = BrowserWindow.getAllWindows();
-        windows.forEach((win) => {
-          if (win.isDestroyed()) return;
-          win.webContents.send('cowork:stream:error', { sessionId: session.id, error: errorMessage });
-        });
+        console.error('[Cowork] session error:', error);
+        try {
+          // The engine router already emits an 'error' event (handled at line ~990)
+          // which sends cowork:stream:error to the renderer. Only send here if the
+          // session hasn't been marked as error yet, to avoid duplicate messages.
+          const existing = coworkStoreInstance.getSession(session.id);
+          if (existing?.status === 'error') return;
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const windows = BrowserWindow.getAllWindows();
+          windows.forEach((win) => {
+            if (win.isDestroyed()) return;
+            win.webContents.send('cowork:stream:error', { sessionId: session.id, error: errorMessage });
+          });
+        } catch (handlerError) {
+          console.error('[Cowork] failed to send error notification to renderer:', handlerError);
+        }
       });
 
       const sessionWithMessages = coworkStoreInstance.getSession(session.id) || {
@@ -2588,18 +2694,22 @@ if (!gotTheLock) {
         skillIds: options.activeSkillIds,
         imageAttachments: options.imageAttachments,
       }).catch(error => {
-        console.error('Cowork continue error:', error);
-        // The engine router already emits an 'error' event (handled at line ~990)
-        // which sends cowork:stream:error to the renderer. Only send here if the
-        // session hasn't been marked as error yet, to avoid duplicate messages.
-        const existing = getCoworkStore().getSession(options.sessionId);
-        if (existing?.status === 'error') return;
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const windows = BrowserWindow.getAllWindows();
-        windows.forEach((win) => {
-          if (win.isDestroyed()) return;
-          win.webContents.send('cowork:stream:error', { sessionId: options.sessionId, error: errorMessage });
-        });
+        console.error('[Cowork] continue error:', error);
+        try {
+          // The engine router already emits an 'error' event (handled at line ~990)
+          // which sends cowork:stream:error to the renderer. Only send here if the
+          // session hasn't been marked as error yet, to avoid duplicate messages.
+          const existing = getCoworkStore().getSession(options.sessionId);
+          if (existing?.status === 'error') return;
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const windows = BrowserWindow.getAllWindows();
+          windows.forEach((win) => {
+            if (win.isDestroyed()) return;
+            win.webContents.send('cowork:stream:error', { sessionId: options.sessionId, error: errorMessage });
+          });
+        } catch (handlerError) {
+          console.error('[Cowork] failed to send error notification to renderer:', handlerError);
+        }
       });
 
       const session = getCoworkStore().getSession(options.sessionId);
@@ -2772,7 +2882,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('agents:create', async (_event, request: import('./coworkStore').CreateAgentRequest) => {
     try {
-      const agent = getAgentManager().createAgent(request);
+      const agent = getAgentManager().createAgent(request, resolveDefaultAgentModelRef());
       // Sync config so workspace files (SOUL.md, IDENTITY.md) are written
       // before OpenClaw scaffolds default templates for the new agent.
       syncOpenClawConfig({ reason: 'agent-created' }).catch(() => {});
@@ -2838,7 +2948,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('agents:addPreset', async (_event, presetId: string) => {
     try {
-      const agent = getAgentManager().addPresetAgent(presetId);
+      const agent = getAgentManager().addPresetAgent(presetId, resolveDefaultAgentModelRef());
       syncOpenClawConfig({ reason: 'agent-preset-added' }).catch(() => {});
       return { success: true, agent };
     } catch (error) {
@@ -3280,12 +3390,29 @@ if (!gotTheLock) {
     getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter,
   });
   initScheduledTaskHelpers({
-    getIMGatewayManager: () => getIMGatewayManager() as any,
+    getIMGatewayManager: () => ({
+      getConfig: () => getIMGatewayManager().getConfig() as unknown as Record<string, unknown>,
+    }),
   });
   registerScheduledTaskHandlers({
     getCronJobService,
-    getIMGatewayManager: () => getIMGatewayManager() as any,
-    getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter as any,
+    getIMGatewayManager: () => ({
+      getIMStore: () => ({
+        getSessionMapping: (conversationId: string, platform: string) =>
+          getIMGatewayManager().getIMStore().getSessionMapping(conversationId, platform as Platform),
+        listSessionMappings: (platform: string, agentId?: string) =>
+          getIMGatewayManager().getIMStore().listSessionMappings(platform as Platform, agentId).map((mapping) => ({
+            ...mapping,
+            lastActiveAt: String(mapping.lastActiveAt),
+          })),
+      }),
+      primeConversationReplyRoute: (
+        platform: string,
+        conversationId: string,
+        coworkSessionId: string,
+      ) => getIMGatewayManager().primeConversationReplyRoute(platform as Platform, conversationId, coworkSessionId),
+    }),
+    getOpenClawRuntimeAdapter: () => openClawRuntimeAdapter,
   });
 
   // ==================== Permissions IPC Handlers ====================
@@ -3625,7 +3752,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:dingtalk:instance:config:set', async (_event, instanceId: string, config: any, options?: { syncGateway?: boolean }) => {
+  ipcMain.handle('im:dingtalk:instance:config:set', async (_event, instanceId: string, config: Partial<DingTalkInstanceConfig>, options?: { syncGateway?: boolean }) => {
     try {
       getIMGatewayManager().getIMStore().setDingTalkInstanceConfig(instanceId, config);
       if (options?.syncGateway && getOpenClawEngineManager().getStatus().phase === 'running') {
@@ -3675,7 +3802,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:qq:instance:config:set', async (_event, instanceId: string, config: any, options?: { syncGateway?: boolean }) => {
+  ipcMain.handle('im:qq:instance:config:set', async (_event, instanceId: string, config: Partial<QQInstanceConfig>, options?: { syncGateway?: boolean }) => {
     try {
       getIMGatewayManager().getIMStore().setQQInstanceConfig(instanceId, config);
       if (options?.syncGateway && getOpenClawEngineManager().getStatus().phase === 'running') {
@@ -3725,7 +3852,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:feishu:instance:config:set', async (_event, instanceId: string, config: any, options?: { syncGateway?: boolean }) => {
+  ipcMain.handle('im:feishu:instance:config:set', async (_event, instanceId: string, config: Partial<FeishuInstanceConfig>, options?: { syncGateway?: boolean }) => {
     try {
       getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, config);
       if (options?.syncGateway && getOpenClawEngineManager().getStatus().phase === 'running') {
@@ -3961,6 +4088,10 @@ if (!gotTheLock) {
     '.webp': 'image/webp',
     '.bmp': 'image/bmp',
     '.svg': 'image/svg+xml',
+    '.tiff': 'image/tiff',
+    '.tif': 'image/tiff',
+    '.ico': 'image/x-icon',
+    '.avif': 'image/avif',
   };
   ipcMain.handle(
     'dialog:readFileAsDataUrl',
@@ -4901,6 +5032,15 @@ if (!gotTheLock) {
 
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
+
+    const defaultAgentModelRef = resolveDefaultAgentModelRef();
+    const backfilledAgentModels = getCoworkStore().backfillEmptyAgentModels(defaultAgentModelRef);
+    const qualifiedAgentModels = migrateAgentModelRefs();
+    if (backfilledAgentModels > 0 || qualifiedAgentModels > 0) {
+      console.log(
+        `[Main] migrated agent model bindings: backfilled=${backfilledAgentModels}, qualified=${qualifiedAgentModels}`,
+      );
+    }
 
     const startupSync = await syncOpenClawConfig({
       reason: 'startup',

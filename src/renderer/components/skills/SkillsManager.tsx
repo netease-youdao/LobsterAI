@@ -23,6 +23,7 @@ import PuzzleIcon from '../icons/PuzzleIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
 import UploadIcon from '../icons/UploadIcon';
+import Tooltip from '../ui/Tooltip';
 import SkillSecurityReport from './SkillSecurityReport';
 
 type SkillTab = 'installed' | 'marketplace';
@@ -539,7 +540,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
         />
       )}
 
-      <div className="flex items-center gap-3">
+      {/* Sticky toolbar: Description + Search + Tabs + Tag pills */}
+      <div className="sticky top-0 z-10 bg-claude-bg dark:bg-claude-darkBg pb-4 space-y-4 shadow-sm">
+        {/* Search + Add button */}
+        <div className="flex items-center gap-3">
         <div className="relative flex-1">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary" />
           <input
@@ -606,57 +610,91 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             </div>
           )}
         </div>
-      </div>
+        </div>
 
-      <div className="flex items-center border-b border-border">
-        <button
-          type="button"
-          onClick={() => setActiveTab('installed')}
-          className={`px-4 py-2 text-sm font-medium transition-colors relative ${
-            activeTab === 'installed'
-              ? 'text-foreground'
-              : 'text-secondary hover:hover:text-foreground'
-          }`}
-        >
-          {i18nService.t('skillInstalled')}
-          {skills.length > 0 && (
-            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
-              {skills.length}
-            </span>
+        {/* Tabs */}
+        <div className="flex items-center border-b border-border">
+          <button
+            type="button"
+            onClick={() => setActiveTab('installed')}
+            className={`px-4 py-2 text-sm font-medium transition-colors relative ${
+              activeTab === 'installed'
+                ? 'text-foreground'
+                : 'text-secondary hover:hover:text-foreground'
+            }`}
+          >
+            {i18nService.t('skillInstalled')}
+            {skills.length > 0 && (
+              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
+                {skills.length}
+              </span>
+            )}
+            <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
+              activeTab === 'installed' ? 'bg-primary' : 'bg-transparent'
+            }`} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('marketplace')}
+            className={`px-4 py-2 text-sm font-medium transition-colors relative ${
+              activeTab === 'marketplace'
+                ? 'text-foreground'
+                : 'text-secondary hover:hover:text-foreground'
+            }`}
+          >
+            {i18nService.t('skillMarketplace')}
+            <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
+              activeTab === 'marketplace' ? 'bg-primary' : 'bg-transparent'
+            }`} />
+          </button>
+          {updatableSkills.length > 0 && (
+            <div className="ml-auto pr-1 pb-1">
+              <button
+                type="button"
+                onClick={handleUpgradeAll}
+                disabled={upgradeState?.isActive === true}
+                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ArrowPathIcon className="h-3 w-3" />
+                {i18nService.t('skillUpgradeAll').replace('{count}', String(updatableSkills.length))}
+              </button>
+            </div>
           )}
-          <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
-            activeTab === 'installed' ? 'bg-primary' : 'bg-transparent'
-          }`} />
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('marketplace')}
-          className={`px-4 py-2 text-sm font-medium transition-colors relative ${
-            activeTab === 'marketplace'
-              ? 'text-foreground'
-              : 'text-secondary hover:hover:text-foreground'
-          }`}
-        >
-          {i18nService.t('skillMarketplace')}
-          <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
-            activeTab === 'marketplace' ? 'bg-primary' : 'bg-transparent'
-          }`} />
-        </button>
-        {updatableSkills.length > 0 && (
-          <div className="ml-auto pr-1 pb-1">
+        </div>
+
+        {/* Tag filter pills (Marketplace only) */}
+        {activeTab === 'marketplace' && !isLoadingMarketplace && marketTags.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
-              onClick={handleUpgradeAll}
-              disabled={upgradeState?.isActive === true}
-              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => setActiveMarketTag('all')}
+              className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                activeMarketTag === 'all'
+                  ? 'bg-primary text-white'
+                  : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
+              }`}
             >
-              <ArrowPathIcon className="h-3 w-3" />
-              {i18nService.t('skillUpgradeAll').replace('{count}', String(updatableSkills.length))}
+              {i18nService.t('skillCategoryAll')}
             </button>
+            {marketTags.map((tag) => (
+              <button
+                key={tag.id}
+                type="button"
+                onClick={() => setActiveMarketTag(tag.id)}
+                className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                  activeMarketTag === tag.id
+                    ? 'bg-primary text-white'
+                    : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
+                }`}
+              >
+                {resolveLocalizedText(tag)}
+              </button>
+            ))}
           </div>
         )}
       </div>
 
+      <div>
       {activeTab === 'installed' && (
       <>
       <div className="grid grid-cols-2 gap-3">
@@ -708,9 +746,16 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 </div>
               </div>
 
-              <p className="text-xs text-secondary line-clamp-2 mb-2">
-                {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
-              </p>
+              <Tooltip
+                content={skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
+                position="bottom"
+                maxWidth="360px"
+                className="block w-full"
+              >
+                <p className="text-xs text-secondary line-clamp-2 mb-2">
+                  {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
+                </p>
+              </Tooltip>
 
               <div className="flex items-center justify-between text-[10px] text-secondary">
                 <div className="flex items-center gap-2">
@@ -764,35 +809,6 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
           </div>
         ) : (
           <>
-            {marketTags.length > 0 && (
-              <div className="flex items-center gap-1.5 mb-4 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setActiveMarketTag('all')}
-                  className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                    activeMarketTag === 'all'
-                      ? 'bg-primary text-white'
-                      : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
-                  }`}
-                >
-                  {i18nService.t('skillCategoryAll')}
-                </button>
-                {marketTags.map((tag) => (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    onClick={() => setActiveMarketTag(tag.id)}
-                    className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                      activeMarketTag === tag.id
-                        ? 'bg-primary text-white'
-                        : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
-                    }`}
-                  >
-                    {resolveLocalizedText(tag)}
-                  </button>
-                ))}
-              </div>
-            )}
             {filteredMarketplaceSkills.length === 0 ? (
               <div className="text-center py-12 text-sm text-secondary">
                 {i18nService.t('skillMarketplaceEmpty')}
@@ -853,9 +869,16 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                   </div>
                 </div>
 
-                <p className="text-xs text-secondary line-clamp-2 mb-2">
-                  {resolveLocalizedText(skill.description)}
-                </p>
+                <Tooltip
+                  content={resolveLocalizedText(skill.description)}
+                  position="bottom"
+                  maxWidth="360px"
+                  className="block w-full"
+                >
+                  <p className="text-xs text-secondary line-clamp-2 mb-2">
+                    {resolveLocalizedText(skill.description)}
+                  </p>
+                </Tooltip>
 
                 <div className="flex items-center gap-2 text-[10px] text-secondary">
                   {skill.source?.from && (
@@ -893,6 +916,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
           </>
         )
       )}
+      </div>
 
       {selectedMarketplaceSkill && createPortal(
         <Modal onClose={() => setSelectedMarketplaceSkill(null)} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-md mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-6">
