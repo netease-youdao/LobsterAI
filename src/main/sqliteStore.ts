@@ -36,6 +36,7 @@ export class SqliteStore {
     db.pragma('synchronous = NORMAL');
     db.pragma('cache_size = -8000'); // 8 MB; negative value = kibibytes
     db.pragma('wal_autocheckpoint = 1000'); // checkpoint every ~4 MB of WAL writes
+    db.pragma('foreign_keys = ON');
 
     const store = new SqliteStore(db, dbPath);
     store.initializeTables(basePath);
