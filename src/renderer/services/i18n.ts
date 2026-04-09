@@ -19,7 +19,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     user: '用户',
     login: '登录',
     inDevelopment: '正在开发中',
-    
+
     // 设置
     settings: '设置',
     general: '通用',
@@ -46,7 +46,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     themeColor: '主题色',
     chinese: '中文',
     english: 'English',
-    
+
     // API设置
     apiKey: 'API Key',
     apiKeyPlaceholder: '输入你的 API Key',
@@ -61,7 +61,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     currentModel: '当前模型',
     availableModels: '可用模型列表',
     modelSwitchHint: '在聊天界面可以切换使用的模型',
-    
+
     // 模型提供商设置
     enabled: '已启用',
     disabled: '已禁用',
@@ -88,7 +88,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelSuffixSecure: '（安全）',
     codingPlanSubscriptionBadge: '订阅套餐',
     inputFileLabel: '输入文件',
-    imageVisionHint: '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。',
+    imageVisionHint:
+      '当前模型未启用图片输入，图片将以文件路径形式发送。若该模型本身支持图片理解，可在模型配置中开启图片输入选项。',
     copied: '已复制',
     copyrightHolder: '网易有道 版权所有',
     noModelsAvailable: '暂无可用模型',
@@ -169,7 +170,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     passwordMismatch: '两次输入的密码不一致',
     passwordTooShort: '密码长度至少为4位',
     wrongPassword: '密码错误，请检查后重试',
-    
+
     // 快捷键
     keyboardShortcuts: '键盘快捷键',
     shortcutNotSet: '未设置',
@@ -193,7 +194,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authLogout: '退出登录',
     authLoginRequired: '请先登录后再开始对话。',
     authLoginRequiredBtn: '登录',
-    authQuotaExhausted: '今日免费额度已用完。您可以登录 LobsterAI Portal 购买套餐或积分包继续使用，或在设置中配置自己的 API Key。',
+    authQuotaExhausted:
+      '今日免费额度已用完。您可以登录 LobsterAI Portal 购买套餐或积分包继续使用，或在设置中配置自己的 API Key。',
     authTopUpLink: '充值',
     authSettingsLink: '设置',
     authLoginToChat: '登录后即可开始聊天',
@@ -208,10 +210,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // 错误信息
     failedToLoadSettings: '加载设置失败',
     failedToSaveSettings: '保存设置失败',
-    
+
     // 加载状态
     loading: '加载中...',
-    
+
     // 侧边栏
     conversations: '对话',
     noConversations: '暂无对话',
@@ -249,7 +251,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     folderIconWork: '工作',
     folderIconCode: '代码',
     folderIconIdea: '灵感',
-    
+
     // 聊天窗口
     sendMessage: '发送消息',
     typeMessage: '询问任何问题...',
@@ -279,17 +281,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imageLimitReached: '最多上传 10 张图片',
     imageReadError: '读取图片失败',
     imageInputNotSupported: '当前模型不支持图像输入',
-    
+
     // 模型选择
     selectModel: '选择模型',
-    
+
     // 错误提示
     errorOccurred: '发生错误',
     tryAgain: '请重试',
     networkError: '网络错误',
     apiKeyRequired: '需要设置API密钥',
     configureApiKey: '请在设置中配置您的API密钥',
-    
+
     // 初始化
     initializationError: '初始化应用程序失败。请检查您的配置。',
     apiKeyNotConfigured: 'API密钥未配置。请在设置中设置您的API密钥。',
@@ -318,7 +320,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelGroupUser: '自定义模型',
     modelSelectorNoModels: '请先在设置中配置模型',
     coworkApiConfigTitle: 'API 配置',
-    coworkApiConfigHint: '支持 Anthropic 兼容与 OpenAI 兼容协议（OpenAI 兼容通过本地转换服务接入）。',
+    coworkApiConfigHint:
+      '支持 Anthropic 兼容与 OpenAI 兼容协议（OpenAI 兼容通过本地转换服务接入）。',
     coworkAgentEngine: 'Agent 引擎',
     coworkAgentEngineOpenClaw: 'OpenClaw（默认）',
     coworkAgentEngineOpenClawHint: '个人 AI 助理',
@@ -331,7 +334,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawInstallHint: 'OpenClaw 运行时已内置。切换到该引擎或启动任务时会自动拉起网关。',
     coworkOpenClawGoToSettingsInstall: '查看引擎设置',
     coworkOpenClawRestartGateway: '重新启动网关',
-    coworkOpenClawNotInstalledNotice: '未检测到内置 OpenClaw runtime（cfmind），请先执行打包前构建脚本。',
+    coworkOpenClawNotInstalledNotice:
+      '未检测到内置 OpenClaw runtime（cfmind），请先执行打包前构建脚本。',
     coworkOpenClawReadyNotice: 'OpenClaw runtime 已就绪。开始任务时会自动启动网关。',
     coworkOpenClawStarting: 'AI 引擎正在启动网关...',
     coworkOpenClawRunning: 'AI 引擎已就绪。',
@@ -351,7 +355,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryEnabledHint: 'OpenClaw 会自动索引 MEMORY.md 文件，为 Agent 提供长期记忆检索。',
     coworkMemoryFilePath: '记忆文件路径',
     coworkMemoryLlmJudgeEnabled: '启用 LLM 二级判定',
-    coworkMemoryLlmJudgeEnabledHint: '仅对规则边界样本调用模型复核，提升准确率（会增加少量 API 调用）。',
+    coworkMemoryLlmJudgeEnabledHint:
+      '仅对规则边界样本调用模型复核，提升准确率（会增加少量 API 调用）。',
     coworkMemoryLegacyNotice: '当前为 OpenClaw 引擎模式。本页功能仅对 Cowork 生效。',
     coworkMemoryAutoWrite: '自动写入记忆',
     coworkMemoryCaptureEachTurn: '启用隐式更新',
@@ -392,14 +397,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryEmbeddingEnabled: '启用本地 embedding 重排',
     coworkMemoryEmbeddingEnabledHint: '在词法检索基础上用本地向量相似度重排结果，提升召回质量',
     coworkMemoryEmbeddingModel: 'Embedding 模型',
-    coworkMemoryEmbeddingModelHint: '推荐 BAAI/bge-m3；可改为你已下载的其他 sentence-transformers 模型',
+    coworkMemoryEmbeddingModelHint:
+      '推荐 BAAI/bge-m3；可改为你已下载的其他 sentence-transformers 模型',
     coworkMemoryEmbeddingLocalModelPath: '本地模型目录（可选）',
     coworkMemoryEmbeddingLocalModelPathHint: '填写后优先加载本地目录；留空时按模型名加载',
     coworkMemoryEmbeddingAutoDownload: '允许自动下载模型',
     coworkMemoryEmbeddingAutoDownloadHint: '关闭后必须提供本地模型目录',
     coworkMemoryEmbeddingDownload: '下载 / 校验模型',
     coworkMemoryEmbeddingDownloading: '下载中...',
-    coworkMemoryEmbeddingDownloadHint: '手动触发模型下载（或校验本地模型目录），下载过程可能较慢，请等待进度完成',
+    coworkMemoryEmbeddingDownloadHint:
+      '手动触发模型下载（或校验本地模型目录），下载过程可能较慢，请等待进度完成',
     coworkMemoryEmbeddingDownloadSuccess: 'Embedding 模型已就绪',
     coworkMemoryEmbeddingDownloadFailed: 'Embedding 模型下载失败',
     coworkMemoryEmbeddingProgressPreparing: '准备下载任务',
@@ -478,10 +485,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     customCreate: '自定义创建',
     choosePreset: '选择预设',
     agentSettings: 'Agent 设置',
-     agentName: '名称',
-     agentNamePlaceholder: 'Agent 名称',
-     emojiPickerTitle: '选择图标',
-     emojiCustomInput: '或者直接输入 Emoji',
+    agentName: '名称',
+    agentNamePlaceholder: 'Agent 名称',
+    emojiPickerTitle: '选择图标',
+    emojiCustomInput: '或者直接输入 Emoji',
     agentDescription: '描述',
     agentDescriptionPlaceholder: '简短描述',
     agentIdentity: '身份',
@@ -521,6 +528,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkNewSession: '新会话',
     coworkContinuePlaceholder: '继续对话...',
     coworkRemoteManagedPlaceholder: '该会话由 IM 通道创建，请在对应的 IM 平台操作',
+    coworkQueued: '排队中',
+    coworkQueueEdit: '编辑排队消息',
+    coworkQueueRemove: '移除排队消息',
+    coworkQueueSendHint: '消息将在当前回复完成后发送',
     aiGeneratedDisclaimer: '内容由 AI 生成，仅供参考',
     updateAvailablePill: '有新版本',
     updateAvailableTitle: '检测到新版本',
@@ -577,7 +588,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noFolderSelected: '未选择文件夹',
     coworkSelectFolderFirst: '请选择任务目录后再提交',
     noRecentFolders: '暂无最近文件夹',
-    folderDriveRootNotAllowed: '不支持使用磁盘根目录作为工作目录，请选择一个子文件夹（例如 D:\\Projects）。',
+    folderDriveRootNotAllowed:
+      '不支持使用磁盘根目录作为工作目录，请选择一个子文件夹（例如 D:\\Projects）。',
     coworkOpenFolder: '打开文件夹',
 
     // Cowork 错误消息
@@ -610,21 +622,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     remoteImport: '远程导入',
     remoteImportTitle: '远程导入',
     createSkillByChat: '通过对话创建',
-    skillCreatorPrompt: '使用你的skill-creator技能，来创建一个技能。首先，请询问我这个技能需要干什么。',
+    skillCreatorPrompt:
+      '使用你的skill-creator技能，来创建一个技能。首先，请询问我这个技能需要干什么。',
     skillCreatorNotInstalled: '请先安装 skill-creator 技能',
     skillCreatorNotEnabled: '请先启用 skill-creator 技能',
     githubTabLabel: 'GitHub',
     githubImportDescription: '支持仓库链接与子目录链接；若仓库内有多个技能，将自动全部导入。',
     githubImportUrlLabel: 'URL',
     githubSkillPlaceholder: '例如：owner/repo 或 GitHub tree/blob 链接',
-    githubImportExamples: '示例：owner/repo；https://github.com/owner/repo/tree/main/SKILLs/my-skill',
+    githubImportExamples:
+      '示例：owner/repo；https://github.com/owner/repo/tree/main/SKILLs/my-skill',
     clawhubTabLabel: 'ClawHub',
     clawhubImportDescription: '粘贴 clawhub.ai 的技能页面链接，将自动安装对应技能。',
     clawhubImportUrlLabel: 'ClawHub URL',
     clawhubSkillPlaceholder: '例如：https://clawhub.ai/skills/owner/skill-name',
     clawhubImportExamples: '示例：https://clawhub.ai/skills/owner/skill-name',
     importSourceMismatchClawhub: '请输入 clawhub.ai 的链接，或切换到 GitHub 标签页导入。',
-    importSourceMismatchGithub: '请输入 GitHub 链接或 owner/repo 格式，或切换到 ClawHub 标签页导入。',
+    importSourceMismatchGithub:
+      '请输入 GitHub 链接或 owner/repo 格式，或切换到 ClawHub 标签页导入。',
     importSkill: '导入',
     importingSkill: '导入中...',
     official: '官方',
@@ -783,7 +798,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpInstallFromUrl: '通过 URL 安装',
     mcpInstallFromUrlTitle: '通过 URL 安装 MCP',
     mcpInstallFromUrlPlaceholder: '输入 npm 包名或 URL',
-    mcpInstallFromUrlHint: '支持 npm 包名（如 @modelcontextprotocol/server-filesystem）、npx 命令或 HTTP/HTTPS URL',
+    mcpInstallFromUrlHint:
+      '支持 npm 包名（如 @modelcontextprotocol/server-filesystem）、npx 命令或 HTTP/HTTPS URL',
     mcpRequiredConfig: '必填配置',
     mcpEnvRequired: '此字段为必填项',
     mcpOptionalConfig: '可选配置',
@@ -895,15 +911,20 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imConnectivityCheckTitle_nim_p2p_only_hint: '云信私聊模式',
     imConnectivityCheckSuggestion_missing_credentials: '补全必填配置项后重试。',
     imConnectivityCheckSuggestion_auth_check: '核对平台凭证、应用权限和发布状态。',
-    imConnectivityCheckSuggestion_gateway_running: '若显示未启用，请点击对应 IM 渠道胶囊按钮启用；启用后确认网络可访问平台服务。',
+    imConnectivityCheckSuggestion_gateway_running:
+      '若显示未启用，请点击对应 IM 渠道胶囊按钮启用；启用后确认网络可访问平台服务。',
     imConnectivityCheckSuggestion_inbound_activity: '向机器人发一条测试消息；群聊场景请 @机器人。',
-    imConnectivityCheckSuggestion_outbound_activity: '检查机器人发消息权限、可见范围和会话回包权限。',
+    imConnectivityCheckSuggestion_outbound_activity:
+      '检查机器人发消息权限、可见范围和会话回包权限。',
     imConnectivityCheckSuggestion_platform_last_error: '根据错误提示修复后再重测。',
     imConnectivityCheckSuggestion_feishu_group_requires_mention: '在群聊中使用 @机器人 + 内容。',
-    imConnectivityCheckSuggestion_feishu_event_subscription_required: '在飞书后台开启 im.message.receive_v1 并发布版本。',
+    imConnectivityCheckSuggestion_feishu_event_subscription_required:
+      '在飞书后台开启 im.message.receive_v1 并发布版本。',
     imConnectivityCheckSuggestion_discord_group_requires_mention: '在频道中使用 @机器人 + 内容。',
-    imConnectivityCheckSuggestion_telegram_privacy_mode_hint: '在 @BotFather 调整 Privacy Mode 设置。',
-    imConnectivityCheckSuggestion_dingtalk_bot_membership_hint: '确认机器人已加入目标会话并允许收发消息。',
+    imConnectivityCheckSuggestion_telegram_privacy_mode_hint:
+      '在 @BotFather 调整 Privacy Mode 设置。',
+    imConnectivityCheckSuggestion_dingtalk_bot_membership_hint:
+      '确认机器人已加入目标会话并允许收发消息。',
     imConnectivityCheckSuggestion_nim_p2p_only_hint: '通过私聊方式向机器人账号发送消息。',
     nimAccountPlaceholder: '机器人账号ID',
     nimAccountHint: '在云信控制台"账号管理"中创建的 IM 账号 ID',
@@ -915,7 +936,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimAppKeyHint: '从云信控制台应用信息中获取',
     nimTokenHint: '为该账号生成的访问凭证（建议设置为长期有效）',
     nimAccountWhitelist: '白名单账号',
-    nimAccountWhitelistHint: '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。',
+    nimAccountWhitelistHint:
+      '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。',
     nimTeamPolicy: '群消息策略',
     nimTeamPolicyDisabled: '禁用 - 不响应群消息',
     nimTeamPolicyOpen: '开放 - 响应所有群的@消息',
@@ -927,7 +949,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimQChatEnabledHint: '订阅圈组消息，仅响应@机器人的消息',
     nimQChatServerIds: '圈组服务器 ID',
     nimQChatServerIdsPlaceholder: '留空自动发现所有已加入的服务器',
-    nimQChatServerIdsHint: '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。',
+    nimQChatServerIdsHint:
+      '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。',
     neteaseBeeChanClientIdPlaceholder: '小蜜蜂助理Client ID',
 
     // IM 设置页面 - POPO 配置
@@ -1023,7 +1046,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     feishuBotCreateWizardOrManual: '或 手动填写、修改已有机器人信息',
     feishuBotCreateWizardOptionNew: '新建机器人',
     feishuBotCreateWizardOptionExisting: '关联已有机器人',
-    feishuBotCreateWizardQrcodeDesc: '使用飞书客户端扫描二维码，选择「一键创建飞书机器人」完成配置。',
+    feishuBotCreateWizardQrcodeDesc:
+      '使用飞书客户端扫描二维码，选择「一键创建飞书机器人」完成配置。',
     feishuBotCreateWizardQrcodeExpired: '二维码已过期，请点击刷新',
     feishuBotCreateWizardQrcodeRefresh: '刷新二维码',
     feishuBotCreateWizardVerify: '验证',
@@ -1183,7 +1207,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksFormValidationDatetimeFuture: '执行时间必须在未来',
     scheduledTasksFormValidationIntervalPositive: '间隔时间必须大于 0',
     scheduledTasksFormValidationCronRequired: '请输入 Cron 表达式',
-    scheduledTasksFormValidationPayloadMismatch: '主会话只能使用系统事件，隔离会话只能使用 Agent 对话',
+    scheduledTasksFormValidationPayloadMismatch:
+      '主会话只能使用系统事件，隔离会话只能使用 Agent 对话',
     scheduledTasksFormValidationWebhookRequired: '请输入 Webhook URL',
     scheduledTasksFormValidationTimeout: '超时秒数必须是大于等于 0 的整数',
     scheduledTasksFormSubmitError: '保存失败：',
@@ -1288,7 +1313,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksFormNotifyConversationNone: '无可用会话',
     scheduledTasksToggleWarningAtPast: '该任务的执行时间已过，启用后将不会运行',
     scheduledTasksToggleWarningExpired: '该任务已过期，启用后将不会运行',
-    scheduledTasksDataAnomalyWarning: '定时任务「{name}」存在异常数据，已自动修正显示，建议重新编辑该任务',
+    scheduledTasksDataAnomalyWarning:
+      '定时任务「{name}」存在异常数据，已自动修正显示，建议重新编辑该任务',
 
     // 隐私协议弹窗
     privacyDialogTitle: '网易有道LobsterAI服务协议',
@@ -1328,7 +1354,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     user: 'User',
     login: 'Login',
     inDevelopment: 'In development',
-    
+
     // Settings
     settings: 'Settings',
     general: 'General',
@@ -1355,7 +1381,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     themeColor: 'Color Themes',
     chinese: 'Chinese',
     english: 'English',
-    
+
     // API Settings
     apiKey: 'API Key',
     apiKeyPlaceholder: 'Enter your API Key',
@@ -1370,7 +1396,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     currentModel: 'Current Model',
     availableModels: 'Available Models',
     modelSwitchHint: 'You can switch models in the chat interface',
-    
+
     // Model Provider Settings
     enabled: 'Enabled',
     disabled: 'Disabled',
@@ -1386,10 +1412,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelNameAndIdRequired: 'Model name and model ID are required',
     modelIdExists: 'Model ID already exists. Use a different one',
     ollamaModelName: 'Model Name',
-    ollamaModelNameHint: 'Enter the name of a model installed in Ollama, e.g. qwen3:8b, lfm2:latest',
+    ollamaModelNameHint:
+      'Enter the name of a model installed in Ollama, e.g. qwen3:8b, lfm2:latest',
     ollamaModelNamePlaceholder: 'qwen3:8b',
     ollamaDisplayName: 'Display Name (optional)',
-    ollamaDisplayNameHint: 'Custom name shown in the model list. Leave empty to use the model name.',
+    ollamaDisplayNameHint:
+      'Custom name shown in the model list. Leave empty to use the model name.',
     ollamaDisplayNamePlaceholder: 'My Qwen3 Model',
     ollamaModelNameRequired: 'Model name is required',
     supportsImageInput: 'Supports image input',
@@ -1397,7 +1425,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     modelSuffixSecure: '(Secure)',
     codingPlanSubscriptionBadge: 'Subscription',
     inputFileLabel: 'Input Files',
-    imageVisionHint: 'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.',
+    imageVisionHint:
+      'Image input is not enabled for the current model. Images will be sent as file paths. If the model supports vision, you can enable image input in the model configuration.',
     copied: 'Copied',
     copyrightHolder: 'NetEase Youdao. All rights reserved.',
     noModelsAvailable: 'No models available',
@@ -1413,9 +1442,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     apiFormatOpenAI: 'OpenAI Compatible',
     apiFormatHint: 'Select protocol compatibility: Anthropic Compatible or OpenAI Compatible',
     zhipuCodingPlanHint: 'When enabled, uses the GLM Coding Plan dedicated API endpoint',
-    zhipuCodingPlanEndpointHint: 'When using GLM Coding Plan, the system will automatically switch to the dedicated Coding endpoint',
-    qwenCodingPlanHint: 'When enabled, uses the Alibaba Cloud Bailian Coding Plan dedicated API endpoint',
-    qwenCodingPlanEndpointHint: 'When using Coding Plan, you need a dedicated API Key (format: sk-sp-xxxxx)',
+    zhipuCodingPlanEndpointHint:
+      'When using GLM Coding Plan, the system will automatically switch to the dedicated Coding endpoint',
+    qwenCodingPlanHint:
+      'When enabled, uses the Alibaba Cloud Bailian Coding Plan dedicated API endpoint',
+    qwenCodingPlanEndpointHint:
+      'When using Coding Plan, you need a dedicated API Key (format: sk-sp-xxxxx)',
     qwenOAuthTab: 'OAuth Login',
     qwenOAuthLogin: 'OAuth Login',
     qwenOAuthLoginFree: 'OAuth Login',
@@ -1428,12 +1460,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     qwenAuthMethod: 'Authentication Method',
     qwenApiKeyOptional: 'API Key (Optional)',
     qwenApiKeyPriority: 'sk-xxxxx (Traditional method, higher priority than OAuth)',
-    qwenAuthPriorityHint: '💡 Authentication Priority: API Key > OAuth. If both are configured, API Key will be used first.',
+    qwenAuthPriorityHint:
+      '💡 Authentication Priority: API Key > OAuth. If both are configured, API Key will be used first.',
     qwenOrUseApiKey: 'Or use API Key',
-    volcengineCodingPlanHint: 'When enabled, uses the Volcengine Coding Plan dedicated API endpoint',
-    volcengineCodingPlanEndpointHint: 'When using Coding Plan, the system will automatically switch to the dedicated Coding endpoint',
+    volcengineCodingPlanHint:
+      'When enabled, uses the Volcengine Coding Plan dedicated API endpoint',
+    volcengineCodingPlanEndpointHint:
+      'When using Coding Plan, the system will automatically switch to the dedicated Coding endpoint',
     moonshotCodingPlanHint: 'When enabled, uses the Moonshot Coding Plan dedicated API endpoint',
-    moonshotCodingPlanEndpointHint: 'When using Coding Plan, the system will automatically switch to the dedicated Coding endpoint',
+    moonshotCodingPlanEndpointHint:
+      'When using Coding Plan, the system will automatically switch to the dedicated Coding endpoint',
     minimaxOAuthTabApiKey: 'API Key',
     minimaxOAuthTabOAuth: 'OAuth',
     minimaxOAuthRegionLabel: 'Region',
@@ -1446,7 +1482,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     minimaxOAuthStatusSuccess: 'OAuth login successful',
     minimaxOAuthStatusError: 'OAuth login failed',
     minimaxOAuthUserCode: 'Authorization code',
-    minimaxOAuthOpenBrowserHint: 'Browser opened, please enter the authorization code and complete login',
+    minimaxOAuthOpenBrowserHint:
+      'Browser opened, please enter the authorization code and complete login',
     minimaxOAuthLoggedIn: 'Logged in via MiniMax OAuth',
     minimaxOAuthRelogin: 'Re-login',
     minimaxOAuthLogout: 'Log out',
@@ -1462,8 +1499,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     importProvidersFailed: 'Failed to import providers',
     exportProvidersFailed: 'Failed to export providers',
     invalidProvidersFile: 'Invalid providers file',
-    decryptProvidersFailed: 'Failed to decrypt API key. Make sure the file was exported on this device.',
-    decryptProvidersPartial: 'Some keys could not be decrypted. Existing keys were kept or left blank.',
+    decryptProvidersFailed:
+      'Failed to decrypt API key. Make sure the file was exported on this device.',
+    decryptProvidersPartial:
+      'Some keys could not be decrypted. Existing keys were kept or left blank.',
 
     // Password related
     password: 'Password',
@@ -1472,13 +1511,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     enterPasswordAgain: 'Enter password again',
     exportPasswordTitle: 'Set Export Password',
     importPasswordTitle: 'Enter Import Password',
-    exportPasswordHint: 'This password encrypts your API keys. Use the same password when importing.',
+    exportPasswordHint:
+      'This password encrypts your API keys. Use the same password when importing.',
     importPasswordHint: 'Enter the password you set when exporting',
     passwordRequired: 'Password is required',
     passwordMismatch: 'Passwords do not match',
     passwordTooShort: 'Password must be at least 4 characters',
     wrongPassword: 'Wrong password, please try again',
-    
+
     // Shortcuts
     keyboardShortcuts: 'Keyboard Shortcuts',
     shortcutNotSet: 'Not set',
@@ -1502,7 +1542,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authLogout: 'Log Out',
     authLoginRequired: 'Please log in to start a conversation.',
     authLoginRequiredBtn: 'Log In',
-    authQuotaExhausted: 'Daily free quota exhausted. Visit LobsterAI Portal to purchase a plan or credits, or configure your own API Key in Settings.',
+    authQuotaExhausted:
+      'Daily free quota exhausted. Visit LobsterAI Portal to purchase a plan or credits, or configure your own API Key in Settings.',
     authTopUpLink: 'Top Up',
     authSettingsLink: 'Settings',
     authLoginToChat: 'Log in to start chatting',
@@ -1517,10 +1558,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Error Messages
     failedToLoadSettings: 'Failed to load settings',
     failedToSaveSettings: 'Failed to save settings',
-    
+
     // Loading State
     loading: 'Loading...',
-    
+
     // Sidebar
     conversations: 'Conversations',
     noConversations: 'No conversations',
@@ -1533,7 +1574,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noProject: 'No project',
     noProjects: 'No projects',
     confirmDelete: 'Confirm Delete',
-    confirmDeleteMessage: 'Are you sure you want to delete this conversation? This action cannot be undone.',
+    confirmDeleteMessage:
+      'Are you sure you want to delete this conversation? This action cannot be undone.',
     searchChats: 'Search Chats',
     searchConversations: 'Search tasks...',
     searchNoResults: 'No matching tasks',
@@ -1550,7 +1592,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     projectSettings: 'Project settings',
     projectNameLabel: 'Project name',
     deleteProject: 'Delete project',
-    confirmDeleteProject: 'Are you sure you want to delete this project? Chats in this project will be moved to your chat list. This action cannot be undone.',
+    confirmDeleteProject:
+      'Are you sure you want to delete this project? Chats in this project will be moved to your chat list. This action cannot be undone.',
     folderIconDefault: 'Default',
     folderIconHealth: 'Health',
     folderIconStudy: 'Study',
@@ -1558,7 +1601,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     folderIconWork: 'Work',
     folderIconCode: 'Code',
     folderIconIdea: 'Ideas',
-    
+
     // Chat Window
     sendMessage: 'Send Message',
     typeMessage: 'Type a message...',
@@ -1568,7 +1611,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkReEdit: 'Re-edit',
     messageCopied: 'Message copied',
     clearConversation: 'Clear Conversation',
-    confirmClearConversation: 'Are you sure you want to clear the current conversation? This action cannot be undone.',
+    confirmClearConversation:
+      'Are you sure you want to clear the current conversation? This action cannot be undone.',
     today: 'Today',
     yesterday: 'Yesterday',
     daysAgo: 'days ago',
@@ -1588,17 +1632,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imageLimitReached: 'Up to 10 images',
     imageReadError: 'Failed to read image',
     imageInputNotSupported: 'Current model does not support images',
-    
+
     // Model Selection
     selectModel: 'Select Model',
-    
+
     // Error Messages
     errorOccurred: 'An error occurred',
     tryAgain: 'Please try again',
     networkError: 'Network error',
     apiKeyRequired: 'API Key Required',
     configureApiKey: 'Please configure your API key in settings',
-    
+
     // Initialization
     initializationError: 'Failed to initialize application. Please check your configuration.',
     apiKeyNotConfigured: 'API key not configured. Please set up your API key in settings.',
@@ -1618,30 +1662,36 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkWorkingDirectoryHint: 'LobsterAI will execute commands in this directory',
     coworkSystemPrompt: 'System Prompt',
     coworkSystemPromptPlaceholder: 'Set custom instructions for LobsterAI...',
-    coworkSystemPromptHint: 'Optional system prompt to customize LobsterAI\'s behavior',
+    coworkSystemPromptHint: "Optional system prompt to customize LobsterAI's behavior",
     coworkModelSettingsRequired: 'Please configure models and API keys in Model Settings first.',
     coworkModelSettingsTitle: 'Model Settings',
-    coworkModelSettingsHint: 'LobsterAI uses the current model and provider configuration from Model Settings.',
+    coworkModelSettingsHint:
+      'LobsterAI uses the current model and provider configuration from Model Settings.',
     coworkModelSettingsAction: 'Go to Model Settings',
     modelGroupServer: 'Plan Models',
     modelGroupUser: 'Custom Models',
     modelSelectorNoModels: 'Please configure models in settings first',
     coworkApiConfigTitle: 'API Configuration',
-    coworkApiConfigHint: 'Supports Anthropic-compatible and OpenAI-compatible APIs (OpenAI compatibility is bridged by a local adapter).',
+    coworkApiConfigHint:
+      'Supports Anthropic-compatible and OpenAI-compatible APIs (OpenAI compatibility is bridged by a local adapter).',
     coworkAgentEngine: 'Agent Engine',
     coworkAgentEngineOpenClaw: 'OpenClaw (Default)',
     coworkAgentEngineOpenClawHint: 'Personal AI assistant',
     coworkAgentEngineClaudeLegacy: 'Cowork',
-    coworkAgentEngineClaudeLegacyHint: 'Built-in engine, ready out of the box, recommended for daily tasks.',
+    coworkAgentEngineClaudeLegacyHint:
+      'Built-in engine, ready out of the box, recommended for daily tasks.',
     coworkOpenClawInstall: 'Start OpenClaw',
     coworkOpenClawRetryInstall: 'Retry OpenClaw Startup',
     coworkOpenClawStart: 'Start OpenClaw',
     coworkOpenClawInstalling: 'Starting OpenClaw...',
-    coworkOpenClawInstallHint: 'OpenClaw runtime is bundled. Switching to this engine or starting a task will auto-start the gateway.',
+    coworkOpenClawInstallHint:
+      'OpenClaw runtime is bundled. Switching to this engine or starting a task will auto-start the gateway.',
     coworkOpenClawGoToSettingsInstall: 'View Engine Settings',
     coworkOpenClawRestartGateway: 'Restart Gateway',
-    coworkOpenClawNotInstalledNotice: 'Bundled OpenClaw runtime (cfmind) was not found. Build the runtime before packaging.',
-    coworkOpenClawReadyNotice: 'OpenClaw runtime is ready. The gateway will auto-start when you run a task.',
+    coworkOpenClawNotInstalledNotice:
+      'Bundled OpenClaw runtime (cfmind) was not found. Build the runtime before packaging.',
+    coworkOpenClawReadyNotice:
+      'OpenClaw runtime is ready. The gateway will auto-start when you run a task.',
     coworkOpenClawStarting: 'AI engine is starting the gateway...',
     coworkOpenClawRunning: 'AI engine is ready.',
     coworkOpenClawError: 'OpenClaw gateway failed to become healthy in time.',
@@ -1651,16 +1701,20 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkBootstrapIdentityTitle: 'Agent Identity',
     coworkBootstrapIdentityHint: 'Agent metadata (name, emoji, avatar, etc.)',
     coworkBootstrapUserTitle: 'User Profile',
-    coworkBootstrapUserHint: 'Information about yourself (name, preferences, etc.) that the Agent will remember.',
+    coworkBootstrapUserHint:
+      'Information about yourself (name, preferences, etc.) that the Agent will remember.',
     coworkBootstrapSoulTitle: 'Agent Persona',
-    coworkBootstrapSoulHint: 'Agent personality, tone, and behavior guidelines. The Agent will be instructed to follow this.',
+    coworkBootstrapSoulHint:
+      'Agent personality, tone, and behavior guidelines. The Agent will be instructed to follow this.',
     coworkBootstrapStoragePath: 'Storage path',
     coworkBootstrapSaveFailed: 'Failed to save agent settings',
     coworkMemoryEnabled: 'Enable user memories',
-    coworkMemoryEnabledHint: 'OpenClaw automatically indexes MEMORY.md for long-term memory retrieval by the Agent.',
+    coworkMemoryEnabledHint:
+      'OpenClaw automatically indexes MEMORY.md for long-term memory retrieval by the Agent.',
     coworkMemoryFilePath: 'Memory file path',
     coworkMemoryLlmJudgeEnabled: 'Enable LLM secondary judge',
-    coworkMemoryLlmJudgeEnabledHint: 'Only borderline rule cases are reviewed by the model for better accuracy (adds a small number of API calls).',
+    coworkMemoryLlmJudgeEnabledHint:
+      'Only borderline rule cases are reviewed by the model for better accuracy (adds a small number of API calls).',
     coworkMemoryLegacyNotice: 'OpenClaw engine mode is active. This page only applies to Cowork.',
     coworkMemoryAutoWrite: 'Auto-write memory',
     coworkMemoryCaptureEachTurn: 'Enable implicit updates',
@@ -1699,16 +1753,20 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryAdvancedShow: 'Show advanced settings',
     coworkMemoryAdvancedHide: 'Hide advanced settings',
     coworkMemoryEmbeddingEnabled: 'Enable local embedding rerank',
-    coworkMemoryEmbeddingEnabledHint: 'Rerank lexical hits with local vector similarity for better recall quality',
+    coworkMemoryEmbeddingEnabledHint:
+      'Rerank lexical hits with local vector similarity for better recall quality',
     coworkMemoryEmbeddingModel: 'Embedding model',
-    coworkMemoryEmbeddingModelHint: 'Recommended: BAAI/bge-m3. You can switch to any downloaded sentence-transformers model',
+    coworkMemoryEmbeddingModelHint:
+      'Recommended: BAAI/bge-m3. You can switch to any downloaded sentence-transformers model',
     coworkMemoryEmbeddingLocalModelPath: 'Local model path (optional)',
-    coworkMemoryEmbeddingLocalModelPathHint: 'If set, load model from this directory first; if empty, load by model id',
+    coworkMemoryEmbeddingLocalModelPathHint:
+      'If set, load model from this directory first; if empty, load by model id',
     coworkMemoryEmbeddingAutoDownload: 'Allow auto model download',
     coworkMemoryEmbeddingAutoDownloadHint: 'When disabled, you must provide a local model path',
     coworkMemoryEmbeddingDownload: 'Download / Validate model',
     coworkMemoryEmbeddingDownloading: 'Downloading...',
-    coworkMemoryEmbeddingDownloadHint: 'Manually trigger model download (or validate local path). This can take a while, wait for progress to finish',
+    coworkMemoryEmbeddingDownloadHint:
+      'Manually trigger model download (or validate local path). This can take a while, wait for progress to finish',
     coworkMemoryEmbeddingDownloadSuccess: 'Embedding model is ready',
     coworkMemoryEmbeddingDownloadFailed: 'Failed to download embedding model',
     coworkMemoryEmbeddingProgressPreparing: 'Preparing download task',
@@ -1719,11 +1777,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryEmbeddingProgressDone: 'Completed',
     coworkMemoryEmbeddingProgressError: 'Failed',
     coworkMemoryEmbeddingWeight: 'Semantic rerank weight',
-    coworkMemoryEmbeddingWeightHint: 'Range 0-1. Higher means more embedding influence. Recommended: 0.62',
+    coworkMemoryEmbeddingWeightHint:
+      'Range 0-1. Higher means more embedding influence. Recommended: 0.62',
     coworkConfigSaveFailed: 'Failed to save LobsterAI settings. Please try again.',
     coworkApiProviderModel: 'Select from provider models',
     coworkApiProviderModelCustom: 'Custom',
-    coworkApiProviderModelHint: 'Only shows enabled providers with configured API key and base URL.',
+    coworkApiProviderModelHint:
+      'Only shows enabled providers with configured API key and base URL.',
     coworkApiBaseUrl: 'API Base URL',
     coworkApiKey: 'API Key',
     coworkApiModel: 'Model Name',
@@ -1753,9 +1813,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkTodoPending: 'pending',
     coworkTodoUntitled: 'Untitled todo',
     coworkTodoUnknownStatus: 'Unknown status',
-    coworkDangerousOperation: 'Warning: This operation may modify files or execute system commands. Please review carefully.',
-    coworkDestructiveOperation: 'Destructive operation: This command may cause irreversible data loss. Please confirm carefully.',
-    coworkCautionOperation: 'Caution: This command may modify files or system state. Please review carefully.',
+    coworkDangerousOperation:
+      'Warning: This operation may modify files or execute system commands. Please review carefully.',
+    coworkDestructiveOperation:
+      'Destructive operation: This command may cause irreversible data loss. Please confirm carefully.',
+    coworkCautionOperation:
+      'Caution: This command may modify files or system state. Please review carefully.',
     dangerReasonRecursiveDelete: 'Recursive file deletion',
     dangerReasonGitForcePush: 'Git force push',
     dangerReasonGitResetHard: 'Git hard reset',
@@ -1787,19 +1850,21 @@ const translations: Record<LanguageType, Record<string, string>> = {
     customCreate: 'Custom Create',
     choosePreset: 'Choose Preset',
     agentSettings: 'Agent Settings',
-     agentName: 'Name',
-     agentNamePlaceholder: 'Agent name',
-     emojiPickerTitle: 'Choose icon',
-     emojiCustomInput: 'Or type an emoji',
+    agentName: 'Name',
+    agentNamePlaceholder: 'Agent name',
+    emojiPickerTitle: 'Choose icon',
+    emojiCustomInput: 'Or type an emoji',
     agentDescription: 'Description',
     agentDescriptionPlaceholder: 'Brief description',
     agentIdentity: 'Identity',
     agentIdentityPlaceholder: 'Identity description (IDENTITY.md)...',
     agentDefaultModel: 'Agent Default Model',
     agentModelOpenClawOnly: 'This setting only applies to the OpenClaw engine',
-    agentModelInvalidHint: 'The model bound to this Agent is no longer available. Please choose a valid model for this Agent first',
+    agentModelInvalidHint:
+      'The model bound to this Agent is no longer available. Please choose a valid model for this Agent first',
     agentSkills: 'Skills',
-    agentSkillsHint: 'Select skills available to this Agent. Leave empty to use all enabled skills.',
+    agentSkillsHint:
+      'Select skills available to this Agent. Leave empty to use all enabled skills.',
     agentSkillsSearch: 'Search skills...',
     agentSkillsNone: 'Click to select skills',
     agentsSubtitle: 'Custom personas and skill sets for your AI agents',
@@ -1820,7 +1885,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentCreateFailed: 'Failed to create Agent',
     agentSaveFailed: 'Failed to save Agent settings',
     agentDeleteConfirmTitle: 'Confirm Delete Agent',
-    agentDeleteConfirmMessage: 'Are you sure you want to delete Agent "{name}"? This action cannot be undone.',
+    agentDeleteConfirmMessage:
+      'Are you sure you want to delete Agent "{name}"? This action cannot be undone.',
     agentUnsavedTitle: 'Unsaved Changes',
     agentUnsavedMessage: 'You have unsaved changes. Are you sure you want to discard them?',
     discard: 'Discard',
@@ -1829,11 +1895,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     coworkNewSession: 'New Session',
     coworkContinuePlaceholder: 'Continue the conversation...',
-    coworkRemoteManagedPlaceholder: 'This session was created via IM. Please use the corresponding IM platform.',
+    coworkRemoteManagedPlaceholder:
+      'This session was created via IM. Please use the corresponding IM platform.',
+    coworkQueued: 'Queued',
+    coworkQueueEdit: 'Edit queued message',
+    coworkQueueRemove: 'Remove queued message',
+    coworkQueueSendHint: 'Message will be sent after the current response completes',
     aiGeneratedDisclaimer: 'Content generated by AI, for reference only.',
     updateAvailablePill: 'New update',
     updateAvailableTitle: 'New version available',
-    updateAvailableMessage: 'A new version is available. Please download it from the official website and install over the current version.',
+    updateAvailableMessage:
+      'A new version is available. Please download it from the official website and install over the current version.',
     updateAvailableConfirm: 'Update Now',
     updateAvailableCancel: 'Cancel',
     updateOpenFailed: 'Failed to open download page',
@@ -1872,13 +1944,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     deleteSession: 'Delete Task',
     turnIndex: 'Turn index',
     deleteTaskConfirmTitle: 'Confirm Deletion',
-    deleteTaskConfirmMessage: 'This action cannot be undone. All messages in this task will be permanently deleted.',
+    deleteTaskConfirmMessage:
+      'This action cannot be undone. All messages in this task will be permanently deleted.',
     batchOperations: 'Batch Operations',
     batchSelectAll: 'Select All',
     batchDelete: 'Delete',
     batchCancel: 'Cancel',
     batchDeleteConfirmTitle: 'Confirm Batch Deletion',
-    batchDeleteConfirmMessage: 'Are you sure you want to delete {count} selected tasks? This action cannot be undone.',
+    batchDeleteConfirmMessage:
+      'Are you sure you want to delete {count} selected tasks? This action cannot be undone.',
     back: 'Back',
     browse: 'Browse',
     addFolder: 'Add Folder',
@@ -1886,26 +1960,35 @@ const translations: Record<LanguageType, Record<string, string>> = {
     noFolderSelected: 'No folder selected',
     coworkSelectFolderFirst: 'Please select a task folder before submitting',
     noRecentFolders: 'No recent folders',
-    folderDriveRootNotAllowed: 'Drive root directories are not supported as working directories. Please select a subfolder (e.g. D:\\Projects).',
+    folderDriveRootNotAllowed:
+      'Drive root directories are not supported as working directories. Please select a subfolder (e.g. D:\\Projects).',
     coworkOpenFolder: 'Open folder',
 
     // Cowork error messages
-    coworkErrorAuthInvalid: 'Invalid or expired API key. Please check and update your API key in settings.',
+    coworkErrorAuthInvalid:
+      'Invalid or expired API key. Please check and update your API key in settings.',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
-    coworkErrorInputTooLong: 'Input too long, exceeding model context limit. Please shorten the conversation and try again.',
-    coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file. Please try converting the PDF to text format and resend.',
-    coworkErrorModelNotFound: 'The requested model does not exist or is unavailable. Please check the model configuration in settings.',
-    coworkErrorGatewayDisconnected: 'AI engine connection lost. Please retry. If the issue persists, try restarting the app.',
+    coworkErrorInputTooLong:
+      'Input too long, exceeding model context limit. Please shorten the conversation and try again.',
+    coworkErrorCouldNotProcessPdf:
+      'Unable to process the PDF file. Please try converting the PDF to text format and resend.',
+    coworkErrorModelNotFound:
+      'The requested model does not exist or is unavailable. Please check the model configuration in settings.',
+    coworkErrorGatewayDisconnected:
+      'AI engine connection lost. Please retry. If the issue persists, try restarting the app.',
     coworkErrorServiceRestart: 'AI engine is restarting. Please try again later.',
     coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',
-    coworkErrorNetworkError: 'Network connection failed. Please check your network settings and try again.',
+    coworkErrorNetworkError:
+      'Network connection failed. Please check your network settings and try again.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
-    coworkErrorContentFiltered: 'Content did not pass the safety review. Please modify and try again.',
+    coworkErrorContentFiltered:
+      'Content did not pass the safety review. Please modify and try again.',
     coworkErrorServerError: 'Server error occurred. Please try again later.',
     coworkErrorSessionStartFailed: 'Failed to start session: {error}',
     coworkErrorSessionContinueFailed: 'Failed to send message: {error}',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
-    coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
+    coworkErrorUnknown:
+      'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
 
     // Skills
     skills: 'Skills',
@@ -1919,21 +2002,26 @@ const translations: Record<LanguageType, Record<string, string>> = {
     remoteImport: 'Remote Import',
     remoteImportTitle: 'Remote Import',
     createSkillByChat: 'Create via Conversation',
-    skillCreatorPrompt: 'Use your skill-creator skill to create a new skill. First, please ask me what this skill should do.',
+    skillCreatorPrompt:
+      'Use your skill-creator skill to create a new skill. First, please ask me what this skill should do.',
     skillCreatorNotInstalled: 'Please install the skill-creator skill first',
     skillCreatorNotEnabled: 'Please enable the skill-creator skill first',
     githubTabLabel: 'GitHub',
-    githubImportDescription: 'Supports both repository and subdirectory links. If a repo contains multiple skills, all will be imported.',
+    githubImportDescription:
+      'Supports both repository and subdirectory links. If a repo contains multiple skills, all will be imported.',
     githubImportUrlLabel: 'URL',
     githubSkillPlaceholder: 'e.g. owner/repo or a GitHub tree/blob URL',
-    githubImportExamples: 'Examples: owner/repo; https://github.com/owner/repo/tree/main/SKILLs/my-skill',
+    githubImportExamples:
+      'Examples: owner/repo; https://github.com/owner/repo/tree/main/SKILLs/my-skill',
     clawhubTabLabel: 'ClawHub',
-    clawhubImportDescription: 'Paste a clawhub.ai skill page URL to automatically install the skill.',
+    clawhubImportDescription:
+      'Paste a clawhub.ai skill page URL to automatically install the skill.',
     clawhubImportUrlLabel: 'ClawHub URL',
     clawhubSkillPlaceholder: 'e.g. https://clawhub.ai/skills/owner/skill-name',
     clawhubImportExamples: 'Example: https://clawhub.ai/skills/owner/skill-name',
     importSourceMismatchClawhub: 'Please enter a clawhub.ai URL, or switch to the GitHub tab.',
-    importSourceMismatchGithub: 'Please enter a GitHub URL or owner/repo, or switch to the ClawHub tab.',
+    importSourceMismatchGithub:
+      'Please enter a GitHub URL or owner/repo, or switch to the ClawHub tab.',
     importSkill: 'Import',
     importingSkill: 'Importing...',
     official: 'Official',
@@ -2045,7 +2133,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // MCP Servers
     mcpServers: 'MCP',
-    mcpDescription: 'Configure and manage MCP (Model Context Protocol) servers to extend your agent\'s tool capabilities',
+    mcpDescription:
+      "Configure and manage MCP (Model Context Protocol) servers to extend your agent's tool capabilities",
     searchMcpServers: 'Search MCP servers',
     addMcpServer: 'Custom',
     editMcpServer: 'Edit MCP Server',
@@ -2092,7 +2181,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpInstallFromUrl: 'Install from URL',
     mcpInstallFromUrlTitle: 'Install MCP from URL',
     mcpInstallFromUrlPlaceholder: 'Enter npm package name or URL',
-    mcpInstallFromUrlHint: 'Supports npm package names (e.g. @modelcontextprotocol/server-filesystem), npx commands, or HTTP/HTTPS URLs',
+    mcpInstallFromUrlHint:
+      'Supports npm package names (e.g. @modelcontextprotocol/server-filesystem), npx commands, or HTTP/HTTPS URLs',
     mcpRequiredConfig: 'Required Configuration',
     mcpEnvRequired: 'This field is required',
     mcpOptionalConfig: 'Optional Configuration',
@@ -2109,7 +2199,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpDesc_github: 'GitHub platform integration: repos, issues, PRs, Actions management',
     mcpDesc_gitlab: 'GitLab API integration: project management, merge requests, pipelines',
     mcpDesc_context7: 'Up-to-date library documentation and code examples for AI coding',
-    mcpDesc_google_drive: 'Google Drive file access and search with auto-export for Workspace files',
+    mcpDesc_google_drive:
+      'Google Drive file access and search with auto-export for Workspace files',
     mcpDesc_gmail: 'Gmail management: read, send, search emails with auto authentication',
     mcpDesc_google_calendar: 'Google Calendar management: create, query, update calendar events',
     mcpDesc_notion: 'Notion API: search, create/update pages, manage databases',
@@ -2117,7 +2208,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpDesc_todoist: 'Task management: create, update, complete and organize to-do items',
     mcpDesc_playwright: 'Advanced browser automation supporting Chromium/Firefox/WebKit',
     mcpDesc_canva: 'Canva design platform: create and manage designs, template operations',
-    mcpDesc_firecrawl: 'Web scraping and data extraction: batch processing, structured extraction and content analysis',
+    mcpDesc_firecrawl:
+      'Web scraping and data extraction: batch processing, structured extraction and content analysis',
     mcpDesc_fetch: 'Web content fetching and HTML-to-markdown conversion for LLM consumption',
 
     // Email Skill Config
@@ -2131,13 +2223,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     emailPasswordPlaceholder: 'Password or app-specific password',
     emailAdvancedSettings: 'Advanced Settings',
     emailAllowInsecureCert: 'Allow insecure certificates',
-    emailAllowInsecureCertHint: 'Skip TLS certificate verification, useful when proxy/VPN causes self-signed certificate errors',
+    emailAllowInsecureCertHint:
+      'Skip TLS certificate verification, useful when proxy/VPN causes self-signed certificate errors',
     emailMailbox: 'Default Mailbox',
     emailConfigSaved: 'Email configuration saved',
     emailConfigError: 'Failed to save configuration',
     emailHintGmail: 'If 2FA is enabled, use an App Password instead of your account password',
-    emailHint163: 'Use an authorization code, not your account password. Enable IMAP/SMTP in web settings first',
-    emailHintQQ: 'Use an authorization code, not your account password. Enable IMAP/SMTP in web settings first',
+    emailHint163:
+      'Use an authorization code, not your account password. Enable IMAP/SMTP in web settings first',
+    emailHintQQ:
+      'Use an authorization code, not your account password. Enable IMAP/SMTP in web settings first',
 
     // File operations
     openFile: 'Open File',
@@ -2158,12 +2253,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nim: 'NetEase IM',
     'netease-bee': 'Netease Bee',
     weixin: 'WeChat',
-    wecom: 'WeCom',    popo: 'POPO',
+    wecom: 'WeCom',
+    popo: 'POPO',
     connected: 'Connected',
     disconnected: 'Disconnected',
     imAgentBinding: 'Responding Agent',
     imAgentBindingDefault: 'Default (main)',
-    imAgentBindingHint: 'Select the Agent that responds to messages on this platform. Different Agents have different personas and skill configurations.',
+    imAgentBindingHint:
+      'Select the Agent that responds to messages on this platform. Different Agents have different personas and skill configurations.',
     kickedByOtherClient: 'Account logged in elsewhere',
     starting: 'Starting',
     start: 'Start',
@@ -2196,23 +2293,35 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imConnectivityCheckTitle_outbound_activity: 'Outbound Message Activity',
     imConnectivityCheckTitle_platform_last_error: 'Recent Platform Error',
     imConnectivityCheckTitle_feishu_group_requires_mention: 'Feishu Group Trigger Rule',
-    imConnectivityCheckTitle_feishu_event_subscription_required: 'Feishu Event Subscription Requirement',
+    imConnectivityCheckTitle_feishu_event_subscription_required:
+      'Feishu Event Subscription Requirement',
     imConnectivityCheckTitle_discord_group_requires_mention: 'Discord Group Trigger Rule',
     imConnectivityCheckTitle_telegram_privacy_mode_hint: 'Telegram Privacy Mode',
     imConnectivityCheckTitle_dingtalk_bot_membership_hint: 'DingTalk Conversation Permission',
     imConnectivityCheckTitle_nim_p2p_only_hint: 'NetEase IM P2P Mode',
     imConnectivityCheckSuggestion_missing_credentials: 'Fill required credentials and test again.',
-    imConnectivityCheckSuggestion_auth_check: 'Verify credentials, permissions, and app release status.',
-    imConnectivityCheckSuggestion_gateway_running: 'If disabled, click the IM channel pill to enable it, then verify platform endpoints are reachable.',
-    imConnectivityCheckSuggestion_inbound_activity: 'Send a test message to the bot; mention it in group chats.',
-    imConnectivityCheckSuggestion_outbound_activity: 'Check bot send permissions and conversation reply scope.',
-    imConnectivityCheckSuggestion_platform_last_error: 'Fix the reported error and run diagnostics again.',
-    imConnectivityCheckSuggestion_feishu_group_requires_mention: 'Use @bot plus your message in group chats.',
-    imConnectivityCheckSuggestion_feishu_event_subscription_required: 'Enable im.message.receive_v1 and publish app version.',
-    imConnectivityCheckSuggestion_discord_group_requires_mention: 'Use @bot plus your message in channels.',
-    imConnectivityCheckSuggestion_telegram_privacy_mode_hint: 'Review Privacy Mode in @BotFather settings.',
-    imConnectivityCheckSuggestion_dingtalk_bot_membership_hint: 'Ensure the bot is in the target conversation with send/receive rights.',
-    imConnectivityCheckSuggestion_nim_p2p_only_hint: 'Send messages via direct chat to the bot account.',
+    imConnectivityCheckSuggestion_auth_check:
+      'Verify credentials, permissions, and app release status.',
+    imConnectivityCheckSuggestion_gateway_running:
+      'If disabled, click the IM channel pill to enable it, then verify platform endpoints are reachable.',
+    imConnectivityCheckSuggestion_inbound_activity:
+      'Send a test message to the bot; mention it in group chats.',
+    imConnectivityCheckSuggestion_outbound_activity:
+      'Check bot send permissions and conversation reply scope.',
+    imConnectivityCheckSuggestion_platform_last_error:
+      'Fix the reported error and run diagnostics again.',
+    imConnectivityCheckSuggestion_feishu_group_requires_mention:
+      'Use @bot plus your message in group chats.',
+    imConnectivityCheckSuggestion_feishu_event_subscription_required:
+      'Enable im.message.receive_v1 and publish app version.',
+    imConnectivityCheckSuggestion_discord_group_requires_mention:
+      'Use @bot plus your message in channels.',
+    imConnectivityCheckSuggestion_telegram_privacy_mode_hint:
+      'Review Privacy Mode in @BotFather settings.',
+    imConnectivityCheckSuggestion_dingtalk_bot_membership_hint:
+      'Ensure the bot is in the target conversation with send/receive rights.',
+    imConnectivityCheckSuggestion_nim_p2p_only_hint:
+      'Send messages via direct chat to the bot account.',
     nimAccountPlaceholder: 'Bot account ID',
     nimAccountHint: 'IM account ID (accid) created in NetEase IM console account management',
     nimCredentialsGuide: 'How to obtain NetEase IM credentials:',
@@ -2223,7 +2332,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimAppKeyHint: 'Obtain from app information in NetEase IM console',
     nimTokenHint: 'Access credential generated for this account (long-term validity recommended)',
     nimAccountWhitelist: 'Account Whitelist',
-    nimAccountWhitelistHint: 'Enter NIM accounts allowed to chat with the bot, separated by commas. Leave empty to allow all accounts.',
+    nimAccountWhitelistHint:
+      'Enter NIM accounts allowed to chat with the bot, separated by commas. Leave empty to allow all accounts.',
     nimTeamPolicy: 'Team Message Policy',
     nimTeamPolicyDisabled: 'Disabled - Do not respond to team messages',
     nimTeamPolicyOpen: 'Open - Respond to @mentions in all teams',
@@ -2235,7 +2345,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimQChatEnabledHint: 'Subscribe to QChat messages, only responds to @mentions',
     nimQChatServerIds: 'QChat Server IDs',
     nimQChatServerIdsPlaceholder: 'Leave empty to auto-discover all joined servers',
-    nimQChatServerIdsHint: 'Specify server IDs to subscribe, separated by commas. Leave empty to auto-subscribe all joined servers.',
+    nimQChatServerIdsHint:
+      'Specify server IDs to subscribe, separated by commas. Leave empty to auto-subscribe all joined servers.',
     neteaseBeeChanClientIdPlaceholder: 'Netease Bee IM Client ID',
 
     // IM settings page - POPO config
@@ -2255,12 +2366,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imDebugMode: 'Debug Mode',
     imSessionTimeout: 'Session Timeout (min, deprecated)',
     imSeparateSessionByConversation: 'Separate Session by Conversation',
-    imSeparateSessionByConversationDesc: 'Maintain independent sessions for DMs, groups, and different groups',
+    imSeparateSessionByConversationDesc:
+      'Maintain independent sessions for DMs, groups, and different groups',
     imGroupSessionScope: 'Group Session Scope',
     imGroupSessionScopeGroup: 'Shared in group',
     imGroupSessionScopeGroupSender: 'Per user in group',
     imSharedMemoryAcrossConversations: 'Share Memory Across Conversations',
-    imSharedMemoryAcrossConversationsDesc: 'Share memory across different conversations (isolated by default)',
+    imSharedMemoryAcrossConversationsDesc:
+      'Share memory across different conversations (isolated by default)',
     imGatewayBaseUrl: 'Custom Gateway URL',
     imGatewayBaseUrlPlaceholder: 'e.g. https://proxy.example.com',
     imSendThinkingMessage: 'Send "thinking" message',
@@ -2279,7 +2392,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imReplyModeStatic: 'Static',
     imReplyModeStreaming: 'Streaming',
     imFeishuStreaming: 'Streaming Output',
-    imFeishuStreamingDesc: 'When enabled, auto mode uses streaming cards for DMs and static replies for groups',
+    imFeishuStreamingDesc:
+      'When enabled, auto mode uses streaming cards for DMs and static replies for groups',
     imFeishuBlockStreaming: 'Block Streaming',
     imFeishuBlockStreamingDesc: 'In static mode, flush text immediately during tool calls',
     imFeishuFooterStatus: 'Show Status Indicator',
@@ -2319,19 +2433,25 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWecomQuickSetupSuccess: 'Bot created successfully, credentials auto-filled',
     imWecomQuickSetupError: 'Creation failed',
     imViewGuide: 'Setup Manual',
-    imDingtalkGuideStep1: 'Go to DingTalk Open Platform, create or pick an enterprise app under "App Development > Bot"',
-    imDingtalkGuideStep2: 'Copy the Client ID (AppKey) and Client Secret (AppSecret) from the credentials page',
-    imDingtalkGuideStep3: 'Turn on the "Bot" capability and enter Client ID and Client Secret below',
+    imDingtalkGuideStep1:
+      'Go to DingTalk Open Platform, create or pick an enterprise app under "App Development > Bot"',
+    imDingtalkGuideStep2:
+      'Copy the Client ID (AppKey) and Client Secret (AppSecret) from the credentials page',
+    imDingtalkGuideStep3:
+      'Turn on the "Bot" capability and enter Client ID and Client Secret below',
     imDingtalkGuideStep4: 'Once saved, the bot will auto-connect via Stream mode',
     imFeishuGuideStep1: 'Enter the Feishu bot App ID and App Secret below to complete setup',
-    imFeishuGuideStep2: 'App credentials are available on the Feishu Open Platform. See the setup manual for details.',
+    imFeishuGuideStep2:
+      'App credentials are available on the Feishu Open Platform. See the setup manual for details.',
     feishuBotCreateWizardTitle: 'Create Bot',
     feishuBotCreateWizardScanBtn: 'Scan QR Code to Create Bot',
-    feishuBotCreateWizardScanHint: 'Scan the QR code with your Feishu app to create and configure a bot in one step',
+    feishuBotCreateWizardScanHint:
+      'Scan the QR code with your Feishu app to create and configure a bot in one step',
     feishuBotCreateWizardOrManual: 'or manually enter / edit bot credentials',
     feishuBotCreateWizardOptionNew: 'Create a new bot',
     feishuBotCreateWizardOptionExisting: 'Use an existing bot',
-    feishuBotCreateWizardQrcodeDesc: 'Scan the QR code with your Feishu app and select "One-click create Feishu bot" to complete setup.',
+    feishuBotCreateWizardQrcodeDesc:
+      'Scan the QR code with your Feishu app and select "One-click create Feishu bot" to complete setup.',
     feishuBotCreateWizardQrcodeExpired: 'QR code expired, please refresh',
     feishuBotCreateWizardQrcodeRefresh: 'Refresh QR Code',
     feishuBotCreateWizardVerify: 'Verify',
@@ -2373,8 +2493,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imTelegramGuideStep4: 'Paste the token into the field below',
     imDiscordGuideStep1: 'Open Discord Developer Portal and create a new application',
     imDiscordGuideStep2: 'Under the Bot section, add a bot and copy its token',
-    imDiscordGuideStep3: 'Under Bot – Privileged Gateway Intents, enable Message Content and Server Members intents',
-    imDiscordGuideStep4: 'In the OAuth2 URL Generator, select "bot" and "applications.commands" with messaging permissions',
+    imDiscordGuideStep3:
+      'Under Bot – Privileged Gateway Intents, enable Message Content and Server Members intents',
+    imDiscordGuideStep4:
+      'In the OAuth2 URL Generator, select "bot" and "applications.commands" with messaging permissions',
     imDiscordGuideStep5: 'Invite the bot to your server using the generated URL',
     imDiscordGuideStep6: 'Paste the bot token into the field below',
 
@@ -2382,11 +2504,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunch: 'Launch at Login',
     autoLaunchDescription: 'Automatically start the app when you log in',
     useSystemProxy: 'Use System Proxy',
-    useSystemProxyDescription: 'When enabled, network requests follow system proxy settings (applies after Save)',
+    useSystemProxyDescription:
+      'When enabled, network requests follow system proxy settings (applies after Save)',
     preventSleep: 'Prevent Sleep',
     preventSleepDescription: 'Prevent the system from sleeping while the app is running',
     skipMissedJobs: 'Skip Missed Scheduled Jobs',
-    skipMissedJobsDescription: 'Skip jobs that were missed while the app was offline (applies after Save)',
+    skipMissedJobsDescription:
+      'Skip jobs that were missed while the app was offline (applies after Save)',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',
@@ -2491,13 +2615,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksFormValidationDatetimeFuture: 'Execution time must be in the future',
     scheduledTasksFormValidationIntervalPositive: 'Interval must be greater than 0',
     scheduledTasksFormValidationCronRequired: 'Cron expression is required',
-    scheduledTasksFormValidationPayloadMismatch: 'Main sessions require system events, isolated sessions require agent turns',
+    scheduledTasksFormValidationPayloadMismatch:
+      'Main sessions require system events, isolated sessions require agent turns',
     scheduledTasksFormValidationWebhookRequired: 'Webhook URL is required',
     scheduledTasksFormValidationTimeout: 'Timeout must be an integer greater than or equal to 0',
     scheduledTasksFormSubmitError: 'Save failed: ',
     scheduledTasksEdit: 'Edit',
     scheduledTasksDelete: 'Delete',
-    scheduledTasksDeleteConfirm: 'Are you sure you want to delete task "{name}"? This cannot be undone.',
+    scheduledTasksDeleteConfirm:
+      'Are you sure you want to delete task "{name}"? This cannot be undone.',
     scheduledTasksRun: 'Run Now',
     scheduledTasksStop: 'Stop',
     scheduledTasksEnabled: 'Enabled',
@@ -2594,13 +2720,16 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksFormNotifyConversationPlaceholder: 'Select target conversation',
     scheduledTasksFormNotifyConversationLoading: 'Loading conversations...',
     scheduledTasksFormNotifyConversationNone: 'No conversations available',
-    scheduledTasksToggleWarningAtPast: 'The execution time of this task has passed. It will not run after enabling',
+    scheduledTasksToggleWarningAtPast:
+      'The execution time of this task has passed. It will not run after enabling',
     scheduledTasksToggleWarningExpired: 'This task has expired. It will not run after enabling',
-    scheduledTasksDataAnomalyWarning: 'Scheduled task "{name}" has abnormal data. Display has been auto-corrected. Consider re-editing this task',
+    scheduledTasksDataAnomalyWarning:
+      'Scheduled task "{name}" has abnormal data. Display has been auto-corrected. Consider re-editing this task',
 
     // Privacy dialog
     privacyDialogTitle: 'NetEase Youdao LobsterAI Terms of Service',
-    privacyDialogDesc: 'Before using NetEase Youdao LobsterAI, please carefully read the {link} and confirm.',
+    privacyDialogDesc:
+      'Before using NetEase Youdao LobsterAI, please carefully read the {link} and confirm.',
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
@@ -2608,7 +2737,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     githubCopilotSignIn: 'Sign in with GitHub',
     githubCopilotSignOut: 'Sign Out',
     githubCopilotRequesting: 'Requesting device code...',
-    githubCopilotEnterCode: 'Open the link below in your browser and enter the device code to authorize:',
+    githubCopilotEnterCode:
+      'Open the link below in your browser and enter the device code to authorize:',
     githubCopilotWaiting: 'Waiting for authorization...',
     githubCopilotConnected: 'Connected',
     githubCopilotNoSubscription: 'You do not have an active GitHub Copilot subscription',
@@ -2621,18 +2751,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     taskFormLeaveConfirm: 'Your changes will be lost if you leave. Are you sure you want to leave?',
     taskFormLeave: 'Leave',
     taskFormStay: 'Keep Editing',
-  }
+  },
 };
 
 class I18nService {
   private currentLanguage: LanguageType = 'zh';
   private listeners = new Set<() => void>();
-  
+
   constructor() {
     // 默认使用中文
     this.currentLanguage = 'zh';
   }
-  
+
   // 初始化语言设置
   async initialize(): Promise<void> {
     try {
@@ -2652,7 +2782,7 @@ class I18nService {
           this.currentLanguage = config.language;
           configService.updateConfig({
             ...config,
-            language_initialized: true
+            language_initialized: true,
           });
         } else {
           // 新用户或使用默认中文的旧用户:检测系统语言
@@ -2660,7 +2790,9 @@ class I18nService {
             const systemLocale = await window.electron.appInfo.getSystemLocale();
             const defaultLanguage = this.inferLanguageFromLocale(systemLocale);
 
-            console.log(`[i18n] First run detected. System locale: ${systemLocale}, default language: ${defaultLanguage}`);
+            console.log(
+              `[i18n] First run detected. System locale: ${systemLocale}, default language: ${defaultLanguage}`,
+            );
 
             this.currentLanguage = defaultLanguage;
 
@@ -2668,7 +2800,7 @@ class I18nService {
             configService.updateConfig({
               ...config,
               language: defaultLanguage,
-              language_initialized: true
+              language_initialized: true,
             });
           } catch (error) {
             console.error('Failed to get system locale:', error);
@@ -2677,7 +2809,7 @@ class I18nService {
             configService.updateConfig({
               ...config,
               language: 'en',
-              language_initialized: true
+              language_initialized: true,
             });
           }
         }
@@ -2690,7 +2822,7 @@ class I18nService {
           this.currentLanguage = 'en';
           configService.updateConfig({
             ...config,
-            language: 'en'
+            language: 'en',
           });
         }
       }
@@ -2709,7 +2841,7 @@ class I18nService {
     }
     return 'en'; // 默认英文 (包括 zh-TW, zh-HK, en-*, 以及其他所有语言)
   }
-  
+
   // 设置语言
   setLanguage(language: LanguageType, options: { persist?: boolean } = {}): void {
     const { persist = true } = options;
@@ -2717,7 +2849,7 @@ class I18nService {
     this.currentLanguage = language;
 
     if (hasChanged) {
-      this.listeners.forEach((listener) => listener());
+      this.listeners.forEach(listener => listener());
     }
 
     if (!persist) {
@@ -2729,18 +2861,18 @@ class I18nService {
       const config = configService.getConfig();
       configService.updateConfig({
         ...config,
-        language
+        language,
       });
     } catch (error) {
       console.error('Failed to save language setting:', error);
     }
   }
-  
+
   // 获取当前语言
   getLanguage(): LanguageType {
     return this.currentLanguage;
   }
-  
+
   // 获取翻译文本
   t(key: string): string {
     const translation = translations[this.currentLanguage][key];
@@ -2761,4 +2893,4 @@ class I18nService {
   }
 }
 
-export const i18nService = new I18nService(); 
+export const i18nService = new I18nService();
