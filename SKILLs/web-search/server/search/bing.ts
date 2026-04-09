@@ -6,6 +6,20 @@ import { Page } from 'playwright-core';
 import { PlaywrightManager } from '../playwright/manager';
 import { SearchResult, SearchResponse } from './types';
 
+const ALLOWED_URL_SCHEMES = ['http:', 'https:'];
+
+function validateNavigationUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid URL: ${url}`);
+  }
+  if (!ALLOWED_URL_SCHEMES.includes(parsed.protocol)) {
+    throw new Error(`Blocked URL scheme "${parsed.protocol}" — only http/https allowed`);
+  }
+}
+
 export interface BingSearchOptions {
   /** Maximum number of results to return */
   maxResults?: number;
@@ -122,6 +136,8 @@ export class BingSearch {
    */
   async getResultContent(connectionId: string, url: string): Promise<string> {
     console.log(`[Bing] Fetching content from: ${url}`);
+
+    validateNavigationUrl(url);
 
     const page = await this.playwrightManager.getPage(connectionId);
 

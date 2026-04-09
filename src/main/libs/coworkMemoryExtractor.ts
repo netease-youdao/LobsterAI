@@ -86,9 +86,7 @@ function extractExplicit(
 ): ExtractedMemoryChange[] {
   const result: ExtractedMemoryChange[] = [];
   const seen = new Set<string>();
-  pattern.lastIndex = 0;
-  let match: RegExpExecArray | null = null;
-  while ((match = pattern.exec(text)) !== null) {
+  for (const match of text.matchAll(pattern)) {
     const raw = normalizeText(match[1] || '');
     if (!shouldKeepCandidate(raw)) continue;
     const key = raw.toLowerCase();

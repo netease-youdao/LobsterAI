@@ -65,6 +65,17 @@ export interface FeishuOpenClawGroupConfig {
   systemPrompt?: string;
 }
 
+export interface FeishuOpenClawFooterConfig {
+  status?: boolean;
+  elapsed?: boolean;
+}
+
+export interface FeishuOpenClawBlockStreamingCoalesceConfig {
+  minChars?: number;
+  maxChars?: number;
+  idleMs?: number;
+}
+
 export interface FeishuOpenClawConfig {
   enabled: boolean;
   appId: string;
@@ -76,7 +87,11 @@ export interface FeishuOpenClawConfig {
   groupAllowFrom: string[];
   groups: Record<string, FeishuOpenClawGroupConfig>;
   historyLimit: number;
+  streaming: boolean;
   replyMode: 'auto' | 'static' | 'streaming';
+  blockStreaming: boolean;
+  footer: FeishuOpenClawFooterConfig;
+  blockStreamingCoalesce?: FeishuOpenClawBlockStreamingCoalesceConfig;
   mediaMaxMb: number;
   debug: boolean;
 }
@@ -542,7 +557,10 @@ export const DEFAULT_FEISHU_OPENCLAW_CONFIG: FeishuOpenClawConfig = {
   groupAllowFrom: [],
   groups: { '*': { requireMention: true } },
   historyLimit: 50,
+  streaming: true,
   replyMode: 'auto',
+  blockStreaming: false,
+  footer: { status: true, elapsed: true },
   mediaMaxMb: 30,
   debug: false,
 };

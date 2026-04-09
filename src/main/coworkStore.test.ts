@@ -71,6 +71,25 @@ function setupDb(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      system_prompt TEXT NOT NULL DEFAULT '',
+      identity TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      icon TEXT NOT NULL DEFAULT '',
+      skill_ids TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'custom',
+      preset_id TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS cowork_user_memories (
       id TEXT PRIMARY KEY,
       text TEXT NOT NULL,
@@ -201,4 +220,24 @@ test('no console.warn when all metadata is valid or null', () => {
   expect(warnSpy).not.toHaveBeenCalled();
 
   warnSpy.mockRestore();
+});
+
+test('backfillEmptyAgentModels assigns the current default model to empty agents only', () => {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO agents (id, name, model, icon, skill_ids, enabled, is_default, source, preset_id, description, system_prompt, identity, created_at, updated_at)
+     VALUES
+     ('main', 'main', '', '', '[]', 1, 1, 'custom', '', '', '', '', ?, ?),
+     ('writer', 'Writer', '', '', '[]', 1, 0, 'custom', '', '', '', '', ?, ?),
+     ('stockexpert', 'Stock Expert', 'qwen3.5-plus', '', '[]', 1, 0, 'preset', 'stockexpert', '', '', '', ?, ?)`,
+  ).run(now, now, now, now, now, now);
+
+  expect(store.backfillEmptyAgentModels('deepseek-v3.2')).toBe(2);
+
+  const rows = (db.prepare(`SELECT id, model FROM agents ORDER BY id`).all() as Array<{ id: string; model: string }>).map((r) => [r.id, r.model]);
+  expect(rows).toEqual([
+    ['main', 'deepseek-v3.2'],
+    ['stockexpert', 'qwen3.5-plus'],
+    ['writer', 'deepseek-v3.2'],
+  ]);
 });

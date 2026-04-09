@@ -1,6 +1,6 @@
 {
   "name": "@lobsterai/skill-web-search",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Web search skill using Playwright-controlled browser for real-time information retrieval",
   "main": "dist/server/index.js",
   "scripts": {

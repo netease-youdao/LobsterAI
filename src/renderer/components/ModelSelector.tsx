@@ -1,14 +1,15 @@
+import { CheckIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import React from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from '../store';
-import { ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
-import {
-  setSelectedModel,
-  isSameModelIdentity,
-  getModelIdentityKey,
-} from '../store/slices/modelSlice';
-import type { Model } from '../store/slices/modelSlice';
+import { useDispatch, useSelector } from 'react-redux';
+
 import { i18nService } from '../services/i18n';
+import { RootState } from '../store';
+import type { Model } from '../store/slices/modelSlice';
+import {
+  getModelIdentityKey,
+  isSameModelIdentity,
+  setSelectedModel,
+} from '../store/slices/modelSlice';
 
 interface ModelSelectorProps {
   dropdownDirection?: 'up' | 'down';
@@ -86,6 +87,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const renderModelItem = (model: Model) => (
     <button
+      type="button"
       key={getModelIdentityKey(model)}
       onClick={() => handleModelSelect(model)}
       className={`w-full px-4 py-2.5 text-left text-foreground hover:bg-surface-raised flex items-center justify-between transition-colors ${
@@ -116,6 +118,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   return (
     <div ref={containerRef} className="relative cursor-pointer">
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-surface-raised text-foreground transition-colors cursor-pointer ${isOpen ? 'bg-surface-raised' : ''}`}
       >
@@ -130,6 +133,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
           <div className="max-h-64 overflow-y-auto">
             {defaultLabel && (
               <button
+                type="button"
                 onClick={() => handleModelSelect(null)}
                 className={`w-full px-4 py-2.5 text-left text-foreground hover:bg-surface-raised flex items-center justify-between transition-colors ${
                   !selectedModel ? 'bg-surface-raised/50' : ''

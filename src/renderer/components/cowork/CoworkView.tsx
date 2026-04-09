@@ -1,6 +1,19 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
+import { ShieldCheckIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+
+import { agentService } from '../../services/agent';
+import { coworkService } from '../../services/cowork';
+import { i18nService } from '../../services/i18n';
+import { quickActionService } from '../../services/quickAction';
+import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
+import {
+  selectCoworkConfig,
+  selectCurrentSession,
+  selectIsOpenClawEngine,
+  selectIsStreaming,
+} from '../../store/selectors/coworkSelectors';
 import {
   addMessage,
   clearCurrentSession,
@@ -8,26 +21,23 @@ import {
   setStreaming,
   updateSessionStatus,
 } from '../../store/slices/coworkSlice';
+import { clearSelection, selectAction, setActions } from '../../store/slices/quickActionSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../../store/slices/skillSlice';
-import { setActions, selectAction, clearSelection } from '../../store/slices/quickActionSlice';
-import { coworkService } from '../../services/cowork';
-import { skillService } from '../../services/skill';
-import { quickActionService } from '../../services/quickAction';
-import { i18nService } from '../../services/i18n';
-import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
-import CoworkSessionDetail from './CoworkSessionDetail';
-import ModelSelector from '../ModelSelector';
-import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import ComposeIcon from '../icons/ComposeIcon';
-import { ShieldCheckIcon } from '@heroicons/react/24/outline';
-import WindowTitleBar from '../window/WindowTitleBar';
-import { QuickActionBar, PromptPanel } from '../quick-actions';
-import type { SettingsOpenOptions } from '../Settings';
 import type {
-  CoworkSession,
   CoworkImageAttachment,
+  CoworkSession,
   OpenClawEngineStatus,
 } from '../../types/cowork';
+import { toOpenClawModelRef } from '../../utils/openclawModelRef';
+import ComposeIcon from '../icons/ComposeIcon';
+import SidebarToggleIcon from '../icons/SidebarToggleIcon';
+import ModelSelector from '../ModelSelector';
+import { PromptPanel, QuickActionBar } from '../quick-actions';
+import type { SettingsOpenOptions } from '../Settings';
+import WindowTitleBar from '../window/WindowTitleBar';
+import { resolveAgentModelSelection } from './agentModelSelection';
+import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
+import CoworkSessionDetail from './CoworkSessionDetail';
 
 export interface CoworkViewProps {
   onRequestAppSettings?: (options?: SettingsOpenOptions) => void;
@@ -64,14 +74,26 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   // Ref for CoworkPromptInput
   const promptInputRef = useRef<CoworkPromptInputRef>(null);
 
-  const { currentSession, isStreaming, config } = useSelector((state: RootState) => state.cowork);
-  const isOpenClawEngine = config.agentEngine !== 'yd_cowork';
+  const currentSession = useSelector(selectCurrentSession);
+  const isStreaming = useSelector(selectIsStreaming);
+  const config = useSelector(selectCoworkConfig);
+  const isOpenClawEngine = useSelector(selectIsOpenClawEngine);
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const quickActions = useSelector((state: RootState) => state.quickAction.actions);
   const selectedActionId = useSelector((state: RootState) => state.quickAction.selectedActionId);
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const availableModels = useSelector((state: RootState) => state.model.availableModels);
+  const globalSelectedModel = useSelector((state: RootState) => state.model.selectedModel);
+  const currentAgent = agents.find(agent => agent.id === currentAgentId);
+  const { selectedModel: headerSelectedModel } = resolveAgentModelSelection({
+    agentModel: currentAgent?.model ?? '',
+    availableModels,
+    fallbackModel: globalSelectedModel,
+    engine: config.agentEngine,
+  });
 
   const buildApiConfigNotice = (
     error?: string,
@@ -173,6 +195,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
       unsubscribe();
       unsubscribeOpenClawStatus();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
   const handleStartSession = async (
@@ -438,7 +461,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
         dispatch(clearSelection());
       }
     }
-  }, [activeSkillIds]);
+  }, [activeSkillIds, dispatch, quickActions, selectedActionId]);
 
   // Handle prompt selection from QuickAction
   const handleQuickActionPromptSelect = (prompt: string) => {
@@ -476,7 +499,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
     };
-  }, [currentSession?.id, currentSession?.status, isOpenClawEngine]);
+  }, [currentSession, isOpenClawEngine]);
 
   if (!isInitialized) {
     return (
@@ -519,7 +542,19 @@ const CoworkView: React.FC<CoworkViewProps> = ({
             {updateBadge}
           </div>
         )}
-        <ModelSelector />
+        <ModelSelector
+          value={isOpenClawEngine ? headerSelectedModel : undefined}
+          onChange={
+            isOpenClawEngine
+              ? async nextModel => {
+                  if (!currentAgent || !nextModel) return;
+                  await agentService.updateAgent(currentAgent.id, {
+                    model: toOpenClawModelRef(nextModel),
+                  });
+                }
+              : undefined
+          }
+        />
       </div>
       <div className="non-draggable flex items-center">
         <div className="flex items-center gap-1.5 mr-2 px-2.5 py-1">
