@@ -1,0 +1,23 @@
+src/main/libs/enterpriseConfigSync.ts
+  844e2639c7e50b59 346-377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "edbe06a314fc75e50661704a009c296b46bf8a73",
+  "prompts": {
+    "844e2639c7e50b59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7931e625-8b77-4310-b8ab-9251b7874118",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang",
+      "messages": [],
+      "total_additions": 50,
+      "total_deletions": 17,
+      "accepted_lines": 34,
+      "overriden_lines": 0
+    }
+  }
+}
