@@ -139,7 +139,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           )}
           {viewMode !== 'list' && (
             <button
-              onClick={handleBackToList}
+              onClick={() => handleBackToList()}
               className="non-draggable p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
               aria-label={i18nService.t('back')}
             >
