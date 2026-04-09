@@ -2862,6 +2862,18 @@ if (!gotTheLock) {
 
   // ========== Agent IPC Handlers ==========
 
+  ipcMain.handle('cowork:session:search', async (_event, query: string) => {
+    try {
+      const sessions = getCoworkStore().searchSessions(query);
+      return { success: true, sessions };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to search sessions',
+      };
+    }
+  });
+
   ipcMain.handle('agents:list', async () => {
     try {
       const agents = getAgentManager().listAgents();
