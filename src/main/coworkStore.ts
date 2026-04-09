@@ -351,6 +351,15 @@ function normalizeCoworkAgentEngineValue(value?: string | null): CoworkAgentEngi
   return COWORK_AGENT_ENGINE;
 }
 
+const VALID_EXECUTION_MODES: readonly CoworkExecutionMode[] = ['auto', 'local', 'sandbox'];
+
+function normalizeExecutionMode(value?: string | null): CoworkExecutionMode {
+  if (value && (VALID_EXECUTION_MODES as readonly string[]).includes(value)) {
+    return value as CoworkExecutionMode;
+  }
+  return 'local';
+}
+
 export interface CoworkMessageMetadata {
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -1057,7 +1066,7 @@ export class CoworkStore {
     return {
       workingDirectory: cfg.get('workingDirectory') || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
-      executionMode: 'local' as CoworkExecutionMode,
+      executionMode: normalizeExecutionMode(cfg.get('executionMode')),
       agentEngine: normalizeCoworkAgentEngineValue(cfg.get('agentEngine')),
       memoryEnabled: parseBooleanConfig(cfg.get('memoryEnabled'), DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
