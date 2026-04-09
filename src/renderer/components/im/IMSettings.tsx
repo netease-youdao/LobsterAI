@@ -5,13 +5,42 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import {
+  SignalIcon,
+  XMarkIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ExclamationTriangleIcon,
+} from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { RootState } from '../../store';
 import { imService } from '../../services/im';
-import { setDingTalkConfig, setDingTalkInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setTelegramOpenClawConfig, setQQConfig, setQQInstanceConfig, setDiscordConfig, setNimConfig, setNeteaseBeeChanConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
+import {
+  setDingTalkConfig,
+  setDingTalkInstanceConfig,
+  setFeishuConfig,
+  setFeishuInstanceConfig,
+  setTelegramOpenClawConfig,
+  setQQConfig,
+  setQQInstanceConfig,
+  setDiscordConfig,
+  setNimConfig,
+  setNeteaseBeeChanConfig,
+  setWecomConfig,
+  setWeixinConfig,
+  setPopoConfig,
+  clearError,
+} from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
-import type { IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
+import type {
+  IMConnectivityCheck,
+  IMConnectivityTestResult,
+  IMGatewayConfig,
+  TelegramOpenClawConfig,
+  DiscordOpenClawConfig,
+  WecomOpenClawConfig,
+  PopoOpenClawConfig,
+} from '../../types/im';
 import { MAX_QQ_INSTANCES, MAX_FEISHU_INSTANCES, MAX_DINGTALK_INSTANCES } from '../../types/im';
 import QQInstanceSettings from './QQInstanceSettings';
 import FeishuInstanceSettings from './FeishuInstanceSettings';
@@ -26,8 +55,6 @@ import { SchemaForm } from './SchemaForm';
 import type { UiHint } from './SchemaForm';
 import Modal from '../common/Modal';
 
-
-
 // Reusable guide card component for platform setup instructions
 const PlatformGuide: React.FC<{
   title?: string;
@@ -36,9 +63,7 @@ const PlatformGuide: React.FC<{
   guideLabel?: string;
 }> = ({ title, steps, guideUrl, guideLabel }) => (
   <div className="mb-3 p-3 rounded-lg border border-dashed border-border-subtle">
-    {title && (
-      <p className="text-xs text-foreground leading-relaxed mb-1.5 font-medium">{title}</p>
-    )}
+    {title && <p className="text-xs text-foreground leading-relaxed mb-1.5 font-medium">{title}</p>}
     <ol className="text-xs text-secondary space-y-1 list-decimal list-inside">
       {steps.map((step, i) => (
         <li key={i}>{step}</li>
@@ -75,7 +100,7 @@ const checkLevelColorClass: Record<IMConnectivityCheck['level'], string> = {
 
 // Map of backend error messages to i18n keys
 const errorMessageI18nMap: Record<string, string> = {
-  '账号已在其它地方登录': 'kickedByOtherClient',
+  账号已在其它地方登录: 'kickedByOtherClient',
 };
 
 // Helper function to translate IM error messages
@@ -89,12 +114,16 @@ function translateIMError(error: string | null): string {
 }
 
 // Helper function to deep-set a value in nested object by dot path
-function deepSet(obj: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> {
+function deepSet(
+  obj: Record<string, unknown>,
+  path: string,
+  value: unknown,
+): Record<string, unknown> {
   const keys = path.split('.');
   const result = { ...obj };
   let current: Record<string, unknown> = result;
   for (let i = 0; i < keys.length - 1; i++) {
-    current[keys[i]] = { ...(current[keys[i]] as Record<string, unknown> || {}) };
+    current[keys[i]] = { ...((current[keys[i]] as Record<string, unknown>) || {}) };
     current = current[keys[i]] as Record<string, unknown>;
   }
   current[keys[keys.length - 1]] = value;
@@ -112,7 +141,9 @@ const IMSettings: React.FC = () => {
   const [activeDingTalkInstanceId, setActiveDingTalkInstanceId] = useState<string | null>(null);
   const [dingtalkExpanded, setDingtalkExpanded] = useState(false);
   const [testingPlatform, setTestingPlatform] = useState<Platform | null>(null);
-  const [connectivityResults, setConnectivityResults] = useState<Partial<Record<Platform, IMConnectivityTestResult>>>({});
+  const [connectivityResults, setConnectivityResults] = useState<
+    Partial<Record<Platform, IMConnectivityTestResult>>
+  >({});
   const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<Platform | null>(null);
   const [language, setLanguage] = useState<'zh' | 'en'>(i18nService.getLanguage());
   const [allowedUserIdInput, setAllowedUserIdInput] = useState('');
@@ -122,10 +153,14 @@ const IMSettings: React.FC = () => {
   // Track visibility of password fields (eye toggle)
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
   // WeCom quick setup state
-  const [wecomQuickSetupStatus, setWecomQuickSetupStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
+  const [wecomQuickSetupStatus, setWecomQuickSetupStatus] = useState<
+    'idle' | 'pending' | 'success' | 'error'
+  >('idle');
   const [wecomQuickSetupError, setWecomQuickSetupError] = useState<string>('');
   // Weixin QR login state
-  const [weixinQrStatus, setWeixinQrStatus] = useState<'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'>('idle');
+  const [weixinQrStatus, setWeixinQrStatus] = useState<
+    'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'
+  >('idle');
   const [weixinQrUrl, setWeixinQrUrl] = useState<string>('');
   const [weixinQrError, setWeixinQrError] = useState<string>('');
   const weixinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,7 +168,10 @@ const IMSettings: React.FC = () => {
   const isMountedRef = useRef(true);
 
   // OpenClaw config schema for schema-driven forms
-  const [openclawSchema, setOpenclawSchema] = useState<{ schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> } | null>(null);
+  const [openclawSchema, setOpenclawSchema] = useState<{
+    schema: Record<string, unknown>;
+    uiHints: Record<string, Record<string, unknown>>;
+  } | null>(null);
 
   // Subscribe to language changes
   useEffect(() => {
@@ -146,14 +184,19 @@ const IMSettings: React.FC = () => {
   // Track component mounted state for async operations
   useEffect(() => {
     isMountedRef.current = true;
-    return () => { isMountedRef.current = false; };
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   // Fetch local IP for POPO webhook placeholder
   useEffect(() => {
-    window.electron?.im?.getLocalIp?.().then((ip: string) => {
-      if (isMountedRef.current) setLocalIp(ip);
-    }).catch(() => {});
+    window.electron?.im
+      ?.getLocalIp?.()
+      .then((ip: string) => {
+        if (isMountedRef.current) setLocalIp(ip);
+      })
+      .catch(() => {});
   }, []);
 
   // Cleanup feishu QR timers on unmount
@@ -167,8 +210,14 @@ const IMSettings: React.FC = () => {
   // Reset feishu QR state when switching away from feishu
   useEffect(() => {
     if (activePlatform !== 'feishu') {
-      if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
-      if (feishuQrCountdownTimerRef.current) { clearInterval(feishuQrCountdownTimerRef.current); feishuQrCountdownTimerRef.current = null; }
+      if (feishuQrPollTimerRef.current) {
+        clearInterval(feishuQrPollTimerRef.current);
+        feishuQrPollTimerRef.current = null;
+      }
+      if (feishuQrCountdownTimerRef.current) {
+        clearInterval(feishuQrCountdownTimerRef.current);
+        feishuQrCountdownTimerRef.current = null;
+      }
       setFeishuQrStatus('idle');
       setFeishuQrUrl('');
       setFeishuQrError('');
@@ -192,11 +241,14 @@ const IMSettings: React.FC = () => {
 
       // Countdown
       feishuQrCountdownTimerRef.current = setInterval(() => {
-        setFeishuQrTimeLeft((prev) => {
+        setFeishuQrTimeLeft(prev => {
           if (prev <= 1) {
             clearInterval(feishuQrCountdownTimerRef.current!);
             feishuQrCountdownTimerRef.current = null;
-            if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
+            if (feishuQrPollTimerRef.current) {
+              clearInterval(feishuQrPollTimerRef.current);
+              feishuQrPollTimerRef.current = null;
+            }
             setFeishuQrStatus('error');
             setFeishuQrError(i18nService.t('feishuBotCreateWizardQrcodeExpired'));
             return 0;
@@ -209,11 +261,15 @@ const IMSettings: React.FC = () => {
       const intervalMs = Math.max(result.interval ?? 5, 3) * 1000;
       feishuQrPollTimerRef.current = setInterval(async () => {
         try {
-          const pollResult = await window.electron.feishu.install.poll(feishuQrDeviceCodeRef.current);
+          const pollResult = await window.electron.feishu.install.poll(
+            feishuQrDeviceCodeRef.current,
+          );
           if (!isMountedRef.current) return;
           if (pollResult.done && pollResult.appId && pollResult.appSecret) {
-            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
-            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+            clearInterval(feishuQrPollTimerRef.current!);
+            feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!);
+            feishuQrCountdownTimerRef.current = null;
             // QR flow creates a new instance with the scanned credentials
             const inst = await imService.addFeishuInstance('Feishu Bot');
             if (inst) {
@@ -225,15 +281,23 @@ const IMSettings: React.FC = () => {
               setActiveFeishuInstanceId(inst.instanceId);
               setFeishuExpanded(true);
             }
-            if (!isMountedRef.current) return;   // re-check after async updateConfig
+            if (!isMountedRef.current) return; // re-check after async updateConfig
             setFeishuQrStatus('success');
-          } else if (pollResult.error && pollResult.error !== 'authorization_pending' && pollResult.error !== 'slow_down') {
-            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
-            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+          } else if (
+            pollResult.error &&
+            pollResult.error !== 'authorization_pending' &&
+            pollResult.error !== 'slow_down'
+          ) {
+            clearInterval(feishuQrPollTimerRef.current!);
+            feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!);
+            feishuQrCountdownTimerRef.current = null;
             setFeishuQrStatus('error');
             setFeishuQrError(pollResult.error);
           }
-        } catch { /* keep retrying */ }
+        } catch {
+          /* keep retrying */
+        }
       }, intervalMs);
     } catch (err: any) {
       if (!isMountedRef.current) return;
@@ -253,7 +317,10 @@ const IMSettings: React.FC = () => {
   // Reset weixin QR login state when switching away from weixin
   useEffect(() => {
     if (activePlatform !== 'weixin') {
-      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
+      if (weixinTimerRef.current) {
+        clearTimeout(weixinTimerRef.current);
+        weixinTimerRef.current = null;
+      }
       setWeixinQrStatus('idle');
       setWeixinQrUrl('');
       setWeixinQrError('');
@@ -291,7 +358,11 @@ const IMSettings: React.FC = () => {
 
     // Find the NIM channel key — could be 'nim' or 'openclaw-nim'
     const channelsProps = (schema as any)?.properties?.channels?.properties ?? {};
-    const channelKey = channelsProps['openclaw-nim'] ? 'openclaw-nim' : channelsProps['nim'] ? 'nim' : null;
+    const channelKey = channelsProps['openclaw-nim']
+      ? 'openclaw-nim'
+      : channelsProps['nim']
+        ? 'nim'
+        : null;
     if (!channelKey) return null;
 
     const channelSchema = channelsProps[channelKey] as Record<string, unknown>;
@@ -318,7 +389,9 @@ const IMSettings: React.FC = () => {
   // Inline QR code state for feishu bot creation (mirroring WeCom quick-setup pattern)
   // These are used by handleFeishuStartQr which creates instances via QR flow
   // @ts-ignore: will be used when QR flow is wired to FeishuInstanceSettings
-  const [_feishuQrStatus, setFeishuQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
+  const [_feishuQrStatus, setFeishuQrStatus] = useState<
+    'idle' | 'loading' | 'showing' | 'success' | 'error'
+  >('idle');
   // @ts-ignore
   const [_feishuQrUrl, setFeishuQrUrl] = useState<string>('');
   // @ts-ignore
@@ -332,15 +405,29 @@ const IMSettings: React.FC = () => {
 
   // Pairing state for OpenClaw platforms
   const [pairingCodeInput, setPairingCodeInput] = useState<Record<string, string>>({});
-  const [pairingStatus, setPairingStatus] = useState<Record<string, { type: 'success' | 'error'; message: string } | null>>({});
+  const [pairingStatus, setPairingStatus] = useState<
+    Record<string, { type: 'success' | 'error'; message: string } | null>
+  >({});
 
   const handleApprovePairing = async (platform: string, code: string) => {
-    setPairingStatus((prev) => ({ ...prev, [platform]: null }));
+    setPairingStatus(prev => ({ ...prev, [platform]: null }));
     const result = await imService.approvePairingCode(platform, code);
     if (result.success) {
-      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'success', message: i18nService.t('imPairingCodeApproved').replace('{code}', code) } }));
+      setPairingStatus(prev => ({
+        ...prev,
+        [platform]: {
+          type: 'success',
+          message: i18nService.t('imPairingCodeApproved').replace('{code}', code),
+        },
+      }));
     } else {
-      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'error', message: result.error || i18nService.t('imPairingCodeInvalid') } }));
+      setPairingStatus(prev => ({
+        ...prev,
+        [platform]: {
+          type: 'error',
+          message: result.error || i18nService.t('imPairingCodeInvalid'),
+        },
+      }));
     }
   };
   // Handle Telegram OpenClaw config change
@@ -350,9 +437,7 @@ const IMSettings: React.FC = () => {
   };
   const handleSaveTelegramOpenClawConfig = async (override?: Partial<TelegramOpenClawConfig>) => {
     if (!configLoaded) return;
-    const configToSave = override
-      ? { ...tgOpenClawConfig, ...override }
-      : tgOpenClawConfig;
+    const configToSave = override ? { ...tgOpenClawConfig, ...override } : tgOpenClawConfig;
     await imService.persistConfig({ telegram: configToSave });
   };
 
@@ -365,9 +450,7 @@ const IMSettings: React.FC = () => {
   };
   const handleSaveDiscordOpenClawConfig = async (override?: Partial<DiscordOpenClawConfig>) => {
     if (!configLoaded) return;
-    const configToSave = override
-      ? { ...dcOpenClawConfig, ...override }
-      : dcOpenClawConfig;
+    const configToSave = override ? { ...dcOpenClawConfig, ...override } : dcOpenClawConfig;
     await imService.persistConfig({ discord: configToSave });
   };
 
@@ -378,7 +461,6 @@ const IMSettings: React.FC = () => {
   // State for POPO allow-from inputs
   const [popoAllowedUserIdInput, setPopoAllowedUserIdInput] = useState('');
   const [popoGroupAllowIdInput, setPopoGroupAllowIdInput] = useState('');
-
 
   // Handle NetEase Bee config change
   const handleNeteaseBeeChanChange = (field: 'clientId' | 'secret', value: string) => {
@@ -392,9 +474,7 @@ const IMSettings: React.FC = () => {
   };
   const handleSaveWecomOpenClawConfig = async (override?: Partial<WecomOpenClawConfig>) => {
     if (!configLoaded) return;
-    const configToSave = override
-      ? { ...wecomOpenClawConfig, ...override }
-      : wecomOpenClawConfig;
+    const configToSave = override ? { ...wecomOpenClawConfig, ...override } : wecomOpenClawConfig;
     await imService.persistConfig({ wecom: configToSave });
   };
 
@@ -408,9 +488,7 @@ const IMSettings: React.FC = () => {
   };
   const handleSavePopoConfig = async (override?: Partial<PopoOpenClawConfig>) => {
     if (!configLoaded) return;
-    const configToSave = override
-      ? { ...popoConfig, ...override }
-      : popoConfig;
+    const configToSave = override ? { ...popoConfig, ...override } : popoConfig;
     await imService.persistConfig({ popo: configToSave });
   };
 
@@ -427,7 +505,12 @@ const IMSettings: React.FC = () => {
       // im:config:set handler in main process already calls
       // syncOpenClawConfig({ restartGatewayIfRunning: true }) when wecom config changes,
       // so we do NOT call stopGateway/startGateway here to avoid redundant gateway restarts.
-      const fullConfig = { ...wecomOpenClawConfig, botId: bot.botid, secret: bot.secret, enabled: true };
+      const fullConfig = {
+        ...wecomOpenClawConfig,
+        botId: bot.botid,
+        secret: bot.secret,
+        enabled: true,
+      };
       dispatch(setWecomConfig({ botId: bot.botid, secret: bot.secret, enabled: true }));
       dispatch(clearError());
       await imService.updateConfig({ wecom: fullConfig });
@@ -441,11 +524,13 @@ const IMSettings: React.FC = () => {
     } catch (error: unknown) {
       if (!isMountedRef.current) return;
       // Roll back optimistic Redux dispatch so UI matches persisted state
-      dispatch(setWecomConfig({
-        botId: wecomOpenClawConfig.botId,
-        secret: wecomOpenClawConfig.secret,
-        enabled: wecomOpenClawConfig.enabled,
-      }));
+      dispatch(
+        setWecomConfig({
+          botId: wecomOpenClawConfig.botId,
+          secret: wecomOpenClawConfig.secret,
+          enabled: wecomOpenClawConfig.enabled,
+        }),
+      );
       setWecomQuickSetupStatus('error');
       const err = error as { message?: string; code?: string };
       setWecomQuickSetupError(err.message || err.code || 'Unknown error');
@@ -479,7 +564,10 @@ const IMSettings: React.FC = () => {
       // Start polling for scan result
       setWeixinQrStatus('waiting');
       const waitResult = await window.electron.im.weixinQrLoginWait(startResult.sessionKey);
-      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
+      if (weixinTimerRef.current) {
+        clearTimeout(weixinTimerRef.current);
+        weixinTimerRef.current = null;
+      }
       if (!isMountedRef.current) return;
 
       if (waitResult.success && waitResult.connected) {
@@ -496,13 +584,15 @@ const IMSettings: React.FC = () => {
         setWeixinQrError(waitResult.message || i18nService.t('imWeixinQrFailed'));
       }
     } catch (err) {
-      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
+      if (weixinTimerRef.current) {
+        clearTimeout(weixinTimerRef.current);
+        weixinTimerRef.current = null;
+      }
       if (!isMountedRef.current) return;
       setWeixinQrStatus('error');
       setWeixinQrError(String(err));
     }
   };
-
 
   const handleSaveConfig = async () => {
     if (!configLoaded) return;
@@ -552,8 +642,6 @@ const IMSettings: React.FC = () => {
     await imService.persistConfig({ [activePlatform]: config[activePlatform] });
   };
 
-
-
   const getCheckTitle = (code: IMConnectivityCheck['code']): string => {
     return i18nService.t(`imConnectivityCheckTitle_${code}`);
   };
@@ -582,12 +670,12 @@ const IMSettings: React.FC = () => {
 
   const runConnectivityTest = async (
     platform: Platform,
-    configOverride?: Partial<IMGatewayConfig>
+    configOverride?: Partial<IMGatewayConfig>,
   ): Promise<IMConnectivityTestResult | null> => {
     setTestingPlatform(platform);
     const result = await imService.testGateway(platform, configOverride);
     if (result) {
-      setConnectivityResults((prev) => ({ ...prev, [platform]: result }));
+      setConnectivityResults(prev => ({ ...prev, [platform]: result }));
     }
     setTestingPlatform(null);
     return result;
@@ -609,7 +697,9 @@ const IMSettings: React.FC = () => {
       // backend debounces syncOpenClawConfig calls with a 600ms window.
       if (platform === 'telegram') {
         const newEnabled = !tgOpenClawConfig.enabled;
-        const success = await imService.updateConfig({ telegram: { ...tgOpenClawConfig, enabled: newEnabled } });
+        const success = await imService.updateConfig({
+          telegram: { ...tgOpenClawConfig, enabled: newEnabled },
+        });
         if (success) {
           dispatch(setTelegramOpenClawConfig({ enabled: newEnabled }));
           if (newEnabled) dispatch(clearError());
@@ -630,7 +720,9 @@ const IMSettings: React.FC = () => {
 
       if (platform === 'discord') {
         const newEnabled = !dcOpenClawConfig.enabled;
-        const success = await imService.updateConfig({ discord: { ...dcOpenClawConfig, enabled: newEnabled } });
+        const success = await imService.updateConfig({
+          discord: { ...dcOpenClawConfig, enabled: newEnabled },
+        });
         if (success) {
           dispatch(setDiscordConfig({ enabled: newEnabled }));
           if (newEnabled) dispatch(clearError());
@@ -646,7 +738,9 @@ const IMSettings: React.FC = () => {
 
       if (platform === 'wecom') {
         const newEnabled = !wecomOpenClawConfig.enabled;
-        const success = await imService.updateConfig({ wecom: { ...wecomOpenClawConfig, enabled: newEnabled } });
+        const success = await imService.updateConfig({
+          wecom: { ...wecomOpenClawConfig, enabled: newEnabled },
+        });
         if (success) {
           dispatch(setWecomConfig({ enabled: newEnabled }));
           if (newEnabled) dispatch(clearError());
@@ -657,7 +751,9 @@ const IMSettings: React.FC = () => {
 
       if (platform === 'weixin') {
         const newEnabled = !weixinOpenClawConfig.enabled;
-        const success = await imService.updateConfig({ weixin: { ...weixinOpenClawConfig, enabled: newEnabled } });
+        const success = await imService.updateConfig({
+          weixin: { ...weixinOpenClawConfig, enabled: newEnabled },
+        });
         if (success) {
           dispatch(setWeixinConfig({ enabled: newEnabled }));
           if (newEnabled) dispatch(clearError());
@@ -668,7 +764,9 @@ const IMSettings: React.FC = () => {
 
       if (platform === 'popo') {
         const newEnabled = !popoConfig.enabled;
-        const success = await imService.updateConfig({ popo: { ...popoConfig, enabled: newEnabled } });
+        const success = await imService.updateConfig({
+          popo: { ...popoConfig, enabled: newEnabled },
+        });
         if (success) {
           dispatch(setPopoConfig({ enabled: newEnabled }));
           if (newEnabled) dispatch(clearError());
@@ -678,7 +776,9 @@ const IMSettings: React.FC = () => {
       }
       if (platform === 'nim') {
         const newEnabled = !config.nim.enabled;
-        const success = await imService.updateConfig({ nim: { ...config.nim, enabled: newEnabled } });
+        const success = await imService.updateConfig({
+          nim: { ...config.nim, enabled: newEnabled },
+        });
         if (success) {
           dispatch(setNimConfig({ enabled: newEnabled }));
           if (newEnabled) dispatch(clearError());
@@ -770,9 +870,15 @@ const IMSettings: React.FC = () => {
       return true; // No credentials needed, connects via QR code in CLI
     }
     if (platform === 'popo') {
-      const effectiveMode = config.popo.connectionMode || (config.popo.token ? 'webhook' : 'websocket');
+      const effectiveMode =
+        config.popo.connectionMode || (config.popo.token ? 'webhook' : 'websocket');
       if (effectiveMode === 'webhook') {
-        return !!(config.popo.appKey && config.popo.appSecret && config.popo.token && config.popo.aesKey);
+        return !!(
+          config.popo.appKey &&
+          config.popo.appSecret &&
+          config.popo.token &&
+          config.popo.aesKey
+        );
       }
       return !!(config.popo.appKey && config.popo.appSecret && config.popo.aesKey);
     }
@@ -828,7 +934,7 @@ const IMSettings: React.FC = () => {
       } as Partial<IMGatewayConfig>);
       // Auto-enable: if OFF and auth_check passed, turn on automatically
       if (!tgOpenClawConfig.enabled && result) {
-        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        const authCheck = result.checks.find(c => c.code === 'auth_check');
         if (authCheck && authCheck.level === 'pass') {
           toggleGateway(platform);
         }
@@ -844,12 +950,21 @@ const IMSettings: React.FC = () => {
       } as Partial<IMGatewayConfig>);
       // Auto-enable: if the active instance is OFF and auth_check passed, turn on automatically
       if (activeDingTalkInstanceId && result) {
-        const inst = dingtalkMultiConfig.instances.find(i => i.instanceId === activeDingTalkInstanceId);
+        const inst = dingtalkMultiConfig.instances.find(
+          i => i.instanceId === activeDingTalkInstanceId,
+        );
         if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
+          const authCheck = result.checks.find(c => c.code === 'auth_check');
           if (authCheck && authCheck.level === 'pass') {
-            dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { enabled: true } }));
-            await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, { enabled: true });
+            dispatch(
+              setDingTalkInstanceConfig({
+                instanceId: activeDingTalkInstanceId,
+                config: { enabled: true },
+              }),
+            );
+            await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, {
+              enabled: true,
+            });
           }
         }
       }
@@ -866,9 +981,11 @@ const IMSettings: React.FC = () => {
       if (activeQQInstanceId && result) {
         const inst = qqMultiConfig.instances.find(i => i.instanceId === activeQQInstanceId);
         if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
+          const authCheck = result.checks.find(c => c.code === 'auth_check');
           if (authCheck && authCheck.level === 'pass') {
-            dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { enabled: true } }));
+            dispatch(
+              setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { enabled: true } }),
+            );
             await imService.updateQQInstanceConfig(activeQQInstanceId, { enabled: true });
           }
         }
@@ -883,7 +1000,7 @@ const IMSettings: React.FC = () => {
         wecom: wecomOpenClawConfig,
       } as Partial<IMGatewayConfig>);
       if (!wecomOpenClawConfig.enabled && result) {
-        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        const authCheck = result.checks.find(c => c.code === 'auth_check');
         if (authCheck && authCheck.level === 'pass') {
           toggleGateway(platform);
         }
@@ -898,7 +1015,7 @@ const IMSettings: React.FC = () => {
         weixin: weixinOpenClawConfig,
       } as Partial<IMGatewayConfig>);
       if (!weixinOpenClawConfig.enabled && result) {
-        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        const authCheck = result.checks.find(c => c.code === 'auth_check');
         if (authCheck && authCheck.level === 'pass') {
           toggleGateway(platform);
         }
@@ -916,9 +1033,14 @@ const IMSettings: React.FC = () => {
       if (activeFeishuInstanceId && result) {
         const inst = feishuMultiConfig.instances.find(i => i.instanceId === activeFeishuInstanceId);
         if (inst && !inst.enabled) {
-          const authCheck = result.checks.find((c) => c.code === 'auth_check');
+          const authCheck = result.checks.find(c => c.code === 'auth_check');
           if (authCheck && authCheck.level === 'pass') {
-            dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: true } }));
+            dispatch(
+              setFeishuInstanceConfig({
+                instanceId: activeFeishuInstanceId,
+                config: { enabled: true },
+              }),
+            );
             await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: true });
           }
         }
@@ -951,7 +1073,7 @@ const IMSettings: React.FC = () => {
 
     // Auto-enable: if the platform was OFF but auth_check passed, start it automatically.
     if (!isEnabled && result) {
-      const authCheck = result.checks.find((c) => c.code === 'auth_check');
+      const authCheck = result.checks.find(c => c.code === 'auth_check');
       if (authCheck && authCheck.level === 'pass') {
         toggleGateway(platform);
       }
@@ -1026,17 +1148,17 @@ const IMSettings: React.FC = () => {
         <input
           type="text"
           value={pairingCodeInput[platform] || ''}
-          onChange={(e) => {
-            setPairingCodeInput((prev) => ({ ...prev, [platform]: e.target.value.toUpperCase() }));
-            if (pairingStatus[platform]) setPairingStatus((prev) => ({ ...prev, [platform]: null }));
+          onChange={e => {
+            setPairingCodeInput(prev => ({ ...prev, [platform]: e.target.value.toUpperCase() }));
+            if (pairingStatus[platform]) setPairingStatus(prev => ({ ...prev, [platform]: null }));
           }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
               e.preventDefault();
               const code = (pairingCodeInput[platform] || '').trim();
               if (code) {
                 void handleApprovePairing(platform, code).then(() => {
-                  setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
+                  setPairingCodeInput(prev => ({ ...prev, [platform]: '' }));
                 });
               }
             }
@@ -1051,7 +1173,7 @@ const IMSettings: React.FC = () => {
             const code = (pairingCodeInput[platform] || '').trim();
             if (code) {
               void handleApprovePairing(platform, code).then(() => {
-                setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
+                setPairingCodeInput(prev => ({ ...prev, [platform]: '' }));
               });
             }
           }}
@@ -1061,8 +1183,11 @@ const IMSettings: React.FC = () => {
         </button>
       </div>
       {pairingStatus[platform] && (
-        <p className={`text-xs ${pairingStatus[platform]!.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-          {pairingStatus[platform]!.type === 'success' ? '\u2713' : '\u2717'} {pairingStatus[platform]!.message}
+        <p
+          className={`text-xs ${pairingStatus[platform]!.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+        >
+          {pairingStatus[platform]!.type === 'success' ? '\u2713' : '\u2717'}{' '}
+          {pairingStatus[platform]!.message}
         </p>
       )}
     </div>
@@ -1072,9 +1197,9 @@ const IMSettings: React.FC = () => {
     <div className="flex h-full gap-4">
       {/* Platform List - Left Side */}
       <div className="w-48 flex-shrink-0 border-r border-border pr-3 space-y-2 overflow-y-auto">
-        {platforms.map((platform) => {
-                const logo = PlatformRegistry.logo(platform);
-           const isEnabled = isPlatformEnabled(platform);
+        {platforms.map(platform => {
+          const logo = PlatformRegistry.logo(platform);
+          const isEnabled = isPlatformEnabled(platform);
           const isConnected = getPlatformConnected(platform) || getPlatformStarting(platform);
           const canToggle = isEnabled || canStart(platform);
 
@@ -1083,7 +1208,11 @@ const IMSettings: React.FC = () => {
               <div key="dingtalk">
                 {/* DingTalk Platform Header - clickable to expand/collapse */}
                 <div
-                  onClick={() => { setActivePlatform('dingtalk'); setActiveDingTalkInstanceId(null); setDingtalkExpanded(!dingtalkExpanded); }}
+                  onClick={() => {
+                    setActivePlatform('dingtalk');
+                    setActiveDingTalkInstanceId(null);
+                    setDingtalkExpanded(!dingtalkExpanded);
+                  }}
                   className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
                     activePlatform === 'dingtalk'
                       ? 'bg-primary-muted border border-primary shadow-subtle'
@@ -1092,25 +1221,44 @@ const IMSettings: React.FC = () => {
                 >
                   <div className="flex flex-1 items-center">
                     <div className="mr-2 flex h-7 w-7 items-center justify-center">
-                      <img src={PlatformRegistry.logo('dingtalk')} alt="DingTalk" className="w-6 h-6 object-contain rounded-md" />
+                      <img
+                        src={PlatformRegistry.logo('dingtalk')}
+                        alt="DingTalk"
+                        className="w-6 h-6 object-contain rounded-md"
+                      />
                     </div>
-                    <span className={`text-sm font-medium truncate ${activePlatform === 'dingtalk' ? 'text-primary' : 'text-foreground'}`}>
+                    <span
+                      className={`text-sm font-medium truncate ${activePlatform === 'dingtalk' ? 'text-primary' : 'text-foreground'}`}
+                    >
                       {i18nService.t('dingtalk')}
                     </span>
                   </div>
-                  <span className="text-xs opacity-50">{dingtalkExpanded ? '\u25BC' : '\u25B6'}</span>
+                  <span className="text-xs opacity-50">
+                    {dingtalkExpanded ? '\u25BC' : '\u25B6'}
+                  </span>
                 </div>
                 {/* DingTalk Instance Sub-items */}
                 {dingtalkExpanded && (
                   <div className="ml-5 mt-1 space-y-1">
-                    {config.dingtalk.instances.map((inst) => {
-                      const instStatus = status.dingtalk?.instances?.find(s => s.instanceId === inst.instanceId);
-                      const isSelected = activePlatform === 'dingtalk' && activeDingTalkInstanceId === inst.instanceId;
-                      const dotColor = !inst.enabled ? 'bg-gray-400' : (instStatus?.connected ? 'bg-green-500' : 'bg-yellow-500');
+                    {config.dingtalk.instances.map(inst => {
+                      const instStatus = status.dingtalk?.instances?.find(
+                        s => s.instanceId === inst.instanceId,
+                      );
+                      const isSelected =
+                        activePlatform === 'dingtalk' &&
+                        activeDingTalkInstanceId === inst.instanceId;
+                      const dotColor = !inst.enabled
+                        ? 'bg-gray-400'
+                        : instStatus?.connected
+                          ? 'bg-green-500'
+                          : 'bg-yellow-500';
                       return (
                         <div
                           key={inst.instanceId}
-                          onClick={() => { setActivePlatform('dingtalk'); setActiveDingTalkInstanceId(inst.instanceId); }}
+                          onClick={() => {
+                            setActivePlatform('dingtalk');
+                            setActiveDingTalkInstanceId(inst.instanceId);
+                          }}
                           className={`flex items-center p-1.5 pl-2 rounded-lg cursor-pointer transition-colors text-sm ${
                             isSelected
                               ? 'bg-primary/10 dark:bg-primary/20'
@@ -1118,7 +1266,9 @@ const IMSettings: React.FC = () => {
                           }`}
                         >
                           <span className={`w-2 h-2 rounded-full ${dotColor} mr-2 flex-shrink-0`} />
-                          <span className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}>
+                          <span
+                            className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}
+                          >
                             {inst.instanceName}
                           </span>
                         </div>
@@ -1135,7 +1285,11 @@ const IMSettings: React.FC = () => {
               <div key="feishu">
                 {/* Feishu Platform Header - clickable to expand/collapse */}
                 <div
-                  onClick={() => { setActivePlatform('feishu'); setActiveFeishuInstanceId(null); setFeishuExpanded(!feishuExpanded); }}
+                  onClick={() => {
+                    setActivePlatform('feishu');
+                    setActiveFeishuInstanceId(null);
+                    setFeishuExpanded(!feishuExpanded);
+                  }}
                   className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
                     activePlatform === 'feishu'
                       ? 'bg-primary-muted border border-primary shadow-subtle'
@@ -1144,9 +1298,15 @@ const IMSettings: React.FC = () => {
                 >
                   <div className="flex flex-1 items-center">
                     <div className="mr-2 flex h-7 w-7 items-center justify-center">
-                      <img src={PlatformRegistry.logo('feishu')} alt="Feishu" className="w-6 h-6 object-contain rounded-md" />
+                      <img
+                        src={PlatformRegistry.logo('feishu')}
+                        alt="Feishu"
+                        className="w-6 h-6 object-contain rounded-md"
+                      />
                     </div>
-                    <span className={`text-sm font-medium truncate ${activePlatform === 'feishu' ? 'text-primary' : 'text-foreground'}`}>
+                    <span
+                      className={`text-sm font-medium truncate ${activePlatform === 'feishu' ? 'text-primary' : 'text-foreground'}`}
+                    >
                       {i18nService.t('feishu')}
                     </span>
                   </div>
@@ -1155,14 +1315,24 @@ const IMSettings: React.FC = () => {
                 {/* Feishu Instance Sub-items */}
                 {feishuExpanded && (
                   <div className="ml-5 mt-1 space-y-1">
-                    {config.feishu.instances.map((inst) => {
-                      const instStatus = status.feishu?.instances?.find(s => s.instanceId === inst.instanceId);
-                      const isSelected = activePlatform === 'feishu' && activeFeishuInstanceId === inst.instanceId;
-                      const dotColor = !inst.enabled ? 'bg-gray-400' : (instStatus?.connected ? 'bg-green-500' : 'bg-yellow-500');
+                    {config.feishu.instances.map(inst => {
+                      const instStatus = status.feishu?.instances?.find(
+                        s => s.instanceId === inst.instanceId,
+                      );
+                      const isSelected =
+                        activePlatform === 'feishu' && activeFeishuInstanceId === inst.instanceId;
+                      const dotColor = !inst.enabled
+                        ? 'bg-gray-400'
+                        : instStatus?.connected
+                          ? 'bg-green-500'
+                          : 'bg-yellow-500';
                       return (
                         <div
                           key={inst.instanceId}
-                          onClick={() => { setActivePlatform('feishu'); setActiveFeishuInstanceId(inst.instanceId); }}
+                          onClick={() => {
+                            setActivePlatform('feishu');
+                            setActiveFeishuInstanceId(inst.instanceId);
+                          }}
                           className={`flex items-center p-1.5 pl-2 rounded-lg cursor-pointer transition-colors text-sm ${
                             isSelected
                               ? 'bg-primary/10 dark:bg-primary/20'
@@ -1170,7 +1340,9 @@ const IMSettings: React.FC = () => {
                           }`}
                         >
                           <span className={`w-2 h-2 rounded-full ${dotColor} mr-2 flex-shrink-0`} />
-                          <span className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}>
+                          <span
+                            className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}
+                          >
                             {inst.instanceName}
                           </span>
                         </div>
@@ -1187,7 +1359,11 @@ const IMSettings: React.FC = () => {
               <div key="qq">
                 {/* QQ Platform Header - clickable to expand/collapse */}
                 <div
-                  onClick={() => { setActivePlatform('qq'); setActiveQQInstanceId(null); setQqExpanded(!qqExpanded); }}
+                  onClick={() => {
+                    setActivePlatform('qq');
+                    setActiveQQInstanceId(null);
+                    setQqExpanded(!qqExpanded);
+                  }}
                   className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
                     activePlatform === 'qq'
                       ? 'bg-primary-muted border border-primary shadow-subtle'
@@ -1196,9 +1372,15 @@ const IMSettings: React.FC = () => {
                 >
                   <div className="flex flex-1 items-center">
                     <div className="mr-2 flex h-7 w-7 items-center justify-center">
-                      <img src={PlatformRegistry.logo('qq')} alt="QQ" className="w-6 h-6 object-contain rounded-md" />
+                      <img
+                        src={PlatformRegistry.logo('qq')}
+                        alt="QQ"
+                        className="w-6 h-6 object-contain rounded-md"
+                      />
                     </div>
-                    <span className={`text-sm font-medium truncate ${activePlatform === 'qq' ? 'text-primary' : 'text-foreground'}`}>
+                    <span
+                      className={`text-sm font-medium truncate ${activePlatform === 'qq' ? 'text-primary' : 'text-foreground'}`}
+                    >
                       {i18nService.t('qq')}
                     </span>
                   </div>
@@ -1207,14 +1389,24 @@ const IMSettings: React.FC = () => {
                 {/* QQ Instance Sub-items */}
                 {qqExpanded && (
                   <div className="ml-5 mt-1 space-y-1">
-                    {config.qq.instances.map((inst) => {
-                      const instStatus = status.qq?.instances?.find(s => s.instanceId === inst.instanceId);
-                      const isSelected = activePlatform === 'qq' && activeQQInstanceId === inst.instanceId;
-                      const dotColor = !inst.enabled ? 'bg-gray-400' : (instStatus?.connected ? 'bg-green-500' : 'bg-yellow-500');
+                    {config.qq.instances.map(inst => {
+                      const instStatus = status.qq?.instances?.find(
+                        s => s.instanceId === inst.instanceId,
+                      );
+                      const isSelected =
+                        activePlatform === 'qq' && activeQQInstanceId === inst.instanceId;
+                      const dotColor = !inst.enabled
+                        ? 'bg-gray-400'
+                        : instStatus?.connected
+                          ? 'bg-green-500'
+                          : 'bg-yellow-500';
                       return (
                         <div
                           key={inst.instanceId}
-                          onClick={() => { setActivePlatform('qq'); setActiveQQInstanceId(inst.instanceId); }}
+                          onClick={() => {
+                            setActivePlatform('qq');
+                            setActiveQQInstanceId(inst.instanceId);
+                          }}
                           className={`flex items-center p-1.5 pl-2 rounded-lg cursor-pointer transition-colors text-sm ${
                             isSelected
                               ? 'bg-primary/10 dark:bg-primary/20'
@@ -1222,7 +1414,9 @@ const IMSettings: React.FC = () => {
                           }`}
                         >
                           <span className={`w-2 h-2 rounded-full ${dotColor} mr-2 flex-shrink-0`} />
-                          <span className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}>
+                          <span
+                            className={`truncate flex-1 ${isSelected ? 'text-primary font-medium' : 'text-foreground'}`}
+                          >
                             {inst.instanceName}
                           </span>
                         </div>
@@ -1252,11 +1446,11 @@ const IMSettings: React.FC = () => {
                     className="w-6 h-6 object-contain rounded-md"
                   />
                 </div>
-                <span className={`text-sm font-medium truncate ${
-                  activePlatform === platform
-                    ? 'text-primary'
-                    : 'text-foreground'
-                }`}>
+                <span
+                  className={`text-sm font-medium truncate ${
+                    activePlatform === platform ? 'text-primary' : 'text-foreground'
+                  }`}
+                >
                   {i18nService.t(platform)}
                 </span>
               </div>
@@ -1264,10 +1458,12 @@ const IMSettings: React.FC = () => {
                 <div
                   className={`w-7 h-4 rounded-full flex items-center transition-colors ${
                     isEnabled
-                      ? (isConnected ? 'bg-green-500' : 'bg-yellow-500')
+                      ? isConnected
+                        ? 'bg-green-500'
+                        : 'bg-yellow-500'
                       : 'bg-gray-400 dark:bg-gray-600'
-                  } ${(!canToggle || togglingPlatform === platform) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                  onClick={(e) => {
+                  } ${!canToggle || togglingPlatform === platform ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  onClick={e => {
                     e.stopPropagation();
                     handlePlatformToggle(platform);
                   }}
@@ -1287,51 +1483,67 @@ const IMSettings: React.FC = () => {
       {/* Platform Settings - Right Side */}
       <div className="flex-1 min-w-0 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
         {/* Header with status (hidden for QQ which has per-instance headers) */}
-        {activePlatform !== 'qq' && activePlatform !== 'feishu' && activePlatform !== 'dingtalk' && (
-        <div className="flex items-center gap-3 pb-3 border-b border-border-subtle">
-          <div className="flex items-center gap-2">
-             <div className="flex h-7 w-7 items-center justify-center rounded-md bg-surface border border-border-subtle p-1">
-               <img
-                src={PlatformRegistry.logo(activePlatform)}
-                 alt={i18nService.t(activePlatform)}
-                 className="w-4 h-4 object-contain rounded"
-               />
+        {activePlatform !== 'qq' &&
+          activePlatform !== 'feishu' &&
+          activePlatform !== 'dingtalk' && (
+            <div className="flex items-center gap-3 pb-3 border-b border-border-subtle">
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-surface border border-border-subtle p-1">
+                  <img
+                    src={PlatformRegistry.logo(activePlatform)}
+                    alt={i18nService.t(activePlatform)}
+                    className="w-4 h-4 object-contain rounded"
+                  />
+                </div>
+                <h3 className="text-sm font-medium text-foreground">
+                  {`${i18nService.t(activePlatform)}${i18nService.t('settings')}`}
+                </h3>
+              </div>
+              <div
+                className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                  getPlatformConnected(activePlatform) || getPlatformStarting(activePlatform)
+                    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+                    : 'bg-gray-500/15 text-gray-500 dark:text-gray-400'
+                }`}
+              >
+                {getPlatformConnected(activePlatform)
+                  ? i18nService.t('connected')
+                  : getPlatformStarting(activePlatform)
+                    ? i18nService.t('starting') || '启动中'
+                    : i18nService.t('disconnected')}
+              </div>
             </div>
-            <h3 className="text-sm font-medium text-foreground">
-              {`${i18nService.t(activePlatform)}${i18nService.t('settings')}`}
-            </h3>
-          </div>
-          <div className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-            getPlatformConnected(activePlatform) || getPlatformStarting(activePlatform)
-              ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-              : 'bg-gray-500/15 text-gray-500 dark:text-gray-400'
-          }`}>
-            {getPlatformConnected(activePlatform)
-              ? i18nService.t('connected')
-              : getPlatformStarting(activePlatform)
-                ? (i18nService.t('starting') || '启动中')
-                : i18nService.t('disconnected')}
-          </div>
-        </div>
-        )}
-
+          )}
 
         {/* DingTalk Settings (multi-instance) */}
         {activePlatform === 'dingtalk' && !activeDingTalkInstanceId && (
           <div className="flex flex-col items-center justify-center py-12 text-center">
-            <img src={PlatformRegistry.logo('dingtalk')} alt="DingTalk" className="w-12 h-12 object-contain rounded-md mb-4 opacity-50" />
+            <img
+              src={PlatformRegistry.logo('dingtalk')}
+              alt="DingTalk"
+              className="w-12 h-12 object-contain rounded-md mb-4 opacity-50"
+            />
             <p className="text-sm text-secondary mb-4">
               {config.dingtalk.instances.length === 0
-                ? (language === 'zh' ? '尚未添加钉钉实例，点击下方按钮添加' : 'No DingTalk instances yet. Click below to add one.')
-                : (language === 'zh' ? '请在左侧选择一个钉钉实例' : 'Select a DingTalk instance from the sidebar.')}
+                ? language === 'zh'
+                  ? '尚未添加钉钉实例，点击下方按钮添加'
+                  : 'No DingTalk instances yet. Click below to add one.'
+                : language === 'zh'
+                  ? '请在左侧选择一个钉钉实例'
+                  : 'Select a DingTalk instance from the sidebar.'}
             </p>
             {config.dingtalk.instances.length < MAX_DINGTALK_INSTANCES && (
               <button
                 type="button"
-                onClick={async (e) => {
+                onClick={async e => {
                   e.stopPropagation();
-                  const inst = await imService.addDingTalkInstance(`DingTalk Bot ${config.dingtalk.instances.length + 1}`);
-                  if (inst) { setActiveDingTalkInstanceId(inst.instanceId); setDingtalkExpanded(true); }
+                  const inst = await imService.addDingTalkInstance(
+                    `DingTalk Bot ${config.dingtalk.instances.length + 1}`,
+                  );
+                  if (inst) {
+                    setActiveDingTalkInstanceId(inst.instanceId);
+                    setDingtalkExpanded(true);
+                  }
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
               >
@@ -1340,69 +1552,121 @@ const IMSettings: React.FC = () => {
             )}
           </div>
         )}
-        {activePlatform === 'dingtalk' && activeDingTalkInstanceId && (() => {
-          const selectedInstance = config.dingtalk.instances.find(i => i.instanceId === activeDingTalkInstanceId);
-          if (!selectedInstance) return null;
-          const selectedStatus = status.dingtalk?.instances?.find(s => s.instanceId === activeDingTalkInstanceId);
-          return (
-            <DingTalkInstanceSettings
-              instance={selectedInstance}
-              instanceStatus={selectedStatus}
-              onConfigChange={(update) => {
-                dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: update }));
-              }}
-              onSave={async (override) => {
-                const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
-                } else {
-                  await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
-                }
-              }}
-              onRename={async (newName) => {
-                dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { instanceName: newName } as any }));
-                await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, { instanceName: newName } as any);
-              }}
-              onDelete={async () => {
-                await imService.deleteDingTalkInstance(activeDingTalkInstanceId);
-                const remaining = config.dingtalk.instances.filter(i => i.instanceId !== activeDingTalkInstanceId);
-                setActiveDingTalkInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
-              }}
-              onToggleEnabled={async () => {
-                const newEnabled = !selectedInstance.enabled;
-                if (newEnabled && !(selectedInstance.clientId && selectedInstance.clientSecret)) return;
-                const success = await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, { enabled: newEnabled });
-                if (success) {
-                  dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { enabled: newEnabled } }));
-                  if (newEnabled) dispatch(clearError());
-                }
-              }}
-              onTestConnectivity={() => {
-                void handleConnectivityTest('dingtalk');
-              }}
-              testingPlatform={testingPlatform}
-              connectivityResults={connectivityResults}
-              language={language}
-            />
-          );
-        })()}
+        {activePlatform === 'dingtalk' &&
+          activeDingTalkInstanceId &&
+          (() => {
+            const selectedInstance = config.dingtalk.instances.find(
+              i => i.instanceId === activeDingTalkInstanceId,
+            );
+            if (!selectedInstance) return null;
+            const selectedStatus = status.dingtalk?.instances?.find(
+              s => s.instanceId === activeDingTalkInstanceId,
+            );
+            return (
+              <DingTalkInstanceSettings
+                instance={selectedInstance}
+                instanceStatus={selectedStatus}
+                onConfigChange={update => {
+                  dispatch(
+                    setDingTalkInstanceConfig({
+                      instanceId: activeDingTalkInstanceId,
+                      config: update,
+                    }),
+                  );
+                }}
+                onSave={async override => {
+                  const configToSave = override
+                    ? { ...selectedInstance, ...override }
+                    : selectedInstance;
+                  if (selectedInstance.enabled) {
+                    await imService.updateDingTalkInstanceConfig(
+                      activeDingTalkInstanceId,
+                      configToSave,
+                    );
+                  } else {
+                    await imService.persistDingTalkInstanceConfig(
+                      activeDingTalkInstanceId,
+                      configToSave,
+                    );
+                  }
+                }}
+                onRename={async newName => {
+                  dispatch(
+                    setDingTalkInstanceConfig({
+                      instanceId: activeDingTalkInstanceId,
+                      config: { instanceName: newName } as any,
+                    }),
+                  );
+                  await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, {
+                    instanceName: newName,
+                  } as any);
+                }}
+                onDelete={async () => {
+                  await imService.deleteDingTalkInstance(activeDingTalkInstanceId);
+                  const remaining = config.dingtalk.instances.filter(
+                    i => i.instanceId !== activeDingTalkInstanceId,
+                  );
+                  setActiveDingTalkInstanceId(
+                    remaining.length > 0 ? remaining[0].instanceId : null,
+                  );
+                }}
+                onToggleEnabled={async () => {
+                  const newEnabled = !selectedInstance.enabled;
+                  if (newEnabled && !(selectedInstance.clientId && selectedInstance.clientSecret))
+                    return;
+                  const success = await imService.updateDingTalkInstanceConfig(
+                    activeDingTalkInstanceId,
+                    { enabled: newEnabled },
+                  );
+                  if (success) {
+                    dispatch(
+                      setDingTalkInstanceConfig({
+                        instanceId: activeDingTalkInstanceId,
+                        config: { enabled: newEnabled },
+                      }),
+                    );
+                    if (newEnabled) dispatch(clearError());
+                  }
+                }}
+                onTestConnectivity={() => {
+                  void handleConnectivityTest('dingtalk');
+                }}
+                testingPlatform={testingPlatform}
+                connectivityResults={connectivityResults}
+                language={language}
+              />
+            );
+          })()}
 
         {/* Feishu Settings (multi-instance) */}
         {activePlatform === 'feishu' && !activeFeishuInstanceId && (
           <div className="flex flex-col items-center justify-center py-12 text-center">
-            <img src={PlatformRegistry.logo('feishu')} alt="Feishu" className="w-12 h-12 object-contain rounded-md mb-4 opacity-50" />
+            <img
+              src={PlatformRegistry.logo('feishu')}
+              alt="Feishu"
+              className="w-12 h-12 object-contain rounded-md mb-4 opacity-50"
+            />
             <p className="text-sm text-secondary mb-4">
               {config.feishu.instances.length === 0
-                ? (language === 'zh' ? '尚未添加飞书实例，点击下方按钮添加' : 'No Feishu instances yet. Click below to add one.')
-                : (language === 'zh' ? '请在左侧选择一个飞书实例' : 'Select a Feishu instance from the sidebar.')}
+                ? language === 'zh'
+                  ? '尚未添加飞书实例，点击下方按钮添加'
+                  : 'No Feishu instances yet. Click below to add one.'
+                : language === 'zh'
+                  ? '请在左侧选择一个飞书实例'
+                  : 'Select a Feishu instance from the sidebar.'}
             </p>
             {config.feishu.instances.length < MAX_FEISHU_INSTANCES && (
               <button
                 type="button"
-                onClick={async (e) => {
+                onClick={async e => {
                   e.stopPropagation();
-                  const inst = await imService.addFeishuInstance(`Feishu Bot ${config.feishu.instances.length + 1}`);
-                  if (inst) { setActiveFeishuInstanceId(inst.instanceId); setFeishuExpanded(true); }
+                  const inst = await imService.addFeishuInstance(
+                    `Feishu Bot ${config.feishu.instances.length + 1}`,
+                  );
+                  if (inst) {
+                    setActiveFeishuInstanceId(inst.instanceId);
+                    setFeishuExpanded(true);
+                  }
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
               >
@@ -1411,69 +1675,115 @@ const IMSettings: React.FC = () => {
             )}
           </div>
         )}
-        {activePlatform === 'feishu' && activeFeishuInstanceId && (() => {
-          const selectedInstance = config.feishu.instances.find(i => i.instanceId === activeFeishuInstanceId);
-          if (!selectedInstance) return null;
-          const selectedStatus = status.feishu?.instances?.find(s => s.instanceId === activeFeishuInstanceId);
-          return (
-            <FeishuInstanceSettings
-              instance={selectedInstance}
-              instanceStatus={selectedStatus}
-              onConfigChange={(update) => {
-                dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: update }));
-              }}
-              onSave={async (override) => {
-                const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
-                } else {
-                  await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
-                }
-              }}
-              onRename={async (newName) => {
-                dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { instanceName: newName } as any }));
-                await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, { instanceName: newName } as any);
-              }}
-              onDelete={async () => {
-                await imService.deleteFeishuInstance(activeFeishuInstanceId);
-                const remaining = config.feishu.instances.filter(i => i.instanceId !== activeFeishuInstanceId);
-                setActiveFeishuInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
-              }}
-              onToggleEnabled={async () => {
-                const newEnabled = !selectedInstance.enabled;
-                if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
-                const success = await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: newEnabled });
-                if (success) {
-                  dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: newEnabled } }));
-                  if (newEnabled) dispatch(clearError());
-                }
-              }}
-              onTestConnectivity={() => {
-                void handleConnectivityTest('feishu');
-              }}
-              testingPlatform={testingPlatform}
-              connectivityResults={connectivityResults}
-              language={language}
-            />
-          );
-        })()}
+        {activePlatform === 'feishu' &&
+          activeFeishuInstanceId &&
+          (() => {
+            const selectedInstance = config.feishu.instances.find(
+              i => i.instanceId === activeFeishuInstanceId,
+            );
+            if (!selectedInstance) return null;
+            const selectedStatus = status.feishu?.instances?.find(
+              s => s.instanceId === activeFeishuInstanceId,
+            );
+            return (
+              <FeishuInstanceSettings
+                instance={selectedInstance}
+                instanceStatus={selectedStatus}
+                onConfigChange={update => {
+                  dispatch(
+                    setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: update }),
+                  );
+                }}
+                onSave={async override => {
+                  const configToSave = override
+                    ? { ...selectedInstance, ...override }
+                    : selectedInstance;
+                  if (selectedInstance.enabled) {
+                    await imService.updateFeishuInstanceConfig(
+                      activeFeishuInstanceId,
+                      configToSave,
+                    );
+                  } else {
+                    await imService.persistFeishuInstanceConfig(
+                      activeFeishuInstanceId,
+                      configToSave,
+                    );
+                  }
+                }}
+                onRename={async newName => {
+                  dispatch(
+                    setFeishuInstanceConfig({
+                      instanceId: activeFeishuInstanceId,
+                      config: { instanceName: newName } as any,
+                    }),
+                  );
+                  await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, {
+                    instanceName: newName,
+                  } as any);
+                }}
+                onDelete={async () => {
+                  await imService.deleteFeishuInstance(activeFeishuInstanceId);
+                  const remaining = config.feishu.instances.filter(
+                    i => i.instanceId !== activeFeishuInstanceId,
+                  );
+                  setActiveFeishuInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+                }}
+                onToggleEnabled={async () => {
+                  const newEnabled = !selectedInstance.enabled;
+                  if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
+                  const success = await imService.updateFeishuInstanceConfig(
+                    activeFeishuInstanceId,
+                    { enabled: newEnabled },
+                  );
+                  if (success) {
+                    dispatch(
+                      setFeishuInstanceConfig({
+                        instanceId: activeFeishuInstanceId,
+                        config: { enabled: newEnabled },
+                      }),
+                    );
+                    if (newEnabled) dispatch(clearError());
+                  }
+                }}
+                onTestConnectivity={() => {
+                  void handleConnectivityTest('feishu');
+                }}
+                testingPlatform={testingPlatform}
+                connectivityResults={connectivityResults}
+                language={language}
+              />
+            );
+          })()}
 
         {/* QQ Settings (multi-instance) */}
         {activePlatform === 'qq' && !activeQQInstanceId && (
           <div className="flex flex-col items-center justify-center py-12 text-center">
-            <img src={PlatformRegistry.logo('qq')} alt="QQ" className="w-12 h-12 object-contain rounded-md mb-4 opacity-50" />
+            <img
+              src={PlatformRegistry.logo('qq')}
+              alt="QQ"
+              className="w-12 h-12 object-contain rounded-md mb-4 opacity-50"
+            />
             <p className="text-sm text-secondary mb-4">
               {config.qq.instances.length === 0
-                ? (language === 'zh' ? '尚未添加 QQ 实例，点击下方按钮添加' : 'No QQ instances yet. Click below to add one.')
-                : (language === 'zh' ? '请在左侧选择一个 QQ 实例' : 'Select a QQ instance from the sidebar.')}
+                ? language === 'zh'
+                  ? '尚未添加 QQ 实例，点击下方按钮添加'
+                  : 'No QQ instances yet. Click below to add one.'
+                : language === 'zh'
+                  ? '请在左侧选择一个 QQ 实例'
+                  : 'Select a QQ instance from the sidebar.'}
             </p>
             {config.qq.instances.length < MAX_QQ_INSTANCES && (
               <button
                 type="button"
-                onClick={async (e) => {
+                onClick={async e => {
                   e.stopPropagation();
-                  const inst = await imService.addQQInstance(`QQ Bot ${config.qq.instances.length + 1}`);
-                  if (inst) { setActiveQQInstanceId(inst.instanceId); setQqExpanded(true); }
+                  const inst = await imService.addQQInstance(
+                    `QQ Bot ${config.qq.instances.length + 1}`,
+                  );
+                  if (inst) {
+                    setActiveQQInstanceId(inst.instanceId);
+                    setQqExpanded(true);
+                  }
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
               >
@@ -1482,52 +1792,76 @@ const IMSettings: React.FC = () => {
             )}
           </div>
         )}
-        {activePlatform === 'qq' && activeQQInstanceId && (() => {
-          const selectedInstance = config.qq.instances.find(i => i.instanceId === activeQQInstanceId);
-          if (!selectedInstance) return null;
-          const selectedStatus = status.qq?.instances?.find(s => s.instanceId === activeQQInstanceId);
-          return (
-            <QQInstanceSettings
-              instance={selectedInstance}
-              instanceStatus={selectedStatus}
-              onConfigChange={(update) => {
-                dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: update }));
-              }}
-              onSave={async (override) => {
-                const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updateQQInstanceConfig(activeQQInstanceId, configToSave);
-                } else {
-                  await imService.persistQQInstanceConfig(activeQQInstanceId, configToSave);
-                }
-              }}
-              onRename={async (newName) => {
-                dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { instanceName: newName } as any }));
-                await imService.persistQQInstanceConfig(activeQQInstanceId, { instanceName: newName } as any);
-              }}
-              onDelete={async () => {
-                await imService.deleteQQInstance(activeQQInstanceId);
-                const remaining = config.qq.instances.filter(i => i.instanceId !== activeQQInstanceId);
-                setActiveQQInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
-              }}
-              onToggleEnabled={async () => {
-                const newEnabled = !selectedInstance.enabled;
-                if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
-                const success = await imService.updateQQInstanceConfig(activeQQInstanceId, { enabled: newEnabled });
-                if (success) {
-                  dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { enabled: newEnabled } }));
-                  if (newEnabled) dispatch(clearError());
-                }
-              }}
-              onTestConnectivity={() => {
-                void handleConnectivityTest('qq');
-              }}
-              testingPlatform={testingPlatform}
-              connectivityResults={connectivityResults}
-              language={language}
-            />
-          );
-        })()}
+        {activePlatform === 'qq' &&
+          activeQQInstanceId &&
+          (() => {
+            const selectedInstance = config.qq.instances.find(
+              i => i.instanceId === activeQQInstanceId,
+            );
+            if (!selectedInstance) return null;
+            const selectedStatus = status.qq?.instances?.find(
+              s => s.instanceId === activeQQInstanceId,
+            );
+            return (
+              <QQInstanceSettings
+                instance={selectedInstance}
+                instanceStatus={selectedStatus}
+                onConfigChange={update => {
+                  dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: update }));
+                }}
+                onSave={async override => {
+                  const configToSave = override
+                    ? { ...selectedInstance, ...override }
+                    : selectedInstance;
+                  if (selectedInstance.enabled) {
+                    await imService.updateQQInstanceConfig(activeQQInstanceId, configToSave);
+                  } else {
+                    await imService.persistQQInstanceConfig(activeQQInstanceId, configToSave);
+                  }
+                }}
+                onRename={async newName => {
+                  dispatch(
+                    setQQInstanceConfig({
+                      instanceId: activeQQInstanceId,
+                      config: { instanceName: newName } as any,
+                    }),
+                  );
+                  await imService.persistQQInstanceConfig(activeQQInstanceId, {
+                    instanceName: newName,
+                  } as any);
+                }}
+                onDelete={async () => {
+                  await imService.deleteQQInstance(activeQQInstanceId);
+                  const remaining = config.qq.instances.filter(
+                    i => i.instanceId !== activeQQInstanceId,
+                  );
+                  setActiveQQInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+                }}
+                onToggleEnabled={async () => {
+                  const newEnabled = !selectedInstance.enabled;
+                  if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
+                  const success = await imService.updateQQInstanceConfig(activeQQInstanceId, {
+                    enabled: newEnabled,
+                  });
+                  if (success) {
+                    dispatch(
+                      setQQInstanceConfig({
+                        instanceId: activeQQInstanceId,
+                        config: { enabled: newEnabled },
+                      }),
+                    );
+                    if (newEnabled) dispatch(clearError());
+                  }
+                }}
+                onTestConnectivity={() => {
+                  void handleConnectivityTest('qq');
+                }}
+                testingPlatform={testingPlatform}
+                connectivityResults={connectivityResults}
+                language={language}
+              />
+            );
+          })()}
 
         {/* Telegram Settings */}
         {activePlatform === 'telegram' && (
@@ -1539,18 +1873,16 @@ const IMSettings: React.FC = () => {
                 i18nService.t('imTelegramGuideStep3'),
                 i18nService.t('imTelegramGuideStep4'),
               ]}
-                guideUrl={PlatformRegistry.guideUrl('telegram')}
+              guideUrl={PlatformRegistry.guideUrl('telegram')}
             />
             {/* Bot Token */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Bot Token
-              </label>
+              <label className="block text-xs font-medium text-secondary">Bot Token</label>
               <div className="relative">
                 <input
                   type={showSecrets['telegram.botToken'] ? 'text' : 'password'}
                   value={tgOpenClawConfig.botToken}
-                  onChange={(e) => handleTelegramOpenClawChange({ botToken: e.target.value })}
+                  onChange={e => handleTelegramOpenClawChange({ botToken: e.target.value })}
                   onBlur={() => handleSaveTelegramOpenClawConfig()}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
@@ -1559,7 +1891,12 @@ const IMSettings: React.FC = () => {
                   {tgOpenClawConfig.botToken && (
                     <button
                       type="button"
-                      onClick={() => { handleTelegramOpenClawChange({ botToken: '' }); void imService.persistConfig({ telegram: { ...tgOpenClawConfig, botToken: '' } }); }}
+                      onClick={() => {
+                        handleTelegramOpenClawChange({ botToken: '' });
+                        void imService.persistConfig({
+                          telegram: { ...tgOpenClawConfig, botToken: '' },
+                        });
+                      }}
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1568,17 +1905,28 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'telegram.botToken': !prev['telegram.botToken'] }))}
+                    onClick={() =>
+                      setShowSecrets(prev => ({
+                        ...prev,
+                        'telegram.botToken': !prev['telegram.botToken'],
+                      }))
+                    }
                     className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['telegram.botToken'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    title={
+                      showSecrets['telegram.botToken']
+                        ? i18nService.t('hide') || 'Hide'
+                        : i18nService.t('show') || 'Show'
+                    }
                   >
-                    {showSecrets['telegram.botToken'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['telegram.botToken'] ? (
+                      <EyeIcon className="h-4 w-4" />
+                    ) : (
+                      <EyeSlashIcon className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-secondary">
-                {i18nService.t('imTelegramTokenHint')}
-              </p>
+              <p className="text-xs text-secondary">{i18nService.t('imTelegramTokenHint')}</p>
             </div>
 
             {/* Advanced Settings (collapsible) */}
@@ -1589,13 +1937,13 @@ const IMSettings: React.FC = () => {
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
                 {/* DM Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    DM Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">DM Policy</label>
                   <select
                     value={tgOpenClawConfig.dmPolicy}
-                    onChange={(e) => {
-                      const update = { dmPolicy: e.target.value as TelegramOpenClawConfig['dmPolicy'] };
+                    onChange={e => {
+                      const update = {
+                        dmPolicy: e.target.value as TelegramOpenClawConfig['dmPolicy'],
+                      };
                       handleTelegramOpenClawChange(update);
                       void handleSaveTelegramOpenClawConfig(update);
                     }}
@@ -1620,16 +1968,18 @@ const IMSettings: React.FC = () => {
                     <input
                       type="text"
                       value={allowedUserIdInput}
-                      onChange={(e) => setAllowedUserIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                      onChange={e => setAllowedUserIdInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                           e.preventDefault();
                           const id = allowedUserIdInput.trim();
                           if (id && !tgOpenClawConfig.allowFrom.includes(id)) {
                             const newIds = [...tgOpenClawConfig.allowFrom, id];
                             handleTelegramOpenClawChange({ allowFrom: newIds });
                             setAllowedUserIdInput('');
-                            void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({
+                              telegram: { ...tgOpenClawConfig, allowFrom: newIds },
+                            });
                           }
                         }
                       }}
@@ -1644,7 +1994,9 @@ const IMSettings: React.FC = () => {
                           const newIds = [...tgOpenClawConfig.allowFrom, id];
                           handleTelegramOpenClawChange({ allowFrom: newIds });
                           setAllowedUserIdInput('');
-                          void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({
+                            telegram: { ...tgOpenClawConfig, allowFrom: newIds },
+                          });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -1654,7 +2006,7 @@ const IMSettings: React.FC = () => {
                   </div>
                   {tgOpenClawConfig.allowFrom.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {tgOpenClawConfig.allowFrom.map((id) => (
+                      {tgOpenClawConfig.allowFrom.map(id => (
                         <span
                           key={id}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -1663,9 +2015,11 @@ const IMSettings: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const newIds = tgOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              const newIds = tgOpenClawConfig.allowFrom.filter(uid => uid !== id);
                               handleTelegramOpenClawChange({ allowFrom: newIds });
-                              void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({
+                                telegram: { ...tgOpenClawConfig, allowFrom: newIds },
+                              });
                             }}
                             className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -1679,13 +2033,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Streaming Mode */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Streaming
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Streaming</label>
                   <select
                     value={tgOpenClawConfig.streaming}
-                    onChange={(e) => {
-                      const update = { streaming: e.target.value as TelegramOpenClawConfig['streaming'] };
+                    onChange={e => {
+                      const update = {
+                        streaming: e.target.value as TelegramOpenClawConfig['streaming'],
+                      };
                       handleTelegramOpenClawChange(update);
                       void handleSaveTelegramOpenClawConfig(update);
                     }}
@@ -1700,13 +2054,11 @@ const IMSettings: React.FC = () => {
 
                 {/* Proxy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Proxy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Proxy</label>
                   <input
                     type="text"
                     value={tgOpenClawConfig.proxy}
-                    onChange={(e) => handleTelegramOpenClawChange({ proxy: e.target.value })}
+                    onChange={e => handleTelegramOpenClawChange({ proxy: e.target.value })}
                     onBlur={() => handleSaveTelegramOpenClawConfig()}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     placeholder="socks5://localhost:9050"
@@ -1715,13 +2067,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Group Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Group Policy</label>
                   <select
                     value={tgOpenClawConfig.groupPolicy}
-                    onChange={(e) => {
-                      const update = { groupPolicy: e.target.value as TelegramOpenClawConfig['groupPolicy'] };
+                    onChange={e => {
+                      const update = {
+                        groupPolicy: e.target.value as TelegramOpenClawConfig['groupPolicy'],
+                      };
                       handleTelegramOpenClawChange(update);
                       void handleSaveTelegramOpenClawConfig(update);
                     }}
@@ -1735,13 +2087,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Reply-to Mode */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Reply-to Mode
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Reply-to Mode</label>
                   <select
                     value={tgOpenClawConfig.replyToMode}
-                    onChange={(e) => {
-                      const update = { replyToMode: e.target.value as TelegramOpenClawConfig['replyToMode'] };
+                    onChange={e => {
+                      const update = {
+                        replyToMode: e.target.value as TelegramOpenClawConfig['replyToMode'],
+                      };
                       handleTelegramOpenClawChange(update);
                       void handleSaveTelegramOpenClawConfig(update);
                     }}
@@ -1755,13 +2107,13 @@ const IMSettings: React.FC = () => {
 
                 {/* History Limit */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    History Limit
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">History Limit</label>
                   <input
                     type="number"
                     value={tgOpenClawConfig.historyLimit}
-                    onChange={(e) => handleTelegramOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })}
+                    onChange={e =>
+                      handleTelegramOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })
+                    }
                     onBlur={() => handleSaveTelegramOpenClawConfig()}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     min="1"
@@ -1771,13 +2123,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Media Max MB */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Media Max (MB)
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Media Max (MB)</label>
                   <input
                     type="number"
                     value={tgOpenClawConfig.mediaMaxMb}
-                    onChange={(e) => handleTelegramOpenClawChange({ mediaMaxMb: parseInt(e.target.value) || 5 })}
+                    onChange={e =>
+                      handleTelegramOpenClawChange({ mediaMaxMb: parseInt(e.target.value) || 5 })
+                    }
                     onBlur={() => handleSaveTelegramOpenClawConfig()}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     min="1"
@@ -1787,9 +2139,7 @@ const IMSettings: React.FC = () => {
 
                 {/* Link Preview */}
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-secondary">
-                    Link Preview
-                  </label>
+                  <label className="text-xs font-medium text-secondary">Link Preview</label>
                   <button
                     type="button"
                     onClick={() => {
@@ -1801,21 +2151,21 @@ const IMSettings: React.FC = () => {
                       tgOpenClawConfig.linkPreview ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                     }`}
                   >
-                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      tgOpenClawConfig.linkPreview ? 'translate-x-4' : 'translate-x-0'
-                    }`} />
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        tgOpenClawConfig.linkPreview ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
                   </button>
                 </div>
 
                 {/* Webhook URL */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Webhook URL
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Webhook URL</label>
                   <input
                     type="text"
                     value={tgOpenClawConfig.webhookUrl}
-                    onChange={(e) => handleTelegramOpenClawChange({ webhookUrl: e.target.value })}
+                    onChange={e => handleTelegramOpenClawChange({ webhookUrl: e.target.value })}
                     onBlur={() => handleSaveTelegramOpenClawConfig()}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     placeholder="https://example.com/telegram-webhook"
@@ -1831,7 +2181,9 @@ const IMSettings: React.FC = () => {
                     <input
                       type="password"
                       value={tgOpenClawConfig.webhookSecret}
-                      onChange={(e) => handleTelegramOpenClawChange({ webhookSecret: e.target.value })}
+                      onChange={e =>
+                        handleTelegramOpenClawChange({ webhookSecret: e.target.value })
+                      }
                       onBlur={() => handleSaveTelegramOpenClawConfig()}
                       className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                       placeholder="webhook-secret"
@@ -1841,9 +2193,7 @@ const IMSettings: React.FC = () => {
               </div>
             </details>
 
-            <div className="pt-1">
-              {renderConnectivityTestButton('telegram')}
-            </div>
+            <div className="pt-1">{renderConnectivityTestButton('telegram')}</div>
           </div>
         )}
 
@@ -1859,18 +2209,16 @@ const IMSettings: React.FC = () => {
                 i18nService.t('imDiscordGuideStep5'),
                 i18nService.t('imDiscordGuideStep6'),
               ]}
-                guideUrl={PlatformRegistry.guideUrl('discord')}
+              guideUrl={PlatformRegistry.guideUrl('discord')}
             />
             {/* Bot Token */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Bot Token
-              </label>
+              <label className="block text-xs font-medium text-secondary">Bot Token</label>
               <div className="relative">
                 <input
                   type={showSecrets['discord.botToken'] ? 'text' : 'password'}
                   value={dcOpenClawConfig.botToken}
-                  onChange={(e) => handleDiscordOpenClawChange({ botToken: e.target.value })}
+                  onChange={e => handleDiscordOpenClawChange({ botToken: e.target.value })}
                   onBlur={() => handleSaveDiscordOpenClawConfig()}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="MTIzNDU2Nzg5MDEyMzQ1Njc4OQ..."
@@ -1879,7 +2227,12 @@ const IMSettings: React.FC = () => {
                   {dcOpenClawConfig.botToken && (
                     <button
                       type="button"
-                      onClick={() => { handleDiscordOpenClawChange({ botToken: '' }); void imService.persistConfig({ discord: { ...dcOpenClawConfig, botToken: '' } }); }}
+                      onClick={() => {
+                        handleDiscordOpenClawChange({ botToken: '' });
+                        void imService.persistConfig({
+                          discord: { ...dcOpenClawConfig, botToken: '' },
+                        });
+                      }}
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1888,17 +2241,28 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'discord.botToken': !prev['discord.botToken'] }))}
+                    onClick={() =>
+                      setShowSecrets(prev => ({
+                        ...prev,
+                        'discord.botToken': !prev['discord.botToken'],
+                      }))
+                    }
                     className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['discord.botToken'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    title={
+                      showSecrets['discord.botToken']
+                        ? i18nService.t('hide') || 'Hide'
+                        : i18nService.t('show') || 'Show'
+                    }
                   >
-                    {showSecrets['discord.botToken'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['discord.botToken'] ? (
+                      <EyeIcon className="h-4 w-4" />
+                    ) : (
+                      <EyeSlashIcon className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-secondary">
-                {i18nService.t('imDiscordTokenHint')}
-              </p>
+              <p className="text-xs text-secondary">{i18nService.t('imDiscordTokenHint')}</p>
             </div>
 
             {/* Advanced Settings (collapsible) */}
@@ -1909,13 +2273,13 @@ const IMSettings: React.FC = () => {
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
                 {/* DM Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    DM Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">DM Policy</label>
                   <select
                     value={dcOpenClawConfig.dmPolicy}
-                    onChange={(e) => {
-                      const update = { dmPolicy: e.target.value as DiscordOpenClawConfig['dmPolicy'] };
+                    onChange={e => {
+                      const update = {
+                        dmPolicy: e.target.value as DiscordOpenClawConfig['dmPolicy'],
+                      };
                       handleDiscordOpenClawChange(update);
                       void handleSaveDiscordOpenClawConfig(update);
                     }}
@@ -1940,16 +2304,18 @@ const IMSettings: React.FC = () => {
                     <input
                       type="text"
                       value={discordAllowedUserIdInput}
-                      onChange={(e) => setDiscordAllowedUserIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                      onChange={e => setDiscordAllowedUserIdInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                           e.preventDefault();
                           const id = discordAllowedUserIdInput.trim();
                           if (id && !dcOpenClawConfig.allowFrom.includes(id)) {
                             const newIds = [...dcOpenClawConfig.allowFrom, id];
                             handleDiscordOpenClawChange({ allowFrom: newIds });
                             setDiscordAllowedUserIdInput('');
-                            void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({
+                              discord: { ...dcOpenClawConfig, allowFrom: newIds },
+                            });
                           }
                         }
                       }}
@@ -1964,7 +2330,9 @@ const IMSettings: React.FC = () => {
                           const newIds = [...dcOpenClawConfig.allowFrom, id];
                           handleDiscordOpenClawChange({ allowFrom: newIds });
                           setDiscordAllowedUserIdInput('');
-                          void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({
+                            discord: { ...dcOpenClawConfig, allowFrom: newIds },
+                          });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -1974,7 +2342,7 @@ const IMSettings: React.FC = () => {
                   </div>
                   {dcOpenClawConfig.allowFrom.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {dcOpenClawConfig.allowFrom.map((id) => (
+                      {dcOpenClawConfig.allowFrom.map(id => (
                         <span
                           key={id}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -1983,9 +2351,11 @@ const IMSettings: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const newIds = dcOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              const newIds = dcOpenClawConfig.allowFrom.filter(uid => uid !== id);
                               handleDiscordOpenClawChange({ allowFrom: newIds });
-                              void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({
+                                discord: { ...dcOpenClawConfig, allowFrom: newIds },
+                              });
                             }}
                             className="text-secondary hover:text-red-500 transition-colors"
                           >
@@ -1999,13 +2369,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Streaming */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Streaming
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Streaming</label>
                   <select
                     value={dcOpenClawConfig.streaming}
-                    onChange={(e) => {
-                      const update = { streaming: e.target.value as DiscordOpenClawConfig['streaming'] };
+                    onChange={e => {
+                      const update = {
+                        streaming: e.target.value as DiscordOpenClawConfig['streaming'],
+                      };
                       handleDiscordOpenClawChange(update);
                       void handleSaveDiscordOpenClawConfig(update);
                     }}
@@ -2020,13 +2390,11 @@ const IMSettings: React.FC = () => {
 
                 {/* Proxy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Proxy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Proxy</label>
                   <input
                     type="text"
                     value={dcOpenClawConfig.proxy}
-                    onChange={(e) => handleDiscordOpenClawChange({ proxy: e.target.value })}
+                    onChange={e => handleDiscordOpenClawChange({ proxy: e.target.value })}
                     onBlur={() => handleSaveDiscordOpenClawConfig()}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     placeholder="http://proxy:port"
@@ -2035,13 +2403,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Group Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Group Policy</label>
                   <select
                     value={dcOpenClawConfig.groupPolicy}
-                    onChange={(e) => {
-                      const update = { groupPolicy: e.target.value as DiscordOpenClawConfig['groupPolicy'] };
+                    onChange={e => {
+                      const update = {
+                        groupPolicy: e.target.value as DiscordOpenClawConfig['groupPolicy'],
+                      };
                       handleDiscordOpenClawChange(update);
                       void handleSaveDiscordOpenClawConfig(update);
                     }}
@@ -2062,16 +2430,18 @@ const IMSettings: React.FC = () => {
                     <input
                       type="text"
                       value={discordServerAllowIdInput}
-                      onChange={(e) => setDiscordServerAllowIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                      onChange={e => setDiscordServerAllowIdInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                           e.preventDefault();
                           const id = discordServerAllowIdInput.trim();
                           if (id && !dcOpenClawConfig.groupAllowFrom.includes(id)) {
                             const newIds = [...dcOpenClawConfig.groupAllowFrom, id];
                             handleDiscordOpenClawChange({ groupAllowFrom: newIds });
                             setDiscordServerAllowIdInput('');
-                            void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                            void imService.persistConfig({
+                              discord: { ...dcOpenClawConfig, groupAllowFrom: newIds },
+                            });
                           }
                         }
                       }}
@@ -2086,7 +2456,9 @@ const IMSettings: React.FC = () => {
                           const newIds = [...dcOpenClawConfig.groupAllowFrom, id];
                           handleDiscordOpenClawChange({ groupAllowFrom: newIds });
                           setDiscordServerAllowIdInput('');
-                          void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                          void imService.persistConfig({
+                            discord: { ...dcOpenClawConfig, groupAllowFrom: newIds },
+                          });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -2096,7 +2468,7 @@ const IMSettings: React.FC = () => {
                   </div>
                   {dcOpenClawConfig.groupAllowFrom.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {dcOpenClawConfig.groupAllowFrom.map((id) => (
+                      {dcOpenClawConfig.groupAllowFrom.map(id => (
                         <span
                           key={id}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -2105,9 +2477,13 @@ const IMSettings: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const newIds = dcOpenClawConfig.groupAllowFrom.filter((gid) => gid !== id);
+                              const newIds = dcOpenClawConfig.groupAllowFrom.filter(
+                                gid => gid !== id,
+                              );
                               handleDiscordOpenClawChange({ groupAllowFrom: newIds });
-                              void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                              void imService.persistConfig({
+                                discord: { ...dcOpenClawConfig, groupAllowFrom: newIds },
+                              });
                             }}
                             className="text-secondary hover:text-red-500 transition-colors"
                           >
@@ -2121,15 +2497,13 @@ const IMSettings: React.FC = () => {
 
                 {/* History Limit */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    History Limit
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">History Limit</label>
                   <input
                     type="number"
                     min={1}
                     max={200}
                     value={dcOpenClawConfig.historyLimit}
-                    onChange={(e) => {
+                    onChange={e => {
                       const val = parseInt(e.target.value) || 50;
                       handleDiscordOpenClawChange({ historyLimit: val });
                     }}
@@ -2140,15 +2514,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Media Max MB */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Media Max MB
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Media Max MB</label>
                   <input
                     type="number"
                     min={1}
                     max={100}
                     value={dcOpenClawConfig.mediaMaxMb}
-                    onChange={(e) => {
+                    onChange={e => {
                       const val = parseInt(e.target.value) || 25;
                       handleDiscordOpenClawChange({ mediaMaxMb: val });
                     }}
@@ -2159,9 +2531,7 @@ const IMSettings: React.FC = () => {
               </div>
             </details>
 
-            <div className="pt-1">
-              {renderConnectivityTestButton('discord')}
-            </div>
+            <div className="pt-1">{renderConnectivityTestButton('discord')}</div>
 
             {/* Bot username display */}
             {status.discord.botUsername && (
@@ -2198,12 +2568,16 @@ const IMSettings: React.FC = () => {
                 hints={nimSchemaData.hints}
                 value={config.nim as unknown as Record<string, unknown>}
                 onChange={(path, value) => {
-                  const updated = deepSet({ ...config.nim } as unknown as Record<string, unknown>, path, value);
+                  const updated = deepSet(
+                    { ...config.nim } as unknown as Record<string, unknown>,
+                    path,
+                    value,
+                  );
                   dispatch(setNimConfig(updated as any));
                 }}
                 onBlur={handleSaveConfig}
                 showSecrets={showSecrets}
-                onToggleSecret={(path) => setShowSecrets(prev => ({ ...prev, [path]: !prev[path] }))}
+                onToggleSecret={path => setShowSecrets(prev => ({ ...prev, [path]: !prev[path] }))}
               />
             ) : (
               /* Fallback: minimal credential inputs when schema not yet loaded */
@@ -2213,7 +2587,7 @@ const IMSettings: React.FC = () => {
                   <input
                     type="text"
                     value={config.nim.appKey}
-                    onChange={(e) => dispatch(setNimConfig({ appKey: e.target.value }))}
+                    onChange={e => dispatch(setNimConfig({ appKey: e.target.value }))}
                     onBlur={handleSaveConfig}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     placeholder="your_app_key"
@@ -2224,7 +2598,7 @@ const IMSettings: React.FC = () => {
                   <input
                     type="text"
                     value={config.nim.account}
-                    onChange={(e) => dispatch(setNimConfig({ account: e.target.value }))}
+                    onChange={e => dispatch(setNimConfig({ account: e.target.value }))}
                     onBlur={handleSaveConfig}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     placeholder="bot_account_id"
@@ -2235,7 +2609,7 @@ const IMSettings: React.FC = () => {
                   <input
                     type="password"
                     value={config.nim.token}
-                    onChange={(e) => dispatch(setNimConfig({ token: e.target.value }))}
+                    onChange={e => dispatch(setNimConfig({ token: e.target.value }))}
                     onBlur={handleSaveConfig}
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
                     placeholder="••••••••••••"
@@ -2244,9 +2618,7 @@ const IMSettings: React.FC = () => {
               </div>
             )}
 
-            <div className="pt-1">
-              {renderConnectivityTestButton('nim')}
-            </div>
+            <div className="pt-1">{renderConnectivityTestButton('nim')}</div>
 
             {status.nim.botAccount && (
               <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
@@ -2267,23 +2639,28 @@ const IMSettings: React.FC = () => {
           <div className="space-y-3">
             {/* Client ID */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Client ID
-              </label>
+              <label className="block text-xs font-medium text-secondary">Client ID</label>
               <div className="relative">
                 <input
                   type="text"
                   value={config['netease-bee'].clientId}
-                  onChange={(e) => handleNeteaseBeeChanChange('clientId', e.target.value)}
+                  onChange={e => handleNeteaseBeeChanChange('clientId', e.target.value)}
                   onBlur={handleSaveConfig}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder={i18nService.t('neteaseBeeChanClientIdPlaceholder') || '您的Client ID'}
+                  placeholder={
+                    i18nService.t('neteaseBeeChanClientIdPlaceholder') || '您的Client ID'
+                  }
                 />
                 {config['netease-bee'].clientId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleNeteaseBeeChanChange('clientId', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], clientId: '' } }); }}
+                      onClick={() => {
+                        handleNeteaseBeeChanChange('clientId', '');
+                        void imService.persistConfig({
+                          'netease-bee': { ...config['netease-bee'], clientId: '' },
+                        });
+                      }}
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2296,14 +2673,12 @@ const IMSettings: React.FC = () => {
 
             {/* Client Secret */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Client Secret
-              </label>
+              <label className="block text-xs font-medium text-secondary">Client Secret</label>
               <div className="relative">
                 <input
                   type={showSecrets['netease-bee.secret'] ? 'text' : 'password'}
                   value={config['netease-bee'].secret}
-                  onChange={(e) => handleNeteaseBeeChanChange('secret', e.target.value)}
+                  onChange={e => handleNeteaseBeeChanChange('secret', e.target.value)}
                   onBlur={handleSaveConfig}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
@@ -2312,7 +2687,12 @@ const IMSettings: React.FC = () => {
                   {config['netease-bee'].secret && (
                     <button
                       type="button"
-                      onClick={() => { handleNeteaseBeeChanChange('secret', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], secret: '' } }); }}
+                      onClick={() => {
+                        handleNeteaseBeeChanChange('secret', '');
+                        void imService.persistConfig({
+                          'netease-bee': { ...config['netease-bee'], secret: '' },
+                        });
+                      }}
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2321,19 +2701,30 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'netease-bee.secret': !prev['netease-bee.secret'] }))}
+                    onClick={() =>
+                      setShowSecrets(prev => ({
+                        ...prev,
+                        'netease-bee.secret': !prev['netease-bee.secret'],
+                      }))
+                    }
                     className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['netease-bee.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    title={
+                      showSecrets['netease-bee.secret']
+                        ? i18nService.t('hide') || 'Hide'
+                        : i18nService.t('show') || 'Show'
+                    }
                   >
-                    {showSecrets['netease-bee.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['netease-bee.secret'] ? (
+                      <EyeIcon className="h-4 w-4" />
+                    ) : (
+                      <EyeSlashIcon className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
             </div>
 
-            <div className="pt-1">
-              {renderConnectivityTestButton('netease-bee')}
-            </div>
+            <div className="pt-1">{renderConnectivityTestButton('netease-bee')}</div>
 
             {/* Bot account display */}
             {status['netease-bee']?.botAccount && (
@@ -2365,9 +2756,7 @@ const IMSettings: React.FC = () => {
                   >
                     {i18nService.t('imWeixinScanBtn')}
                   </button>
-                  <p className="text-xs text-secondary">
-                    {i18nService.t('imWeixinScanHint')}
-                  </p>
+                  <p className="text-xs text-secondary">{i18nService.t('imWeixinScanHint')}</p>
                   {weixinQrStatus === 'error' && weixinQrError && (
                     <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
                       <XCircleIcon className="h-4 w-4 flex-shrink-0" />
@@ -2411,13 +2800,11 @@ const IMSettings: React.FC = () => {
                 i18nService.t('imWeixinGuideStep2'),
                 i18nService.t('imWeixinGuideStep3'),
               ]}
-                guideUrl={PlatformRegistry.guideUrl('weixin')}
+              guideUrl={PlatformRegistry.guideUrl('weixin')}
             />
 
             {/* Connectivity test */}
-            <div className="pt-1">
-              {renderConnectivityTestButton('weixin')}
-            </div>
+            <div className="pt-1">{renderConnectivityTestButton('weixin')}</div>
 
             {/* Account ID display */}
             {weixinOpenClawConfig.accountId && (
@@ -2450,9 +2837,7 @@ const IMSettings: React.FC = () => {
                   ? i18nService.t('imWecomQuickSetupPending')
                   : i18nService.t('imWecomScanBtn')}
               </button>
-              <p className="text-xs text-secondary">
-                {i18nService.t('imWecomScanHint')}
-              </p>
+              <p className="text-xs text-secondary">{i18nService.t('imWecomScanHint')}</p>
               {wecomQuickSetupStatus === 'success' && (
                 <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
                   <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
@@ -2483,18 +2868,16 @@ const IMSettings: React.FC = () => {
                 i18nService.t('imWecomGuideStep2'),
                 i18nService.t('imWecomGuideStep3'),
               ]}
-                guideUrl={PlatformRegistry.guideUrl('wecom')}
+              guideUrl={PlatformRegistry.guideUrl('wecom')}
             />
             {/* Bot ID */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Bot ID
-              </label>
+              <label className="block text-xs font-medium text-secondary">Bot ID</label>
               <div className="relative">
                 <input
                   type="text"
                   value={wecomOpenClawConfig.botId}
-                  onChange={(e) => handleWecomOpenClawChange({ botId: e.target.value })}
+                  onChange={e => handleWecomOpenClawChange({ botId: e.target.value })}
                   onBlur={() => handleSaveWecomOpenClawConfig()}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder={i18nService.t('imWecomBotIdPlaceholder')}
@@ -2503,7 +2886,12 @@ const IMSettings: React.FC = () => {
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleWecomOpenClawChange({ botId: '' }); void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, botId: '' } }); }}
+                      onClick={() => {
+                        handleWecomOpenClawChange({ botId: '' });
+                        void imService.persistConfig({
+                          wecom: { ...wecomOpenClawConfig, botId: '' },
+                        });
+                      }}
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2516,14 +2904,12 @@ const IMSettings: React.FC = () => {
 
             {/* Secret */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                Secret
-              </label>
+              <label className="block text-xs font-medium text-secondary">Secret</label>
               <div className="relative">
                 <input
                   type={showSecrets['wecom.secret'] ? 'text' : 'password'}
                   value={wecomOpenClawConfig.secret}
-                  onChange={(e) => handleWecomOpenClawChange({ secret: e.target.value })}
+                  onChange={e => handleWecomOpenClawChange({ secret: e.target.value })}
                   onBlur={() => handleSaveWecomOpenClawConfig()}
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
@@ -2532,7 +2918,12 @@ const IMSettings: React.FC = () => {
                   {wecomOpenClawConfig.secret && (
                     <button
                       type="button"
-                      onClick={() => { handleWecomOpenClawChange({ secret: '' }); void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, secret: '' } }); }}
+                      onClick={() => {
+                        handleWecomOpenClawChange({ secret: '' });
+                        void imService.persistConfig({
+                          wecom: { ...wecomOpenClawConfig, secret: '' },
+                        });
+                      }}
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -2541,17 +2932,25 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'wecom.secret': !prev['wecom.secret'] }))}
+                    onClick={() =>
+                      setShowSecrets(prev => ({ ...prev, 'wecom.secret': !prev['wecom.secret'] }))
+                    }
                     className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['wecom.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    title={
+                      showSecrets['wecom.secret']
+                        ? i18nService.t('hide') || 'Hide'
+                        : i18nService.t('show') || 'Show'
+                    }
                   >
-                    {showSecrets['wecom.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['wecom.secret'] ? (
+                      <EyeIcon className="h-4 w-4" />
+                    ) : (
+                      <EyeSlashIcon className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-secondary">
-                {i18nService.t('imWecomCredentialHint')}
-              </p>
+              <p className="text-xs text-secondary">{i18nService.t('imWecomCredentialHint')}</p>
             </div>
 
             {/* Advanced Settings (collapsible) */}
@@ -2562,13 +2961,13 @@ const IMSettings: React.FC = () => {
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
                 {/* DM Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    DM Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">DM Policy</label>
                   <select
                     value={wecomOpenClawConfig.dmPolicy}
-                    onChange={(e) => {
-                      const update = { dmPolicy: e.target.value as WecomOpenClawConfig['dmPolicy'] };
+                    onChange={e => {
+                      const update = {
+                        dmPolicy: e.target.value as WecomOpenClawConfig['dmPolicy'],
+                      };
                       handleWecomOpenClawChange(update);
                       void handleSaveWecomOpenClawConfig(update);
                     }}
@@ -2593,16 +2992,18 @@ const IMSettings: React.FC = () => {
                     <input
                       type="text"
                       value={allowedUserIdInput}
-                      onChange={(e) => setAllowedUserIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                      onChange={e => setAllowedUserIdInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                           e.preventDefault();
                           const id = allowedUserIdInput.trim();
                           if (id && !wecomOpenClawConfig.allowFrom.includes(id)) {
                             const newIds = [...wecomOpenClawConfig.allowFrom, id];
                             handleWecomOpenClawChange({ allowFrom: newIds });
                             setAllowedUserIdInput('');
-                            void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                            void imService.persistConfig({
+                              wecom: { ...wecomOpenClawConfig, allowFrom: newIds },
+                            });
                           }
                         }
                       }}
@@ -2617,7 +3018,9 @@ const IMSettings: React.FC = () => {
                           const newIds = [...wecomOpenClawConfig.allowFrom, id];
                           handleWecomOpenClawChange({ allowFrom: newIds });
                           setAllowedUserIdInput('');
-                          void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                          void imService.persistConfig({
+                            wecom: { ...wecomOpenClawConfig, allowFrom: newIds },
+                          });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -2627,7 +3030,7 @@ const IMSettings: React.FC = () => {
                   </div>
                   {wecomOpenClawConfig.allowFrom.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {wecomOpenClawConfig.allowFrom.map((id) => (
+                      {wecomOpenClawConfig.allowFrom.map(id => (
                         <span
                           key={id}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -2636,9 +3039,13 @@ const IMSettings: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const newIds = wecomOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              const newIds = wecomOpenClawConfig.allowFrom.filter(
+                                uid => uid !== id,
+                              );
                               handleWecomOpenClawChange({ allowFrom: newIds });
-                              void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                              void imService.persistConfig({
+                                wecom: { ...wecomOpenClawConfig, allowFrom: newIds },
+                              });
                             }}
                             className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -2652,13 +3059,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Group Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Group Policy</label>
                   <select
                     value={wecomOpenClawConfig.groupPolicy}
-                    onChange={(e) => {
-                      const update = { groupPolicy: e.target.value as WecomOpenClawConfig['groupPolicy'] };
+                    onChange={e => {
+                      const update = {
+                        groupPolicy: e.target.value as WecomOpenClawConfig['groupPolicy'],
+                      };
                       handleWecomOpenClawChange(update);
                       void handleSaveWecomOpenClawConfig(update);
                     }}
@@ -2678,26 +3085,30 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      const update = { sendThinkingMessage: !wecomOpenClawConfig.sendThinkingMessage };
+                      const update = {
+                        sendThinkingMessage: !wecomOpenClawConfig.sendThinkingMessage,
+                      };
                       handleWecomOpenClawChange(update);
                       void handleSaveWecomOpenClawConfig(update);
                     }}
                     className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
-                      wecomOpenClawConfig.sendThinkingMessage ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
+                      wecomOpenClawConfig.sendThinkingMessage
+                        ? 'bg-primary'
+                        : 'bg-gray-300 dark:bg-gray-600'
                     }`}
                   >
-                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      wecomOpenClawConfig.sendThinkingMessage ? 'translate-x-4' : 'translate-x-0'
-                    }`} />
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        wecomOpenClawConfig.sendThinkingMessage ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
                   </button>
                 </div>
               </div>
             </details>
 
             {/* Connectivity test */}
-            <div className="pt-1">
-              {renderConnectivityTestButton('wecom')}
-            </div>
+            <div className="pt-1">{renderConnectivityTestButton('wecom')}</div>
 
             {/* Bot ID display */}
             {status.wecom?.botId && (
@@ -2724,7 +3135,7 @@ const IMSettings: React.FC = () => {
                 i18nService.t('imPopoGuideStep2'),
                 i18nService.t('imPopoGuideStep3'),
               ]}
-                guideUrl={PlatformRegistry.guideUrl('popo')}
+              guideUrl={PlatformRegistry.guideUrl('popo')}
             />
 
             {/* Connection Mode selector */}
@@ -2734,8 +3145,10 @@ const IMSettings: React.FC = () => {
               </label>
               <select
                 value={popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')}
-                onChange={(e) => {
-                  const update = { connectionMode: e.target.value as PopoOpenClawConfig['connectionMode'] };
+                onChange={e => {
+                  const update = {
+                    connectionMode: e.target.value as PopoOpenClawConfig['connectionMode'],
+                  };
                   handlePopoChange(update);
                   void handleSavePopoConfig(update);
                 }}
@@ -2747,9 +3160,7 @@ const IMSettings: React.FC = () => {
             </div>
 
             {/* Credential hint */}
-            <p className="text-xs text-secondary">
-              {i18nService.t('imPopoCredentialHint')}
-            </p>
+            <p className="text-xs text-secondary">{i18nService.t('imPopoCredentialHint')}</p>
 
             {/* AppKey input */}
             <div className="space-y-1.5">
@@ -2758,7 +3169,7 @@ const IMSettings: React.FC = () => {
                 <input
                   type="text"
                   value={popoConfig.appKey}
-                  onChange={(e) => handlePopoChange({ appKey: e.target.value })}
+                  onChange={e => handlePopoChange({ appKey: e.target.value })}
                   onBlur={() => void handleSavePopoConfig()}
                   placeholder="AppKey"
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
@@ -2788,7 +3199,7 @@ const IMSettings: React.FC = () => {
                 <input
                   type={showSecrets['popo.appSecret'] ? 'text' : 'password'}
                   value={popoConfig.appSecret}
-                  onChange={(e) => handlePopoChange({ appSecret: e.target.value })}
+                  onChange={e => handlePopoChange({ appSecret: e.target.value })}
                   onBlur={() => void handleSavePopoConfig()}
                   placeholder="••••••••••••"
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
@@ -2809,54 +3220,78 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.appSecret': !prev['popo.appSecret'] }))}
+                    onClick={() =>
+                      setShowSecrets(prev => ({
+                        ...prev,
+                        'popo.appSecret': !prev['popo.appSecret'],
+                      }))
+                    }
                     className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['popo.appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    title={
+                      showSecrets['popo.appSecret']
+                        ? i18nService.t('hide') || 'Hide'
+                        : i18nService.t('show') || 'Show'
+                    }
                   >
-                    {showSecrets['popo.appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['popo.appSecret'] ? (
+                      <EyeIcon className="h-4 w-4" />
+                    ) : (
+                      <EyeSlashIcon className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
             </div>
 
             {/* Token input (webhook mode only) */}
-            {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">Token</label>
-              <div className="relative">
-                <input
-                  type={showSecrets['popo.token'] ? 'text' : 'password'}
-                  value={popoConfig.token}
-                  onChange={(e) => handlePopoChange({ token: e.target.value })}
-                  onBlur={() => void handleSavePopoConfig()}
-                  placeholder="••••••••••••"
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {popoConfig.token && (
+            {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) ===
+              'webhook' && (
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-secondary">Token</label>
+                <div className="relative">
+                  <input
+                    type={showSecrets['popo.token'] ? 'text' : 'password'}
+                    value={popoConfig.token}
+                    onChange={e => handlePopoChange({ token: e.target.value })}
+                    onBlur={() => void handleSavePopoConfig()}
+                    placeholder="••••••••••••"
+                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
+                  />
+                  <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                    {popoConfig.token && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handlePopoChange({ token: '' });
+                          void handleSavePopoConfig({ token: '' });
+                        }}
+                        className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                        title={i18nService.t('clear') || 'Clear'}
+                      >
+                        <XCircleIconSolid className="h-4 w-4" />
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => {
-                        handlePopoChange({ token: '' });
-                        void handleSavePopoConfig({ token: '' });
-                      }}
+                      onClick={() =>
+                        setShowSecrets(prev => ({ ...prev, 'popo.token': !prev['popo.token'] }))
+                      }
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
+                      title={
+                        showSecrets['popo.token']
+                          ? i18nService.t('hide') || 'Hide'
+                          : i18nService.t('show') || 'Show'
+                      }
                     >
-                      <XCircleIconSolid className="h-4 w-4" />
+                      {showSecrets['popo.token'] ? (
+                        <EyeIcon className="h-4 w-4" />
+                      ) : (
+                        <EyeSlashIcon className="h-4 w-4" />
+                      )}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.token': !prev['popo.token'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['popo.token'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['popo.token'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
+                  </div>
                 </div>
               </div>
-            </div>
             )}
 
             {/* AES Key input */}
@@ -2866,7 +3301,7 @@ const IMSettings: React.FC = () => {
                 <input
                   type={showSecrets['popo.aesKey'] ? 'text' : 'password'}
                   value={popoConfig.aesKey}
-                  onChange={(e) => handlePopoChange({ aesKey: e.target.value })}
+                  onChange={e => handlePopoChange({ aesKey: e.target.value })}
                   onBlur={() => void handleSavePopoConfig()}
                   placeholder="••••••••••••"
                   className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
@@ -2887,16 +3322,29 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.aesKey': !prev['popo.aesKey'] }))}
+                    onClick={() =>
+                      setShowSecrets(prev => ({ ...prev, 'popo.aesKey': !prev['popo.aesKey'] }))
+                    }
                     className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['popo.aesKey'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    title={
+                      showSecrets['popo.aesKey']
+                        ? i18nService.t('hide') || 'Hide'
+                        : i18nService.t('show') || 'Show'
+                    }
                   >
-                    {showSecrets['popo.aesKey'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['popo.aesKey'] ? (
+                      <EyeIcon className="h-4 w-4" />
+                    ) : (
+                      <EyeSlashIcon className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
               {popoConfig.aesKey && popoConfig.aesKey.length !== 32 && (
-                <p className="text-xs text-amber-500">AES Key {i18nService.t('imPopoAesKeyLengthWarning')}（{i18nService.t('imPopoAesKeyLengthCurrent')} {popoConfig.aesKey.length}）</p>
+                <p className="text-xs text-amber-500">
+                  AES Key {i18nService.t('imPopoAesKeyLengthWarning')}（
+                  {i18nService.t('imPopoAesKeyLengthCurrent')} {popoConfig.aesKey.length}）
+                </p>
               )}
             </div>
 
@@ -2907,57 +3355,66 @@ const IMSettings: React.FC = () => {
               </summary>
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
                 {/* Webhook fields (webhook mode only) */}
-                {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
-                <>
-                {/* Webhook Base URL */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">Webhook Base URL</label>
-                  <input
-                    type="text"
-                    value={popoConfig.webhookBaseUrl}
-                    onChange={(e) => handlePopoChange({ webhookBaseUrl: e.target.value })}
-                    onBlur={() => void handleSavePopoConfig()}
-                    placeholder={localIp ? `http://${localIp}` : i18nService.t('imPopoWebhookPlaceholder')}
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  />
-                </div>
+                {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) ===
+                  'webhook' && (
+                  <>
+                    {/* Webhook Base URL */}
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-medium text-secondary">
+                        Webhook Base URL
+                      </label>
+                      <input
+                        type="text"
+                        value={popoConfig.webhookBaseUrl}
+                        onChange={e => handlePopoChange({ webhookBaseUrl: e.target.value })}
+                        onBlur={() => void handleSavePopoConfig()}
+                        placeholder={
+                          localIp ? `http://${localIp}` : i18nService.t('imPopoWebhookPlaceholder')
+                        }
+                        className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+                      />
+                    </div>
 
-                {/* Webhook Path */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">Webhook Path</label>
-                  <input
-                    type="text"
-                    value={popoConfig.webhookPath}
-                    onChange={(e) => handlePopoChange({ webhookPath: e.target.value })}
-                    onBlur={() => void handleSavePopoConfig()}
-                    placeholder="/popo/callback"
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  />
-                </div>
+                    {/* Webhook Path */}
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-medium text-secondary">
+                        Webhook Path
+                      </label>
+                      <input
+                        type="text"
+                        value={popoConfig.webhookPath}
+                        onChange={e => handlePopoChange({ webhookPath: e.target.value })}
+                        onBlur={() => void handleSavePopoConfig()}
+                        placeholder="/popo/callback"
+                        className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+                      />
+                    </div>
 
-                {/* Webhook Port */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">Webhook Port</label>
-                  <input
-                    type="number"
-                    value={popoConfig.webhookPort}
-                    onChange={(e) => handlePopoChange({ webhookPort: parseInt(e.target.value) || 3100 })}
-                    onBlur={() => void handleSavePopoConfig()}
-                    placeholder="3100"
-                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-                  />
-                </div>
-                </>
+                    {/* Webhook Port */}
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-medium text-secondary">
+                        Webhook Port
+                      </label>
+                      <input
+                        type="number"
+                        value={popoConfig.webhookPort}
+                        onChange={e =>
+                          handlePopoChange({ webhookPort: parseInt(e.target.value) || 3100 })
+                        }
+                        onBlur={() => void handleSavePopoConfig()}
+                        placeholder="3100"
+                        className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+                      />
+                    </div>
+                  </>
                 )}
 
                 {/* DM Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    DM Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">DM Policy</label>
                   <select
                     value={popoConfig.dmPolicy}
-                    onChange={(e) => {
+                    onChange={e => {
                       const update = { dmPolicy: e.target.value as PopoOpenClawConfig['dmPolicy'] };
                       handlePopoChange(update);
                       void handleSavePopoConfig(update);
@@ -2983,16 +3440,18 @@ const IMSettings: React.FC = () => {
                     <input
                       type="text"
                       value={popoAllowedUserIdInput}
-                      onChange={(e) => setPopoAllowedUserIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                      onChange={e => setPopoAllowedUserIdInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                           e.preventDefault();
                           const id = popoAllowedUserIdInput.trim();
                           if (id && !popoConfig.allowFrom.includes(id)) {
                             const newIds = [...popoConfig.allowFrom, id];
                             handlePopoChange({ allowFrom: newIds });
                             setPopoAllowedUserIdInput('');
-                            void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                            void imService.persistConfig({
+                              popo: { ...popoConfig, allowFrom: newIds },
+                            });
                           }
                         }
                       }}
@@ -3007,7 +3466,9 @@ const IMSettings: React.FC = () => {
                           const newIds = [...popoConfig.allowFrom, id];
                           handlePopoChange({ allowFrom: newIds });
                           setPopoAllowedUserIdInput('');
-                          void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                          void imService.persistConfig({
+                            popo: { ...popoConfig, allowFrom: newIds },
+                          });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -3017,7 +3478,7 @@ const IMSettings: React.FC = () => {
                   </div>
                   {popoConfig.allowFrom.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {popoConfig.allowFrom.map((id) => (
+                      {popoConfig.allowFrom.map(id => (
                         <span
                           key={id}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -3026,9 +3487,11 @@ const IMSettings: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const newIds = popoConfig.allowFrom.filter((uid) => uid !== id);
+                              const newIds = popoConfig.allowFrom.filter(uid => uid !== id);
                               handlePopoChange({ allowFrom: newIds });
-                              void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                              void imService.persistConfig({
+                                popo: { ...popoConfig, allowFrom: newIds },
+                              });
                             }}
                             className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -3042,13 +3505,13 @@ const IMSettings: React.FC = () => {
 
                 {/* Group Policy */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">
-                    Group Policy
-                  </label>
+                  <label className="block text-xs font-medium text-secondary">Group Policy</label>
                   <select
                     value={popoConfig.groupPolicy}
-                    onChange={(e) => {
-                      const update = { groupPolicy: e.target.value as PopoOpenClawConfig['groupPolicy'] };
+                    onChange={e => {
+                      const update = {
+                        groupPolicy: e.target.value as PopoOpenClawConfig['groupPolicy'],
+                      };
                       handlePopoChange(update);
                       void handleSavePopoConfig(update);
                     }}
@@ -3069,16 +3532,18 @@ const IMSettings: React.FC = () => {
                     <input
                       type="text"
                       value={popoGroupAllowIdInput}
-                      onChange={(e) => setPopoGroupAllowIdInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                      onChange={e => setPopoGroupAllowIdInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                           e.preventDefault();
                           const id = popoGroupAllowIdInput.trim();
                           if (id && !popoConfig.groupAllowFrom.includes(id)) {
                             const newIds = [...popoConfig.groupAllowFrom, id];
                             handlePopoChange({ groupAllowFrom: newIds });
                             setPopoGroupAllowIdInput('');
-                            void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                            void imService.persistConfig({
+                              popo: { ...popoConfig, groupAllowFrom: newIds },
+                            });
                           }
                         }
                       }}
@@ -3093,7 +3558,9 @@ const IMSettings: React.FC = () => {
                           const newIds = [...popoConfig.groupAllowFrom, id];
                           handlePopoChange({ groupAllowFrom: newIds });
                           setPopoGroupAllowIdInput('');
-                          void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                          void imService.persistConfig({
+                            popo: { ...popoConfig, groupAllowFrom: newIds },
+                          });
                         }
                       }}
                       className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -3103,7 +3570,7 @@ const IMSettings: React.FC = () => {
                   </div>
                   {popoConfig.groupAllowFrom.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {popoConfig.groupAllowFrom.map((id) => (
+                      {popoConfig.groupAllowFrom.map(id => (
                         <span
                           key={id}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -3112,9 +3579,11 @@ const IMSettings: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const newIds = popoConfig.groupAllowFrom.filter((gid) => gid !== id);
+                              const newIds = popoConfig.groupAllowFrom.filter(gid => gid !== id);
                               handlePopoChange({ groupAllowFrom: newIds });
-                              void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                              void imService.persistConfig({
+                                popo: { ...popoConfig, groupAllowFrom: newIds },
+                              });
                             }}
                             className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                           >
@@ -3128,11 +3597,15 @@ const IMSettings: React.FC = () => {
 
                 {/* Text Chunk Limit */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">Text Chunk Limit</label>
+                  <label className="block text-xs font-medium text-secondary">
+                    Text Chunk Limit
+                  </label>
                   <input
                     type="number"
                     value={popoConfig.textChunkLimit}
-                    onChange={(e) => handlePopoChange({ textChunkLimit: parseInt(e.target.value) || 3000 })}
+                    onChange={e =>
+                      handlePopoChange({ textChunkLimit: parseInt(e.target.value) || 3000 })
+                    }
                     onBlur={() => void handleSavePopoConfig()}
                     placeholder="3000"
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
@@ -3141,11 +3614,15 @@ const IMSettings: React.FC = () => {
 
                 {/* Rich Text Chunk Limit */}
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-medium text-secondary">Rich Text Chunk Limit</label>
+                  <label className="block text-xs font-medium text-secondary">
+                    Rich Text Chunk Limit
+                  </label>
                   <input
                     type="number"
                     value={popoConfig.richTextChunkLimit}
-                    onChange={(e) => handlePopoChange({ richTextChunkLimit: parseInt(e.target.value) || 5000 })}
+                    onChange={e =>
+                      handlePopoChange({ richTextChunkLimit: parseInt(e.target.value) || 5000 })
+                    }
                     onBlur={() => void handleSavePopoConfig()}
                     placeholder="5000"
                     className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
@@ -3166,18 +3643,18 @@ const IMSettings: React.FC = () => {
                       popoConfig.debug ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
                     }`}
                   >
-                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      popoConfig.debug ? 'translate-x-4' : 'translate-x-0'
-                    }`} />
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        popoConfig.debug ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
                   </button>
                 </div>
               </div>
             </details>
 
             {/* Connectivity test */}
-            <div className="pt-1">
-              {renderConnectivityTestButton('popo')}
-            </div>
+            <div className="pt-1">{renderConnectivityTestButton('popo')}</div>
 
             {/* Error display */}
             {status.popo?.lastError && (
@@ -3189,75 +3666,81 @@ const IMSettings: React.FC = () => {
         )}
 
         {connectivityModalPlatform && (
-          <Modal onClose={() => setConnectivityModalPlatform(null)} overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden">
-              <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-                <div className="text-sm font-semibold text-foreground">
-                  {`${i18nService.t(connectivityModalPlatform)} ${i18nService.t('imConnectivitySectionTitle')}`}
+          <Modal
+            onClose={() => setConnectivityModalPlatform(null)}
+            overlayClassName="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+            className="w-full max-w-2xl bg-surface rounded-2xl shadow-modal border border-border overflow-hidden"
+          >
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <div className="text-sm font-semibold text-foreground">
+                {`${i18nService.t(connectivityModalPlatform)} ${i18nService.t('imConnectivitySectionTitle')}`}
+              </div>
+              <button
+                type="button"
+                aria-label={i18nService.t('close')}
+                onClick={() => setConnectivityModalPlatform(null)}
+                className="p-1 rounded-md hover:bg-surface-raised text-secondary"
+              >
+                <XMarkIcon className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 max-h-[65vh] overflow-y-auto">
+              {testingPlatform === connectivityModalPlatform ? (
+                <div className="text-sm text-secondary">
+                  {i18nService.t('imConnectivityTesting')}
                 </div>
-                <button
-                  type="button"
-                  aria-label={i18nService.t('close')}
-                  onClick={() => setConnectivityModalPlatform(null)}
-                  className="p-1 rounded-md hover:bg-surface-raised text-secondary"
-                >
-                  <XMarkIcon className="h-4 w-4" />
-                </button>
-              </div>
-
-              <div className="p-4 max-h-[65vh] overflow-y-auto">
-                {testingPlatform === connectivityModalPlatform ? (
-                  <div className="text-sm text-secondary">
-                    {i18nService.t('imConnectivityTesting')}
-                  </div>
-                ) : connectivityResults[connectivityModalPlatform] ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${verdictColorClass[connectivityResults[connectivityModalPlatform]!.verdict]}`}>
-                        {connectivityResults[connectivityModalPlatform]!.verdict === 'pass' ? (
-                          <CheckCircleIcon className="h-3.5 w-3.5" />
-                        ) : connectivityResults[connectivityModalPlatform]!.verdict === 'warn' ? (
-                          <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-                        ) : (
-                          <XCircleIcon className="h-3.5 w-3.5" />
-                        )}
-                        {i18nService.t(`imConnectivityVerdict_${connectivityResults[connectivityModalPlatform]!.verdict}`)}
-                      </div>
-                      <div className="text-[11px] text-secondary">
-                        {`${i18nService.t('imConnectivityLastChecked')}: ${formatTestTime(connectivityResults[connectivityModalPlatform]!.testedAt)}`}
-                      </div>
+              ) : connectivityResults[connectivityModalPlatform] ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${verdictColorClass[connectivityResults[connectivityModalPlatform]!.verdict]}`}
+                    >
+                      {connectivityResults[connectivityModalPlatform]!.verdict === 'pass' ? (
+                        <CheckCircleIcon className="h-3.5 w-3.5" />
+                      ) : connectivityResults[connectivityModalPlatform]!.verdict === 'warn' ? (
+                        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
+                      ) : (
+                        <XCircleIcon className="h-3.5 w-3.5" />
+                      )}
+                      {i18nService.t(
+                        `imConnectivityVerdict_${connectivityResults[connectivityModalPlatform]!.verdict}`,
+                      )}
                     </div>
+                    <div className="text-[11px] text-secondary">
+                      {`${i18nService.t('imConnectivityLastChecked')}: ${formatTestTime(connectivityResults[connectivityModalPlatform]!.testedAt)}`}
+                    </div>
+                  </div>
 
-                    <div className="space-y-2">
-                      {connectivityResults[connectivityModalPlatform]!.checks.map((check, index) => (
-                        <div
-                          key={`${check.code}-${index}`}
-                          className="rounded-lg border border-border-subtle px-2.5 py-2 bg-surface"
-                        >
-                          <div className={`text-xs font-medium ${checkLevelColorClass[check.level]}`}>
-                            {getCheckTitle(check.code)}
-                          </div>
-                          <div className="mt-1 text-xs text-secondary">
-                            {check.message}
-                          </div>
-                          {getCheckSuggestion(check) && (
-                            <div className="mt-1 text-[11px] text-secondary">
-                              {`${i18nService.t('imConnectivitySuggestion')}: ${getCheckSuggestion(check)}`}
-                            </div>
-                          )}
+                  <div className="space-y-2">
+                    {connectivityResults[connectivityModalPlatform]!.checks.map((check, index) => (
+                      <div
+                        key={`${check.code}-${index}`}
+                        className="rounded-lg border border-border-subtle px-2.5 py-2 bg-surface"
+                      >
+                        <div className={`text-xs font-medium ${checkLevelColorClass[check.level]}`}>
+                          {getCheckTitle(check.code)}
                         </div>
-                      ))}
-                    </div>
+                        <div className="mt-1 text-xs text-secondary">{check.message}</div>
+                        {getCheckSuggestion(check) && (
+                          <div className="mt-1 text-[11px] text-secondary">
+                            {`${i18nService.t('imConnectivitySuggestion')}: ${getCheckSuggestion(check)}`}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ) : (
-                  <div className="text-sm text-secondary">
-                    {i18nService.t('imConnectivityNoResult')}
-                  </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="text-sm text-secondary">
+                  {i18nService.t('imConnectivityNoResult')}
+                </div>
+              )}
+            </div>
 
-              <div className="px-4 py-3 border-t border-border flex items-center justify-end">
-                {renderConnectivityTestButton(connectivityModalPlatform)}
-              </div>
+            <div className="px-4 py-3 border-t border-border flex items-center justify-end">
+              {renderConnectivityTestButton(connectivityModalPlatform)}
+            </div>
           </Modal>
         )}
       </div>
