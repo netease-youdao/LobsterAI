@@ -344,6 +344,13 @@ export interface UpdateAgentRequest {
 
 const COWORK_AGENT_ENGINE = 'openclaw';
 
+function normalizeCoworkExecutionModeValue(value?: string | null): CoworkExecutionMode {
+  if (value === 'auto' || value === 'local' || value === 'sandbox') {
+    return value;
+  }
+  return 'local';
+}
+
 function normalizeCoworkAgentEngineValue(value?: string | null): CoworkAgentEngine {
   if (value === COWORK_AGENT_ENGINE || value === 'openclaw') {
     return value;
@@ -1057,7 +1064,7 @@ export class CoworkStore {
     return {
       workingDirectory: cfg.get('workingDirectory') || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
-      executionMode: 'local' as CoworkExecutionMode,
+      executionMode: normalizeCoworkExecutionModeValue(cfg.get('executionMode')),
       agentEngine: normalizeCoworkAgentEngineValue(cfg.get('agentEngine')),
       memoryEnabled: parseBooleanConfig(cfg.get('memoryEnabled'), DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
