@@ -151,6 +151,12 @@
   - 已修复 Airi -> Bridge 的 `systemPrompt` 透传，角色卡提示词重新在 text-fast 与 agent 模式生效
   - 已修复图片回复“LobsterAI 有答案但 Airi 不显示”的主链兜底，assistant.final 现会回填可见正文
   - 已修复 Cowork / Airi 侧 ACT 指令直出问题，当前会消费 ACT 驱动动作，并从可见文本中剥离控制 token
+  - 已完成 Airi Web/Desktop 一致性第一阶段：共享启动装配、核心初始化、settings system 主体与首页主舞台主体开始共用
+  - 已完成 Airi Web/Desktop 一致性第二阶段：channel-server / developer 菜单 / data settings / ChatArea 的平台分支继续迁移到 runtime capability
+  - 已在 Airi 侧完成第二阶段后的 `stage-web` 与 `stage-tamagotchi` typecheck/build 通过，确认当前 Lobster Bridge 接入面未被一致性改造破坏
+  - 已在 Airi 侧新增 `openclaw-agent` 独立 provider 入口，并完成 onboarding / settings / ChatArea / 技能条的桥接复用
+  - 已将 Bridge 专用提示词下沉到角色卡 `extensions.airi.agents.openclaw.prompt`，Bridge 聊天现通过 `systemPrompt` 显式透传，避免继续转发 Airi 原生角色提示词
+  - 已在 Airi 前端加入运行时保护：使用 `lobster-agent` / `openclaw-agent` 且未配置角色卡 OpenClaw 提示词时，聊天发送会被阻止并提示先到角色卡设置填写
 
 ## 待你手测的检查点
 

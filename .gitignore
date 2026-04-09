@@ -38,6 +38,8 @@ nul
 
 .playwright-mcp/
 .cowork-temp/
+.lobster-bridge-files/
+*.tsbuildinfo
 
 # editorconfig files
 .vscode/
