@@ -152,7 +152,9 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
   const showConversationSelector = isIMChannel(form.notifyChannel);
 
   useEffect(() => {
-    setForm(createFormState(task));
+    const next = createFormState(task);
+    setForm(next);
+    initialFormRef.current = JSON.stringify(next);
   }, [task]);
 
   useEffect(() => {
@@ -270,6 +272,10 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       } else if (task) {
         await scheduledTaskService.updateTaskById(task.id, input);
       }
+      // Reset dirty-state baseline so the navigation guard does not
+      // show an "unsaved changes" dialog after a successful save.
+      initialFormRef.current = JSON.stringify(form);
+
       onSaved();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
