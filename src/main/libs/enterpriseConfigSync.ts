@@ -342,6 +342,39 @@ function syncSkills(configPath: string, store: SqliteStore, mode: 'merge' | 'ove
     } catch (error) {
       console.warn('[Enterprise] failed to update skills_state:', error);
     }
+
+    // Add copied skills to user's skills.config.json so they appear in the UI
+    const userSkillsConfigPath = path.join(userDataSkillsDir, 'skills.config.json');
+    try {
+      let userConfig: { version?: number; description?: string; defaults: Record<string, { order?: number; enabled?: boolean }> } = {
+        version: 1,
+        defaults: {},
+      };
+      if (fs.existsSync(userSkillsConfigPath)) {
+        userConfig = JSON.parse(fs.readFileSync(userSkillsConfigPath, 'utf-8'));
+        if (!userConfig.defaults) userConfig.defaults = {};
+      }
+      const maxOrder = Object.values(userConfig.defaults).reduce(
+        (max, v) => Math.max(max, v.order ?? 0), 0
+      );
+      let nextOrder = Math.ceil((maxOrder + 10) / 10) * 10;
+      let changed = false;
+      for (const name of skillNames) {
+        if (!(name in userConfig.defaults)) {
+          userConfig.defaults[name] = { order: nextOrder, enabled: true };
+          nextOrder += 10;
+          changed = true;
+        }
+      }
+      if (changed) {
+        const tmpPath = userSkillsConfigPath + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(userConfig, null, 2) + '\n', 'utf-8');
+        fs.renameSync(tmpPath, userSkillsConfigPath);
+        console.log('[Enterprise] added new skill entries to skills.config.json');
+      }
+    } catch (error) {
+      console.warn('[Enterprise] failed to update skills.config.json:', error);
+    }
   }
 
   console.log(`[Enterprise] synced ${skillNames.length} skill(s) (mode: ${mode})`);
