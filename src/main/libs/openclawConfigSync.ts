@@ -945,7 +945,6 @@ export class OpenClawConfigSync {
         enabled: true,
         maxConcurrentRuns: 3,
         sessionRetention: '7d',
-        skipMissedJobs: coworkConfig.skipMissedJobs ?? false
       },
       ...((() => {
         const pluginEntries: Record<string, unknown> = {
