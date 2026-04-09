@@ -1521,7 +1521,13 @@ export class CoworkRunner extends EventEmitter {
       setCoworkProxySessionId(sessionId);
       await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
-      console.error('Cowork session error:', error);
+      console.error('[CoworkRunner] session start failed:', error);
+      if (this.activeSessions.has(sessionId)) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        this.handleError(sessionId, errorMessage);
+        this.clearPendingPermissions(sessionId);
+        this.activeSessions.delete(sessionId);
+      }
     }
   }
 
@@ -1607,7 +1613,13 @@ export class CoworkRunner extends EventEmitter {
       setCoworkProxySessionId(sessionId);
       await this.runClaudeCode(activeSession, effectivePrompt, sessionCwd, effectiveSystemPrompt, options.imageAttachments);
     } catch (error) {
-      console.error('Cowork continue error:', error);
+      console.error('[CoworkRunner] session continue failed:', error);
+      if (this.activeSessions.has(sessionId)) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        this.handleError(sessionId, errorMessage);
+        this.clearPendingPermissions(sessionId);
+        this.activeSessions.delete(sessionId);
+      }
     }
   }
 
