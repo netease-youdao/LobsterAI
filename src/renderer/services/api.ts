@@ -454,12 +454,15 @@ class ApiService {
 
       return new Promise((resolve, reject) => {
         let aborted = false;
+        let sseBuffer = '';
 
-        // 设置流式监听器
         const removeDataListener = window.electron.api.onStreamData(requestId, (chunk) => {
-          const lines = chunk.split('\n');
+          sseBuffer += chunk;
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? '';
 
-          for (const line of lines) {
+          for (const rawLine of lines) {
+            const line = rawLine.replace(/\r$/, '');
             if (line.startsWith('data: ')) {
               const data = line.slice(6);
               if (data === '[DONE]') continue;
@@ -467,7 +470,6 @@ class ApiService {
               try {
                 const parsed = JSON.parse(data);
 
-                // Anthropic SSE 事件处理
                 if (parsed.type === 'content_block_delta') {
                   const delta = parsed.delta;
                   if (delta.type === 'text_delta') {
@@ -622,11 +624,15 @@ class ApiService {
 
       return new Promise((resolve, reject) => {
         let aborted = false;
+        let sseBuffer = '';
 
         const removeDataListener = window.electron.api.onStreamData(requestId, (chunk) => {
-          const lines = chunk.split('\n');
+          sseBuffer += chunk;
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? '';
 
-          for (const line of lines) {
+          for (const rawLine of lines) {
+            const line = rawLine.replace(/\r$/, '');
             if (line.startsWith('data: ')) {
               const data = line.slice(6);
               if (data === '[DONE]') continue;
