@@ -1,0 +1,37 @@
+scripts/patches/v2026.4.8/openclaw-export-run-gateway-command.patch
+  8ca12012ee2df256 3-4,6-13
+  8b0e62ec6e5fcbb2 1-2,5,14-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "d81ea12d9d4975374a70fab64f7a8d8ad0f4e8ee",
+  "prompts": {
+    "8b0e62ec6e5fcbb2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_292e56e39ffeqfUatK10Exj5wX-ebfd083a-3cba-4887-8b70-2bc1d33c9ead",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 1,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    },
+    "8ca12012ee2df256": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_292e56e39ffeqfUatK10Exj5wX-1e4580f7-02a6-45eb-a3b2-3152afb39d31",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 0,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    }
+  }
+}

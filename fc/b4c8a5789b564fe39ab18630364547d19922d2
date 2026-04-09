@@ -1,0 +1,33 @@
+src/renderer/components/scheduledTasks/TaskForm.tsx
+  a790bd8d7a9955ae 185,199
+src/renderer/types/electron.d.ts
+  a790bd8d7a9955ae 488
+src/main/preload.ts
+  a790bd8d7a9955ae 425
+src/main/ipcHandlers/scheduledTask/handlers.ts
+  a790bd8d7a9955ae 19,23,224,227,229-230
+src/main/im/imStore.ts
+  a790bd8d7a9955ae 1169-1175,1177-1196
+src/renderer/services/scheduledTask.ts
+  a790bd8d7a9955ae 270,275
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "fcb4c8a5789b564fe39ab18630364547d19922d2",
+  "prompts": {
+    "a790bd8d7a9955ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bf3973b4-ef23-44b1-b15e-d427b627959a",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 67,
+      "total_deletions": 57,
+      "accepted_lines": 39,
+      "overriden_lines": 0
+    }
+  }
+}

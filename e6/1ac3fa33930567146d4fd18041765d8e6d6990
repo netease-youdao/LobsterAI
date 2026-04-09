@@ -1,0 +1,27 @@
+src/main/coworkStore.test.ts
+  cd1063b3e3667671 73,227,233,237
+src/main/im/imStore.test.ts
+  cd1063b3e3667671 5-6,8-10,13-46,52,68
+src/scheduledTask/migrate.test.ts
+  cd1063b3e3667671 44,56-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "e61ac3fa33930567146d4fd18041765d8e6d6990",
+  "prompts": {
+    "cd1063b3e3667671": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "737967df-97d0-4009-9032-e8fc59532db9",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 73,
+      "total_deletions": 77,
+      "accepted_lines": 73,
+      "overriden_lines": 0
+    }
+  }
+}

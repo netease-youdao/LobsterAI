@@ -1,0 +1,82 @@
+src/main/libs/claudeSettings.ts
+  448900d44a4e557b 501
+src/shared/providers/constants.ts
+  5051b973174aa568 234,241
+src/renderer/components/Settings.tsx
+  968582896bed4ba7 1199
+  752b85c19f9145e0 2043
+src/main/libs/openclawConfigSync.ts
+  fbe6d486de94a1ef 488
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "256bedc07143e44e56cdf87b6f5a26f1360852a4",
+  "prompts": {
+    "448900d44a4e557b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-253cb3a5-2bb3-4e02-af95-66e0bba5dae6",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "5051b973174aa568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-4d352cda-235e-45b0-a420-e24df03602a1",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 3,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "752b85c19f9145e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-d52d4a31-1e73-42b8-b777-2fcfbc3d76de",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "968582896bed4ba7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-466e5685-897b-45fc-9cca-a6c8148da843",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "fbe6d486de94a1ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-36537d52-57af-43cf-a1a0-550106d575e7",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

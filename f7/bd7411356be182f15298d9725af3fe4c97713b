@@ -1,0 +1,37 @@
+src/renderer/components/Settings.tsx
+  fc4dac489bd41d39 2050-2051
+  65050011ff4155af 2049
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "f7bd7411356be182f15298d9725af3fe4c97713b",
+  "prompts": {
+    "65050011ff4155af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-3f3876d5-9c37-4a84-a3a6-ef3b7a2a5934",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "fc4dac489bd41d39": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2aee483fdffeElY3EdPOY6NDIy-290a17aa-194b-4881-b366-deaaddaef063",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 1,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}

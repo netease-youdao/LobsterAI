@@ -1,0 +1,36 @@
+src/renderer/components/Settings.tsx
+  2a2e2c8390322d48 3659-3673
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "9206c8a597bb7783235ea61cb9e59b065902696e",
+  "prompts": {
+    "2a2e2c8390322d48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23b7d164-9519-44b3-870c-51922b881bb1",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 51,
+      "total_deletions": 43,
+      "accepted_lines": 51,
+      "overriden_lines": 0
+    },
+    "b8f1924a71e24884": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27ace511-9617-4d7e-92b0-5b4d474ce8fb",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 9,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}

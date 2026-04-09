@@ -1,0 +1,46 @@
+src/shared/providers/types.ts
+  0c2b831f8df48fb8 16-19
+src/renderer/types/electron.d.ts
+  0c2b831f8df48fb8 523
+src/main/main.ts
+  0c2b831f8df48fb8 4389
+src/renderer/components/Settings.tsx
+  0c2b831f8df48fb8 13,1288-1289,1324-1325,1894-1895,2977,2979-2982,2989,2991-3001,3003-3008,3067,3092,3685
+src/main/libs/claudeSettings.ts
+  0c2b831f8df48fb8 226-234,252-253,302,387-395,398,453-461,501-514
+src/renderer/services/i18n.ts
+  0c2b831f8df48fb8 115,117-118,1405,1407-1408
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "d63a8d9204fb929d6033fe3aed071f01347731ea",
+  "prompts": {
+    "0c2b831f8df48fb8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "95bcdb90-453c-475e-b5a7-fd47468e8fad",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 102,
+      "total_deletions": 225,
+      "accepted_lines": 96,
+      "overriden_lines": 0
+    },
+    "cd1063b3e3667671": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "737967df-97d0-4009-9032-e8fc59532db9",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

@@ -1,0 +1,34 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.3",
+  "base_commit_sha": "d6613dd30829459ceaa5f7545273e5dd46a7a0c8",
+  "prompts": {
+    "427cc45571990b9e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2b40a33d3ffeag6dqN176627Ns-4c2a9017-3a2c-444f-b279-a549004cd4be",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 125,
+      "overriden_lines": 0
+    },
+    "e5a7a25ec7ec3ecf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2b40a33d3ffeag6dqN176627Ns-858d06dc-8172-4eea-b0d9-883520aedc64",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 286,
+      "overriden_lines": 0
+    }
+  }
+}

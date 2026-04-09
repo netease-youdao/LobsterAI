@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "705257a46c1280453b147421889d3fd48b216bb2",
+  "prompts": {
+    "e060810fc4121225": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d7223-f83b-7c13-8559-7bff269d8dcf",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 0,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}

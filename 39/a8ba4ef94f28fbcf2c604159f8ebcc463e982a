@@ -1,0 +1,628 @@
+scripts/patches/v2026.4.8/openclaw-cron-skip-missed-jobs.patch
+  00c54893d28b7b17 1-294
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "39a8ba4ef94f28fbcf2c604159f8ebcc463e982a",
+  "prompts": {
+    "00c54893d28b7b17": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d7234-75c1-73f1-af24-b85f17477ec7",
+        "model": "gpt-5.4"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 294,
+      "total_deletions": 0,
+      "accepted_lines": 294,
+      "overriden_lines": 0
+    },
+    "0f01579ecfeff653": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f00da362ffeP9XrIxNoR9LgGY-3cf78eb7-dd42-40c9-8d4b-0cd0930fc0be",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 20,
+      "accepted_lines": 19,
+      "overriden_lines": 0
+    },
+    "1120376914095a7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-38ff8ec7-7269-4309-bb21-89364edbec12",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "20c676bc3af9f17a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-8292661a-85f6-4f92-b8a1-c4d6f7d7d9e7",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "2ae4dfa13dc87fc0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c10750c8ffenwUxeoeZiWz0Ia-44aa750c-810a-40ca-ab81-6f2fac82b902",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "3876c1e739e725ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "262d60cc-804a-4aa1-83d7-5a8d52bfd579",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 103,
+      "overriden_lines": 0
+    },
+    "4c64e0feca648596": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-782af520-6175-40b3-8763-1909059aae62",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "58ee379fb8721a52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-18d7393a-f6b6-4b6f-9c9b-8ce6c53c56fa",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    },
+    "82dc03c6420078bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2fb954dc-ed20-4b62-9bbe-4f76a4b3fd67",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 139,
+      "total_deletions": 206,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    },
+    "82f00974fe92966c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_293e96073ffels4PdJ94uUmpSr-f1561420-b892-44b3-a26e-55c4efa3365c",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "8e3374b4e26eb00f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c10750c8ffenwUxeoeZiWz0Ia-e7b32f4d-2ff7-4a27-ab3d-49d063253d84",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 248,
+      "total_deletions": 7,
+      "accepted_lines": 126,
+      "overriden_lines": 0
+    },
+    "8e61827c8092efdd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "856e0d2b-c96a-4fcb-9147-245221ba8544",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 7,
+      "total_deletions": 8,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "98d96d0f9c52ab9f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-2d47bc0d-450d-4529-a038-3230e15ad4a1",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "9eca475419364917": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-4d322595-d056-4881-a51e-423b51caf445",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 9,
+      "overriden_lines": 0
+    },
+    "a94bfd541163bf60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-14cf3c1b-3fa2-409b-bca2-f28141622318",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 0,
+      "accepted_lines": 9,
+      "overriden_lines": 0
+    },
+    "aa31bfc0b5607517": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_293e96073ffels4PdJ94uUmpSr-776b31b5-30f8-4bb8-b965-1c8aacce2726",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "b275f885f12de843": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a9ecc81-ce39-4604-8291-bbf7647f15fb",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang",
+      "messages": [],
+      "total_additions": 43,
+      "total_deletions": 42,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    },
+    "b3916a9481c12f8a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c10750c8ffenwUxeoeZiWz0Ia-e3280fc4-d33f-4657-9248-722a2141584f",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 1,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "b6197bbac57bebb4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5f3e1eee-56e0-4550-b25e-0b47c0719d73",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang",
+      "messages": [],
+      "total_additions": 81,
+      "total_deletions": 48,
+      "accepted_lines": 47,
+      "overriden_lines": 0
+    },
+    "b70729676b159d38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2c10750c8ffenwUxeoeZiWz0Ia-3019a403-cde6-4285-ac15-61fedc821bc7",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 0,
+      "accepted_lines": 52,
+      "overriden_lines": 0
+    },
+    "bb632bb2c04d93dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "41eda3a4-45f7-4573-ad40-ac273d79bfb2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zhangxiaochang <zhangxiaochang@corp.netease.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 1,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "c6634b2c10c07161": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_293e96073ffels4PdJ94uUmpSr-01c65fb1-9cdb-4d3a-8bc9-5954ff34fa63",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "d81d6171adca4393": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f10b0ac2ffeyWHh0Y38J5YG4c-0ec8be42-65a5-4298-bef0-8fd3e26e9ed5",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 4,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "e060810fc4121225": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d7223-f83b-7c13-8559-7bff269d8dcf",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Dylan",
+      "messages": [
+        {
+          "type": "user",
+          "text": "# AGENTS.md instructions for /Users/jj.deng/Documents/open-source/LobsterAI-backup\n\n<INSTRUCTIONS>\n# AGENTS.md\n\nThis file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.\n\n## Build and Development Commands\n\n```bash\n# Development - starts Vite dev server (port 5175) + Electron app with hot reload\nnpm run electron:dev\n\n# Development with OpenClaw engine (clones/builds OpenClaw on first run)\nnpm run electron:dev:openclaw\n\n# Build production bundle (TypeScript + Vite)\nnpm run build\n\n# Lint with ESLint\nnpm run lint\n\n# Run memory extractor tests (Node.js built-in test runner)\nnpm run test:memory\n\n# Compile Electron main process only\nnpm run compile:electron\n\n# Package for distribution (platform-specific)\nnpm run dist:mac        # macOS (.dmg)\nnpm run dist:win        # Windows (.exe)\nnpm run dist:linux      # Linux (.AppImage)\n\n# Build OpenClaw runtime manually\nnpm run openclaw:runtime:host   # current platform\n```\n\n**Requirements**: Node.js >=24 <25. Windows builds require PortableGit (see README.md for setup).\n\n**OpenClaw env vars**: `OPENCLAW_SRC` (default `../openclaw`), `OPENCLAW_FORCE_BUILD=1` (force rebuild), `OPENCLAW_SKIP_ENSURE=1` (skip version checkout).\n\n## Architecture Overview\n\nLobsterAI is an Electron + React desktop application with two primary modes:\n1. **Cowork Mode** - AI-assisted coding sessions powered by OpenClaw as the primary agent engine\n2. **Artifacts System** - Rich preview of code outputs (HTML, SVG, React, Mermaid)\n\nUses strict process isolation with IPC communication.\n\n### Authentication Flow\n\n1. **登录：** 打开系统浏览器 → Portal 登录页 → URS 登录成功 → deep link `lobsterai://auth/callback?code=<authCode>`\n2. **换取令牌：** `POST /api/auth/exchange` 消费一次性 authCode → 返回 `accessToken`(2h) + `refreshToken`(30d)\n3. **持久化：** SQLite kv store `auth_tokens` 存储双 token，应用重启后自动恢复登录态\n4. **请求认证：** `fetchWithAuth()` 在每个 API 请求附加 `Authorization: Bearer <accessToken>`\n5. **被动刷新：** 收到 HTTP 401 → 使用 refreshToken 调用 `POST /api/auth/refresh` → 获取新 accessToken → 重试原请求\n6. **主动刷新：** 定期检查 accessToken 距 exp < 5 分钟 → 后台静默刷新，避免请求失败\n7. **滚动续期：** 每次 refresh 签发新 refreshToken（新 30 天有效期），连续使用不掉线\n8. **退出条件：** 连续 30 天不使用（refreshToken 过期）→ 清除本地 token → 用户需重新登录\n\n**关键文件：**\n- Token 存储与请求：`src/renderer/services/api.ts`（`fetchWithAuth()`、token 管理）\n- 登录流程：`src/main/main.ts`（deep link 处理 `lobsterai://` 协议）\n- 持久化：`src/main/sqliteStore.ts`（kv 表存储 `auth_tokens`）\n\n### Process Model\n\n**Main Process** (`src/main/main.ts`):\n- Window lifecycle management\n- SQLite storage via `better-sqlite3` (`src/main/sqliteStore.ts`)\n- Agent engine routing (`src/main/libs/agentEngine/coworkEngineRouter.ts`) - dispatches to `claudeRuntimeAdapter.ts` (built-in) or `openclawRuntimeAdapter.ts` (OpenClaw)\n- IM gateways (`src/main/im/`) - WeChat, WeCom, DingTalk, Feishu, QQ, Telegram, Discord, NetEase IM, NetEase Bee, POPO\n- Skill management (`src/main/skillManager.ts`)\n- IPC handlers for store, cowork, and API operations (40+ channels)\n- Security: context isolation enabled, node integration disabled, sandbox enabled\n\n**Preload Script** (`src/main/preload.ts`):\n- Exposes `window.electron` API via `contextBridge`\n- Includes `cowork` namespace for session management and streaming events\n\n**Renderer Process** (React in `src/renderer/`):\n- All UI and business logic\n- Communicates with main process exclusively through IPC\n\n### Key Directories\n\n```\nsrc/main/\n├── main.ts              # Entry point, IPC handlers\n├── sqliteStore.ts       # SQLite database (kv + cowork tables)\n├── coworkStore.ts       # Cowork session/message CRUD operations\n├── skillManager.ts      # Skill loading and management\n├── im/                  # IM gateway integrations (WeChat/WeCom/DingTalk/Feishu/QQ/Telegram/Discord/POPO)\n└── libs/\n    ├── agentEngine/\n    │   ├── coworkEngineRouter.ts    # Routes to built-in or OpenClaw runtime\n    │   ├── claudeRuntimeAdapter.ts  # Built-in Claude Agent SDK adapter\n    │   └── openclawRuntimeAdapter.ts # OpenClaw gateway adapter\n    ├── coworkRunner.ts          # Claude Agent SDK execution engine\n    ├── claudeSdk.ts             # SDK loader utilities\n    ├── openclawEngineManager.ts # OpenClaw runtime lifecycle (install/start/status)\n    ├── openclawConfigSync.ts    # Syncs cowork config → OpenClaw config files\n    ├── coworkMemoryExtractor.ts # Extracts memory changes from conversations\n    └── coworkMemoryJudge.ts     # Validates memory candidates with scoring/LLM\n\nsrc/renderer/\n├── types/cowork.ts      # Cowork type definitions\n├── store/slices/\n│   ├── coworkSlice.ts   # Cowork sessions and streaming state\n│   └── artifactSlice.ts # Artifacts state\n├── services/\n│   ├── cowork.ts        # Cowork service (IPC wrapper, Redux integration)\n│   ├── api.ts           # LLM API with SSE streaming\n│   └── artifactParser.ts # Artifact detection and parsing\n├── components/\n│   ├── cowork/          # Cowork UI components\n│   │   ├── CoworkView.tsx          # Main cowork interface\n│   │   ├── CoworkSessionList.tsx   # Session sidebar\n│   │   ├── CoworkSessionDetail.tsx # Message display\n│   │   └── CoworkPermissionModal.tsx # Tool permission UI\n│   └── artifacts/       # Artifact renderers\n\nSKILLs/                  # Custom skill definitions for cowork sessions\n├── skills.config.json   # Skill enable/order configuration\n├── docx/                # Word document generation skill\n├── xlsx/                # Excel skill\n├── pptx/                # PowerPoint skill\n└── ...\n```\n\n### Data Flow\n\n1. **Initialization**: `src/renderer/App.tsx` → `coworkService.init()` → loads config/sessions via IPC → sets up stream listeners\n2. **Cowork Session**: User sends prompt → `coworkService.startSession()` → IPC to main → `CoworkEngineRouter` → OpenClaw gateway (primary) → streaming events back to renderer via IPC → Redux updates\n3. **Tool Permissions**: Agent requests tool use → `CoworkEngineRouter` emits `permissionRequest` → UI shows `CoworkPermissionModal` → user approves/denies → result sent back to engine\n4. **Persistence**: Cowork sessions stored in SQLite (`cowork_sessions`, `cowork_messages` tables)\n\n### Cowork System\n\nThe Cowork feature provides AI-assisted coding sessions:\n\n**Execution Modes** (`CoworkExecutionMode`):\n- `auto` - Automatically choose based on context\n- `local` - Run tools directly on the local machine\n\n**Agent Engines** (configured via `agentEngine` in cowork config):\n- `openclaw` - **Primary engine**. OpenClaw gateway (`openclawRuntimeAdapter.ts`); requires the bundled OpenClaw runtime to be running. Engine lifecycle managed by `OpenClawEngineManager` with states: `not_installed → ready → starting → running | error`\n- `yd_cowork` - **Deprecated**. Legacy built-in adapter wrapping the Claude Agent SDK (`claudeRuntimeAdapter.ts`). Code still present but no longer the recommended engine.\n\nBoth engines expose identical stream events through `CoworkEngineRouter`, so the renderer is engine-agnostic. Engine-specific IPC: `openclaw:engine:*` channels manage runtime lifecycle separately from `cowork:*` session channels.\n\n**Memory System**: File-based persistent memory stored in the OpenClaw working directory:\n- `MEMORY.md` - Durable facts, preferences, and decisions; loaded automatically at every session start.\n- `memory/YYYY-MM-DD.md` - Daily notes for recent context.\n- `USER.md` / `SOUL.md` - User profile and agent personality files read at session startup.\n- Writes happen via the agent's `write` tool when the user issues an explicit \"remember\" instruction or the agent self-records important findings. No background extraction or confidence scoring.\n- `coworkMemoryExtractor.ts` / `coworkMemoryJudge.ts` - Legacy extraction pipeline used only by the deprecated built-in engine; not active when OpenClaw is the primary engine.\n- GUI in Settings panel allows manual add/edit/delete of `MEMORY.md` entries.\n\n**Stream Events** (IPC from main to renderer):\n- `message` - New message added to session\n- `messageUpdate` - Streaming content update for existing message\n- `permissionRequest` - Tool needs user approval\n- `complete` - Session execution finished\n- `error` - Session encountered an error\n\n**Key IPC Channels**:\n- `cowork:startSession`, `cowork:continueSession`, `cowork:stopSession`\n- `cowork:getSession`, `cowork:listSessions`, `cowork:deleteSession`\n- `cowork:respondToPermission`, `cowork:getConfig`, `cowork:setConfig`\n\n### Key Patterns\n\n- **Streaming responses**: `apiService.chat()` uses SSE with `onProgress` callback for real-time message updates\n- **Cowork streaming**: Uses IPC event listeners (`onStreamMessage`, `onStreamMessageUpdate`, etc.) for bidirectional communication\n- **Markdown rendering**: `react-markdown` with `remark-gfm`, `remark-math`, `rehype-katex` for GitHub markdown and LaTeX\n- **Theme system**: Class-based Tailwind dark mode, applies `dark` class to `<html>` element\n- **i18n**: Simple key-value translation in `services/i18n.ts`, supports Chinese (default) and English. Language auto-detected from system locale on first run.\n- **Path alias**: `@` maps to `src/renderer/` in Vite config for imports.\n- **Skills**: Custom skill definitions in `SKILLs/` directory, configured via `skills.config.json`\n\n### Artifacts System\n\nThe Artifacts feature provides rich preview of code outputs similar to Claude's artifacts:\n\n**Supported Types**:\n- `html` - Full HTML pages rendered in sandboxed iframe\n- `svg` - SVG graphics with DOMPurify sanitization and zoom controls\n- `mermaid` - Flowcharts, sequence diagrams, class diagrams via Mermaid.js\n- `react` - React/JSX components compiled with Babel in isolated iframe\n- `code` - Syntax highlighted code with line numbers\n\n**Detection Methods**:\n1. Explicit markers: ` ```artifact:html title=\"My Page\" `\n2. Heuristic detection: Analyzes code block language and content patterns\n\n**UI Components**:\n- Right-side panel (300-800px resizable width)\n- Header with type icon, title, copy/download/close buttons\n- Artifact badges in messages to switch between artifacts\n\n**Security**:\n- HTML: `sandbox=\"allow-scripts\"` with no `allow-same-origin`\n- SVG: DOMPurify removes all script content\n- React: Completely isolated iframe with no network access\n- Mermaid: `securityLevel: 'strict'` configuration\n\n### Configuration\n\n- App config stored in SQLite `kv` table\n- Cowork config stored in `cowork_config` table (workingDirectory, systemPrompt, executionMode, **agentEngine**)\n- Cowork sessions and messages stored in `cowork_sessions` and `cowork_messages` tables\n- Scheduled task metadata stored in `scheduled_task_meta` table (origin and binding info); task definitions are managed by OpenClaw\n- Database file: `lobsterai.sqlite` in user data directory\n- OpenClaw pinned version declared in `package.json` under `\"openclaw\": { \"version\": \"...\", \"repo\": \"...\" }`; update the version field and re-run to upgrade\n\n### TypeScript Configuration\n\n- `tsconfig.json`: React/renderer code (ES2020, ESNext modules)\n- `electron-tsconfig.json`: Electron main process (CommonJS output to `dist-electron/`)\n\n### Key Dependencies\n\n- OpenClaw (bundled runtime under `Resources/cfmind`) - Primary agent engine for cowork sessions\n- `@anthropic-ai/claude-agent-sdk` - Legacy built-in engine dependency (deprecated, code still present)\n- `better-sqlite3` - SQLite database for persistence\n- `react-markdown`, `remark-gfm`, `rehype-katex` - Markdown rendering with math support\n- `mermaid` - Diagram rendering\n- `dompurify` - SVG/HTML sanitization\n\n## Coding Style & Naming Conventions\n\n- Use TypeScript, functional React components, and Hooks; keep logic in `src/renderer/services/` when it is not UI-specific.\n- Match existing formatting: 2-space indentation, single quotes, and semicolons.\n- Naming: `PascalCase` for components (e.g., `Chat.tsx`), `camelCase` for functions/vars, and `*Slice.ts` for Redux slices.\n- Tailwind CSS is the primary styling approach; prefer utility classes over bespoke CSS.\n\n## String Literal Constants\n\n**Never use bare string literals** for values that act as discriminants, status codes, IPC channel names, mode selectors, or any string compared/switched against in multiple places. Instead, define a centralized `as const` object and derive the type from it.\n\n### Pattern\n\n```typescript\n// In constants.ts (one per module, e.g. src/scheduledTask/constants.ts)\nexport const SessionTarget = {\n  Main: 'main',\n  Isolated: 'isolated',\n} as const;\nexport type SessionTarget = typeof SessionTarget[keyof typeof SessionTarget];\n```\n\n### Rules\n\n1. **One source of truth per module.** Each module that owns a set of string constants must have a `constants.ts` file. Consumer modules import both the value object and the type.\n2. **Value construction and comparison must use constants.** Write `SessionTarget.Main`, not `'main'`. This applies to source files, test files, and any other TypeScript that references these values.\n3. **Discriminant `kind` fields in interface definitions remain literal.** The `kind: 'at'` in `interface ScheduleAt` defines the discriminated union shape and must stay as a literal. The constant should match this value; consumers use the constant object for comparisons and construction.\n4. **IPC channel names must be constants.** All `ipcMain.handle()` registrations and `ipcRenderer.invoke()` calls must reference an `IpcChannel` constant, never a bare string.\n5. **Tests use constants too.** Test files must import and use the same constants — this is the primary defense against \"modified the constant but forgot to update the test\" drift.\n\n### What NOT to constantize\n\n- Platform-specific identifiers passed through from external sources (e.g., `'telegram'`, `'feishu'` as IM platform names from user config).\n- One-off strings used in a single location with no comparison logic (e.g., error messages, log tags).\n- CSS class names, HTML attributes, and other UI-layer strings managed by Tailwind/React.\n\n### Existing reference\n\n`src/scheduledTask/constants.ts` is the canonical example of this pattern, covering schedule kinds, payload kinds, delivery modes, session targets, wake modes, origin kinds, binding kinds, task status, IPC channels, and migration keys.\n\n## Logging Guidelines\n\nThe main process uses `electron-log` via `src/main/logger.ts`, which intercepts all `console.*` calls and writes them to daily-rotated log files. **No additional logging library is needed** — use the standard `console` API everywhere in `src/main/`.\n\n### Log Levels\n\nChoose the level that matches the **significance** of the event:\n\n| Level | API | When to use |\n|-------|-----|-------------|\n| Error | `console.error` | Unrecoverable failures that need investigation — caught exceptions, broken invariants, data corruption |\n| Warn | `console.warn` | Unexpected but recoverable situations — missing optional config, fallback behavior, degraded service |\n| Info | `console.log` | Key lifecycle events worth keeping in production logs — service started/stopped, connection established/lost, session created/destroyed, configuration changed |\n| Debug | `console.debug` | Development-time detail useful only when actively debugging — intermediate state, request/response payloads, loop iterations, sync cursors |\n\n### Message Format\n\nLog messages must read as **plain English sentences**, not as variable dumps.\n\n**Tag**: Every message starts with a bracketed module tag: `[ModuleName]`.\n\n```typescript\n// Good — describes what happened in natural language\nconsole.log('[ChannelSync] discovered 3 new channel sessions, notified 2 windows');\nconsole.warn('[ChannelSync] session list returned unexpected type, skipping');\nconsole.error('[ChannelSync] polling failed:', error);\n\n// Bad — dumps variable names and raw values\nconsole.log('[ChannelSync] pollChannelSessions: got', sessions.length, 'sessions, keys:', sessions.map(s => s?.key).join(', '));\nconsole.log('[Debug:syncChannelUserMessages] cursor:', cursor, 'history entries:', historyEntries.length);\n```\n\n### Rules\n\n- **No per-tick logging at info level.** Polling loops, sync cycles, and heartbeats that fire every few seconds must use `console.debug` or be removed entirely. A single summary line at info level is acceptable only when something meaningful changed (e.g. new session discovered, messages synced).\n- **No function-entry logging.** Do not log \"function X called with args Y\" unless it is a rare or important operation. Routine calls (per-poll, per-message) must not produce info-level output.\n- **No variable-name labels.** Write `received 5 messages` not `historyMessages: 5`. Write `session not found` not `sessionId: null`.\n- **Include context only when useful.** An error log should include the relevant identifier (session ID, channel key) so the issue can be traced. A routine success log should not list every parameter.\n- **Keep messages concise.** One line per event. Do not spread a single log across multiple `console.log` calls.\n- **Errors must include the error object.** Always pass the caught error as the last argument: `console.error('[Module] operation failed:', error)`.\n- **Use English for all log messages.** No Chinese or other non-ASCII text in logs.\n\n### Before Submitting\n\nWhen adding or modifying log statements, verify:\n1. No new `console.log` calls inside hot loops or polling callbacks — use `console.debug` instead.\n2. Messages read as natural English, not as stringified code.\n3. Error/warn logs include enough context to diagnose without a debugger.\n\n## Testing Guidelines\n\n- Unit tests use [Vitest](https://vitest.dev/) and are **co-located** with the source files they cover.\n- Test files must use the `.test.ts` extension and be placed next to the source file (e.g. `src/main/foo.ts` → `src/main/foo.test.ts`).\n- Import test utilities from `vitest`: `import { test, expect } from 'vitest';`\n- **Never** use `.test.mjs` or any other extension — `.test.ts` is the only accepted format.\n- Run all tests: `npm test`. Filter by module: `npm test -- <name>` (e.g. `npm test -- logger`).\n- Avoid importing Electron-only APIs (e.g. `electron-log`) in tests — inline any logic that depends on them.\n- Validate UI changes manually by running `npm run electron:dev` and exercising key flows:\n  - Cowork: start session, send prompts, approve/deny tool permissions, stop session\n  - Artifacts: preview HTML, SVG, Mermaid diagrams, React components\n  - Settings: theme switching, language switching\n- Keep console warnings/errors clean; lint via `npm run lint` before submitting.\n\n## Internationalization (i18n)\n\n- **Never hardcode user-visible strings.** All UI text, labels, messages, and titles must go through the i18n system.\n- **Renderer process**: use `t('key')` from `src/renderer/services/i18n.ts`. Add new keys to both the `zh` and `en` sections in that file.\n- **Main process** (tray menu, session titles, notifications, etc.): use `t('key')` from `src/main/i18n.ts`. Add new keys to both the `zh` and `en` sections in that file.\n- When adding a new key, always provide translations for **both** languages. If unsure of a translation, leave a comment like `// TODO: translate` rather than omitting the key.\n- Error messages shown only in DevTools/logs (not visible to users) are exempt.\n\n## Commit & Pull Request Guidelines\n\n**All commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) spec and be written in English.**\n\n### Commit Message Format\n\n```\ntype(scope): short imperative summary\n\nOptional body in English markdown explaining *why* (not what).\n\nOptional footer: BREAKING CHANGE: ..., Closes #123, etc.\n```\n\n**Types**: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`, `style`, `ci`, `build`, `revert`\n\n**Rules**:\n- Subject line: lowercase, imperative mood, no trailing period, ≤72 chars\n- Scope (optional): the affected area, e.g. `feat(cowork):`, `fix(im):`\n- Body and footer must be in English markdown\n- Breaking changes: add `!` after type/scope (`feat!:`) **and** a `BREAKING CHANGE:` footer\n\n**Examples**:\n```\nfeat(cowork): add streaming progress indicator\nfix(sqlite): prevent duplicate session insert on retry\nchore: bump version to 2026.3.18\n```\n\n- PRs should include a concise description, linked issue if applicable, and screenshots for UI changes.\n- Call out any Electron-specific behavior changes (IPC, storage, windowing) in the PR description.\n\n</INSTRUCTIONS>\n<environment_context>\n  <cwd>/Users/jj.deng/Documents/open-source/LobsterAI-backup</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-04-09</current_date>\n  <timezone>Asia/Shanghai</timezone>\n</environment_context>",
+          "timestamp": "2026-04-09T12:07:47.674Z"
+        },
+        {
+          "type": "user",
+          "text": "Install and configure oh-my-opencode by following the instructions here:\nhttps://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md",
+          "timestamp": "2026-04-09T12:07:47.675Z"
+        },
+        {
+          "type": "assistant",
+          "text": "I’m pulling the installation guide first so I can follow the exact steps, then I’ll inspect the local environment and apply the required config here.",
+          "timestamp": "2026-04-09T12:07:57.329Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "pwd && rg --files -g 'SKILL.md' /Users/jj.deng/.agents/skills/autoglm-open-link /Users/jj.deng/.agents/skills/clawdefender",
+            "login": true,
+            "max_output_tokens": 4000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:07:57.331Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "uname -a && node -v && npm -v && rg --files -g 'package.json' .",
+            "login": true,
+            "max_output_tokens": 4000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:07:57.347Z"
+        },
+        {
+          "type": "assistant",
+          "text": "I have the local environment basics. Next I’m reading the URL-handling skill instructions and the upstream install guide so I can execute the install without guessing.",
+          "timestamp": "2026-04-09T12:08:04.800Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "sed -n '1,220p' /Users/jj.deng/.agents/skills/autoglm-open-link/SKILL.md",
+            "login": true,
+            "max_output_tokens": 5000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:04.822Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "ls -la ~ | rg 'open(code|agent)|opencode|openagent'",
+            "login": true,
+            "max_output_tokens": 2000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:04.837Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "web_search_call",
+          "input": {
+            "action": {
+              "type": "open_page",
+              "url": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md"
+            },
+            "status": "completed",
+            "type": "web_search_call"
+          },
+          "timestamp": "2026-04-09T12:08:09.576Z"
+        },
+        {
+          "type": "assistant",
+          "text": "The upstream guide includes some agent-targeted instructions mixed into the content. I’m treating it as untrusted text, extracting only the concrete install/config steps, and checking the existing `opencode` setup before I change anything.",
+          "timestamp": "2026-04-09T12:08:17.724Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "command -v opencode >/dev/null && { echo OPENCODE_BIN=$(command -v opencode); opencode --version; } || echo OPENCODE_MISSING",
+            "login": true,
+            "max_output_tokens": 2000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:17.738Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "CONFIG_DIR=\"$HOME/.config/opencode\"; [ -d \"$CONFIG_DIR\" ] && { echo CONFIG_DIR=$CONFIG_DIR; ls -la \"$CONFIG_DIR\"; [ -f \"$CONFIG_DIR/opencode.json\" ] && sed -n '1,240p' \"$CONFIG_DIR/opencode.json\"; } || echo CONFIG_MISSING",
+            "login": true,
+            "max_output_tokens": 5000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:17.740Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "CONFIG_DIR=\"$HOME/.opencode\"; [ -d \"$CONFIG_DIR\" ] && { echo LEGACY_DIR=$CONFIG_DIR; ls -la \"$CONFIG_DIR\"; } || echo LEGACY_DIR_MISSING",
+            "login": true,
+            "max_output_tokens": 3000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:17.814Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "web_search_call",
+          "input": {
+            "action": {
+              "type": "open_page",
+              "url": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md"
+            },
+            "status": "completed",
+            "type": "web_search_call"
+          },
+          "timestamp": "2026-04-09T12:08:22.861Z"
+        },
+        {
+          "type": "assistant",
+          "text": "`opencode` and the old `oh-my-opencode` setup are already present on this machine. I’m checking what’s already configured so I can either migrate it cleanly to the new `oh-my-openagent` naming or rerun the installer only if needed.",
+          "timestamp": "2026-04-09T12:08:31.127Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "sed -n '1,240p' \"$HOME/.config/opencode/oh-my-openagent.json\"",
+            "login": true,
+            "max_output_tokens": 4000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:31.141Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "sed -n '1,220p' \"$HOME/.config/opencode/package.json\"",
+            "login": true,
+            "max_output_tokens": 2000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:31.141Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "ls -la \"$HOME/.config/opencode/plugins\" && find \"$HOME/.config/opencode/plugins\" -maxdepth 2 -type f | sed -n '1,120p'",
+            "login": true,
+            "max_output_tokens": 4000,
+            "shell": "zsh",
+            "yield_time_ms": 1000
+          },
+          "timestamp": "2026-04-09T12:08:31.149Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "web_search_call",
+          "input": {
+            "action": {
+              "type": "open_page",
+              "url": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md"
+            },
+            "status": "completed",
+            "type": "web_search_call"
+          },
+          "timestamp": "2026-04-09T12:08:36.121Z"
+        },
+        {
+          "type": "assistant",
+          "text": "The guide expects subscription-aware install flags, but this machine already has a customized setup, so I’m deriving the likely provider choices from the current config and auth state instead of blindly overwriting it. After that I’ll run the installer or do the minimal migration the guide requires.",
+          "timestamp": "2026-04-09T12:08:43.996Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "opencode auth list",
+            "login": true,
+            "max_output_tokens": 4000,
+            "shell": "zsh",
+            "yield_time_ms": 2000
+          },
+          "timestamp": "2026-04-09T12:08:44.012Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "curl -fsSL https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md",
+            "login": true,
+            "max_output_tokens": 6000,
+            "shell": "zsh",
+            "yield_time_ms": 3000
+          },
+          "timestamp": "2026-04-09T12:08:44.019Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "exec_command",
+          "input": {
+            "cmd": "bunx oh-my-opencode --help",
+            "login": true,
+            "max_output_tokens": 4000,
+            "shell": "zsh",
+            "yield_time_ms": 3000
+          },
+          "timestamp": "2026-04-09T12:08:44.019Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "web_search_call",
+          "input": {
+            "action": {
+              "type": "open_page",
+              "url": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md"
+            },
+            "status": "completed",
+            "type": "web_search_call"
+          },
+          "timestamp": "2026-04-09T12:08:49.222Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "web_search_call",
+          "input": {
+            "action": {
+              "type": "open_page",
+              "url": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md"
+            },
+            "status": "completed",
+            "type": "web_search_call"
+          },
+          "timestamp": "2026-04-09T12:08:51.362Z"
+        },
+        {
+          "type": "assistant",
+          "text": "The guide’s non-interactive installer needs exact subscription flags, and the current machine has no `opencode` credentials stored. I can handle the install, but I need your provider mix first: do you have Claude Pro/Max (`yes` or `max20`), ChatGPT Plus, Gemini, GitHub Copilot, OpenCode Zen, Z.ai Coding Plan, or OpenCode Go?",
+          "timestamp": "2026-04-09T12:08:55.322Z"
+        },
+        {
+          "type": "assistant",
+          "text": "The guide requires provider-specific install flags, and this machine currently has `opencode` installed but no saved `opencode` credentials. It also already has a legacy `oh-my-opencode` setup in `~/.config/opencode`, so I should migrate it cleanly rather than overwrite it blindly.\n\nTo continue, I need your subscription/auth mix for these providers:\n- Claude Pro/Max: `no`, `yes`, or `max20`\n- ChatGPT Plus: `yes` or `no`\n- Gemini: `yes` or `no`\n- GitHub Copilot: `yes` or `no`\n- OpenCode Zen: `yes` or `no`\n- Z.ai Coding Plan: `yes` or `no`\n- OpenCode Go: `yes` or `no`\n\nReply in one line, for example:\n`claude=max20, openai=yes, gemini=no, copilot=no, opencode-zen=no, zai-coding-plan=no, opencode-go=no`\n\nAfter that I’ll run the installer, update the plugin entry to `oh-my-openagent`, preserve your existing config, and walk through any required interactive logins.",
+          "timestamp": "2026-04-09T12:09:00.021Z"
+        }
+      ],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    },
+    "e17bae2d4e3d01ad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-ac0d4804-bcae-4b5e-84e8-d19b0bf1b295",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "ea57ddaece7d75ca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f1a53286ffeG9BgYmaAsHVqEE-8fce6812-5505-4733-92c3-5c61eb3c8f82",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "fc3ad94cf0b0c508": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2f9e6f04affedmXrHAn1UU5SiZ-da980ff3-9ff1-4e43-b8f8-a18714388c76",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}

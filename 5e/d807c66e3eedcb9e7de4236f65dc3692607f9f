@@ -1,0 +1,23 @@
+src/renderer/components/Settings.tsx
+  2a2e2c8390322d48 1916,1918-1919,3242,3244-3246,3248-3257,3259-3277,3279-3286,3288,3433,3437-3439,3442,3446,3529
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5ed807c66e3eedcb9e7de4236f65dc3692607f9f",
+  "prompts": {
+    "2a2e2c8390322d48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23b7d164-9519-44b3-870c-51922b881bb1",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 57,
+      "total_deletions": 317,
+      "accepted_lines": 79,
+      "overriden_lines": 0
+    }
+  }
+}

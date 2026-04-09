@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "5bb2c40fa98ea5aca39ea7ea22e06e926ece0cef",
+  "prompts": {
+    "2a2e2c8390322d48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23b7d164-9519-44b3-870c-51922b881bb1",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 27,
+      "overriden_lines": 0
+    }
+  }
+}

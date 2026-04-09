@@ -1,0 +1,65 @@
+scripts/apply-openclaw-patches.cjs
+  3e5778bef80f67a2 82-91,93-102,104-105,110-118,121-127,129-156
+  c616e92ac9ada451 21
+  072b2e6a41c3a169 69-78
+  6eab9579f5f81457 157-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "8f4daa91653c2962a548ac92272b573ac9f8d010",
+  "prompts": {
+    "072b2e6a41c3a169": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_293636b35ffeKFgdm1eVnHJPBH-6c15a542-0a40-4334-9069-0513e107995a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 1,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    },
+    "3e5778bef80f67a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_293636b35ffeKFgdm1eVnHJPBH-fac1640f-41a1-4deb-bc11-bf657e70e924",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 68,
+      "total_deletions": 66,
+      "accepted_lines": 68,
+      "overriden_lines": 0
+    },
+    "6eab9579f5f81457": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_293636b35ffeKFgdm1eVnHJPBH-e355d790-c9a8-40f1-8763-384d12a4ee0a",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 0,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    },
+    "c616e92ac9ada451": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_293636b35ffeKFgdm1eVnHJPBH-20ba3b37-d775-49ed-bfe8-efb3d981e9be",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

@@ -1,0 +1,60 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "c696307b50df4574454fa38f02150632b41a3cfb",
+  "prompts": {
+    "339601afd37f8417": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2bdfedbddffeFkZrgYLBazK4ng-36b01b3d-07c9-4361-98bb-77af6baa3ea4",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 4,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    },
+    "a30f173e85a7ad9e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2bdfedbddffeFkZrgYLBazK4ng-b3788964-b024-4312-b883-6e7881f1ce5e",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "db9ef817d35177a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2bdfedbddffeFkZrgYLBazK4ng-f57ae9d6-16d3-4a80-95a0-2da73ab4b101",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "e8736513bf93142e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_2bdfedbddffeFkZrgYLBazK4ng-56c9fd20-ce2b-4926-a7f0-0592f57b08fb",
+        "model": "unknown"
+      },
+      "human_author": "Dylan <2894220@gmail.com>",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 35,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}

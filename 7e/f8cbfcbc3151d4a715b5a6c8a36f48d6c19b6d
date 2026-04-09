@@ -1,0 +1,138 @@
+src/main/libs/openclawConfigSync.ts
+  4c64e0feca648596 1125,1127-1129
+src/renderer/types/im.ts
+  5a5b39635dff0c36 560,562-563
+  64d789a980f0a94b 68-78,90,92-94
+src/renderer/services/i18n.ts
+  212b7164bfb4a4ad 2281-2286
+src/main/im/types.ts
+  4b81350ca21d7fc6 564,566-567
+  d661459bbcf1c7ab 67-77,89,91-93
+src/renderer/components/im/FeishuInstanceSettings.tsx
+  80475cf6abb1b600 653-729
+  1452a94deaf0eee5 750-780
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "7ef8cbfcbc3151d4a715b5a6c8a36f48d6c19b6d",
+  "prompts": {
+    "1452a94deaf0eee5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-9016cb5a-a76c-4247-8a50-8df28abb62b7",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 31,
+      "total_deletions": 0,
+      "accepted_lines": 31,
+      "overriden_lines": 0
+    },
+    "212b7164bfb4a4ad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-a0b5a504-f64d-455e-ab06-951b2c034894",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    },
+    "4b81350ca21d7fc6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-e29ef5b1-1076-4b22-8758-09efface6fc9",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "4c64e0feca648596": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-782af520-6175-40b3-8763-1909059aae62",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "5a5b39635dff0c36": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-be636e46-f691-4410-a083-9196d499b6f6",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "64d789a980f0a94b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-6ec30b97-d97a-4944-a0bd-39d5568e4782",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 15,
+      "total_deletions": 0,
+      "accepted_lines": 15,
+      "overriden_lines": 0
+    },
+    "80475cf6abb1b600": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-785b1bff-5979-4477-81d6-f7b59a2e3283",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 77,
+      "total_deletions": 0,
+      "accepted_lines": 77,
+      "overriden_lines": 0
+    },
+    "cd1063b3e3667671": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "737967df-97d0-4009-9032-e8fc59532db9",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "d661459bbcf1c7ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "opencode-transcript-ses_294261b6cffe9qwZZeQJE45vjV-37c342f1-45bd-405a-ba5e-dbeea4967617",
+        "model": "unknown"
+      },
+      "human_author": "Dylan",
+      "messages": [],
+      "total_additions": 15,
+      "total_deletions": 0,
+      "accepted_lines": 15,
+      "overriden_lines": 0
+    }
+  }
+}
