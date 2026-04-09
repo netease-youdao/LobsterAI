@@ -767,7 +767,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? false);
   const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
-    coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.SevenDays,
+    coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
   );
   const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
   const [coworkMemoryStats, setCoworkMemoryStats] = useState<CoworkMemoryStats | null>(null);
@@ -787,7 +787,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
     setSkipMissedJobs(coworkConfig.skipMissedJobs ?? false);
-    setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.SevenDays);
+    setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   }, [
     coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
@@ -1413,7 +1413,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
     || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? false)
-    || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.SevenDays);
+    || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
   const openClawProgressPercent = useMemo(() => {
@@ -2622,33 +2622,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   />
                 </button>
               </label>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-3">
-                {i18nService.t('openClawSessionKeepAlive')}
-              </label>
-              <p className="text-sm text-secondary mb-3">
-                {i18nService.t('openClawSessionKeepAliveHint')}
-              </p>
-              <select
-                value={openClawSessionKeepAlive}
-                onChange={(event) => setOpenClawSessionKeepAlive(event.target.value as OpenClawSessionKeepAlive)}
-                className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface text-foreground"
-              >
-                <option value={OpenClawSessionKeepAliveValues.OneDay}>
-                  {i18nService.t('openClawSessionKeepAliveOneDay')}
-                </option>
-                <option value={OpenClawSessionKeepAliveValues.SevenDays}>
-                  {i18nService.t('openClawSessionKeepAliveSevenDays')}
-                </option>
-                <option value={OpenClawSessionKeepAliveValues.ThirtyDays}>
-                  {i18nService.t('openClawSessionKeepAliveThirtyDays')}
-                </option>
-                <option value={OpenClawSessionKeepAliveValues.OneYear}>
-                  {i18nService.t('openClawSessionKeepAliveOneYear')}
-                </option>
-              </select>
             </div>
 
             {/* Appearance Section — mode selector + theme gallery */}

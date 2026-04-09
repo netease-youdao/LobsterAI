@@ -70,9 +70,17 @@ describe('buildOpenClawSessionConfig', () => {
       dmScope: 'per-account-channel-peer',
       reset: {
         mode: 'idle',
-        idleMinutes: 10080,
+        idleMinutes: 43200,
       },
       maintenance: OPENCLAW_SESSION_MAINTENANCE,
+    });
+  });
+});
+
+describe('DEFAULT_OPENCLAW_SESSION_POLICY_CONFIG', () => {
+  test('defaults keepAlive to thirty days', () => {
+    expect(DEFAULT_OPENCLAW_SESSION_POLICY_CONFIG).toEqual({
+      keepAlive: OpenClawSessionKeepAlive.ThirtyDays,
     });
   });
 });

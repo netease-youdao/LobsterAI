@@ -224,7 +224,7 @@ class CoworkService {
         ...coworkResult.config,
         openClawSessionPolicy: sessionPolicyResult?.success && sessionPolicyResult.config
           ? sessionPolicyResult.config
-          : { keepAlive: '7d' },
+          : { keepAlive: '30d' },
       }));
     }
   }

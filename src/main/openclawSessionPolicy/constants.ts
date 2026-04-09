@@ -15,7 +15,7 @@ export interface OpenClawSessionPolicyConfig {
 }
 
 export const DEFAULT_OPENCLAW_SESSION_POLICY_CONFIG: OpenClawSessionPolicyConfig = {
-  keepAlive: OpenClawSessionKeepAlive.SevenDays,
+  keepAlive: OpenClawSessionKeepAlive.ThirtyDays,
 };
 
 export const OPENCLAW_SESSION_MAINTENANCE = {

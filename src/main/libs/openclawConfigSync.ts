@@ -738,7 +738,7 @@ export class OpenClawConfigSync {
   }
 
   private buildSessionConfig(): Record<string, unknown> {
-    const policy = this.getOpenClawSessionPolicy?.() ?? { keepAlive: OpenClawSessionKeepAlive.SevenDays };
+    const policy = this.getOpenClawSessionPolicy?.() ?? { keepAlive: OpenClawSessionKeepAlive.ThirtyDays };
     return buildOpenClawSessionConfig(policy);
   }
 
