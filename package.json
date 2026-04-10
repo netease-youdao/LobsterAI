@@ -135,6 +135,7 @@
     "form-data": "^4.0.5",
     "js-yaml": "^4.1.1",
     "katex": "^0.16.21",
+    "lucide-react": "^1.8.0",
     "mermaid": "^10.9.5",
     "nim-web-sdk-ng": "10.9.77-alpha.4",
     "npm": "^11.11.0",

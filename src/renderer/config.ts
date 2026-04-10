@@ -332,6 +332,7 @@ export const CONFIG_KEYS = {
   CONVERSATIONS: 'conversations',
   PROVIDERS_EXPORT_KEY: 'providers_export_key',
   SKILLS: 'skills',
+  USER_AVATAR: 'user_avatar_config',
 };
 
 // Provider lists derived from ProviderRegistry — single source of truth
