@@ -31,24 +31,8 @@ import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import { defaultConfig, type AppConfig, getVisibleProviders, isCustomProvider, getCustomProviderDefaultName,getProviderDisplayName } from '../config';
-import {
-  OpenAIIcon,
-  DeepSeekIcon,
-  GeminiIcon,
-  AnthropicIcon,
-  MoonshotIcon,
-  ZhipuIcon,
-  MiniMaxIcon,
-  YouDaoZhiYunIcon,
-  QwenIcon,
-  XiaomiIcon,
-  StepfunIcon,
-  VolcengineIcon,
-  OpenRouterIcon,
-  OllamaIcon,
-  GitHubCopilotIcon,
-  CustomProviderIcon,
-} from './icons/providers';
+import { CustomProviderIcon, GitHubCopilotIcon } from './icons/providers';
+import { getProviderIcon } from './providerIconMap';
 
 type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
 
@@ -146,22 +130,27 @@ interface ProvidersImportPayload {
   providers?: Record<string, ProvidersImportEntry>;
 }
 
+const renderProviderIcon = (providerKey: string) => {
+  const Icon = getProviderIcon(providerKey);
+  return <Icon />;
+};
+
 const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode }> = {
-  openai: { label: 'OpenAI', icon: <OpenAIIcon /> },
-  deepseek: { label: 'DeepSeek', icon: <DeepSeekIcon /> },
-  gemini: { label: 'Gemini', icon: <GeminiIcon /> },
-  anthropic: { label: 'Anthropic', icon: <AnthropicIcon /> },
-  moonshot: { label: 'Moonshot', icon: <MoonshotIcon /> },
-  zhipu: { label: 'Zhipu', icon: <ZhipuIcon /> },
-  minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
-  youdaozhiyun: { label: 'Youdao', icon: <YouDaoZhiYunIcon /> },
-  qwen: { label: 'Qwen', icon: <QwenIcon /> },
-  xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
-  stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
-  volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
-  openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
-  'github-copilot': { label: 'GitHub Copilot', icon: <GitHubCopilotIcon /> },
-  ollama: { label: 'Ollama', icon: <OllamaIcon /> },
+  openai: { label: 'OpenAI', icon: renderProviderIcon('openai') },
+  deepseek: { label: 'DeepSeek', icon: renderProviderIcon('deepseek') },
+  gemini: { label: 'Gemini', icon: renderProviderIcon('gemini') },
+  anthropic: { label: 'Anthropic', icon: renderProviderIcon('anthropic') },
+  moonshot: { label: 'Moonshot', icon: renderProviderIcon('moonshot') },
+  zhipu: { label: 'Zhipu', icon: renderProviderIcon('zhipu') },
+  minimax: { label: 'MiniMax', icon: renderProviderIcon('minimax') },
+  youdaozhiyun: { label: 'Youdao', icon: renderProviderIcon('youdaozhiyun') },
+  qwen: { label: 'Qwen', icon: renderProviderIcon('qwen') },
+  xiaomi: { label: 'Xiaomi', icon: renderProviderIcon('xiaomi') },
+  stepfun: { label: 'StepFun', icon: renderProviderIcon('stepfun') },
+  volcengine: { label: 'Volcengine', icon: renderProviderIcon('volcengine') },
+  openrouter: { label: 'OpenRouter', icon: renderProviderIcon('openrouter') },
+  'github-copilot': { label: 'GitHub Copilot', icon: renderProviderIcon('github-copilot') },
+  ollama: { label: 'Ollama', icon: renderProviderIcon('ollama') },
   ...Object.fromEntries(
     CUSTOM_PROVIDER_KEYS.map(key => [key, { label: getCustomProviderDefaultName(key), icon: <CustomProviderIcon /> }])
   ) as Record<(typeof CUSTOM_PROVIDER_KEYS)[number], { label: string; icon: React.ReactNode }>,

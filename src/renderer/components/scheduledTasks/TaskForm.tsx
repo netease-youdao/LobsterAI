@@ -696,7 +696,6 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
           />
           <div className="flex items-center px-2 py-1">
             <ModelSelector
-              dropdownDirection="up"
               value={selectedModelValue}
               onChange={handleModelChange}
               defaultLabel={i18nService.t('scheduledTasksFormModelDefault')}

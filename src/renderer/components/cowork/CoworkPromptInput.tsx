@@ -796,7 +796,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               style={{ minHeight: `${minHeight}px` }}
             />
             <div className="flex items-center justify-between px-4 pb-2 pt-1.5">
-              <div className="flex items-center gap-2 relative">
+              <div className="flex items-center gap-2 relative h-9">
                 {showFolderSelector && (
                   <>
                       <div className="flex items-center">
@@ -845,7 +845,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 {showModelSelector && !remoteManaged && (
                   <div className="flex flex-col items-start gap-1">
                     <ModelSelector
-                      dropdownDirection="up"
                       value={coworkAgentEngine === 'openclaw' ? agentSelectedModel : null}
                       onChange={coworkAgentEngine === 'openclaw'
                         ? async (nextModel) => {
@@ -865,7 +864,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   <button
                     type="button"
                     onClick={handleAddFile}
-                    className="flex items-center justify-center p-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
+                    className="flex items-center justify-center px-2 py-1.5 rounded-lg text-sm text-secondary hover:bg-surface-raised hover:text-foreground transition-colors"
                     title={i18nService.t('coworkAddFile')}
                     aria-label={i18nService.t('coworkAddFile')}
                     disabled={disabled || isStreaming || isAddingFile}
@@ -883,34 +882,34 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 h-9">
                 {isStreaming ? (
                   <button
                     type="button"
                     onClick={handleStopClick}
-                    className="p-2 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-all shadow-subtle hover:shadow-card active:scale-95"
+                    className="p-[7px] rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all active:scale-95"
                     aria-label="Stop"
                   >
-                    <StopIcon className="h-5 w-5" />
+                    <StopIcon className="h-[18px] w-[18px]" />
                   </button>
                 ) : (
                   <div className="relative">
-                    <div className={`flex items-stretch rounded-xl shadow-subtle hover:shadow-card ${!canSubmit ? 'opacity-50' : ''}`}>
+                    <div className={`flex items-stretch rounded-lg ${!canSubmit ? 'opacity-50' : ''}`}>
                       <button
                         type="button"
                         onClick={handleSubmit}
                         disabled={!canSubmit}
-                        className="p-2 rounded-l-xl bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 disabled:cursor-not-allowed"
+                        className="p-[7px] rounded-l-lg bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 disabled:cursor-not-allowed"
                         aria-label="Send"
                         title={currentSendShortcut !== 'Enter' ? getSendShortcutLabel(currentSendShortcut) : undefined}
                       >
-                        <PaperAirplaneIcon className="h-5 w-5" />
+                        <PaperAirplaneIcon className="h-[18px] w-[18px]" />
                       </button>
                       <button
                         ref={sendShortcutBtnRef}
                         type="button"
                         onClick={() => setShowSendShortcutMenu(!showSendShortcutMenu)}
-                        className="px-1 flex items-center rounded-r-xl bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 border-l border-white/20"
+                        className="px-1 flex items-center rounded-r-lg bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 border-l border-white/20"
                         aria-label="Change send shortcut"
                       >
                         <ChevronDownIcon className="h-3 w-3" />

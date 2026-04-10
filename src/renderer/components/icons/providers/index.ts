@@ -14,3 +14,4 @@ export { default as OllamaIcon } from './OllamaIcon';
 export { default as VolcengineIcon } from './VolcengineIcon';
 export { default as GitHubCopilotIcon } from './GitHubCopilotIcon';
 export { default as CustomProviderIcon } from './CustomProviderIcon';
+export { default as DefaultProviderIcon } from './DefaultProviderIcon';
