@@ -1101,6 +1101,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skipMissedJobsDescription: '启动时跳过离线期间未触发的定时任务，不补充执行（保存后生效）',
     taskNotification: '任务完成通知',
     taskNotificationDescription: '定时任务执行完成后推送系统通知',
+    taskNotificationPermissionDenied: '系统通知权限未开启，请在系统设置中允许通知',
+    taskNotificationHint: '提示：可在设置中开启「任务完成通知」以接收系统推送',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -2507,6 +2509,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Skip jobs that were missed while the app was offline (applies after Save)',
     taskNotification: 'Task Completion Notification',
     taskNotificationDescription: 'Show a system notification when a scheduled task finishes',
+    taskNotificationPermissionDenied:
+      'Notification permission not granted. Please allow notifications in System Settings.',
+    taskNotificationHint:
+      'Tip: Enable "Task Completion Notification" in Settings to receive system notifications.',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',

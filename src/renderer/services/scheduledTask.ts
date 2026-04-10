@@ -66,7 +66,7 @@ class ScheduledTaskService {
   }
 
   destroy(): void {
-    this.cleanupFns.forEach((fn) => fn());
+    this.cleanupFns.forEach(fn => fn());
     this.cleanupFns = [];
     this.initialized = false;
   }
@@ -75,23 +75,19 @@ class ScheduledTaskService {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
-    const cleanupStatus = api.onStatusUpdate(
-      (event: ScheduledTaskStatusEvent) => {
-        store.dispatch(
-          updateTaskState({
-            taskId: event.taskId,
-            taskState: event.state,
-          })
-        );
-      }
-    );
+    const cleanupStatus = api.onStatusUpdate((event: ScheduledTaskStatusEvent) => {
+      store.dispatch(
+        updateTaskState({
+          taskId: event.taskId,
+          taskState: event.state,
+        }),
+      );
+    });
     this.cleanupFns.push(cleanupStatus);
 
-    const cleanupRun = api.onRunUpdate(
-      (event: ScheduledTaskRunEvent) => {
-        store.dispatch(addOrUpdateRun(event.run));
-      }
-    );
+    const cleanupRun = api.onRunUpdate((event: ScheduledTaskRunEvent) => {
+      store.dispatch(addOrUpdateRun(event.run));
+    });
     this.cleanupFns.push(cleanupRun);
 
     // Listen for full refresh events (e.g., after first poll or migration)
@@ -127,10 +123,22 @@ class ScheduledTaskService {
       const result = await api.create(input);
       if (result.success && result.task) {
         if (hasTaskDataAnomaly(result.task)) {
-          const msg = i18nService.t('scheduledTasksDataAnomalyWarning').replace('{name}', result.task.name);
+          const msg = i18nService
+            .t('scheduledTasksDataAnomalyWarning')
+            .replace('{name}', result.task.name);
           showToast(msg);
         }
         store.dispatch(addTask(result.task));
+
+        // Prompt user to enable OS notifications if not yet enabled.
+        try {
+          const enabled = await window.electron.store.get('scheduled_task_notification_enabled');
+          if (enabled !== true) {
+            showToast(i18nService.t('taskNotificationHint'));
+          }
+        } catch {
+          // Non-critical, ignore.
+        }
       } else {
         throw new Error(result.error || 'Failed to create task');
       }
@@ -140,10 +148,7 @@ class ScheduledTaskService {
     }
   }
 
-  async updateTaskById(
-    id: string,
-    input: Partial<ScheduledTaskInput>
-  ): Promise<void> {
+  async updateTaskById(id: string, input: Partial<ScheduledTaskInput>): Promise<void> {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
@@ -267,7 +272,10 @@ class ScheduledTaskService {
     }
   }
 
-  async listChannelConversations(channel: string, accountId?: string): Promise<ScheduledTaskConversationOption[]> {
+  async listChannelConversations(
+    channel: string,
+    accountId?: string,
+  ): Promise<ScheduledTaskConversationOption[]> {
     const api = window.electron?.scheduledTasks;
     if (!api?.listChannelConversations) return [];
 

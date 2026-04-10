@@ -9,6 +9,7 @@ import {
   nativeImage,
   nativeTheme,
   net,
+  Notification,
   powerMonitor,
   powerSaveBlocker,
   protocol,
@@ -2121,6 +2122,22 @@ if (!gotTheLock) {
         error: error instanceof Error ? error.message : 'Failed to set prevent-sleep',
       };
     }
+  });
+
+  // ── Notification permission check ─────────────────────────────────────────
+  // Sends a test notification to trigger the macOS permission prompt on first
+  // use. On subsequent calls it lets the user know notifications are active.
+  // Returns { supported: boolean } so the renderer can react.
+  ipcMain.handle('app:checkNotificationPermission', () => {
+    const supported = Notification.isSupported();
+    if (supported) {
+      const notification = new Notification({
+        title: t('notificationTestTitle'),
+        body: t('notificationTestBody'),
+      });
+      notification.show();
+    }
+    return { supported };
   });
 
   // Window control IPC handlers

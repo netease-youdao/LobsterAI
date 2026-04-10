@@ -27,6 +27,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     notificationTaskFailed: '定时任务「{name}」执行失败',
     notificationTaskCompleteBody: '任务已成功执行，点击查看详情。',
     notificationTaskFailedBody: '错误: {error}',
+    notificationTestTitle: 'LobsterAI',
+    notificationTestBody: '通知已启用，定时任务完成后将收到推送。',
 
     // Session titles (created by ChannelSessionSync)
     cronSessionPrefix: '定时',
@@ -217,6 +219,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     notificationTaskFailed: 'Scheduled task "{name}" failed',
     notificationTaskCompleteBody: 'Task executed successfully. Click to view details.',
     notificationTaskFailedBody: 'Error: {error}',
+    notificationTestTitle: 'LobsterAI',
+    notificationTestBody:
+      'Notifications enabled. You will be notified when scheduled tasks finish.',
 
     // Session titles
     cronSessionPrefix: 'Cron',

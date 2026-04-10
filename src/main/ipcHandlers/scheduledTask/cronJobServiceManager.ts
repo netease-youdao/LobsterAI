@@ -1,8 +1,8 @@
-import { app, BrowserWindow, nativeImage,Notification } from 'electron';
+import { app, BrowserWindow, nativeImage, Notification } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import { StoreKey,TaskStatus } from '../../../scheduledTask/constants';
+import { StoreKey, TaskStatus } from '../../../scheduledTask/constants';
 import { CronJobService } from '../../../scheduledTask/cronJobService';
 import type { ScheduledTaskRunWithName } from '../../../scheduledTask/types';
 import { t } from '../../i18n';
@@ -49,8 +49,8 @@ function showRunNotification(run: ScheduledTaskRunWithName): void {
   const store = deps?.getStore();
   if (!store) return;
 
-  // Default to true -- notifications are enabled unless explicitly disabled.
-  const enabled = store.get<boolean>(StoreKey.NotificationEnabled) ?? true;
+  // Default to false -- user must explicitly enable notifications.
+  const enabled = store.get<boolean>(StoreKey.NotificationEnabled) ?? false;
   if (!enabled) return;
 
   const isSuccess = run.status === TaskStatus.Success;

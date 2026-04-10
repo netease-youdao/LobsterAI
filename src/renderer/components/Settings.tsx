@@ -13,7 +13,7 @@ import {
   XCircleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
@@ -712,7 +712,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [preventSleep, setPreventSleepState] = useState(false);
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
-  const [taskNotification, setTaskNotification] = useState(true);
+  const [taskNotification, setTaskNotification] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const buildNoticeMessage = (): string | null => {
@@ -1003,11 +1003,11 @@ const Settings: React.FC<SettingsProps> = ({
           console.error('Failed to load prevent-sleep setting:', err);
         });
 
-      // Load task notification setting (defaults to true)
+      // Load task notification setting (defaults to false)
       window.electron.store
         .get('scheduled_task_notification_enabled')
         .then((val: unknown) => {
-          setTaskNotification(val !== false);
+          setTaskNotification(val === true);
         })
         .catch(err => {
           console.error('Failed to load task notification setting:', err);
@@ -2943,12 +2943,28 @@ const Settings: React.FC<SettingsProps> = ({
                   aria-checked={taskNotification}
                   onClick={async () => {
                     const next = !taskNotification;
-                    setTaskNotification(next);
                     try {
                       await window.electron.store.set('scheduled_task_notification_enabled', next);
+                      setTaskNotification(next);
                     } catch (err) {
                       console.error('Failed to save task notification setting:', err);
-                      setTaskNotification(!next);
+                      return;
+                    }
+                    // Best-effort: send a test notification to trigger the OS
+                    // permission prompt (macOS) and confirm it works.
+                    if (next) {
+                      try {
+                        const { supported } = await window.electron.notification.checkPermission();
+                        if (!supported) {
+                          window.dispatchEvent(
+                            new CustomEvent('app:showToast', {
+                              detail: i18nService.t('taskNotificationPermissionDenied'),
+                            }),
+                          );
+                        }
+                      } catch {
+                        // Permission check is non-critical; toggle is already saved.
+                      }
                     }
                   }}
                   className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
