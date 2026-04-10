@@ -17,14 +17,14 @@ export const ScheduleKind = {
   Every: 'every',
   Cron: 'cron',
 } as const;
-export type ScheduleKind = typeof ScheduleKind[keyof typeof ScheduleKind];
+export type ScheduleKind = (typeof ScheduleKind)[keyof typeof ScheduleKind];
 
 // ─── Payload Kind ───────────────────────────────────────────────────────────
 export const PayloadKind = {
   AgentTurn: 'agentTurn',
   SystemEvent: 'systemEvent',
 } as const;
-export type PayloadKind = typeof PayloadKind[keyof typeof PayloadKind];
+export type PayloadKind = (typeof PayloadKind)[keyof typeof PayloadKind];
 
 // ─── Delivery Mode ──────────────────────────────────────────────────────────
 export const DeliveryMode = {
@@ -32,7 +32,7 @@ export const DeliveryMode = {
   Announce: 'announce',
   Webhook: 'webhook',
 } as const;
-export type DeliveryMode = typeof DeliveryMode[keyof typeof DeliveryMode];
+export type DeliveryMode = (typeof DeliveryMode)[keyof typeof DeliveryMode];
 
 // ─── Delivery Channel (magic values) ────────────────────────────────────────
 export const DeliveryChannel = {
@@ -44,14 +44,14 @@ export const SessionTarget = {
   Main: 'main',
   Isolated: 'isolated',
 } as const;
-export type SessionTarget = typeof SessionTarget[keyof typeof SessionTarget];
+export type SessionTarget = (typeof SessionTarget)[keyof typeof SessionTarget];
 
 // ─── Wake Mode ──────────────────────────────────────────────────────────────
 export const WakeMode = {
   Now: 'now',
   NextHeartbeat: 'next-heartbeat',
 } as const;
-export type WakeMode = typeof WakeMode[keyof typeof WakeMode];
+export type WakeMode = (typeof WakeMode)[keyof typeof WakeMode];
 
 // ─── Task Origin Kind ───────────────────────────────────────────────────────
 export const OriginKind = {
@@ -60,7 +60,7 @@ export const OriginKind = {
   Cowork: 'cowork',
   Manual: 'manual',
 } as const;
-export type OriginKind = typeof OriginKind[keyof typeof OriginKind];
+export type OriginKind = (typeof OriginKind)[keyof typeof OriginKind];
 
 // ─── Execution Binding Kind ─────────────────────────────────────────────────
 export const BindingKind = {
@@ -69,7 +69,7 @@ export const BindingKind = {
   IMSession: 'im_session',
   SessionKey: 'session_key',
 } as const;
-export type BindingKind = typeof BindingKind[keyof typeof BindingKind];
+export type BindingKind = (typeof BindingKind)[keyof typeof BindingKind];
 
 // ─── Task / Run Status ──────────────────────────────────────────────────────
 export const TaskStatus = {
@@ -78,7 +78,7 @@ export const TaskStatus = {
   Skipped: 'skipped',
   Running: 'running',
 } as const;
-export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
+export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
 // ─── Gateway Status (OpenClaw wire format) ────────────────────────────────���─
 export const GatewayStatus = {
@@ -86,7 +86,7 @@ export const GatewayStatus = {
   Error: 'error',
   Skipped: 'skipped',
 } as const;
-export type GatewayStatus = typeof GatewayStatus[keyof typeof GatewayStatus];
+export type GatewayStatus = (typeof GatewayStatus)[keyof typeof GatewayStatus];
 
 // ─── Default Agent ID ───────────────────────────────────────────────────────
 export const DefaultAgentId = 'main' as const;
@@ -118,6 +118,11 @@ export const IpcChannel = {
   StatusUpdate: 'scheduledTask:statusUpdate',
   RunUpdate: 'scheduledTask:runUpdate',
   Refresh: 'scheduledTask:refresh',
+} as const;
+
+// ─── KV Store Keys ──────────────────────────────────────────────────────────
+export const StoreKey = {
+  NotificationEnabled: 'scheduled_task_notification_enabled',
 } as const;
 
 // ─── Migration Keys ─────────────────────────────────────────────────────────
