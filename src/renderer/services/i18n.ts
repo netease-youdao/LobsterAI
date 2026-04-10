@@ -10,6 +10,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     save: '保存',
     cancel: '取消',
     saving: '保存中...',
+    delete: '删除',
     create: '创建',
     clear: '清除',
     show: '显示',
@@ -176,6 +177,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     newChat: '新建任务',
     search: '搜索任务',
     openSettings: '打开设置',
+    sendMessageShortcut: '发送消息',
+    shortcutConflict: '快捷键 "{0}" 已被 "{1}" 使用',
     close: '关闭',
     loginNotAvailable: '登录功能暂未开放',
     collapse: '收起',
@@ -226,7 +229,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     unpinConversation: '取消置顶',
     noProject: '无项目',
     noProjects: '暂无项目',
-    delete: '删除',
     confirmDelete: '确认删除',
     confirmDeleteMessage: '确定要删除这个对话吗？此操作不可撤销。',
     searchChats: '搜索聊天',
@@ -495,6 +497,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentDescriptionPlaceholder: '简短描述',
     agentIdentity: '身份',
     agentIdentityPlaceholder: '身份描述（IDENTITY.md）...',
+    agentDefaultModel: 'Agent 默认模型',
+    agentModelOpenClawOnly: '仅 OpenClaw 引擎使用此设置',
+    agentModelInvalidHint: '当前 Agent 绑定的模型已不可用，请先为该 Agent 重新选择有效模型',
     agentSkills: '技能',
     agentSkillsHint: '选择该 Agent 可使用的技能。不选则使用所有已启用技能。',
     agentSkillsSearch: '搜索技能...',
@@ -514,6 +519,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentIMBound: '已绑定',
     agentIMBoundToOther: '→ {agent}',
     agentIMBindHint: '选择此 Agent 响应的 IM 渠道',
+    agentCreateFailed: '创建 Agent 失败',
+    agentSaveFailed: '保存 Agent 设置失败',
+    agentDeleteConfirmTitle: '确认删除 Agent',
+    agentDeleteConfirmMessage: '确定要删除 Agent「{name}」吗？此操作不可撤销。',
+    agentUnsavedTitle: '未保存的更改',
+    agentUnsavedMessage: '有未保存的更改，确定要放弃吗？',
+    discard: '放弃',
     noPresetsAvailable: '所有预设已添加',
     creating: '创建中...',
 
@@ -789,6 +801,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpInstallFromUrlHint:
       '支持 npm 包名（如 @modelcontextprotocol/server-filesystem）、npx 命令或 HTTP/HTTPS URL',
     mcpRequiredConfig: '必填配置',
+    mcpEnvRequired: '此字段为必填项',
     mcpOptionalConfig: '可选配置',
     mcpViewOnGithub: '在 GitHub 上查看',
     mcpNoInstalledServers: '尚未安装任何 MCP 服务',
@@ -940,6 +953,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
       '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。',
     neteaseBeeChanClientIdPlaceholder: '小蜜蜂助理Client ID',
 
+    // IM 设置页面 - POPO 配置
+    imPopoAesKeyLengthWarning: 'AES Key 需要为 32 个字符',
+    imPopoAesKeyLengthCurrent: '当前',
+    imPopoWebhookPlaceholder: '外部域名（可选，不填则自动检测本机 IP）',
+    imPopoUserIdPlaceholder: '输入用户 ID 后回车添加',
+    imPopoGroupIdPlaceholder: '输入群组 ID 后回车添加',
+
     // IM 设置页面国际化
     imAdvancedSettings: '高级设置',
     imPairingApproval: '配对码审批',
@@ -973,6 +993,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imReplyModeAuto: '自动选择',
     imReplyModeStatic: '静态回复',
     imReplyModeStreaming: '流式回复',
+    imFeishuStreaming: '流式输出',
+    imFeishuStreamingDesc: '开启后，自动模式下私聊使用流式卡片、群聊使用静态回复',
+    imFeishuBlockStreaming: '分块流式',
+    imFeishuBlockStreamingDesc: '静态模式下工具调用期间即时输出文字',
+    imFeishuFooterStatus: '显示状态指示',
+    imFeishuFooterElapsed: '显示耗时',
     imDingtalkUserIdPlaceholder: '输入钉钉 User ID',
     imQQCredentialHint: '从 QQ 开放平台获取 AppID 和 AppSecret',
     imQQUserIdPlaceholder: '输入 QQ OpenID',
@@ -1075,6 +1101,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     useSystemProxyDescription: '开启后网络请求将跟随系统代理（保存后生效）',
     preventSleep: '防止休眠',
     preventSleepDescription: '防止系统在应用运行时进入睡眠模式',
+    skipMissedJobs: '跳过未执行任务',
+    skipMissedJobsDescription: '启动时跳过离线期间未触发的定时任务，不补充执行（保存后生效）',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -1337,12 +1365,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
     onboardingResetTour: '新手引导',
     onboardingResetBtn: '重新开始',
     onboardingResetDone: '新手引导已重置，重新进入页面后将再次展示。',
+
+    // TaskForm unsaved changes confirmation
+    taskFormUnsavedChanges: '有未保存的修改',
+    taskFormLeaveConfirm: '离开后修改将丢失，确认离开吗？',
+    taskFormLeave: '离开',
+    taskFormStay: '继续编辑',
   },
   en: {
     // Common
     save: 'Save',
     cancel: 'Cancel',
     saving: 'Saving...',
+    delete: 'Delete',
     create: 'Create',
     clear: 'Clear',
     show: 'Show',
@@ -1522,6 +1557,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     newChat: 'New Task',
     search: 'Search Tasks',
     openSettings: 'Open Settings',
+    sendMessageShortcut: 'Send Message',
+    shortcutConflict: 'Shortcut "{0}" is already used by "{1}"',
     close: 'Close',
     loginNotAvailable: 'Login is not available yet',
     collapse: 'Collapse',
@@ -1571,7 +1608,6 @@ const translations: Record<LanguageType, Record<string, string>> = {
     unpinConversation: 'Unpin chat',
     noProject: 'No project',
     noProjects: 'No projects',
-    delete: 'Delete',
     confirmDelete: 'Confirm Delete',
     confirmDeleteMessage:
       'Are you sure you want to delete this conversation? This action cannot be undone.',
@@ -1857,6 +1893,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentDescriptionPlaceholder: 'Brief description',
     agentIdentity: 'Identity',
     agentIdentityPlaceholder: 'Identity description (IDENTITY.md)...',
+    agentDefaultModel: 'Agent Default Model',
+    agentModelOpenClawOnly: 'This setting only applies to the OpenClaw engine',
+    agentModelInvalidHint:
+      'The model bound to this Agent is no longer available. Please choose a valid model for this Agent first',
     agentSkills: 'Skills',
     agentSkillsHint:
       'Select skills available to this Agent. Leave empty to use all enabled skills.',
@@ -1877,6 +1917,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     agentIMBound: 'Bound',
     agentIMBoundToOther: '→ {agent}',
     agentIMBindHint: 'Select IM channels this Agent responds to',
+    agentCreateFailed: 'Failed to create Agent',
+    agentSaveFailed: 'Failed to save Agent settings',
+    agentDeleteConfirmTitle: 'Confirm Delete Agent',
+    agentDeleteConfirmMessage:
+      'Are you sure you want to delete Agent "{name}"? This action cannot be undone.',
+    agentUnsavedTitle: 'Unsaved Changes',
+    agentUnsavedMessage: 'You have unsaved changes. Are you sure you want to discard them?',
+    discard: 'Discard',
     noPresetsAvailable: 'All presets have been added',
     creating: 'Creating...',
 
@@ -2167,6 +2215,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpInstallFromUrlHint:
       'Supports npm package names (e.g. @modelcontextprotocol/server-filesystem), npx commands, or HTTP/HTTPS URLs',
     mcpRequiredConfig: 'Required Configuration',
+    mcpEnvRequired: 'This field is required',
     mcpOptionalConfig: 'Optional Configuration',
     mcpViewOnGithub: 'View on GitHub',
     mcpNoInstalledServers: 'No MCP servers installed yet',
@@ -2331,6 +2380,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Specify server IDs to subscribe, separated by commas. Leave empty to auto-subscribe all joined servers.',
     neteaseBeeChanClientIdPlaceholder: 'Netease Bee IM Client ID',
 
+    // IM settings page - POPO config
+    imPopoAesKeyLengthWarning: 'AES Key must be 32 characters',
+    imPopoAesKeyLengthCurrent: 'current',
+    imPopoWebhookPlaceholder: 'External domain (optional, auto-detects local IP)',
+    imPopoUserIdPlaceholder: 'Enter user ID and press Enter',
+    imPopoGroupIdPlaceholder: 'Enter group ID and press Enter',
+
     // IM settings page i18n
     imAdvancedSettings: 'Advanced Settings',
     imPairingApproval: 'Pairing Code Approval',
@@ -2366,6 +2422,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imReplyModeAuto: 'Auto',
     imReplyModeStatic: 'Static',
     imReplyModeStreaming: 'Streaming',
+    imFeishuStreaming: 'Streaming Output',
+    imFeishuStreamingDesc:
+      'When enabled, auto mode uses streaming cards for DMs and static replies for groups',
+    imFeishuBlockStreaming: 'Block Streaming',
+    imFeishuBlockStreamingDesc: 'In static mode, flush text immediately during tool calls',
+    imFeishuFooterStatus: 'Show Status Indicator',
+    imFeishuFooterElapsed: 'Show Elapsed Time',
     imDingtalkUserIdPlaceholder: 'Enter DingTalk User ID',
     imQQCredentialHint: 'Get AppID and AppSecret from QQ Open Platform',
     imQQUserIdPlaceholder: 'Enter QQ OpenID',
@@ -2476,6 +2539,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'When enabled, network requests follow system proxy settings (applies after Save)',
     preventSleep: 'Prevent Sleep',
     preventSleepDescription: 'Prevent the system from sleeping while the app is running',
+    skipMissedJobs: 'Skip Missed Scheduled Jobs',
+    skipMissedJobsDescription:
+      'Skip jobs that were missed while the app was offline (applies after Save)',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',
@@ -2748,6 +2814,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     onboardingResetBtn: 'Restart',
     onboardingResetDone:
       'Onboarding tour has been reset. It will appear again when you re-enter the page.',
+
+    // TaskForm unsaved changes confirmation
+    taskFormUnsavedChanges: 'Unsaved Changes',
+    taskFormLeaveConfirm: 'Your changes will be lost if you leave. Are you sure you want to leave?',
+    taskFormLeave: 'Leave',
+    taskFormStay: 'Keep Editing',
   },
 };
 

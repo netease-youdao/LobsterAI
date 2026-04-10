@@ -3095,6 +3095,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         return;
       }
 
+      // Guard: don't replace if gateway returned fewer entries.
+      // This typically means the gateway lost history (e.g., after restart)
+      // and replacing would permanently destroy local messages.
+      if (authoritativeEntries.length < localEntries.length) {
+        console.log(
+          '[Reconcile] skipping — gateway has fewer entries than local, preserving local history. sessionId:',
+          sessionId, 'local:', localEntries.length, 'gateway:', authoritativeEntries.length,
+        );
+        this.channelSyncCursor.set(sessionId, localEntries.length);
+        return;
+      }
+
       // Replace local messages with authoritative ones
       console.log(
         '[Reconcile] replacing messages — sessionId:', sessionId,

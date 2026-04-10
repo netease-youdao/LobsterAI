@@ -6,7 +6,7 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.4.3",
+  "version": "2026.4.8",
   "openclaw": {
     "version": "v2026.3.2",
     "repo": "https://github.com/openclaw/openclaw.git",
@@ -71,7 +71,7 @@
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
     "precompile:electron": "electron-builder install-app-deps",
-    "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json",
+    "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json && rm -f SKILLs/web-search/.connection SKILLs/web-search/.server.log SKILLs/web-search/.server.pid",
     "build:skill:tech-news": "node scripts/build-skill-tech-news.js",
     "build:skill:email": "cd SKILLs/imap-smtp-email && npm install --production",
     "build:skills": "npm run build:skill:web-search && npm run build:skill:tech-news && npm run build:skill:email",

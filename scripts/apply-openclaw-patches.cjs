@@ -18,6 +18,7 @@
 
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '..');
@@ -65,82 +66,99 @@ let applied = 0;
 let skipped = 0;
 
 for (const patchFile of patchFiles) {
-  const patchPath = path.join(patchesDir, patchFile);
+  const originalPatchPath = path.join(patchesDir, patchFile);
 
-  // Check if patch is already applied.
-  //
-  // Strategy:
-  //   1. Try `git apply --check --reverse` — if it succeeds the patch is applied.
-  //   2. Try `git apply --check` (forward) — if it succeeds the patch is NOT applied.
-  //   3. If BOTH fail, the patch is partially/fully applied (e.g. new files already
-  //      exist and modified hunks already match).  Treat as already applied.
-  //
-  // This avoids fragile regex parsing of patch contents and works regardless of
-  // line-ending differences (CRLF vs LF).
+  // Normalize line endings: strip \r so that CRLF-checked-out patches don't
+  // cause "corrupt patch" errors on Windows (git apply rejects \r in diffs).
+  const raw = fs.readFileSync(originalPatchPath, 'utf8');
+  const needsNormalize = raw.includes('\r');
+  let patchPath = originalPatchPath;
+  if (needsNormalize) {
+    patchPath = path.join(os.tmpdir(), `lobsterai-patch-${patchFile}`);
+    fs.writeFileSync(patchPath, raw.replace(/\r/g, ''), 'utf8');
+  }
 
-  let reverseOk = false;
   try {
-    execFileSync('git', ['apply', '--check', '--reverse', '--ignore-whitespace', patchPath], {
-      cwd: openclawSrc,
-      stdio: 'pipe',
-    });
-    reverseOk = true;
-  } catch {
-    // reverse check failed — patch may or may not be applied
-  }
+    // Check if patch is already applied.
+    //
+    // Strategy:
+    //   1. Try `git apply --check --reverse` — if it succeeds the patch is applied.
+    //   2. Try `git apply --check` (forward) — if it succeeds the patch is NOT applied.
+    //   3. If BOTH fail, the patch is partially/fully applied (e.g. new files already
+    //      exist and modified hunks already match).  Treat as already applied.
+    //
+    // This avoids fragile regex parsing of patch contents and works regardless of
+    // line-ending differences (CRLF vs LF).
 
-  if (reverseOk) {
-    console.log(`[apply-openclaw-patches] Already applied: ${patchFile}`);
-    skipped++;
-    continue;
-  }
+    let reverseOk = false;
+    try {
+      execFileSync('git', ['apply', '--check', '--reverse', '--ignore-whitespace', patchPath], {
+        cwd: openclawSrc,
+        stdio: 'pipe',
+      });
+      reverseOk = true;
+    } catch {
+      // reverse check failed — patch may or may not be applied
+    }
 
-  // Try forward apply check.
-  let forwardErr = null;
-  try {
-    execFileSync('git', ['apply', '--check', '--ignore-whitespace', patchPath], {
-      cwd: openclawSrc,
-      stdio: 'pipe',
-    });
-  } catch (err) {
-    forwardErr = err;
-  }
-
-  if (forwardErr) {
-    // Both reverse and forward checks failed.  This typically means the patch
-    // is already applied but git can't cleanly reverse it (e.g. new files are
-    // untracked, or the working tree has the changes but they aren't committed).
-    const stderr = forwardErr.stderr ? forwardErr.stderr.toString() : '';
-    const alreadyExists = stderr.includes('already exists in working directory');
-    const patchDoesNotApply = stderr.includes('patch does not apply');
-
-    if (alreadyExists || patchDoesNotApply) {
-      console.log(`[apply-openclaw-patches] Already applied (forward check confirms): ${patchFile}`);
+    if (reverseOk) {
+      console.log(`[apply-openclaw-patches] Already applied: ${patchFile}`);
       skipped++;
       continue;
     }
 
-    // Genuinely cannot apply — report error.
-    console.error(`[apply-openclaw-patches] Patch does not apply cleanly: ${patchFile}`);
-    console.error(`[apply-openclaw-patches] This usually means the openclaw version has changed.`);
-    console.error(`[apply-openclaw-patches] Regenerate patches or update to match the new source.`);
-    if (stderr) console.error(stderr);
-    process.exit(1);
-  }
+    // Try forward apply check.
+    let forwardErr = null;
+    try {
+      execFileSync('git', ['apply', '--check', '--ignore-whitespace', patchPath], {
+        cwd: openclawSrc,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      forwardErr = err;
+    }
 
-  // Apply the patch.
-  try {
-    execFileSync('git', ['apply', '--ignore-whitespace', patchPath], {
-      cwd: openclawSrc,
-      stdio: 'pipe',
-    });
-    console.log(`[apply-openclaw-patches] Applied: ${patchFile}`);
-    applied++;
-  } catch (err) {
-    console.error(`[apply-openclaw-patches] Failed to apply: ${patchFile}`);
-    const stderr = err.stderr ? err.stderr.toString() : '';
-    if (stderr) console.error(stderr);
-    process.exit(1);
+    if (forwardErr) {
+      // Both reverse and forward checks failed.  This typically means the patch
+      // is already applied but git can't cleanly reverse it (e.g. new files are
+      // untracked, or the working tree has the changes but they aren't committed).
+      const stderr = forwardErr.stderr ? forwardErr.stderr.toString() : '';
+      const alreadyExists = stderr.includes('already exists in working directory');
+      const patchDoesNotApply = stderr.includes('patch does not apply');
+
+      if (alreadyExists || patchDoesNotApply) {
+        console.log(`[apply-openclaw-patches] Already applied (forward check confirms): ${patchFile}`);
+        skipped++;
+        continue;
+      }
+
+      // Genuinely cannot apply — report error.
+      console.error(`[apply-openclaw-patches] Patch does not apply cleanly: ${patchFile}`);
+      console.error(`[apply-openclaw-patches] This usually means the openclaw version has changed.`);
+      console.error(`[apply-openclaw-patches] Regenerate patches or update to match the new source.`);
+      if (stderr) console.error(stderr);
+      process.exit(1);
+    }
+
+    // Apply the patch.
+    try {
+      execFileSync('git', ['apply', '--ignore-whitespace', patchPath], {
+        cwd: openclawSrc,
+        stdio: 'pipe',
+      });
+      console.log(`[apply-openclaw-patches] Applied: ${patchFile}`);
+      applied++;
+    } catch (err) {
+      console.error(`[apply-openclaw-patches] Failed to apply: ${patchFile}`);
+      const stderr = err.stderr ? err.stderr.toString() : '';
+      if (stderr) console.error(stderr);
+      process.exit(1);
+    }
+  } finally {
+    // Clean up temporary normalized patch file.
+    if (needsNormalize && fs.existsSync(patchPath)) {
+      try { fs.unlinkSync(patchPath); } catch {}
+    }
   }
 }
 

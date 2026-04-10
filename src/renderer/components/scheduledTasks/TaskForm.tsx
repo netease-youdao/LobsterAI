@@ -1,6 +1,5 @@
 import { PlatformRegistry } from '@shared/platform';
-import { OpenClawProviderId,ProviderRegistry } from '@shared/providers/constants';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import type {
@@ -13,20 +12,16 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
+import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import ModelSelector from '../ModelSelector';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
-
-function toOpenClawModelRef(model: { id: string; providerKey?: string; isServerModel?: boolean }): string {
-  if (model.isServerModel) return `${OpenClawProviderId.LobsteraiServer}/${model.id}`;
-  const openClawId = ProviderRegistry.getOpenClawProviderId(model.providerKey ?? '');
-  return `${openClawId}/${model.id}`;
-}
 
 interface TaskFormProps {
   mode: 'create' | 'edit';
   task?: ScheduledTask;
   onCancel: () => void;
   onSaved: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface FormState {
@@ -127,8 +122,9 @@ function buildScheduleInput(form: FormState): ScheduledTaskInput['schedule'] {
   return { kind: 'cron', expr: `${min} ${hr} ${form.monthDay} * *` };
 }
 
-const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
+const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDirtyChange }) => {
   const [form, setForm] = useState<FormState>(() => createFormState(task));
+  const initialFormRef = useRef<string>(JSON.stringify(createFormState(task)));
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
@@ -145,6 +141,12 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const isDirty = JSON.stringify(form) !== initialFormRef.current;
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   const isAdvanced = form.planType === 'advanced';
   const showConversationSelector = isIMChannel(form.notifyChannel);
@@ -669,7 +671,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       </h2>
 
       <div>
-        <label className={labelClass}>{i18nService.t('scheduledTasksFormName')}</label>
+        <label className={labelClass}>{i18nService.t('scheduledTasksFormName')}<span className="text-red-400 text-xs ml-0.5">*</span></label>
         <input
           type="text"
           value={form.name}
@@ -682,7 +684,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
       <div>
         <label className={labelClass}>
-          {i18nService.t('scheduledTasksFormPayloadTextAgent')}
+          {i18nService.t('scheduledTasksFormPayloadTextAgent')}<span className="text-red-400 text-xs ml-0.5">*</span>
         </label>
         <div className="rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white focus-within:ring-1 focus-within:ring-claude-accent/40 focus-within:border-claude-accent">
           <textarea
@@ -748,6 +750,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               : i18nService.t('scheduledTasksFormUpdate')}
         </button>
       </div>
+
     </div>
   );
 };
