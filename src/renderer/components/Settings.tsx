@@ -1,38 +1,39 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import Modal from './common/Modal';
-import { configService } from '../services/config';
-import { apiService } from '../services/api';
-import { checkForAppUpdate } from '../services/appUpdate';
-import type { AppUpdateInfo } from '../services/appUpdate';
-import { themeService } from '../services/theme';
-import { i18nService, LanguageType } from '../services/i18n';
-import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPayload, PasswordEncryptedPayload } from '../services/encryption';
-import { coworkService } from '../services/cowork';
-import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
-import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import PlusCircleIcon from './icons/PlusCircleIcon';
-import TrashIcon from './icons/TrashIcon';
-import PencilIcon from './icons/PencilIcon';
-import BrainIcon from './icons/BrainIcon';
+import { ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { setAvailableModels } from '../store/slices/modelSlice';
+
+import { ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
+import { type AppConfig, defaultConfig, getCustomProviderDefaultName,getProviderDisplayName,getVisibleProviders, isCustomProvider } from '../config';
+import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { apiService } from '../services/api';
+import type { AppUpdateInfo } from '../services/appUpdate';
+import { checkForAppUpdate } from '../services/appUpdate';
+import { configService } from '../services/config';
+import { coworkService } from '../services/cowork';
+import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPassword, PasswordEncryptedPayload } from '../services/encryption';
+import { i18nService, LanguageType } from '../services/i18n';
+import { imService } from '../services/im';
+import { themeService } from '../services/theme';
 import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
-import ThemedSelect from './ui/ThemedSelect';
+import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
   CoworkAgentEngine,
-  OpenClawEngineStatus,
-  CoworkUserMemoryEntry,
   CoworkMemoryStats,
+  CoworkUserMemoryEntry,
+  OpenClawEngineStatus,
 } from '../types/cowork';
-import IMSettings from './im/IMSettings';
-import { imService } from '../services/im';
-import EmailSkillConfig from './skills/EmailSkillConfig';
-import { ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
-import { defaultConfig, type AppConfig, getVisibleProviders, isCustomProvider, getCustomProviderDefaultName,getProviderDisplayName } from '../config';
+import Modal from './common/Modal';
+import ErrorMessage from './ErrorMessage';
+import BrainIcon from './icons/BrainIcon';
+import PencilIcon from './icons/PencilIcon';
+import PlusCircleIcon from './icons/PlusCircleIcon';
 import { CustomProviderIcon, GitHubCopilotIcon } from './icons/providers';
+import TrashIcon from './icons/TrashIcon';
+import IMSettings from './im/IMSettings';
 import { getProviderIcon } from './providerIconMap';
+import EmailSkillConfig from './skills/EmailSkillConfig';
+import ThemedSelect from './ui/ThemedSelect';
 
 type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
 

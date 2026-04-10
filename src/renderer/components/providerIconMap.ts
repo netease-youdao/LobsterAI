@@ -1,23 +1,23 @@
 import React from 'react';
 
 import {
-  OpenAIIcon,
-  DeepSeekIcon,
-  GeminiIcon,
   AnthropicIcon,
-  MoonshotIcon,
-  ZhipuIcon,
-  MiniMaxIcon,
-  YouDaoZhiYunIcon,
-  QwenIcon,
-  XiaomiIcon,
-  StepfunIcon,
-  OpenRouterIcon,
-  OllamaIcon,
-  VolcengineIcon,
-  GitHubCopilotIcon,
   CustomProviderIcon,
+  DeepSeekIcon,
   DefaultProviderIcon,
+  GeminiIcon,
+  GitHubCopilotIcon,
+  MiniMaxIcon,
+  MoonshotIcon,
+  OllamaIcon,
+  OpenAIIcon,
+  OpenRouterIcon,
+  QwenIcon,
+  StepfunIcon,
+  VolcengineIcon,
+  XiaomiIcon,
+  YouDaoZhiYunIcon,
+  ZhipuIcon,
 } from './icons/providers';
 
 /**

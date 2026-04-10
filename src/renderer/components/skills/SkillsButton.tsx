@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import { Skill } from '../../types/skill';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import SkillsPopover from './SkillsPopover';
-import { Skill } from '../../types/skill';
-import { i18nService } from '../../services/i18n';
 
 interface SkillsButtonProps {
   onSelectSkill: (skill: Skill) => void;
