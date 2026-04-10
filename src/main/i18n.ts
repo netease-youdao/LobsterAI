@@ -22,6 +22,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     traySettings: '设置',
     trayQuit: '退出',
 
+    // Scheduled task notifications
+    notificationTaskComplete: '定时任务「{name}」已完成',
+    notificationTaskFailed: '定时任务「{name}」执行失败',
+    notificationTaskCompleteBody: '任务已成功执行，点击查看详情。',
+    notificationTaskFailedBody: '错误: {error}',
+
     // Session titles (created by ChannelSessionSync)
     cronSessionPrefix: '定时',
     channelPrefixFeishu: '飞书',
@@ -46,7 +52,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     qwenOAuthFailed: 'OAuth 授权失败',
     qwenOAuthTimeout: 'OAuth 授权超时',
     // Thinking-only hint
-    taskThinkingOnly: '[模型未输出内容] 模型已完成思考但未生成可见回复。你可以继续对话，让模型重新输出结果。',
+    taskThinkingOnly:
+      '[模型未输出内容] 模型已完成思考但未生成可见回复。你可以继续对话，让模型重新输出结果。',
 
     // Feishu bot install
     feishuVerifyCredentialsFailed: '凭证验证失败，请检查 App ID 和 App Secret 是否正确',
@@ -75,7 +82,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skill manager errors
     skillErrNoSkillMd: '来源中未找到 SKILL.md',
-    skillErrInvalidSource: '无效的技能来源。支持 owner/repo、仓库链接、npm 包名、ClawHub 链接或 GitHub tree/blob 链接。',
+    skillErrInvalidSource:
+      '无效的技能来源。支持 owner/repo、仓库链接、npm 包名、ClawHub 链接或 GitHub tree/blob 链接。',
     skillErrClawhubNotFound: '在 ClawHub 上未找到该技能，请检查链接是否正确。',
     skillErrClawhubDownloadFailed: '从 ClawHub 下载技能失败，请稍后重试。',
 
@@ -126,7 +134,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imTelegramAuthFailedUnknown: '未知错误',
     imTelegramCheckToken: '请检查 Bot Token 是否正确。',
     imTelegramCheckTokenNetwork: '请检查 Bot Token 是否正确，且网络通畅。',
-    imTelegramOpenClawHint: 'Telegram 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    imTelegramOpenClawHint:
+      'Telegram 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
 
     // Discord
     imDiscordMissingBotToken: '缺少必要配置项: botToken',
@@ -134,7 +143,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imDiscordAuthPassed: 'Discord Bot 鉴权通过（Bot: {username}）。',
     imDiscordAuthFailed: 'Discord Bot 鉴权失败: {error}',
     imDiscordCheckTokenNetwork: '请检查 Bot Token 是否正确，且网络通畅。',
-    imDiscordOpenClawHint: 'Discord 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    imDiscordOpenClawHint:
+      'Discord 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imDiscordGroupMention: 'Discord 群聊中仅响应 @机器人的消息。',
 
     // Feishu
@@ -142,7 +152,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imFeishuAuthPassed: '飞书鉴权通过（Bot: {botName}）',
     imFeishuAuthFailed: '飞书鉴权失败: {error}',
     imFeishuCheckAppIdSecret: '请检查 App ID 和 App Secret 是否正确。',
-    imFeishuOpenClawHint: '飞书通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    imFeishuOpenClawHint:
+      '飞书通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imFeishuGroupMention: '飞书群聊中仅响应 @机器人的消息。',
     imFeishuGroupMentionSuggestion: '请在群聊中使用 @机器人 + 内容触发对话。',
     imFeishuEventSubscription: '飞书需要开启消息事件订阅（im.message.receive_v1）才能收消息。',
@@ -153,22 +164,26 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imDingtalkFillClientIdSecret: '请补全 Client ID 和 Client Secret 后重新测试连通性。',
     imDingtalkAuthPassed: '钉钉鉴权通过。',
     imDingtalkAuthFailed: '钉钉鉴权失败: {error}',
-    imDingtalkCheckClientIdSecret: '请检查 Client ID 和 Client Secret 是否正确，且机器人权限已开通。',
-    imDingtalkOpenClawHint: '钉钉通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    imDingtalkCheckClientIdSecret:
+      '请检查 Client ID 和 Client Secret 是否正确，且机器人权限已开通。',
+    imDingtalkOpenClawHint:
+      '钉钉通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imDingtalkBotMembership: '钉钉机器人需被加入目标会话并具备发言权限。',
     imDingtalkBotMembershipSuggestion: '请确认机器人在目标会话中，且企业权限配置允许收发消息。',
 
     // WeCom
     imWecomFillBotIdSecret: '请补全 Bot ID 和 Secret 后重新测试连通性。',
     imWecomConfigReady: '企业微信配置已就绪（Bot ID: {botId}）。',
-    imWecomOpenClawHint: '企业微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    imWecomOpenClawHint:
+      '企业微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imWecomConfigReadyOpenClaw: '企业微信配置已就绪（Bot ID: {botId}），通过 OpenClaw 运行。',
 
     // Weixin
     imWeixinNotEnabled: '微信渠道当前未启用。',
     imWeixinEnableSuggestion: '请启用微信渠道后重新测试连通性。',
     imWeixinConfigReady: '微信配置已就绪。',
-    imWeixinOpenClawHint: '微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    imWeixinOpenClawHint:
+      '微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imWeixinConfigReadyOpenClaw: '微信配置已就绪，通过 OpenClaw 运行。',
 
     // NIM
@@ -197,6 +212,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     traySettings: 'Settings',
     trayQuit: 'Quit',
 
+    // Scheduled task notifications
+    notificationTaskComplete: 'Scheduled task "{name}" completed',
+    notificationTaskFailed: 'Scheduled task "{name}" failed',
+    notificationTaskCompleteBody: 'Task executed successfully. Click to view details.',
+    notificationTaskFailedBody: 'Error: {error}',
+
     // Session titles
     cronSessionPrefix: 'Cron',
     channelPrefixFeishu: 'Feishu',
@@ -210,8 +231,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     nimGroup: 'Group',
 
     // Timeout hint
-    taskTimedOut: '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
-    imSessionStoppedReply: 'The task was manually stopped. You can send a new message to start a fresh conversation.',
+    taskTimedOut:
+      '[Task timed out] The task was automatically stopped because it exceeded the maximum allowed duration. You can continue the conversation to pick up where it left off.',
+    imSessionStoppedReply:
+      'The task was manually stopped. You can send a new message to start a fresh conversation.',
 
     // OAuth flow messages
     qwenOAuthRequestingDeviceCode: 'Requesting device authorization code...',
@@ -221,10 +244,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     qwenOAuthFailed: 'OAuth authorization failed',
     qwenOAuthTimeout: 'OAuth authorization timeout',
     // Thinking-only hint
-    taskThinkingOnly: '[No output] The model finished thinking but did not generate a visible reply. You can continue the conversation to ask it to output the result.',
+    taskThinkingOnly:
+      '[No output] The model finished thinking but did not generate a visible reply. You can continue the conversation to ask it to output the result.',
 
     // Feishu bot install
-    feishuVerifyCredentialsFailed: 'Credential validation failed. Please check your App ID and App Secret.',
+    feishuVerifyCredentialsFailed:
+      'Credential validation failed. Please check your App ID and App Secret.',
     feishuVerifyFailed: 'Verification failed',
 
     // Cowork error messages
@@ -238,19 +263,23 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorGatewayDraining: 'AI engine is restarting. Please wait a moment and try again.',
     coworkErrorNetworkError: 'Network connection failed. Please check your network settings.',
     coworkErrorRateLimit: 'Too many requests. Please try again later.',
-    coworkErrorContentFiltered: 'Content did not pass the safety review. Please modify and try again.',
+    coworkErrorContentFiltered:
+      'Content did not pass the safety review. Please modify and try again.',
     coworkErrorServerError: 'Server error occurred. Please try again later.',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
-    coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
+    coworkErrorUnknown:
+      'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
     imErrorPrefix: 'Error processing message',
 
     // Exec approval continuation
-    execApprovalApproved: 'The user approved the command execution. Please check the result and continue.',
+    execApprovalApproved:
+      'The user approved the command execution. Please check the result and continue.',
     execApprovalDenied: 'The user denied the command execution.',
 
     // Skill manager errors
     skillErrNoSkillMd: 'No SKILL.md found in source',
-    skillErrInvalidSource: 'Invalid skill source. Use owner/repo, repo URL, npm package spec, ClawHub URL, or a GitHub tree/blob URL.',
+    skillErrInvalidSource:
+      'Invalid skill source. Use owner/repo, repo URL, npm package spec, ClawHub URL, or a GitHub tree/blob URL.',
     skillErrClawhubNotFound: 'Skill not found on ClawHub. Please check the URL.',
     skillErrClawhubDownloadFailed: 'Failed to download skill from ClawHub. Please try again later.',
 
@@ -264,34 +293,45 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imFillCredentials: 'Please complete the configuration and test connectivity again.',
     imAuthProbeTimeout: 'Authentication probe timed out',
     imAuthFailed: 'Authentication failed: {error}',
-    imAuthFailedSuggestion: 'Please check that your ID/Secret/Token are correct and that bot permissions are enabled.',
+    imAuthFailedSuggestion:
+      'Please check that your ID/Secret/Token are correct and that bot permissions are enabled.',
     imChannelEnabledNotConnected: 'IM channel is enabled but not currently connected.',
-    imChannelEnabledNotConnectedSuggestion: 'Please check the network, bot configuration, and platform-side event settings.',
+    imChannelEnabledNotConnectedSuggestion:
+      'Please check the network, bot configuration, and platform-side event settings.',
     imChannelRunning: 'IM channel is enabled and running normally.',
     imChannelNotEnabled: 'IM channel is not currently enabled.',
     imChannelNotEnabledSuggestion: 'Please click the IM channel toggle button to enable it.',
     imNoInboundAfter2Min: 'Connected for over 2 minutes but no inbound messages received.',
-    imNoInboundSuggestion: 'Please verify the bot is in the target conversation, or @mention the bot per platform rules.',
+    imNoInboundSuggestion:
+      'Please verify the bot is in the target conversation, or @mention the bot per platform rules.',
     imInboundDetected: 'Inbound messages detected.',
-    imGatewayJustStarted: 'Gateway just started; inbound activity check will be more accurate after 2 minutes.',
+    imGatewayJustStarted:
+      'Gateway just started; inbound activity check will be more accurate after 2 minutes.',
     imNoOutbound: 'Messages received but no successful outbound reply observed.',
-    imNoOutboundSuggestion: 'Please check message send permissions, bot visibility scope, and reply permissions.',
+    imNoOutboundSuggestion:
+      'Please check message send permissions, bot visibility scope, and reply permissions.',
     imOutboundDetected: 'Successful outbound reply detected.',
-    imNoInboundForOutboundCheck: 'No inbound messages received yet to evaluate outbound capability.',
+    imNoInboundForOutboundCheck:
+      'No inbound messages received yet to evaluate outbound capability.',
     imRecentError: 'Recent error: {error}',
-    imRecentErrorConnectedSuggestion: 'Currently connected, but fixing this error is recommended to prevent future interruptions.',
-    imRecentErrorDisconnectedSuggestion: 'This error may block conversations. Please fix it and retry.',
+    imRecentErrorConnectedSuggestion:
+      'Currently connected, but fixing this error is recommended to prevent future interruptions.',
+    imRecentErrorDisconnectedSuggestion:
+      'This error may block conversations. Please fix it and retry.',
     imConfigIncomplete: 'Configuration incomplete',
     imUnknownPlatform: 'Unknown platform.',
 
     // QQ
-    imQqOpenClawHint: 'QQ runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imQqMentionHint: '@mention the bot in channels to start a conversation. Direct messages and group chats are also supported.',
+    imQqOpenClawHint:
+      'QQ runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imQqMentionHint:
+      '@mention the bot in channels to start a conversation. Direct messages and group chats are also supported.',
     imQqAuthPassed: 'QQ authentication passed (AccessToken obtained).',
     imQqAccessTokenFailed: 'Failed to obtain AccessToken',
     imQqFillAppIdSecret: 'Please provide the AppID and AppSecret and test connectivity again.',
     imQqAuthFailed: 'QQ authentication failed: {error}',
-    imQqCheckAppIdSecret: 'Please check that the AppID and AppSecret are correct and that bot permissions are enabled.',
+    imQqCheckAppIdSecret:
+      'Please check that the AppID and AppSecret are correct and that bot permissions are enabled.',
 
     // Telegram
     imTelegramMissingBotToken: 'Missing required configuration: botToken',
@@ -300,67 +340,90 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imTelegramAuthFailed: 'Telegram Bot authentication failed: {error}',
     imTelegramAuthFailedUnknown: 'Unknown error',
     imTelegramCheckToken: 'Please check that the Bot Token is correct.',
-    imTelegramCheckTokenNetwork: 'Please check that the Bot Token is correct and the network is reachable.',
-    imTelegramOpenClawHint: 'Telegram runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imTelegramCheckTokenNetwork:
+      'Please check that the Bot Token is correct and the network is reachable.',
+    imTelegramOpenClawHint:
+      'Telegram runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
 
     // Discord
     imDiscordMissingBotToken: 'Missing required configuration: botToken',
     imDiscordFillBotToken: 'Please provide the Bot Token and test connectivity again.',
     imDiscordAuthPassed: 'Discord Bot authentication passed (Bot: {username}).',
     imDiscordAuthFailed: 'Discord Bot authentication failed: {error}',
-    imDiscordCheckTokenNetwork: 'Please check that the Bot Token is correct and the network is reachable.',
-    imDiscordOpenClawHint: 'Discord runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imDiscordCheckTokenNetwork:
+      'Please check that the Bot Token is correct and the network is reachable.',
+    imDiscordOpenClawHint:
+      'Discord runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imDiscordGroupMention: 'Discord only responds to @mentioned messages in group chats.',
 
     // Feishu
-    imFeishuFillAppIdSecret: 'Please provide the App ID and App Secret and test connectivity again.',
+    imFeishuFillAppIdSecret:
+      'Please provide the App ID and App Secret and test connectivity again.',
     imFeishuAuthPassed: 'Feishu authentication passed (Bot: {botName})',
     imFeishuAuthFailed: 'Feishu authentication failed: {error}',
     imFeishuCheckAppIdSecret: 'Please check that the App ID and App Secret are correct.',
-    imFeishuOpenClawHint: 'Feishu runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imFeishuOpenClawHint:
+      'Feishu runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imFeishuGroupMention: 'Feishu only responds to @mentioned messages in group chats.',
-    imFeishuGroupMentionSuggestion: 'Please @mention the bot in group chats to start a conversation.',
-    imFeishuEventSubscription: 'Feishu requires the message event subscription (im.message.receive_v1) to receive messages.',
-    imFeishuEventSubscriptionSuggestion: 'Please verify event subscriptions, permissions, and publish status in the Feishu Developer Console.',
+    imFeishuGroupMentionSuggestion:
+      'Please @mention the bot in group chats to start a conversation.',
+    imFeishuEventSubscription:
+      'Feishu requires the message event subscription (im.message.receive_v1) to receive messages.',
+    imFeishuEventSubscriptionSuggestion:
+      'Please verify event subscriptions, permissions, and publish status in the Feishu Developer Console.',
     imFeishuAuthPassedWithBot: 'Feishu authentication passed (Bot: {botName}).',
 
     // DingTalk
-    imDingtalkFillClientIdSecret: 'Please provide the Client ID and Client Secret and test connectivity again.',
+    imDingtalkFillClientIdSecret:
+      'Please provide the Client ID and Client Secret and test connectivity again.',
     imDingtalkAuthPassed: 'DingTalk authentication passed.',
     imDingtalkAuthFailed: 'DingTalk authentication failed: {error}',
-    imDingtalkCheckClientIdSecret: 'Please check that the Client ID and Client Secret are correct and that bot permissions are enabled.',
-    imDingtalkOpenClawHint: 'DingTalk runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imDingtalkBotMembership: 'The DingTalk bot must be added to the target conversation with messaging permissions.',
-    imDingtalkBotMembershipSuggestion: 'Please verify the bot is in the target conversation and enterprise permissions allow sending and receiving messages.',
+    imDingtalkCheckClientIdSecret:
+      'Please check that the Client ID and Client Secret are correct and that bot permissions are enabled.',
+    imDingtalkOpenClawHint:
+      'DingTalk runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imDingtalkBotMembership:
+      'The DingTalk bot must be added to the target conversation with messaging permissions.',
+    imDingtalkBotMembershipSuggestion:
+      'Please verify the bot is in the target conversation and enterprise permissions allow sending and receiving messages.',
 
     // WeCom
     imWecomFillBotIdSecret: 'Please provide the Bot ID and Secret and test connectivity again.',
     imWecomConfigReady: 'WeCom configuration is ready (Bot ID: {botId}).',
-    imWecomOpenClawHint: 'WeCom runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
-    imWecomConfigReadyOpenClaw: 'WeCom configuration is ready (Bot ID: {botId}), running via OpenClaw.',
+    imWecomOpenClawHint:
+      'WeCom runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imWecomConfigReadyOpenClaw:
+      'WeCom configuration is ready (Bot ID: {botId}), running via OpenClaw.',
 
     // Weixin
     imWeixinNotEnabled: 'WeChat channel is not currently enabled.',
     imWeixinEnableSuggestion: 'Please enable the WeChat channel and test connectivity again.',
     imWeixinConfigReady: 'WeChat configuration is ready.',
-    imWeixinOpenClawHint: 'WeChat runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imWeixinOpenClawHint:
+      'WeChat runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imWeixinConfigReadyOpenClaw: 'WeChat configuration is ready, running via OpenClaw.',
 
     // NIM
-    imNimFillCredentials: 'Please provide the AppKey, Account, and Token and test connectivity again.',
+    imNimFillCredentials:
+      'Please provide the AppKey, Account, and Token and test connectivity again.',
     imNimConfigReady: 'NIM configuration is ready (Account: {account}).',
-    imNimOpenClawHint: 'NIM runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imNimOpenClawHint:
+      'NIM runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imNimP2pOnly: 'NIM currently only supports P2P (direct) messages.',
-    imNimP2pOnlySuggestion: 'Please send a direct message to the bot account to start a conversation.',
+    imNimP2pOnlySuggestion:
+      'Please send a direct message to the bot account to start a conversation.',
 
     // Netease Bee
     imNeteaseBeeConfigReady: 'Netease Bee configuration is ready (Client ID: {clientId}).',
 
     // POPO
-    imPopoFillWebhookCredentials: 'Please provide the appKey, appSecret, token, and aesKey and test connectivity again.',
-    imPopoFillWsCredentials: 'Please provide the appKey, appSecret, and aesKey and test connectivity again.',
+    imPopoFillWebhookCredentials:
+      'Please provide the appKey, appSecret, token, and aesKey and test connectivity again.',
+    imPopoFillWsCredentials:
+      'Please provide the appKey, appSecret, and aesKey and test connectivity again.',
     imPopoConfigReady: 'POPO configuration is ready.',
-    imPopoOpenClawHint: 'POPO runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
+    imPopoOpenClawHint:
+      'POPO runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imPopoConfigReadyOpenClaw: 'POPO configuration is ready, running via OpenClaw.',
 
     'enterprise.updateBlocked': 'Updates are managed by enterprise',
@@ -386,9 +449,10 @@ export function getLanguage(): LanguageType {
  *   // => "缺少必要配置项: appId, appSecret"
  */
 export function t(key: string, params?: Record<string, string | number>): string {
-  let text = translations[currentLanguage][key]
-    ?? translations[currentLanguage === 'zh' ? 'en' : 'zh'][key]
-    ?? key;
+  let text =
+    translations[currentLanguage][key] ??
+    translations[currentLanguage === 'zh' ? 'en' : 'zh'][key] ??
+    key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       text = text.replace(`{${k}}`, String(v));
