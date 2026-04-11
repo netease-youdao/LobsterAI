@@ -221,6 +221,7 @@ const McpManager: React.FC = () => {
     setIsFormOpen(false);
     setEditingServer(null);
     setInstallingRegistry(null);
+    setQuickTemplateData(null);
   };
 
   const handleSaveForm = async (data: McpServerFormData) => {
@@ -250,6 +251,42 @@ const McpManager: React.FC = () => {
   const handleOpenCreateForm = () => {
     setEditingServer(null);
     setInstallingRegistry(null);
+    setIsFormOpen(true);
+  };
+
+  const [quickTemplateData, setQuickTemplateData] = useState<McpServerFormData | null>(null);
+
+  const handleQuickAddTemplate = (template: 'filesystem' | 'sqlite' | 'bravesearch') => {
+    const templates: Record<string, McpServerFormData> = {
+      filesystem: {
+        name: 'file-system',
+        description: '文件系统操作',
+        transportType: 'stdio',
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-filesystem', '~/Desktop'],
+      },
+      sqlite: {
+        name: 'sqlite',
+        description: 'Sqlite数据库操作',
+        transportType: 'stdio',
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-sqlite', '--db-path', './data.db'],
+      },
+      bravesearch: {
+        name: 'brave-search',
+        description: 'Brave搜索',
+        transportType: 'stdio',
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-brave-search'],
+        env: { BRAVE_API_KEY: 'XXX' },
+      },
+    };
+
+    const data = templates[template];
+    if (!data) return;
+
+    setActionError('');
+    setQuickTemplateData(data);
     setIsFormOpen(true);
   };
 
@@ -599,6 +636,41 @@ const McpManager: React.FC = () => {
       {/* ── Tab: Custom ─────────────────────────────────── */}
       {activeTab === 'custom' && (
         <div className="space-y-6">
+          {/* Quick Templates Section */}
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <h3 className="text-sm font-medium text-foreground">
+                快速添加模版
+              </h3>
+              <span className="text-xs text-secondary">
+                一键添加常用 MCP 服务
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => handleQuickAddTemplate('filesystem')}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised text-foreground hover:bg-primary hover:text-white transition-colors border border-border"
+              >
+                + File System
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickAddTemplate('sqlite')}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised text-foreground hover:bg-primary hover:text-white transition-colors border border-border"
+              >
+                + SQLite
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickAddTemplate('bravesearch')}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised text-foreground hover:bg-primary hover:text-white transition-colors border border-border"
+              >
+                + Brave Search
+              </button>
+            </div>
+          </div>
+
           {/* Custom servers grid (add button + server cards) */}
           <div className="grid grid-cols-2 gap-3">
             {/* Add custom server card */}
@@ -725,11 +797,12 @@ const McpManager: React.FC = () => {
         </Modal>
       )}
 
-      {/* Edit / Registry-install form modal */}
+      {/* Edit / Registry-install / Quick template form modal */}
       <McpServerFormModal
         isOpen={isFormOpen}
         server={editingServer}
         registryEntry={installingRegistry}
+        initialData={quickTemplateData}
         existingNames={existingNames}
         onClose={handleCloseForm}
         onSave={handleSaveForm}
