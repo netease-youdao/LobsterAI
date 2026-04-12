@@ -18,7 +18,7 @@ import PencilIcon from './icons/PencilIcon';
 import BrainIcon from './icons/BrainIcon';
 import { useDispatch, useSelector } from 'react-redux';
 import { setAvailableModels } from '../store/slices/modelSlice';
-import { RootState } from '../store';
+import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
 import ThemedSelect from './ui/ThemedSelect';
 import type {
   CoworkAgentEngine,
@@ -457,6 +457,15 @@ const formatShortcutFromEvent = (e: React.KeyboardEvent): string | null => {
   return parts.join('+');
 };
 
+const SEND_SHORTCUT_OPTIONS = [
+  { value: 'Enter', label: 'Enter', labelMac: 'Enter' },
+  { value: 'Shift+Enter', label: 'Shift+Enter', labelMac: 'Shift+Enter' },
+  { value: 'Ctrl+Enter', label: 'Ctrl+Enter', labelMac: 'Cmd+Enter' },
+  { value: 'Alt+Enter', label: 'Alt+Enter', labelMac: 'Option+Enter' },
+] as const;
+
+const isMacPlatform = navigator.platform.includes('Mac');
+
 const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
   const [recording, setRecording] = useState(false);
   const divRef = useRef<HTMLDivElement>(null);
@@ -496,6 +505,65 @@ const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void 
         }`}
     >
       {value || i18nService.t('shortcutNotSet')}
+    </div>
+  );
+};
+
+const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const currentLabel = (() => {
+    const opt = SEND_SHORTCUT_OPTIONS.find(o => o.value === value);
+    if (!opt) return value;
+    return isMacPlatform ? opt.labelMac : opt.label;
+  })();
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div
+        onClick={() => setOpen(!open)}
+        className={`w-36 rounded-xl border px-3 py-1.5 text-sm cursor-pointer select-none text-center outline-none transition-colors
+          dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset dark:text-claude-darkText text-claude-text
+          ${open
+            ? 'border-claude-accent ring-1 ring-claude-accent/30'
+            : 'dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50'
+          }`}
+      >
+        {currentLabel}
+      </div>
+      {open && (
+        <div className="absolute right-0 mt-1 z-50 min-w-[160px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset shadow-elevated py-1">
+          {SEND_SHORTCUT_OPTIONS.map((option) => {
+            const label = isMacPlatform ? option.labelMac : option.label;
+            const isActive = value === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => { onChange(option.value); setOpen(false); }}
+                className={`flex items-center justify-between w-full px-3 py-1.5 text-sm transition-colors
+                  ${isActive
+                    ? 'dark:text-claude-accent text-claude-accent font-medium'
+                    : 'dark:text-claude-darkText text-claude-text'
+                  } hover:bg-claude-accent/10`}
+              >
+                <span>{label}</span>
+                {isActive && <span className="text-claude-accent">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -562,6 +630,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
+    sendMessage: defaultConfig.shortcuts!.sendMessage,
   });
 
   // GitHub Copilot device code auth state
@@ -688,11 +757,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
   }, [isExportingLogs]);
 
-  const coworkConfig = useSelector((state: RootState) => state.cowork.config);
+  const coworkConfig = useSelector(selectCoworkConfig);
 
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
+  const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? false);
   const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
   const [coworkMemoryStats, setCoworkMemoryStats] = useState<CoworkMemoryStats | null>(null);
   const [coworkMemoryListLoading, setCoworkMemoryListLoading] = useState<boolean>(false);
@@ -710,10 +780,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
+    setSkipMissedJobs(coworkConfig.skipMissedJobs ?? false);
   }, [
     coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
+    coworkConfig.skipMissedJobs,
   ]);
 
   useEffect(() => () => {
@@ -1328,7 +1400,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
-    || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
+    || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
+    || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? false);
   const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
   const openClawProgressPercent = useMemo(() => {
@@ -1684,6 +1757,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           agentEngine: coworkAgentEngine,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
+          skipMissedJobs,
         });
         if (!updated) {
           throw new Error(i18nService.t('coworkConfigSaveFailed'));
@@ -1730,8 +1804,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setActiveTab(tab);
   };
 
+  // Mapping from shortcut key to i18n label key for conflict messages
+  const shortcutLabelMap: Record<string, string> = {
+    newChat: 'newChat',
+    search: 'search',
+    settings: 'openSettings',
+    sendMessage: 'sendMessageShortcut',
+  };
+
   // 快捷键更新处理
   const handleShortcutChange = (key: keyof typeof shortcuts, value: string) => {
+    // Check for conflicts with other shortcuts
+    const conflictKey = Object.keys(shortcuts).find(
+      k => k !== key && shortcuts[k as keyof typeof shortcuts] === value
+    );
+    if (conflictKey) {
+      const conflictLabel = i18nService.t(shortcutLabelMap[conflictKey] ?? conflictKey);
+      setNoticeMessage(
+        i18nService.t('shortcutConflict').replace('{0}', value).replace('{1}', conflictLabel)
+      );
+      return;
+    }
     setShortcuts(prev => ({
       ...prev,
       [key]: value
@@ -2473,6 +2566,37 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                       useSystemProxy ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+
+            {/* Skip Missed Jobs Section */}
+            <div>
+              <h4 className="text-sm font-medium text-foreground mb-3">
+                {i18nService.t('skipMissedJobs')}
+              </h4>
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-sm text-secondary">
+                  {i18nService.t('skipMissedJobsDescription')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={skipMissedJobs}
+                  onClick={() => {
+                    setSkipMissedJobs((prev) => !prev);
+                  }}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    skipMissedJobs
+                      ? 'bg-primary'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      skipMissedJobs ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
@@ -3810,6 +3934,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-foreground">{i18nService.t('openSettings')}</span>
                   <ShortcutRecorder value={shortcuts.settings} onChange={(v) => handleShortcutChange('settings', v)} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-foreground">{i18nService.t('sendMessageShortcut')}</span>
+                  <SendShortcutSelect
+                    value={shortcuts.sendMessage}
+                    onChange={(v) => handleShortcutChange('sendMessage', v)}
+                  />
                 </div>
               </div>
             </div>

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { useSelector } from 'react-redux';
-import { RootState } from '../../store';
+import { selectUnreadSessionIds } from '../../store/selectors/coworkSelectors';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionItem from './CoworkSessionItem';
 import { i18nService } from '../../services/i18n';
@@ -35,7 +35,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
   onToggleSelection,
   onEnterBatchMode,
 }) => {
-  const unreadSessionIds = useSelector((state: RootState) => state.cowork.unreadSessionIds);
+  const unreadSessionIds = useSelector(selectUnreadSessionIds);
   const unreadSessionIdSet = useMemo(() => new Set(unreadSessionIds), [unreadSessionIds]);
 
   const sortedSessions = useMemo(() => {

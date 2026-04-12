@@ -222,6 +222,7 @@ class ConfigService {
       ...(normalizedProviders ? { providers: normalizedProviders } : {}),
     };
     await localStore.setItem(CONFIG_KEYS.APP_CONFIG, this.config);
+    window.dispatchEvent(new CustomEvent('config-updated'));
   }
 
   getApiConfig() {

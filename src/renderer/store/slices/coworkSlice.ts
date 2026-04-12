@@ -52,6 +52,7 @@ const initialState: CoworkState = {
     memoryLlmJudgeEnabled: false,
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
+    skipMissedJobs: false,
   },
 };
 
