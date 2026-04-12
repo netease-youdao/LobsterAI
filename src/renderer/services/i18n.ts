@@ -19,7 +19,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     user: '用户',
     login: '登录',
     inDevelopment: '正在开发中',
-    
+
     // 设置
     settings: '设置',
     general: '通用',
@@ -46,7 +46,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     themeColor: '主题色',
     chinese: '中文',
     english: 'English',
-    
+
     // API设置
     apiKey: 'API Key',
     apiKeyPlaceholder: '输入你的 API Key',
@@ -61,7 +61,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     currentModel: '当前模型',
     availableModels: '可用模型列表',
     modelSwitchHint: '在聊天界面可以切换使用的模型',
-    
+
     // 模型提供商设置
     enabled: '已启用',
     disabled: '已禁用',
@@ -169,7 +169,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     passwordMismatch: '两次输入的密码不一致',
     passwordTooShort: '密码长度至少为4位',
     wrongPassword: '密码错误，请检查后重试',
-    
+
     // 快捷键
     keyboardShortcuts: '键盘快捷键',
     shortcutNotSet: '未设置',
@@ -208,10 +208,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // 错误信息
     failedToLoadSettings: '加载设置失败',
     failedToSaveSettings: '保存设置失败',
-    
+
     // 加载状态
     loading: '加载中...',
-    
+
     // 侧边栏
     conversations: '对话',
     noConversations: '暂无对话',
@@ -249,13 +249,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     folderIconWork: '工作',
     folderIconCode: '代码',
     folderIconIdea: '灵感',
-    
+
     // 聊天窗口
     sendMessage: '发送消息',
     typeMessage: '询问任何问题...',
     quickPrompt: '询问任何问题',
     regenerateResponse: '重新生成回复',
     copyToClipboard: '复制到剪贴板',
+    regenerateResponse: '重新生成',
     coworkReEdit: '重新编辑',
     messageCopied: '消息已复制',
     clearConversation: '清空对话',
@@ -279,17 +280,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imageLimitReached: '最多上传 10 张图片',
     imageReadError: '读取图片失败',
     imageInputNotSupported: '当前模型不支持图像输入',
-    
+
     // 模型选择
     selectModel: '选择模型',
-    
+
     // 错误提示
     errorOccurred: '发生错误',
     tryAgain: '请重试',
     networkError: '网络错误',
     apiKeyRequired: '需要设置API密钥',
     configureApiKey: '请在设置中配置您的API密钥',
-    
+
     // 初始化
     initializationError: '初始化应用程序失败。请检查您的配置。',
     apiKeyNotConfigured: 'API密钥未配置。请在设置中设置您的API密钥。',
@@ -1328,7 +1329,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     user: 'User',
     login: 'Login',
     inDevelopment: 'In development',
-    
+
     // Settings
     settings: 'Settings',
     general: 'General',
@@ -1355,7 +1356,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     themeColor: 'Color Themes',
     chinese: 'Chinese',
     english: 'English',
-    
+
     // API Settings
     apiKey: 'API Key',
     apiKeyPlaceholder: 'Enter your API Key',
@@ -1370,7 +1371,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     currentModel: 'Current Model',
     availableModels: 'Available Models',
     modelSwitchHint: 'You can switch models in the chat interface',
-    
+
     // Model Provider Settings
     enabled: 'Enabled',
     disabled: 'Disabled',
@@ -1478,7 +1479,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     passwordMismatch: 'Passwords do not match',
     passwordTooShort: 'Password must be at least 4 characters',
     wrongPassword: 'Wrong password, please try again',
-    
+
     // Shortcuts
     keyboardShortcuts: 'Keyboard Shortcuts',
     shortcutNotSet: 'Not set',
@@ -1517,10 +1518,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Error Messages
     failedToLoadSettings: 'Failed to load settings',
     failedToSaveSettings: 'Failed to save settings',
-    
+
     // Loading State
     loading: 'Loading...',
-    
+
     // Sidebar
     conversations: 'Conversations',
     noConversations: 'No conversations',
@@ -1558,13 +1559,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     folderIconWork: 'Work',
     folderIconCode: 'Code',
     folderIconIdea: 'Ideas',
-    
+
     // Chat Window
     sendMessage: 'Send Message',
     typeMessage: 'Type a message...',
     quickPrompt: 'Ask anything...',
     regenerateResponse: 'Regenerate Response',
     copyToClipboard: 'Copy to Clipboard',
+    regenerateResponse: 'Regenerate',
     coworkReEdit: 'Re-edit',
     messageCopied: 'Message copied',
     clearConversation: 'Clear Conversation',
@@ -1588,17 +1590,17 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imageLimitReached: 'Up to 10 images',
     imageReadError: 'Failed to read image',
     imageInputNotSupported: 'Current model does not support images',
-    
+
     // Model Selection
     selectModel: 'Select Model',
-    
+
     // Error Messages
     errorOccurred: 'An error occurred',
     tryAgain: 'Please try again',
     networkError: 'Network error',
     apiKeyRequired: 'API Key Required',
     configureApiKey: 'Please configure your API key in settings',
-    
+
     // Initialization
     initializationError: 'Failed to initialize application. Please check your configuration.',
     apiKeyNotConfigured: 'API key not configured. Please set up your API key in settings.',
@@ -2627,12 +2629,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
 class I18nService {
   private currentLanguage: LanguageType = 'zh';
   private listeners = new Set<() => void>();
-  
+
   constructor() {
     // 默认使用中文
     this.currentLanguage = 'zh';
   }
-  
+
   // 初始化语言设置
   async initialize(): Promise<void> {
     try {
@@ -2709,7 +2711,7 @@ class I18nService {
     }
     return 'en'; // 默认英文 (包括 zh-TW, zh-HK, en-*, 以及其他所有语言)
   }
-  
+
   // 设置语言
   setLanguage(language: LanguageType, options: { persist?: boolean } = {}): void {
     const { persist = true } = options;
@@ -2735,12 +2737,12 @@ class I18nService {
       console.error('Failed to save language setting:', error);
     }
   }
-  
+
   // 获取当前语言
   getLanguage(): LanguageType {
     return this.currentLanguage;
   }
-  
+
   // 获取翻译文本
   t(key: string): string {
     const translation = translations[this.currentLanguage][key];
@@ -2761,4 +2763,4 @@ class I18nService {
   }
 }
 
-export const i18nService = new I18nService(); 
+export const i18nService = new I18nService();

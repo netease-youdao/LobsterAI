@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { ShareIcon } from '@heroicons/react/20/solid';
 import {
+  ArrowPathIcon,
   CheckIcon,
   ChevronRightIcon,
   DocumentArrowDownIcon,
@@ -1267,11 +1268,13 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
+  onRegenerate?: () => void;
 }> = ({
   message,
   resolveLocalFilePath,
   mapDisplayText,
   showCopyButton = false,
+  onRegenerate,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
@@ -1296,6 +1299,17 @@ const AssistantMessageItem: React.FC<{
             content={displayContent}
             visible={isHovered}
           />
+          {onRegenerate && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRegenerate(); }}
+              className={`p-1.5 rounded-md hover:bg-surface-raised transition-all duration-200 ${
+                isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
+              title={i18nService.t('regenerateResponse')}
+            >
+              <ArrowPathIcon className="w-4 h-4 text-[var(--icon-secondary)]" />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -1405,12 +1419,14 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  onRegenerate?: () => void;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  onRegenerate,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1511,6 +1527,11 @@ export const AssistantTurnBlock: React.FC<{
                   .slice(index + 1)
                   .some(laterItem => laterItem.type === 'tool_group');
 
+                // Only show regenerate on the last assistant message item in the turn
+                const isLastAssistant = !visibleAssistantItems
+                  .slice(index + 1)
+                  .some(laterItem => laterItem.type === 'assistant' && !laterItem.message.metadata?.isThinking);
+
                 return (
                   <AssistantMessageItem
                     key={item.message.id}
@@ -1518,6 +1539,7 @@ export const AssistantTurnBlock: React.FC<{
                     resolveLocalFilePath={resolveLocalFilePath}
                     mapDisplayText={mapDisplayText}
                     showCopyButton={showCopyButtons && !hasToolGroupAfter}
+                    onRegenerate={isLastAssistant && !hasToolGroupAfter ? onRegenerate : undefined}
                   />
                 );
               }
@@ -2224,6 +2246,15 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
+  const handleRegenerate = useCallback(() => {
+    if (!turns.length) return;
+    const lastTurn = turns[turns.length - 1];
+    const userMsg = lastTurn.userMessage;
+    if (!userMsg || !userMsg.content?.trim()) return;
+    const imageAttachments = ((userMsg.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
+    onContinue(userMsg.content, undefined, imageAttachments.length > 0 ? imageAttachments : undefined);
+  }, [turns, onContinue]);
+
   // Cache turn-level DOM elements (data-turn-index, always in DOM even for lazy turns)
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -2343,6 +2374,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                onRegenerate={isLastTurn && !isStreaming && !remoteManaged ? handleRegenerate : undefined}
               />
             </div>
           )}
