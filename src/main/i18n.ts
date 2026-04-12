@@ -22,6 +22,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     traySettings: '设置',
     trayQuit: '退出',
 
+    // Windows Explorer context menu
+    contextMenuLabel: '使用有道龙虾打开',
+
     // Session titles (created by ChannelSessionSync)
     cronSessionPrefix: '定时',
     channelPrefixFeishu: '飞书',
@@ -196,6 +199,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     trayNewTask: 'New Task',
     traySettings: 'Settings',
     trayQuit: 'Quit',
+
+    // Windows Explorer context menu
+    contextMenuLabel: 'Open with LobsterAI',
 
     // Session titles
     cronSessionPrefix: 'Cron',

@@ -576,8 +576,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [themeId, setThemeId] = useState<string>(themeService.getThemeId());
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
-  const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
+  const [contextMenuRegistered, setContextMenuRegistered] = useState(false);
+  const [isUpdatingContextMenu, setIsUpdatingContextMenu] = useState(false);
+  const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [preventSleep, setPreventSleepState] = useState(false);
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -833,6 +835,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       }).catch(err => {
         console.error('Failed to load auto-launch setting:', err);
       });
+
+      // Load Windows Explorer context-menu registration state
+      if (window.electron.platform === 'win32') {
+        window.electron.contextMenu.isRegistered().then(({ registered }: { registered: boolean }) => {
+          setContextMenuRegistered(registered);
+        }).catch((err: unknown) => {
+          console.error('Failed to load context menu state:', err);
+        });
+      }
 
       // Load prevent-sleep setting
       window.electron.preventSleep.get().then(({ enabled }) => {
@@ -2491,6 +2502,59 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 </button>
               </label>
             </div>
+
+            {/* Windows Explorer Context Menu Section */}
+            {window.electron.platform === 'win32' && (
+              <div>
+                <h4 className="text-sm font-medium text-foreground mb-3">
+                  {i18nService.t('contextMenuIntegration')}
+                </h4>
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-sm text-secondary">
+                    {i18nService.t('contextMenuIntegrationDescription')}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={contextMenuRegistered}
+                    onClick={async () => {
+                      if (isUpdatingContextMenu) return;
+                      const next = !contextMenuRegistered;
+                      setIsUpdatingContextMenu(true);
+                      try {
+                        const result = next
+                          ? await window.electron.contextMenu.register()
+                          : await window.electron.contextMenu.unregister();
+                        if (result.success) {
+                          setContextMenuRegistered(next);
+                        } else {
+                          setError(result.error || 'Failed to update context menu setting');
+                        }
+                      } catch (err) {
+                        console.error('Failed to set context menu:', err);
+                        setError('Failed to update context menu setting');
+                      } finally {
+                        setIsUpdatingContextMenu(false);
+                      }
+                    }}
+                    disabled={isUpdatingContextMenu}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                      isUpdatingContextMenu ? 'opacity-50 cursor-not-allowed' : ''
+                    } ${
+                      contextMenuRegistered
+                        ? 'bg-primary'
+                        : 'bg-gray-300 dark:bg-gray-600'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        contextMenuRegistered ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </label>
+              </div>
+            )}
 
             {/* Prevent Sleep Section */}
             <div>

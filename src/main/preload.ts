@@ -294,6 +294,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('cowork:sessions:changed', handler);
       return () => ipcRenderer.removeListener('cowork:sessions:changed', handler);
     },
+    onConfigChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('cowork:config:changed', handler);
+      return () => ipcRenderer.removeListener('cowork:config:changed', handler);
+    },
   },
   dialog: {
     selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
@@ -314,6 +319,11 @@ contextBridge.exposeInMainWorld('electron', {
   autoLaunch: {
     get: () => ipcRenderer.invoke('app:getAutoLaunch'),
     set: (enabled: boolean) => ipcRenderer.invoke('app:setAutoLaunch', enabled),
+  },
+  contextMenu: {
+    isRegistered: () => ipcRenderer.invoke('app:contextMenu:isRegistered'),
+    register: () => ipcRenderer.invoke('app:contextMenu:register'),
+    unregister: () => ipcRenderer.invoke('app:contextMenu:unregister'),
   },
   preventSleep: {
     get: () => ipcRenderer.invoke('app:getPreventSleep'),
