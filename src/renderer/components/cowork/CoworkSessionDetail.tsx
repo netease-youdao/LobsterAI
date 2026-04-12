@@ -1,5 +1,6 @@
 import { ShareIcon } from '@heroicons/react/20/solid';
 import {
+  ArrowDownIcon,
   CheckIcon,
   ChevronRightIcon,
   DocumentArrowDownIcon,
@@ -1861,6 +1862,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setShowConfirmDelete(false);
   };
 
+  const handleScrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+    setShouldAutoScroll(true);
+  }, []);
+
   const handleMessagesScroll = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -2380,6 +2388,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           {renderConversationTurns()}
           <div className="h-20" />
         </div>
+
+        {/* Scroll to bottom FAB */}
+        <button
+          type="button"
+          onClick={handleScrollToBottom}
+          className={`absolute bottom-20 left-1/2 -translate-x-1/2 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-white shadow-md transition-opacity duration-200 hover:text-foreground dark:bg-gray-700 text-secondary ${
+            shouldAutoScroll
+              ? 'opacity-0 pointer-events-none'
+              : 'opacity-100 pointer-events-auto'
+          }`}
+          aria-label="Scroll to bottom"
+        >
+          <ArrowDownIcon className="h-4 w-4" />
+        </button>
 
         {/* Turn Navigation Rail — to the left of scrollbar */}
         {turns.length > 1 && isScrollable && (
