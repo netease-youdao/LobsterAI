@@ -957,7 +957,10 @@ const ToolCallGroup: React.FC<{
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
                 <div className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
                 <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
-                <span className="ml-2 text-[10px] text-secondary font-medium">Terminal</span>
+                <span className="ml-2 text-[10px] text-secondary font-medium flex-1">Terminal</span>
+                {displayToolResult && (
+                  <CopyButton content={displayToolResult} visible={true} />
+                )}
               </div>
               {/* Terminal content */}
               <div className="bg-surface-inset px-3 py-3 max-h-72 overflow-y-auto font-mono text-xs">
@@ -1000,8 +1003,13 @@ const ToolCallGroup: React.FC<{
               ))}
               {toolResult && (hasToolResultText || showNoDetailError) && (
                 <div>
-                  <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider mb-1">
-                    {i18nService.t('coworkToolResult')}
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider">
+                      {i18nService.t('coworkToolResult')}
+                    </div>
+                    {hasToolResultText && (
+                      <CopyButton content={displayToolResult} visible={true} />
+                    )}
                   </div>
                   <div className="max-h-32 overflow-y-auto">
                     <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
@@ -1034,8 +1042,13 @@ const ToolCallGroup: React.FC<{
               )}
               {toolResult && (hasToolResultText || showNoDetailError) && (
                 <div>
-                  <div className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">
-                    {i18nService.t('coworkToolResult')}
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[10px] font-medium text-muted uppercase tracking-wider">
+                      {i18nService.t('coworkToolResult')}
+                    </div>
+                    {hasToolResultText && (
+                      <CopyButton content={displayToolResult} visible={true} />
+                    )}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
@@ -1472,16 +1485,23 @@ export const AssistantTurnBlock: React.FC<{
               </div>
             )}
             {(hasToolResultText || showNoDetailError) && (
-              <div className="mt-2 px-3 py-2 rounded-lg bg-surface-raised max-h-64 overflow-y-auto">
-                <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                  isToolError
-                    ? 'text-red-500'
-                    : hasToolResultText
-                      ? 'text-foreground'
-                      : 'text-secondary italic'
-                }`}>
-                  {displayText}
-                </pre>
+              <div className="mt-2 relative group/orphan">
+                {hasToolResultText && (
+                  <div className="absolute right-2 top-1.5 opacity-0 group-hover/orphan:opacity-100 transition-opacity z-10">
+                    <CopyButton content={displayText} visible={true} />
+                  </div>
+                )}
+                <div className="px-3 py-2 rounded-lg bg-surface-raised max-h-64 overflow-y-auto">
+                  <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                    isToolError
+                      ? 'text-red-500'
+                      : hasToolResultText
+                        ? 'text-foreground'
+                        : 'text-secondary italic'
+                  }`}>
+                    {displayText}
+                  </pre>
+                </div>
               </div>
             )}
           </div>
