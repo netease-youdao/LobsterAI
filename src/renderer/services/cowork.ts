@@ -172,6 +172,15 @@ class CoworkService {
       });
     });
     this.streamListenerCleanups.push(sessionsChangedCleanup);
+
+    // Config changed listener - triggered when working directory is set via Explorer context menu
+    const configChangedCleanup = cowork.onConfigChanged(() => {
+      console.debug('[CoworkService] onConfigChanged: reloading config from main process');
+      void this.loadConfig().catch((err) => {
+        console.error('[CoworkService] onConfigChanged: loadConfig failed:', err);
+      });
+    });
+    this.streamListenerCleanups.push(configChangedCleanup);
   }
 
   private setupOpenClawEngineListeners(): void {

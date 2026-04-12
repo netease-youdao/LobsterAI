@@ -74,6 +74,11 @@ import {
   writeBootstrapFile,
 } from './libs/openclawMemoryFile';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
+import {
+  isContextMenuRegistered,
+  registerContextMenu,
+  unregisterContextMenu,
+} from './libs/windowsContextMenu';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import {
   applySystemProxyEnv,
@@ -1807,22 +1812,76 @@ if (!gotTheLock) {
     return code;
   });
 
+  /**
+   * Parse --open-directory=<path> from a command-line argument array and, if
+   * found, apply it as the cowork working directory and focus the main window.
+   * Can be called both at first launch (process.argv) and on second-instance.
+   */
+  const handleOpenDirectoryArg = async (args: string[]): Promise<void> => {
+    const arg = args.find(a => a.startsWith('--open-directory='));
+    if (!arg) return;
+    const dirPath = arg.slice('--open-directory='.length).replace(/^"|"$/g, '');
+    if (!dirPath) return;
+    try {
+      const resolved = resolveTaskWorkingDirectory(dirPath);
+      console.log('[Main] opening directory from context menu:', resolved);
+      // Reuse the same setConfig path that the UI uses, so memory sync etc. fires.
+      const previousConfig = getCoworkStore().getConfig();
+      const previousWorkingDir = previousConfig.workingDirectory;
+      getCoworkStore().setConfig({ workingDirectory: resolved });
+      if (resolved !== previousWorkingDir) {
+        getSkillManager().handleWorkingDirectoryChange();
+        const syncResult = syncMemoryFileOnWorkspaceChange(previousWorkingDir, resolved);
+        if (syncResult.error) {
+          console.warn('[OpenClaw Memory] Workspace sync failed:', syncResult.error);
+        }
+        try {
+          ensureDefaultIdentity(resolved);
+        } catch (err) {
+          console.warn('[OpenClaw] ensureDefaultIdentity failed (non-fatal):', err);
+        }
+        await syncOpenClawConfig({ reason: 'open-directory-arg' }).catch((err) => {
+          console.warn('[Main] OpenClaw config sync failed after open-directory:', err);
+        });
+      }
+      // Notify renderer that config has changed so the UI reflects the new directory.
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('cowork:config:changed');
+      }
+    } catch (err) {
+      console.error('[Main] Failed to open directory from context menu:', err);
+    }
+    // Always bring the window to the front.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    }
+  };
+
   // macOS: handle open-url event for deep links
   app.on('open-url', (event, url) => {
     event.preventDefault();
     handleDeepLink(url);
   });
 
-  app.on('second-instance', (_event, commandLine, workingDirectory) => {
-    console.debug('[Main] second-instance event', { commandLine, workingDirectory });
+  app.on('second-instance', (_event, commandLine, _cwd) => {
+    console.debug('[Main] second-instance event received');
 
     // Check for deep link in command line args (Windows/Linux)
     const deepLink = commandLine.find(arg => arg.startsWith('lobsterai://'));
     if (deepLink) {
       handleDeepLink(deepLink);
+      return;
     }
 
-    // Focus main window
+    // Handle --open-directory from Windows Explorer context menu
+    if (commandLine.some(a => a.startsWith('--open-directory='))) {
+      void handleOpenDirectoryArg(commandLine);
+      return;
+    }
+
+    // Focus main window (no special argument)
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
@@ -1951,6 +2010,52 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set auto-launch',
+      };
+    }
+  });
+
+  // ── Windows Explorer context-menu integration ───────────────────────────
+  ipcMain.handle('app:contextMenu:isRegistered', async () => {
+    if (process.platform !== 'win32') return { registered: false };
+    try {
+      const registered = await isContextMenuRegistered();
+      return { registered };
+    } catch (error) {
+      console.error('[Main] Failed to query context menu registration:', error);
+      return { registered: false };
+    }
+  });
+
+  ipcMain.handle('app:contextMenu:register', async () => {
+    if (process.platform !== 'win32') {
+      return { success: false, error: 'Context menu registration is only supported on Windows' };
+    }
+    try {
+      const exePath = app.getPath('exe');
+      const menuLabel = t('contextMenuLabel');
+      await registerContextMenu(exePath, menuLabel);
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] Failed to register context menu:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to register context menu',
+      };
+    }
+  });
+
+  ipcMain.handle('app:contextMenu:unregister', async () => {
+    if (process.platform !== 'win32') {
+      return { success: false, error: 'Context menu is only supported on Windows' };
+    }
+    try {
+      await unregisterContextMenu();
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] Failed to unregister context menu:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to unregister context menu',
       };
     }
   });
@@ -5159,6 +5264,14 @@ if (!gotTheLock) {
       } catch (e) {
         console.error('[Main] Failed to parse cold-start deep link:', e);
       }
+    }
+
+    // Windows cold start: handle --open-directory from Explorer context menu.
+    // Defer until the renderer is ready so config:changed can be forwarded.
+    if (process.platform === 'win32' && process.argv.some(a => a.startsWith('--open-directory='))) {
+      mainWindow?.webContents.once('did-finish-load', () => {
+        void handleOpenDirectoryArg(process.argv);
+      });
     }
 
     // Auto-reconnect IM bots that were enabled before restart

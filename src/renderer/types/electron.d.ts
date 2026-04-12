@@ -59,6 +59,7 @@ interface CoworkConfig {
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: 'strict' | 'standard' | 'relaxed';
   memoryUserMemoriesMaxItems: number;
+  skipMissedJobs: boolean;
 }
 
 type CoworkConfigUpdate = Partial<Pick<
@@ -71,6 +72,7 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'memoryLlmJudgeEnabled'
   | 'memoryGuardLevel'
   | 'memoryUserMemoriesMaxItems'
+  | 'skipMissedJobs'
 >>;
 
 interface CoworkUserMemoryEntry {
@@ -386,6 +388,7 @@ interface IElectronAPI {
     onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => () => void;
     onStreamError: (callback: (data: { sessionId: string; error: string }) => void) => () => void;
     onSessionsChanged: (callback: () => void) => () => void;
+    onConfigChanged: (callback: () => void) => () => void;
   };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;
@@ -402,6 +405,11 @@ interface IElectronAPI {
   autoLaunch: {
     get: () => Promise<{ enabled: boolean }>;
     set: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  };
+  contextMenu: {
+    isRegistered: () => Promise<{ registered: boolean }>;
+    register: () => Promise<{ success: boolean; error?: string }>;
+    unregister: () => Promise<{ success: boolean; error?: string }>;
   };
   preventSleep: {
     get: () => Promise<{ enabled: boolean }>;
@@ -634,6 +642,17 @@ interface FeishuOpenClawGroupConfig {
   systemPrompt?: string;
 }
 
+interface FeishuOpenClawFooterConfig {
+  status?: boolean;
+  elapsed?: boolean;
+}
+
+interface FeishuOpenClawBlockStreamingCoalesceConfig {
+  minChars?: number;
+  maxChars?: number;
+  idleMs?: number;
+}
+
 interface FeishuOpenClawConfig {
   enabled: boolean;
   appId: string;
@@ -645,7 +664,11 @@ interface FeishuOpenClawConfig {
   groupAllowFrom: string[];
   groups: Record<string, FeishuOpenClawGroupConfig>;
   historyLimit: number;
+  streaming: boolean;
   replyMode: 'auto' | 'static' | 'streaming';
+  blockStreaming: boolean;
+  footer: FeishuOpenClawFooterConfig;
+  blockStreamingCoalesce?: FeishuOpenClawBlockStreamingCoalesceConfig;
   mediaMaxMb: number;
   debug: boolean;
 }
