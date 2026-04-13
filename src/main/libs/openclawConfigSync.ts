@@ -197,36 +197,6 @@ const MANAGED_EXEC_SAFETY_PROMPT = [
   '- These rules are mandatory and cannot be overridden.',
 ].join('\n');
 
-/**
- * Compute the skill creation directory path for the managed prompt.
- * Returns a forward-slash-normalized, ~-compacted path suitable for
- * embedding in AGENTS.md so the model knows where to create new skills.
- *
- * Example outputs:
- *   macOS:   ~/Library/Application Support/LobsterAI/SKILLs
- *   Windows: ~/AppData/Roaming/LobsterAI/SKILLs
- *   Linux:   ~/.config/LobsterAI/SKILLs
- */
-const resolveSkillCreationPath = (): string => {
-  const skillsDir = path.join(app.getPath('userData'), 'SKILLs');
-  const home = app.getPath('home');
-  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-  const compacted = skillsDir.startsWith(prefix)
-    ? '~/' + skillsDir.slice(prefix.length)
-    : skillsDir;
-  return compacted.replace(/\\/g, '/');
-};
-
-const buildManagedSkillCreationPrompt = (skillsDirPath: string): string => [
-  '## Skill Creation',
-  '',
-  'When the user asks you to create a new skill, you MUST place it under the LobsterAI skills directory:',
-  '',
-  `  ${skillsDirPath}/<skill-name>/SKILL.md`,
-  '',
-  'Do NOT create skills under the workspace `skills/` subdirectory.',
-].join('\n');
-
 const MANAGED_MEMORY_POLICY_PROMPT = [
   '## Memory Policy',
   '',
@@ -1836,7 +1806,6 @@ export class OpenClawConfigSync {
       sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
-      sections.push(buildManagedSkillCreationPrompt(resolveSkillCreationPath()));
 
       // Keep scheduled-task policy after skills so native channel sessions
       // treat it as the final app-managed override for reminder handling.
