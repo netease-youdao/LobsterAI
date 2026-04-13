@@ -26,7 +26,7 @@ export interface CoworkMessageMetadata {
   isStreaming?: boolean;
   isFinal?: boolean;
   isThinking?: boolean;
-  skillIds?: string[];  // Skills used for this message
+  skillIds?: string[]; // Skills used for this message
   [key: string]: unknown;
 }
 
@@ -70,18 +70,20 @@ export interface CoworkConfig {
   skipMissedJobs: boolean;
 }
 
-export type CoworkConfigUpdate = Partial<Pick<
-  CoworkConfig,
-  | 'workingDirectory'
-  | 'executionMode'
-  | 'agentEngine'
-  | 'memoryEnabled'
-  | 'memoryImplicitUpdateEnabled'
-  | 'memoryLlmJudgeEnabled'
-  | 'memoryGuardLevel'
-  | 'memoryUserMemoriesMaxItems'
-  | 'skipMissedJobs'
->>;
+export type CoworkConfigUpdate = Partial<
+  Pick<
+    CoworkConfig,
+    | 'workingDirectory'
+    | 'executionMode'
+    | 'agentEngine'
+    | 'memoryEnabled'
+    | 'memoryImplicitUpdateEnabled'
+    | 'memoryLlmJudgeEnabled'
+    | 'memoryGuardLevel'
+    | 'memoryUserMemoriesMaxItems'
+    | 'skipMissedJobs'
+  >
+>;
 
 export interface CoworkApiConfig {
   apiKey: string;
@@ -217,4 +219,14 @@ export interface CoworkStreamEvent {
     error?: string;
     claudeSessionId?: string;
   };
+}
+
+export interface Bookmark {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  messageType: 'user' | 'assistant';
+  content: string;
+  sessionTitle: string;
+  createdAt: number;
 }
