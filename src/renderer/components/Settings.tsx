@@ -2673,52 +2673,61 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 })}
               </div>
 
-              {/* Theme color gallery — all themes */}
-              <h4 className="text-sm font-medium mb-3 mt-5" style={{ color: 'var(--lobster-text-primary)' }}>
-                {i18nService.t('themeColor')}
-              </h4>
               {(() => {
                 const allThemes = themeService.getAllThemes();
-                const classicThemes = allThemes.filter(t => t.meta.id === 'classic-light' || t.meta.id === 'classic-dark');
-                const otherThemes = allThemes.filter(t => t.meta.id !== 'classic-light' && t.meta.id !== 'classic-dark');
-                const renderTile = (t: import('../theme').ThemeDefinition) => {
+                const lightThemes = allThemes.filter(t => t.meta.appearance === 'light');
+                const darkThemes = allThemes.filter(t => t.meta.appearance === 'dark');
+                const selectedTheme = allThemes.find(t => t.meta.id === themeId);
+                const [bg, c1, c2, c3] = selectedTheme?.meta.preview ?? ['#F8F9FB', '#3B82F6', '#60A5FA', '#6B7280'];
+
+                const renderCircle = (t: import('../theme').ThemeDefinition) => {
                   const isSelected = themeId === t.meta.id;
-                  const [bg, c1, c2, c3] = t.meta.preview;
+                  const accent = t.meta.preview[1];
+                  const half = t.meta.appearance === 'light' ? '#ffffff' : '#000000';
                   return (
                     <button
                       key={t.meta.id}
                       type="button"
+                      title={t.meta.name}
                       onClick={() => {
                         themeService.setThemeById(t.meta.id);
                         setThemeId(t.meta.id);
                         setTheme(t.meta.appearance as 'light' | 'dark');
                       }}
-                      className="flex flex-col items-center rounded-xl border-2 p-2 transition-colors cursor-pointer"
+                      className="w-4 h-4 rounded-full transition-all flex-shrink-0 cursor-pointer"
                       style={{
-                        borderColor: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-border)',
-                        backgroundColor: isSelected ? 'var(--lobster-primary-muted)' : undefined,
+                        background: `linear-gradient(135deg, ${accent} 50%, ${half} 50%)`,
+                        boxShadow: `inset 0 0 0 1px rgba(0,0,0,0.15)`,
+                        outline: isSelected ? `2px solid ${accent}` : '2px solid transparent',
+                        outlineOffset: '2px',
                       }}
-                    >
-                      <svg viewBox="0 0 80 48" className="w-full h-auto rounded-md mb-1.5 overflow-hidden" xmlns="http://www.w3.org/2000/svg">
+                    />
+                  );
+                };
+
+                return (
+                  <>
+                    <div className="flex items-center justify-between mt-5 mb-3">
+                      <h4 className="text-sm font-medium" style={{ color: 'var(--lobster-text-primary)' }}>
+                        {i18nService.t('themeColor')}
+                      </h4>
+                      <div className="flex items-center gap-1.5">
+                        {lightThemes.map(renderCircle)}
+                        <div className="w-px h-3 mx-0.5" style={{ backgroundColor: 'var(--lobster-border)' }} />
+                        {darkThemes.map(renderCircle)}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border p-2" style={{ borderColor: 'var(--lobster-border)' }}>
+                      <svg viewBox="0 0 80 48" className="w-full h-auto rounded-md overflow-hidden" xmlns="http://www.w3.org/2000/svg">
                         <rect width="80" height="48" fill={bg} />
                         <rect x="4" y="6" width="20" height="36" rx="3" fill={c1} opacity="0.7" />
                         <rect x="28" y="6" width="48" height="36" rx="3" fill={c2} opacity="0.5" />
                         <circle cx="52" cy="24" r="8" fill={c3} opacity="0.8" />
                         <rect x="32" y="34" width="40" height="4" rx="2" fill={c1} opacity="0.6" />
                       </svg>
-                      <span className="text-[10px] font-medium truncate w-full text-center" style={{ color: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-text-primary)' }}>
-                        {t.meta.name}
+                      <span className="text-xs font-medium mt-1.5 block text-center" style={{ color: 'var(--lobster-text-primary)' }}>
+                        {selectedTheme?.meta.name ?? ''}
                       </span>
-                    </button>
-                  );
-                };
-                return (
-                  <>
-                    <div className="grid grid-cols-2 gap-3 mb-3">
-                      {classicThemes.map(renderTile)}
-                    </div>
-                    <div className="grid grid-cols-4 gap-3">
-                      {otherThemes.map(renderTile)}
                     </div>
                   </>
                 );
