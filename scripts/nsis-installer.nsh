@@ -94,7 +94,7 @@
   ; - Only excludes the bundled runtime, not the entire application
   ; - Common practice for developer tools (VS Code, Docker Desktop, etc.)
 
-  nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "try { Add-MpPreference -ExclusionPath $\"$INSTDIR\resources\cfmind$\" -ErrorAction Stop; Write-Output ok } catch { Write-Output skip }"'
+  nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "try { Add-MpPreference -ExclusionPath $\"$INSTDIR\resources\cfmind$\" -ErrorAction Stop; Add-MpPreference -ExclusionPath $\"$INSTDIR\resources\python-win$\" -ErrorAction Stop; Write-Output ok } catch { Write-Output skip }"'
   Pop $0
   Pop $1
   FileWrite $2 "defender-exclusion: exit=$0 result=$1$\r$\n"
@@ -132,7 +132,7 @@
 !macro customUnInstall
   ; ─── Remove Windows Defender Exclusion on uninstall ───
   ; Clean up the exclusion we added during installation.
-  nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "try { Remove-MpPreference -ExclusionPath $\"$INSTDIR\resources\cfmind$\" -ErrorAction SilentlyContinue } catch {}"'
+  nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "try { Remove-MpPreference -ExclusionPath $\"$INSTDIR\resources\cfmind$\" -ErrorAction SilentlyContinue; Remove-MpPreference -ExclusionPath $\"$INSTDIR\resources\python-win$\" -ErrorAction SilentlyContinue } catch {}"'
   Pop $0
   Pop $1
 !macroend
