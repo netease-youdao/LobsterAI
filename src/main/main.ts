@@ -34,6 +34,7 @@ import {
   OpenClawRuntimeAdapter,
 } from './libs/agentEngine';
 import { cancelActiveDownload, downloadUpdate, installUpdate } from './libs/appUpdateInstaller';
+import { summarizeApiFetchRequest, summarizeApiFetchResponse } from './libs/apiFetchLog';
 import { clearServerModelMetadata, getCurrentApiConfig, resolveAllEnabledProviderConfigs, resolveCurrentApiConfig, resolveRawApiConfig, setAuthTokensGetter, setServerBaseUrlGetter, setStoreGetter, updateServerModelMetadata } from './libs/claudeSettings';
 import {
   clearCopilotTokenState,
@@ -4250,7 +4251,7 @@ if (!gotTheLock) {
     headers: Record<string, string>;
     body?: string;
   }) => {
-    console.log(`[api:fetch] ${options.method} ${options.url}, headers: ${JSON.stringify(options.headers)}, body: ${options.body}`);
+    console.log('[api:fetch] request:', summarizeApiFetchRequest(options));
 
     const doFetch = async (headers: Record<string, string>) => {
       const response = await session.defaultSession.fetch(options.url, {
@@ -4281,7 +4282,13 @@ if (!gotTheLock) {
 
     try {
       let result = await doFetch(options.headers);
-      console.log(`[api:fetch] ${options.method} ${options.url} -> ${result.status} ${result.statusText}`, typeof result.data === 'object' ? JSON.stringify(result.data) : result.data);
+      console.log('[api:fetch] response:', summarizeApiFetchResponse({
+        method: options.method,
+        url: options.url,
+        status: result.status,
+        statusText: result.statusText,
+        data: result.data,
+      }));
 
       // Auto-retry once for Copilot 401/403
       if (!result.ok && (result.status === 401 || result.status === 403) && isCopilotUrl(options.url)) {

@@ -9,6 +9,7 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
 } from './types';
+import { sanitizeLogPayload } from '../main/libs/apiFetchLog';
 import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
 import { PlatformRegistry } from '../shared/platform';
 import {
@@ -244,9 +245,9 @@ function toGatewayPayload(payload: ScheduledTaskPayload): GatewayPayload {
 }
 
 function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | undefined {
-  console.log('[CronJobService][toGatewayDelivery] input delivery:', JSON.stringify(delivery, null, 2));
+  console.debug('[CronJobService] converting delivery:', sanitizeLogPayload(delivery));
   if (!delivery) {
-    console.log('[CronJobService][toGatewayDelivery] no delivery, returning undefined');
+    console.debug('[CronJobService] delivery is empty, skipping');
     return undefined;
   }
   if (delivery.mode === DeliveryMode.None) {
@@ -257,7 +258,7 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
       ...(delivery.channel ? { channel: delivery.channel } : {}),
       ...(delivery.to ? { to: delivery.to } : {}),
     } as GatewayDelivery;
-    console.log('[CronJobService][toGatewayDelivery] mode=none with preserved channel/to:', JSON.stringify(result));
+    console.debug('[CronJobService] converted disabled delivery:', sanitizeLogPayload(result));
     return result;
   }
 
@@ -279,7 +280,7 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
       ? { bestEffort: delivery.bestEffort }
       : {}),
   };
-  console.log('[CronJobService][toGatewayDelivery] output gatewayDelivery:', JSON.stringify(result, null, 2));
+  console.debug('[CronJobService] converted delivery:', sanitizeLogPayload(result));
   return result;
 }
 
@@ -461,18 +462,20 @@ export class CronJobService {
   }
 
   async addJob(input: ScheduledTaskInput): Promise<ScheduledTask> {
-    console.log('[CronJobService][addJob] full input:', JSON.stringify(input, null, 2));
-    console.log('[CronJobService][addJob] delivery details:', JSON.stringify({
+    console.debug('[CronJobService] creating job:', sanitizeLogPayload({
+      name: input.name,
+      schedule: input.schedule,
+      payload: input.payload,
       deliveryMode: input.delivery?.mode,
       deliveryChannel: input.delivery?.channel,
       deliveryTo: input.delivery?.to,
       deliveryAccountId: input.delivery?.accountId,
       sessionTarget: input.sessionTarget,
       sessionKey: input.sessionKey,
-    }, null, 2));
+    }));
     const client = await this.client();
     const gatewayDelivery = toGatewayDelivery(input.delivery);
-    console.log('[CronJobService][addJob] resolved gatewayDelivery:', JSON.stringify(gatewayDelivery));
+    console.debug('[CronJobService] resolved gateway delivery:', sanitizeLogPayload(gatewayDelivery));
     const job = await client.request<GatewayJob>('cron.add', {
       name: input.name,
       description: input.description || undefined,
@@ -492,15 +495,18 @@ export class CronJobService {
   }
 
   async updateJob(id: string, input: Partial<ScheduledTaskInput>): Promise<ScheduledTask> {
-    console.log('[CronJobService][updateJob] id:', id, 'input:', JSON.stringify(input, null, 2));
-    console.log('[CronJobService][updateJob] delivery details:', JSON.stringify({
+    console.debug('[CronJobService] updating job:', sanitizeLogPayload({
+      id,
+      name: input.name,
+      schedule: input.schedule,
+      payload: input.payload,
       deliveryMode: input.delivery?.mode,
       deliveryChannel: input.delivery?.channel,
       deliveryTo: input.delivery?.to,
       deliveryAccountId: input.delivery?.accountId,
       sessionTarget: input.sessionTarget,
       sessionKey: input.sessionKey,
-    }, null, 2));
+    }));
     const client = await this.client();
     const patch: Record<string, unknown> = {};
 
@@ -517,7 +523,7 @@ export class CronJobService {
     if (input.agentId !== undefined) patch.agentId = input.agentId?.trim() || null;
     if (input.sessionKey !== undefined) patch.sessionKey = input.sessionKey?.trim() || null;
 
-    console.log('[CronJobService][updateJob] final patch:', JSON.stringify(patch, null, 2));
+    console.debug('[CronJobService] update patch:', sanitizeLogPayload(patch));
     const job = await client.request<GatewayJob>('cron.update', { id, patch });
     const mapped = mapGatewayJob(job);
     console.log('[CronJobService][updateJob] updated job id:', mapped.id, 'name:', mapped.name);

@@ -9,6 +9,7 @@ import {
   openAIToAnthropic,
   type OpenAIStreamChunk,
 } from './coworkFormatTransform';
+import { summarizeLogText } from './apiFetchLog';
 
 export type OpenAICompatUpstreamConfig = {
   baseURL: string;
@@ -2697,7 +2698,7 @@ async function handleRequest(
 
     if (!upstreamResponse.ok) {
       const firstErrorText = await upstreamResponse.text();
-      console.error(`[CoworkProxy] Upstream error: status=${upstreamResponse.status}, body=${firstErrorText.slice(0, 500)}`);
+      console.error(`[CoworkProxy] Upstream error: status=${upstreamResponse.status}, body=${summarizeLogText(firstErrorText)}`);
       let firstErrorMessage = extractErrorMessage(firstErrorText);
       if (firstErrorMessage === 'Upstream API request failed') {
         firstErrorMessage = `Upstream API request failed (${upstreamResponse.status}) ${currentTargetURL}`;
