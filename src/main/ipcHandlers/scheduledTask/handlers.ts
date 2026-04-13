@@ -7,6 +7,7 @@ import {
 } from '../../../scheduledTask/constants';
 import { PlatformRegistry } from '../../../shared/platform';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
+import { sanitizeLogPayload } from '../../libs/apiFetchLog';
 import { listScheduledTaskChannels } from './helpers';
 
 export interface ScheduledTaskHandlerDeps {
@@ -111,7 +112,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Create, async (_event, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.debug('[ScheduledTask] create input:', JSON.stringify(normalizedInput, null, 2));
+      console.debug('[ScheduledTask] create input:', sanitizeLogPayload(normalizedInput));
       await applyAnnounceDeliveryNormalization(normalizedInput, getIMGatewayManager);
 
       const task = await getCronJobService().addJob(normalizedInput);
@@ -125,7 +126,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
   ipcMain.handle(ScheduledTaskIpc.Update, async (_event, id: string, input: any) => {
     try {
       const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
-      console.debug('[ScheduledTask] update input id:', id, JSON.stringify(normalizedInput, null, 2));
+      console.debug('[ScheduledTask] update input:', sanitizeLogPayload({ id, input: normalizedInput }));
       await applyAnnounceDeliveryNormalization(normalizedInput, getIMGatewayManager);
 
       const task = await getCronJobService().updateJob(id, normalizedInput);
