@@ -1,9 +1,9 @@
 import { store } from '../store';
 import {
-  setBookmarks,
-  setLoading,
   addBookmark,
   removeBookmark,
+  setBookmarks,
+  setLoading,
 } from '../store/slices/bookmarkSlice';
 import type { Bookmark } from '../types/cowork';
 

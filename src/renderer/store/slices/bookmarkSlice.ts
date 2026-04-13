@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import type { Bookmark } from '../../types/cowork';
 
 interface BookmarkState {

@@ -1,9 +1,10 @@
 import React, { useCallback } from 'react';
 import { useSelector } from 'react-redux';
-import type { RootState } from '../store';
-import type { Bookmark } from '../types/cowork';
+
 import { bookmarkService } from '../services/bookmark';
 import { i18nService } from '../services/i18n';
+import type { RootState } from '../store';
+import type { Bookmark } from '../types/cowork';
 
 function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
