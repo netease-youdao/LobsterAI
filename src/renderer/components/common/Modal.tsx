@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 
 interface ModalProps {
   isOpen?: boolean;
@@ -7,6 +7,8 @@ interface ModalProps {
   overlayClassName?: string;
   onClick?: React.MouseEventHandler<HTMLDivElement>;
   children: React.ReactNode;
+  /** Set to false to disable closing the modal with the Escape key. Defaults to true. */
+  closeOnEscape?: boolean;
 }
 
 /**
@@ -14,6 +16,7 @@ interface ModalProps {
  *
  * Only closes when the user clicks the backdrop directly (mousedown + mouseup both on backdrop).
  * Dragging text from inside the modal to outside will NOT close the modal.
+ * Pressing Escape will close the modal (unless closeOnEscape is false).
  */
 const Modal: React.FC<ModalProps> = ({
   isOpen,
@@ -22,8 +25,20 @@ const Modal: React.FC<ModalProps> = ({
   overlayClassName,
   onClick,
   children,
+  closeOnEscape = true,
 }) => {
   const mouseDownOnBackdropRef = useRef(false);
+
+  useEffect(() => {
+    if (isOpen === false || !closeOnEscape) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose, closeOnEscape]);
 
   if (isOpen === false) return null;
 

@@ -340,6 +340,17 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
     });
   };
 
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        handleDeny();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  });
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
       <div className="modal-content w-full max-w-lg mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
