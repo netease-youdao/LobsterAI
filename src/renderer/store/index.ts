@@ -8,6 +8,7 @@ import quickActionReducer from './slices/quickActionSlice';
 import scheduledTaskReducer from './slices/scheduledTaskSlice';
 import agentReducer from './slices/agentSlice';
 import authReducer from './slices/authSlice';
+import bookmarkReducer from './slices/bookmarkSlice';
 
 export const store = configureStore({
   reducer: {
@@ -20,8 +21,9 @@ export const store = configureStore({
     scheduledTask: scheduledTaskReducer,
     agent: agentReducer,
     auth: authReducer,
+    bookmark: bookmarkReducer,
   },
 });
 
 export type RootState = ReturnType<typeof store.getState>;
-export type AppDispatch = typeof store.dispatch; 
+export type AppDispatch = typeof store.dispatch;
