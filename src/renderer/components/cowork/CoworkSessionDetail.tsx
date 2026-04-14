@@ -2482,14 +2482,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const container = scrollContainerRef.current;
 
       if (msgEl && container) {
-        // Manually compute scrollTop to center the element in the container.
-        // scrollIntoView scrolls ALL scrollable ancestors (including body),
-        // which produces wrong results in nested scroll containers.
+        // Position the message top at ~1/3 from the container top for comfortable reading
         const containerRect = container.getBoundingClientRect();
         const msgRect = msgEl.getBoundingClientRect();
         const elementOffsetInContainer = msgRect.top - containerRect.top + container.scrollTop;
-        const targetScrollTop =
-          elementOffsetInContainer - container.clientHeight / 2 + msgRect.height / 2;
+        const targetScrollTop = elementOffsetInContainer - container.clientHeight / 3;
         container.scrollTop = Math.max(0, targetScrollTop);
 
         msgEl.classList.add('bookmark-flash');
