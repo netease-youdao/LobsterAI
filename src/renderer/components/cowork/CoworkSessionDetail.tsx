@@ -1747,7 +1747,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     } else {
       setShouldAutoScroll(true);
     }
-  }, [currentSession?.id, pendingScrollTarget]);
+    // Only react to session changes, not to pendingScrollTarget clearing.
+    // When pendingScrollTarget clears (after flash animation), shouldAutoScroll
+    // should stay false — the user explicitly navigated to a specific message.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession?.id]);
 
   // Focus rename input when entering rename mode
   useEffect(() => {
