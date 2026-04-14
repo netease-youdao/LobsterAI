@@ -321,6 +321,12 @@ const App: React.FC = () => {
   }, []);
 
   const handleJumpToMessage = useCallback((sessionId: string, messageId: string) => {
+    console.debug(
+      '[BookmarkJump] handleJumpToMessage called, sessionId:',
+      sessionId,
+      'messageId:',
+      messageId,
+    );
     setPendingScrollTarget({ sessionId, messageId });
     coworkService.loadSession(sessionId);
     setMainView('cowork');
