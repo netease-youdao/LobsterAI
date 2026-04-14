@@ -1370,7 +1370,7 @@ export class OpenClawConfigSync {
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'netease-bee': {
         enabled: true,
         clientId: neteaseBeeChanConfig.clientId,
-        secret: neteaseBeeChanConfig.secret,
+        secret: '${LOBSTER_NETEASE_BEE_SECRET}',
       }};
     }
 
@@ -1577,6 +1577,12 @@ export class OpenClawConfigSync {
     const nimConfig = this.getNimConfig();
     if (nimConfig?.enabled && nimConfig.token) {
       env.LOBSTER_NIM_TOKEN = nimConfig.token;
+    }
+
+    // NetEase Bee
+    const neteaseBeeChanConfig = this.getNeteaseBeeChanConfig();
+    if (neteaseBeeChanConfig?.enabled && neteaseBeeChanConfig.secret) {
+      env.LOBSTER_NETEASE_BEE_SECRET = neteaseBeeChanConfig.secret;
     }
 
     return env;
