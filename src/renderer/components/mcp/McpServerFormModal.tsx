@@ -7,6 +7,7 @@ interface McpServerFormModalProps {
   isOpen: boolean;
   server?: McpServerConfig | null; // null = create mode, defined = edit mode
   registryEntry?: McpRegistryEntry | null; // install from registry mode
+  initialData?: McpServerFormData | null; // quick template prefill data
   existingNames: string[];
   onClose: () => void;
   onSave: (data: McpServerFormData) => void;
@@ -16,12 +17,14 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
   isOpen,
   server,
   registryEntry,
+  initialData,
   existingNames,
   onClose,
   onSave,
 }) => {
   const isEdit = !!server;
   const isRegistry = !!registryEntry && !isEdit;
+  const isQuickTemplate = !!initialData && !isEdit && !isRegistry;
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -89,6 +92,28 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
       setEnvRows(envEntries);
       setUrl('');
       setHeaderRows([]);
+    } else if (initialData) {
+      // Quick template mode — pre-fill from initial data
+      setName(initialData.name);
+      setDescription(initialData.description);
+      setTransportType(initialData.transportType);
+      setCommand(initialData.command || '');
+      setArgsText((initialData.args || []).join('\n'));
+      setEnvRows(
+        initialData.env
+          ? Object.entries(initialData.env).map(([key, value]) => ({
+              key,
+              value,
+              required: value === 'XXX' ? true : undefined,
+            }))
+          : []
+      );
+      setUrl(initialData.url || '');
+      setHeaderRows(
+        initialData.headers
+          ? Object.entries(initialData.headers).map(([key, value]) => ({ key, value }))
+          : []
+      );
     } else {
       // Create mode
       setName('');
@@ -102,7 +127,7 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     }
     setError('');
     setEnvErrors({});
-  }, [isOpen, server, registryEntry]);
+  }, [isOpen, server, registryEntry, initialData]);
 
   const handleSave = () => {
     const trimmedName = name.trim();
@@ -237,7 +262,9 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
     ? i18nService.t('editMcpServer')
     : isRegistry
       ? `${i18nService.t('mcpInstall')} ${registryEntry!.name}`
-      : i18nService.t('addMcpServer');
+      : isQuickTemplate
+        ? '添加 MCP 服务'
+        : i18nService.t('addMcpServer');
 
   // Save button text
   const saveText = isRegistry && !isEdit
