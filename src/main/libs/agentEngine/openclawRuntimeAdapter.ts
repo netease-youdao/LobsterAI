@@ -1548,7 +1548,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.channelSessionSync?.clearCache();
     this.knownChannelSessionIds.clear();
     this.heartbeatSessionKeys.clear();
-    this.stoppedSessions.clear();
     this.browserPrewarmAttempted = false;
     this.lastTickTimestamp = 0;
     // Clear messageUpdate throttle state
