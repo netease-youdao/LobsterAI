@@ -76,15 +76,16 @@ const ReadButton: React.FC<ReadButtonProps> = ({ content, visible }) => {
   };
 
   // Tooltip follows the same pattern as CopyButton (native browser title tooltip).
-  // While playing, hint that clicking will pause; otherwise show "read aloud".
   const title = isPlaying
     ? i18nService.t('readAloudPause')
-    : i18nService.t('readAloud');
+    : isPaused
+      ? i18nService.t('readAloudResume')
+      : i18nService.t('readAloud');
 
   /**
    * Icon decision:
    * - playing → animated sound-wave
-   * - idle / paused → static speaker icon (same icon, no extra visual distinction)
+   * - idle / paused → static speaker icon
    */
   const icon = isPlaying ? <SoundWaveIcon /> : <SpeakerIcon />;
 
