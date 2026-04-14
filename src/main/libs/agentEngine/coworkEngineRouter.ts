@@ -96,17 +96,16 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
 
   respondToPermission(requestId: string, result: PermissionResult): void {
     const engine = this.requestEngine.get(requestId);
-    if (engine) {
-      this.runtimeByEngine[engine].respondToPermission(requestId, result);
-      if (result.behavior === 'allow' || result.behavior === 'deny') {
-        this.requestEngine.delete(requestId);
-        this.requestSession.delete(requestId);
-      }
+    if (!engine) {
+      console.warn('[CoworkEngineRouter] permission response for unknown requestId, ignoring:', requestId);
       return;
     }
 
-    this.runtimeByEngine.openclaw.respondToPermission(requestId, result);
-    this.runtimeByEngine.yd_cowork.respondToPermission(requestId, result);
+    this.runtimeByEngine[engine].respondToPermission(requestId, result);
+    if (result.behavior === 'allow' || result.behavior === 'deny') {
+      this.requestEngine.delete(requestId);
+      this.requestSession.delete(requestId);
+    }
   }
 
   isSessionActive(sessionId: string): boolean {
