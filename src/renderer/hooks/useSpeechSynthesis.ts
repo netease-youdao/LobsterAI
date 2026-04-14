@@ -3,6 +3,91 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export type SpeechStatus = 'idle' | 'playing' | 'paused';
 
 /**
+ * Priority keywords for selecting the best available voice.
+ * Higher index in the array = higher priority (checked last = wins).
+ *
+ * Strategy (ascending priority):
+ *   1. Any voice matching the target language
+ *   2. Prefer voices whose name contains quality keywords
+ *   3. Strongly prefer Microsoft Neural / Natural voices (best on Windows/Electron)
+ */
+const ZH_VOICE_PRIORITY = [
+  'zh',           // any Chinese voice
+  'xiaoyun',      // Alibaba / system
+  'huihui',       // Microsoft legacy
+  'kangkang',     // Microsoft legacy
+  'yaoyao',       // Microsoft legacy
+  'yunxi',        // Microsoft neural
+  'yunyang',      // Microsoft neural
+  'xiaomo',       // Microsoft neural
+  'xiaohan',      // Microsoft neural
+  'xiaorui',      // Microsoft neural
+  'xiaochen',     // Microsoft neural
+  'xiaoshuang',   // Microsoft neural
+  'xiaoxuan',     // Microsoft neural
+  'xiaozhen',     // Microsoft neural
+  'xiaoyi',       // Microsoft neural
+  'xiaoxiao',     // Microsoft neural — top pick
+  'natural',      // any "Natural" labelled voice
+  'online',       // online (higher quality)
+];
+
+const EN_VOICE_PRIORITY = [
+  'en',
+  'david',        // Microsoft David (legacy)
+  'mark',         // Microsoft Mark (legacy)
+  'zira',         // Microsoft Zira (legacy)
+  'aria',         // Microsoft Aria neural
+  'jenny',        // Microsoft Jenny neural
+  'guy',          // Microsoft Guy neural
+  'natural',
+  'online',
+];
+
+/**
+ * Score a voice for a given language. Higher = better.
+ * Returns -1 if the voice does not match the language at all.
+ */
+function scoreVoice(voice: SpeechSynthesisVoice, lang: string): number {
+  const langPrefix = lang.split('-')[0].toLowerCase(); // 'zh' or 'en'
+  const voiceLang = voice.lang.toLowerCase();
+  const voiceName = voice.name.toLowerCase();
+
+  // Must at least match the primary language tag
+  if (!voiceLang.startsWith(langPrefix)) return -1;
+
+  const priority = langPrefix === 'zh' ? ZH_VOICE_PRIORITY : EN_VOICE_PRIORITY;
+  let score = 0;
+  priority.forEach((keyword, idx) => {
+    if (voiceName.includes(keyword)) {
+      score = idx + 1; // higher index = higher score
+    }
+  });
+  return score;
+}
+
+/**
+ * Pick the best available voice for the given language tag.
+ * Falls back to undefined (browser default) if no voice matches.
+ */
+function pickBestVoice(lang: string): SpeechSynthesisVoice | undefined {
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return undefined;
+
+  let best: SpeechSynthesisVoice | undefined;
+  let bestScore = -1;
+
+  for (const voice of voices) {
+    const s = scoreVoice(voice, lang);
+    if (s > bestScore) {
+      bestScore = s;
+      best = voice;
+    }
+  }
+  return best;
+}
+
+/**
  * Strip Markdown syntax to produce plain text suitable for TTS.
  */
 function stripMarkdown(text: string): string {
@@ -91,11 +176,15 @@ export function useSpeechSynthesis(
       utterance.pitch = pitch;
 
       // Auto-detect language: if text contains CJK characters, use zh-CN
-      if (options.lang) {
-        utterance.lang = options.lang;
-      } else {
-        const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff]/.test(plain);
-        utterance.lang = hasCJK ? 'zh-CN' : 'en-US';
+      const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff]/.test(plain);
+      const targetLang = options.lang ?? (hasCJK ? 'zh-CN' : 'en-US');
+      utterance.lang = targetLang;
+
+      // Pick the best available voice for the target language
+      const bestVoice = pickBestVoice(targetLang);
+      if (bestVoice) {
+        utterance.voice = bestVoice;
+        utterance.lang = bestVoice.lang; // align lang to the chosen voice
       }
 
       utterance.onstart = () => setStatus('playing');
