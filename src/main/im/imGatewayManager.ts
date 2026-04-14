@@ -1598,12 +1598,57 @@ export class IMGatewayManager extends EventEmitter {
       return { platform, testedAt, verdict: 'fail', checks };
     }
 
-    // Check 2: Config completeness passes
-    checks.push({
-      code: 'auth_check',
-      level: 'pass',
-      message: t('imPopoConfigReady'),
-    });
+    // Check 2: API authentication probe
+    // Call POPO official API to verify credentials validity
+    try {
+      const tokenUrl = 'https://open.popo.netease.com/open-apis/robots/v1/token';
+      const response = await this.withTimeout(
+        fetchJsonWithTimeout<{ 
+          errcode?: number; 
+          errmsg?: string; 
+          data?: { 
+            accessToken?: string; 
+            accessExpiredAt?: number;
+            refreshToken?: string;
+            refreshExpiredAt?: number;
+          } 
+        }>(
+          tokenUrl,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              appKey: popoConfig.appKey,
+              appSecret: popoConfig.appSecret,
+            }),
+          },
+          CONNECTIVITY_TIMEOUT_MS
+        ),
+        CONNECTIVITY_TIMEOUT_MS,
+        t('imAuthProbeTimeout')
+      );
+
+      if (response.data?.accessToken) {
+        checks.push({
+          code: 'auth_check',
+          level: 'pass',
+          message: t('imPopoAuthPassed'),
+        });
+      } else {
+        const errorMsg = response.errmsg || `errcode ${response.errcode || 'unknown'}`;
+        throw new Error(errorMsg);
+      }
+    } catch (error: any) {
+      checks.push({
+        code: 'auth_check',
+        level: 'fail',
+        message: t('imPopoAuthFailed', { error: error.message }),
+        suggestion: t('imPopoCheckCredentials'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
 
     // Check 3: OpenClaw Gateway running info
     checks.push({
