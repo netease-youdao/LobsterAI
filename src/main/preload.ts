@@ -221,6 +221,14 @@ contextBridge.exposeInMainWorld('electron', {
     respondToPermission: (options: { requestId: string; result: any }) =>
       ipcRenderer.invoke('cowork:permission:respond', options),
 
+    // Bookmarks
+    addBookmark: (options: { sessionId: string; messageId: string }) =>
+      ipcRenderer.invoke('cowork:bookmark:add', options),
+    removeBookmark: (options: { sessionId: string; messageId: string }) =>
+      ipcRenderer.invoke('cowork:bookmark:remove', options),
+    listBookmarks: (sessionId: string) =>
+      ipcRenderer.invoke('cowork:bookmark:list', sessionId),
+
     // Configuration
     getConfig: () =>
       ipcRenderer.invoke('cowork:config:get'),

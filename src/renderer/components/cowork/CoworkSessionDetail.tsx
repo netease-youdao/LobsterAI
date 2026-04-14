@@ -1267,11 +1267,15 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
+  isBookmarked?: boolean;
+  onToggleBookmark?: (messageId: string) => void;
 }> = ({
   message,
   resolveLocalFilePath,
   mapDisplayText,
   showCopyButton = false,
+  isBookmarked = false,
+  onToggleBookmark,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
@@ -1296,6 +1300,26 @@ const AssistantMessageItem: React.FC<{
             content={displayContent}
             visible={isHovered}
           />
+          {onToggleBookmark && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleBookmark(message.id); }}
+              className={`p-1.5 rounded-md hover:bg-surface-raised transition-all duration-200 ${
+                isHovered || isBookmarked ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
+              title={i18nService.t(isBookmarked ? 'coworkBookmarkRemove' : 'coworkBookmarkAdd')}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill={isBookmarked ? 'currentColor' : 'none'}
+                stroke="currentColor"
+                strokeWidth={2}
+                className={`w-4 h-4 ${isBookmarked ? 'text-yellow-500' : 'text-[var(--icon-secondary)]'}`}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -1405,12 +1429,16 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  bookmarkedMessageIds?: Set<string>;
+  onToggleBookmark?: (messageId: string) => void;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  bookmarkedMessageIds,
+  onToggleBookmark,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1518,6 +1546,8 @@ export const AssistantTurnBlock: React.FC<{
                     resolveLocalFilePath={resolveLocalFilePath}
                     mapDisplayText={mapDisplayText}
                     showCopyButton={showCopyButtons && !hasToolGroupAfter}
+                    isBookmarked={bookmarkedMessageIds?.has(item.message.id) ?? false}
+                    onToggleBookmark={onToggleBookmark}
                   />
                 );
               }
@@ -1613,6 +1643,50 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
+
+  // Bookmark state
+  const [bookmarkedMessageIds, setBookmarkedMessageIds] = useState<Set<string>>(new Set());
+
+  // Load bookmarks when session changes
+  useEffect(() => {
+    if (!sessionId) return;
+    const loadBookmarks = async () => {
+      try {
+        const cowork = window.electron?.cowork;
+        if (!cowork?.listBookmarks) return;
+        const result = await cowork.listBookmarks(sessionId);
+        if (result.success && result.bookmarks) {
+          setBookmarkedMessageIds(new Set(result.bookmarks.map((b: { messageId: string }) => b.messageId)));
+        }
+      } catch (err) {
+        console.error('[CoworkSessionDetail] Failed to load bookmarks:', err);
+      }
+    };
+    loadBookmarks();
+  }, [sessionId]);
+
+  const handleToggleBookmark = useCallback(async (messageId: string) => {
+    if (!sessionId) return;
+    const cowork = window.electron?.cowork;
+    if (!cowork?.addBookmark || !cowork?.removeBookmark) return;
+
+    const isCurrentlyBookmarked = bookmarkedMessageIds.has(messageId);
+    try {
+      if (isCurrentlyBookmarked) {
+        await cowork.removeBookmark({ sessionId, messageId });
+        setBookmarkedMessageIds(prev => {
+          const next = new Set(prev);
+          next.delete(messageId);
+          return next;
+        });
+      } else {
+        await cowork.addBookmark({ sessionId, messageId });
+        setBookmarkedMessageIds(prev => new Set(prev).add(messageId));
+      }
+    } catch (err) {
+      console.error('[CoworkSessionDetail] Failed to toggle bookmark:', err);
+    }
+  }, [sessionId, bookmarkedMessageIds]);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -2343,6 +2417,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                bookmarkedMessageIds={bookmarkedMessageIds}
+                onToggleBookmark={handleToggleBookmark}
               />
             </div>
           )}

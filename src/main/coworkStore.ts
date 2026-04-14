@@ -757,6 +757,30 @@ export class CoworkStore {
     }));
   }
 
+  addBookmark(sessionId: string, messageId: string): { id: string; createdAt: number } {
+    const id = uuidv4();
+    const now = Date.now();
+    this.db
+      .prepare('INSERT OR IGNORE INTO cowork_bookmarks (id, session_id, message_id, created_at) VALUES (?, ?, ?, ?)')
+      .run(id, sessionId, messageId, now);
+    return { id, createdAt: now };
+  }
+
+  removeBookmark(sessionId: string, messageId: string): boolean {
+    const result = this.db
+      .prepare('DELETE FROM cowork_bookmarks WHERE session_id = ? AND message_id = ?')
+      .run(sessionId, messageId);
+    return result.changes > 0;
+  }
+
+  listBookmarks(sessionId: string): Array<{ id: string; messageId: string; createdAt: number }> {
+    const rows = this.getAll<{ id: string; message_id: string; created_at: number }>(
+      'SELECT id, message_id, created_at FROM cowork_bookmarks WHERE session_id = ? ORDER BY created_at ASC',
+      [sessionId],
+    );
+    return rows.map(r => ({ id: r.id, messageId: r.message_id, createdAt: r.created_at }));
+  }
+
   resetRunningSessions(): number {
     const now = Date.now();
     const result = this.db
