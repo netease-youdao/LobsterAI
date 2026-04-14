@@ -62,7 +62,6 @@ const ReadButton: React.FC<ReadButtonProps> = ({ content, visible }) => {
 
   const isPlaying = status === 'playing';
   const isPaused = status === 'paused';
-  const isActive = isPlaying || isPaused;
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -93,7 +92,7 @@ const ReadButton: React.FC<ReadButtonProps> = ({ content, visible }) => {
     <button
       onClick={handleClick}
       className={`p-1.5 rounded-md hover:bg-surface-raised transition-all duration-200 ${
-        visible || isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        visible || isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'
       } ${isPlaying ? 'text-primary' : 'text-[var(--icon-secondary)]'}`}
       title={title}
     >
