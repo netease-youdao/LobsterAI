@@ -999,6 +999,15 @@ export class OpenClawEngineManager extends EventEmitter {
       const candidates = fs.readdirSync(distRoot)
         .filter((name) => /^client(?:-.*)?\.js$/i.test(name))
         .sort();
+      // When multiple client-*.js files exist (v2026.4+), probe each one
+      // to find the file that actually exports the GatewayClient class.
+      for (const name of candidates) {
+        const candidatePath = path.join(distRoot, name);
+        if (this.isGatewayClientModule(candidatePath)) {
+          return candidatePath;
+        }
+      }
+      // Fallback: return first candidate if none matched the probe
       if (candidates.length > 0) {
         return path.join(distRoot, candidates[0]);
       }
@@ -1007,6 +1016,28 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     return null;
+  }
+
+  private isGatewayClientModule(filePath: string): boolean {
+    try {
+      const loaded = require(filePath) as Record<string, unknown>;
+      if (typeof loaded.GatewayClient === 'function') return true;
+      for (const val of Object.values(loaded)) {
+        if (typeof val !== 'function') continue;
+        const fn = val as { name?: string; prototype?: Record<string, unknown> };
+        if (fn.name === 'GatewayClient') return true;
+        const proto = fn.prototype;
+        if (proto
+          && typeof proto.start === 'function'
+          && typeof proto.stop === 'function'
+          && typeof proto.request === 'function') {
+          return true;
+        }
+      }
+    } catch {
+      // ignore require errors
+    }
+    return false;
   }
 
   private ensureGatewayToken(): string {

@@ -8,7 +8,7 @@
   "license": "MIT",
   "version": "2026.4.13",
   "openclaw": {
-    "version": "v2026.3.2",
+    "version": "v2026.4.12",
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
@@ -34,7 +34,7 @@
       {
         "id": "openclaw-weixin",
         "npm": "@tencent-weixin/openclaw-weixin",
-        "version": "1.0.3"
+        "version": "2.1.8"
       },
       {
         "id": "moltbot-popo",
