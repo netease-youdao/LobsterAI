@@ -218,8 +218,8 @@ const PROVIDER_DEFINITIONS = [
   {
     id: ProviderName.Qwen,
     label: 'Qwen',
-    website: 'https://dashscope.console.aliyun.com',
-    apiKeyUrl: 'https://dashscope.console.aliyun.com/apiKey',
+    website: 'https://bailian.console.aliyun.com',
+    apiKeyUrl: 'https://bailian.console.aliyun.com/?tab=model#/api-key',
     openClawProviderId: OpenClawProviderId.Qwen,
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/apps/anthropic',
     defaultApiFormat: ApiFormat.Anthropic,
