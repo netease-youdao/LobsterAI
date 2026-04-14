@@ -889,6 +889,22 @@ const ToolCallGroup: React.FC<{
     ? truncatePreview(toolResultDisplay.replace(/\s+/g, ' '))
     : null;
 
+  // Elapsed timer for running tools
+  const [toolElapsed, setToolElapsed] = useState(0);
+  const isToolRunning = !toolResult;
+  useEffect(() => {
+    if (!isToolRunning) {
+      setToolElapsed(0);
+      return;
+    }
+    const startTs = toolUse.timestamp;
+    if (!startTs) return;
+    const compute = () => Math.max(0, Math.floor((Date.now() - startTs) / 1000));
+    setToolElapsed(compute());
+    const timer = setInterval(() => setToolElapsed(compute()), 1000);
+    return () => clearInterval(timer);
+  }, [isToolRunning, toolUse.timestamp]);
+
   // Check if this is a Bash-like tool that should show terminal style
   const isBashTool = isBashLikeToolName(rawToolName);
 
@@ -941,8 +957,11 @@ const ToolCallGroup: React.FC<{
             </div>
           )}
           {!toolResult && (
-            <div className="text-xs text-muted mt-0.5">
-              {i18nService.t('coworkToolRunning')}
+            <div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
+              <span>{i18nService.t('coworkToolRunning')}</span>
+              {toolElapsed > 0 && (
+                <span className="tabular-nums text-muted/60">{formatElapsedTime(toolElapsed)}</span>
+              )}
             </div>
           )}
         </div>
@@ -979,8 +998,11 @@ const ToolCallGroup: React.FC<{
                   </div>
                 )}
                 {!toolResult && (
-                  <div className="text-muted mt-1.5 italic">
-                    {i18nService.t('coworkToolRunning')}
+                  <div className="text-muted mt-1.5 italic flex items-center gap-1.5">
+                    <span>{i18nService.t('coworkToolRunning')}</span>
+                    {toolElapsed > 0 && (
+                      <span className="tabular-nums not-italic text-muted/60">{formatElapsedTime(toolElapsed)}</span>
+                    )}
                   </div>
                 )}
               </div>
@@ -1303,42 +1325,76 @@ const AssistantMessageItem: React.FC<{
 };
 
 // Streaming activity bar shown between messages and input
+const formatElapsedTime = (seconds: number): string => {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
+};
+
 const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ messages }) => {
-  // Walk messages backwards to find the latest tool_use without a paired tool_result
-  const getStatusText = (): string => {
-    const toolUseIds = new Set<string>();
+  const [elapsed, setElapsed] = useState(0);
+
+  // Find the latest user message timestamp as the total execution start time
+  const executionStartTimestamp = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === 'user') {
+        return messages[i].timestamp;
+      }
+    }
+    return 0;
+  }, [messages]);
+
+  // Find the latest unresolved tool_use for status text
+  const latestToolName = useMemo(() => {
     const toolResultIds = new Set<string>();
     for (const msg of messages) {
       const id = msg.metadata?.toolUseId;
-      if (typeof id === 'string') {
-        if (msg.type === 'tool_result') toolResultIds.add(id);
-        if (msg.type === 'tool_use') toolUseIds.add(id);
+      if (typeof id === 'string' && msg.type === 'tool_result') {
+        toolResultIds.add(id);
       }
     }
-    // Walk backwards to find latest unresolved tool_use
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.type === 'tool_use') {
         const id = msg.metadata?.toolUseId;
         if (typeof id === 'string' && !toolResultIds.has(id)) {
-          const toolName = typeof msg.metadata?.toolName === 'string' ? msg.metadata.toolName : null;
-          if (toolName) {
-            return `${i18nService.t('coworkToolRunning')} ${toolName}...`;
-          }
+          return typeof msg.metadata?.toolName === 'string' ? msg.metadata.toolName : null;
         }
       }
     }
-    return `${i18nService.t('coworkToolRunning')}`;
-  };
+    return null;
+  }, [messages]);
+
+  // Tick the elapsed timer every second from user message timestamp
+  useEffect(() => {
+    if (!executionStartTimestamp) {
+      setElapsed(0);
+      return;
+    }
+    const computeElapsed = () => Math.max(0, Math.floor((Date.now() - executionStartTimestamp) / 1000));
+    setElapsed(computeElapsed());
+    const timer = setInterval(() => setElapsed(computeElapsed()), 1000);
+    return () => clearInterval(timer);
+  }, [executionStartTimestamp]);
+
+  const statusText = latestToolName
+    ? `${i18nService.t('coworkToolRunning')} ${latestToolName}...`
+    : `${i18nService.t('coworkToolRunning')}`;
 
   return (
     <div className="shrink-0 animate-fade-in px-4">
       <div className="max-w-3xl mx-auto">
         <div className="streaming-bar" />
-        <div className="py-1">
+        <div className="py-1 flex items-center gap-2">
           <span className="text-xs text-secondary">
-            {getStatusText()}
+            {statusText}
           </span>
+          {elapsed > 0 && (
+            <span className="text-xs text-secondary/60 tabular-nums">
+              {formatElapsedTime(elapsed)}
+            </span>
+          )}
         </div>
       </div>
     </div>
