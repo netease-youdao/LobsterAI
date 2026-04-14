@@ -4220,7 +4220,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               </div>
 
               <div className="flex items-center gap-2 text-xs text-secondary">
-                <span>{ProviderRegistry.get(testResult.provider)?.label ?? testResult.provider}</span>
+                <span>{isCustomProvider(testResult.provider)
+                  ? ((providers[testResult.provider] as ProviderConfig)?.displayName || getCustomProviderDefaultName(testResult.provider))
+                  : (ProviderRegistry.get(testResult.provider)?.label ?? getProviderDisplayName(testResult.provider))
+                }</span>
                 <span className="text-[11px]">•</span>
                 <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                   {testResult.success ? (
