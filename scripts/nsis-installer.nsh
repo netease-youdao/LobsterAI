@@ -142,8 +142,58 @@
 
 !macro customUnInstall
   ; ─── Remove Windows Defender Exclusion on uninstall ───
-  ; Clean up the exclusion we added during installation.
   nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "try { Remove-MpPreference -ExclusionPath $\"$INSTDIR\resources\cfmind$\" -ErrorAction SilentlyContinue } catch {}"'
   Pop $0
   Pop $1
+
+  ; ─── Clean up AppData directories ───
+  ; electron-builder's deleteAppDataOnUninstall may not clean everything
+  ; Manually ensure LobsterAI folder in AppData/Roaming is removed
+  RMDir /r "$APPDATA\LobsterAI"
+  RMDir /r "$LOCALAPPDATA\LobsterAI"
+
+  ; ─── Force complete installation directory removal ───
+  Sleep 500
+  RMDir /r "$INSTDIR"
+!macroend
+
+; ─── Uninstaller initialization macro ───
+; This runs BEFORE any files are deleted, right when user clicks uninstall
+; Using customUnInit macro instead of un.onInit function to avoid conflict
+; with electron-builder's built-in uninstaller scripts
+!macro customUnInit
+  ; Check if app is running and prompt user
+  nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "if (Get-Process -Name $\"${APP_FILENAME}$\" -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"'
+  Pop $0
+  Pop $1
+  
+  ; Exit code 1 means process is running
+  StrCmp $0 "1" 0 Done
+  
+  ; App is running - show concise prompt
+  MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
+    "LobsterAI 正在运行。$\r$\n点击【确定】关闭。" \
+    IDOK CloseApp IDCANCEL Cancel
+  
+  CloseApp:
+    ; User confirmed - close the application
+    nsExec::ExecToLog 'taskkill /IM "${PRODUCT_FILENAME}.exe" /F /T'
+    Pop $0
+    Sleep 1500
+    
+    ; Verify termination
+    nsExec::ExecToStack 'powershell -NoProfile -NonInteractive -Command "if (Get-Process -Name $\"${APP_FILENAME}$\" -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"'
+    Pop $0
+    Pop $1
+    StrCmp $0 "1" 0 Done
+    
+    ; Still running - abort
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "无法关闭 LobsterAI,请手动关闭后重试。"
+    Abort
+  
+  Cancel:
+    Abort
+    
+  Done:
 !macroend
