@@ -2505,24 +2505,58 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       turnEl.scrollIntoView({ behavior: 'auto', block: 'center' });
     }
 
-    // Phase 2: After lazy render fires, find the exact message element and highlight it.
+    // Phase 2: Wait for the message element to appear, then stabilize its position.
+    // Lazy rendering causes continuous layout shifts as placeholder turns expand to
+    // full height. We use a polling loop that keeps re-centering the element until
+    // its position actually stabilizes within the scroll container.
+    let stabilizeRaf = 0;
+    let stabilizeTimer = 0;
+
     const attemptScroll = (retries: number) => {
       const msgEl = document.querySelector(`[data-message-id="${targetMessageId}"]`);
       if (msgEl) {
-        // Use 'auto' to avoid prolonged scroll events fighting with other effects
-        msgEl.scrollIntoView({ behavior: 'auto', block: 'center' });
-        // Double-RAF to wait for layout stabilization after lazy renders
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
+        const container = scrollContainerRef.current;
+        if (!container) {
+          isBookmarkScrollingRef.current = false;
+          onClearPendingScroll?.();
+          return;
+        }
+
+        let stableCount = 0;
+        let attempts = 0;
+        const maxAttempts = 20;
+
+        const stabilize = () => {
+          const containerRect = container.getBoundingClientRect();
+          const msgRect = msgEl.getBoundingClientRect();
+          // How far the element center is from the container center
+          const msgCenter = msgRect.top + msgRect.height / 2;
+          const containerCenter = containerRect.top + containerRect.height / 2;
+          const offset = Math.abs(msgCenter - containerCenter);
+
+          if (offset > 10 && attempts < maxAttempts) {
+            // Not centered yet — re-scroll
             msgEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+            stableCount = 0;
+            attempts++;
+            stabilizeRaf = requestAnimationFrame(stabilize);
+          } else if (stableCount < 3 && attempts < maxAttempts) {
+            // Position looks good, but wait a few more frames to confirm layout is stable
+            stableCount++;
+            attempts++;
+            stabilizeRaf = requestAnimationFrame(stabilize);
+          } else {
+            // Position is stable — apply highlight
             msgEl.classList.add('bookmark-flash');
-            setTimeout(() => {
+            stabilizeTimer = window.setTimeout(() => {
               msgEl.classList.remove('bookmark-flash');
               isBookmarkScrollingRef.current = false;
             }, 1500);
             onClearPendingScroll?.();
-          });
-        });
+          }
+        };
+
+        stabilize();
       } else if (retries > 0) {
         setTimeout(() => attemptScroll(retries - 1), 200);
       } else {
@@ -2532,9 +2566,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     };
 
     // Give IntersectionObserver + React render time to fire
-    const timer = setTimeout(() => attemptScroll(5), 150);
+    const timer = setTimeout(() => attemptScroll(8), 100);
     return () => {
       clearTimeout(timer);
+      cancelAnimationFrame(stabilizeRaf);
+      clearTimeout(stabilizeTimer);
       isBookmarkScrollingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
