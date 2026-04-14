@@ -244,6 +244,12 @@ interface ProfileSummaryData {
   creditItems: CreditItem[];
 }
 
+interface SkillUsageStat {
+  skillId: string;
+  useCount: number;
+  lastUsedAt: number;
+}
+
 interface IElectronAPI {
   platform: string;
   arch: string;
@@ -267,6 +273,7 @@ interface IElectronAPI {
       skillId: string,
       config: Record<string, string>
     ) => Promise<{ success: boolean; result?: EmailConnectivityTestResult; error?: string }>;
+    getUsageStats: () => Promise<{ success: boolean; stats?: SkillUsageStat[]; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {

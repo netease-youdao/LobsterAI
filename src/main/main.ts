@@ -88,6 +88,7 @@ import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 import { loadOpenClawSessionPolicyConfig, saveOpenClawSessionPolicyConfig } from './openclawSessionPolicy/store';
 import { SkillManager } from './skillManager';
 import { getSkillServiceManager } from './skillServices';
+import { SkillUsageStore } from './skillUsageStore';
 import { SqliteStore } from './sqliteStore';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 
@@ -648,6 +649,7 @@ process.on('exit', (code) => {
 });
 
 let store: SqliteStore | null = null;
+let skillUsageStore: SkillUsageStore | null = null;
 let coworkStore: CoworkStore | null = null;
 let coworkRunner: CoworkRunner | null = null;
 let claudeRuntimeAdapter: ClaudeRuntimeAdapter | null = null;
@@ -839,6 +841,13 @@ const ensureOpenClawRunningForCowork = async () => {
   }
 
   return await manager.startGateway();
+};
+
+const getSkillUsageStore = () => {
+  if (!skillUsageStore) {
+    skillUsageStore = new SkillUsageStore(getStore().getDatabase());
+  }
+  return skillUsageStore;
 };
 
 const getCoworkStore = () => {
@@ -1139,6 +1148,34 @@ const bindCoworkRuntimeForwarder = (): void => {
       ? (message as { type?: unknown }).type
       : undefined;
     console.log('[CoworkForwarder] forwarding message: sessionId=', sessionId, 'type=', messageType, 'windowCount=', windows.length);
+
+    // 通过 SKILL.md Read 事件检测技能实际使用，fire-and-forget 旁路，不阻塞主流程
+    // 原理：AI 使用技能时必须先用 Read 工具读取 SKILL.md（见 OpenClaw 官方文档 tools/skills.md）
+    // OpenClaw Read 工具支持 'path' 或 'file_path' 两种参数名（CLAUDE_PARAM_GROUPS.read）
+    if (messageType === 'tool_use') {
+      const meta = (message as { metadata?: Record<string, unknown> }).metadata;
+      const toolInput = meta?.toolInput as Record<string, unknown> | undefined;
+      console.debug('[Skills] tool_use detected:', meta?.toolName, 'input keys:', Object.keys(toolInput ?? {}));
+      const filePath = (
+        typeof toolInput?.path === 'string' ? toolInput.path :
+        typeof toolInput?.file_path === 'string' ? toolInput.file_path :
+        null
+      );
+      if (filePath && path.basename(filePath) === 'SKILL.md') {
+        const skillId = path.basename(path.dirname(filePath));
+        setImmediate(() => {
+          try {
+            const skills = getSkillManager()?.listSkills() ?? [];
+            if (skills.some(s => s.id === skillId)) {
+              getSkillUsageStore().recordUsage([skillId]);
+            }
+          } catch (error) {
+            console.warn('[Skills] failed to record skill usage:', error);
+          }
+        });
+      }
+    }
+
     windows.forEach((win) => {
       if (win.isDestroyed()) return;
       try {
@@ -2361,6 +2398,15 @@ if (!gotTheLock) {
     config: Record<string, string>
   ) => {
     return getSkillManager().testEmailConnectivity(skillId, config);
+  });
+
+  ipcMain.handle('skills:getUsageStats', () => {
+    try {
+      const stats = getSkillUsageStore().getAll();
+      return { success: true, stats };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get usage stats' };
+    }
   });
 
   ipcMain.handle('openclaw:engine:getStatus', async () => {
