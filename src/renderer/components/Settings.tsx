@@ -568,6 +568,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const minimaxIsOAuthMode = providers.minimax.authType !== 'apikey';
   const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'minimax' && minimaxIsOAuthMode);
 
+  // Disable "Test Connection" when essential provider config is incomplete
+  const isTestConnectionDisabled = useMemo(() => {
+    const providerConfig = providers[activeProvider];
+    const missingModels = !providerConfig.models?.length;
+    const missingApiKey = providerRequiresApiKey(activeProvider) && !providerConfig.apiKey;
+    const effectiveApiFormat = getEffectiveApiFormat(activeProvider, providerConfig.apiFormat);
+    const missingBaseUrl = !resolveBaseUrl(activeProvider, providerConfig.baseUrl, effectiveApiFormat);
+    return isTesting || missingApiKey || missingModels || missingBaseUrl;
+  }, [activeProvider, providers, isTesting]);
+
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -1952,7 +1962,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       // Apply Coding Plan endpoint switch
       let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, getEffectiveApiFormat(testingProvider, providerConfig.apiFormat));
       let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
-
       // Handle Coding Plan endpoint switch for supported providers
       if ((providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled && (effectiveApiFormat === 'anthropic' || effectiveApiFormat === 'openai')) {
         const resolved = resolveCodingPlanBaseUrl(testingProvider, true, effectiveApiFormat, effectiveBaseUrl);
@@ -3768,7 +3777,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey)}
+                  disabled={isTestConnectionDisabled}
                   className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                 >
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
