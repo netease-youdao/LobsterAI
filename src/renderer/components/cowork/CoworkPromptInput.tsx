@@ -781,6 +781,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             {i18nService.t('coworkDropFileHint')}
           </div>
         )}
+        {!remoteManaged && (
+          <ActiveSkillBadge className="px-4 pt-2.5" />
+        )}
         {isLarge ? (
           <>
             <textarea
@@ -874,13 +877,10 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </button>
                 )}
                 {!remoteManaged && (
-                  <>
-                    <SkillsButton
-                      onSelectSkill={handleSelectSkill}
-                      onManageSkills={handleManageSkills}
-                    />
-                    <ActiveSkillBadge />
-                  </>
+                  <SkillsButton
+                    onSelectSkill={handleSelectSkill}
+                    onManageSkills={handleManageSkills}
+                  />
                 )}
               </div>
               <div className="flex items-center gap-2">
