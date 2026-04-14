@@ -1,12 +1,14 @@
+import { ChatBubbleLeftRightIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { CoworkSessionSummary, CoworkSessionStatus } from '../../types/cowork';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+
+import { i18nService } from '../../services/i18n';
+import type { CoworkSessionStatus, CoworkSessionSummary } from '../../types/cowork';
+import { formatRelativeTimeString } from '../../utils/formatTime';
+import Modal from '../common/Modal';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
+import ListChecksIcon from '../icons/ListChecksIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
-import ListChecksIcon from '../icons/ListChecksIcon';
-import { i18nService } from '../../services/i18n';
-import Modal from '../common/Modal';
 
 interface CoworkSessionItemProps {
   session: CoworkSessionSummary;
@@ -51,41 +53,6 @@ const PushPinIcon: React.FC<React.SVGProps<SVGSVGElement> & { slashed?: boolean 
   </svg>
 );
 
-const formatRelativeTime = (timestamp: number): { compact: string; full: string } => {
-  const now = Date.now();
-  const diff = now - timestamp;
-
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (minutes < 1) {
-    return {
-      compact: 'now',
-      full: i18nService.t('justNow'),
-    };
-  } else if (minutes < 60) {
-    return {
-      compact: `${minutes}m`,
-      full: `${minutes} ${i18nService.t('minutesAgo')}`,
-    };
-  } else if (hours < 24) {
-    return {
-      compact: `${hours}h`,
-      full: `${hours} ${i18nService.t('hoursAgo')}`,
-    };
-  } else if (days === 1) {
-    return {
-      compact: '1d',
-      full: i18nService.t('yesterday'),
-    };
-  } else {
-    return {
-      compact: `${days}d`,
-      full: `${days} ${i18nService.t('daysAgo')}`,
-    };
-  }
-};
 
 const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   session,
@@ -245,7 +212,7 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
     if (position && (position.x !== menuPosition.x || position.y !== menuPosition.y)) {
       setMenuPosition(position);
     }
-  }, [menuPosition, showConfirmDelete]);
+  }, [menuPosition, showConfirmDelete, showBatchOption]);
 
   useEffect(() => {
     if (!isRenaming) return;
@@ -259,10 +226,9 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
   const actionLabel = i18nService.t('coworkSessionActions');
   const renameLabel = i18nService.t('renameConversation');
   const deleteLabel = i18nService.t('deleteSession');
-  const relativeTime = formatRelativeTime(session.updatedAt);
+  const relativeTime = formatRelativeTimeString(session.updatedAt);
   const showRunningIndicator = session.status === 'running';
   const showUnreadIndicator = !showRunningIndicator && hasUnread;
-  const showStatusIndicator = showRunningIndicator || showUnreadIndicator;
   const batchLabel = i18nService.t('batchOperations');
   const menuItems = useMemo(() => {
     const items = [
@@ -297,16 +263,16 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
         }
         onSelect();
       }}
-      className={`group relative p-3 rounded-lg cursor-pointer transition-all duration-150 ${
+      className={`group relative py-2 px-3 rounded-lg cursor-pointer transition-all duration-150 ${
         isActive
           ? 'bg-black/[0.06] dark:bg-white/[0.08]'
           : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.05]'
       }`}
     >
       {/* Content area */}
-      <div className="flex items-start">
+      <div className="flex items-center gap-2.5">
         {isBatchMode && (
-          <div className="flex items-center mr-2 mt-0.5 flex-shrink-0">
+          <div className="flex items-center flex-shrink-0">
             <input
               type="checkbox"
               checked={isSelected}
@@ -319,18 +285,25 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
             />
           </div>
         )}
-        <div className="flex-1 min-w-0">
-          <div className={`flex items-center mb-1 ${showStatusIndicator ? 'gap-2' : 'gap-0'}`}>
-            {/* Status indicator */}
-            {showStatusIndicator && (
-              <span
-                className={`block w-2 h-2 rounded-full bg-primary flex-shrink-0 ${
-                  showRunningIndicator ? 'shadow-[0_0_6px_rgba(59,130,246,0.5)] animate-pulse' : ''
-                }`}
-                title={showRunningIndicator ? i18nService.t(statusLabels[session.status]) : undefined}
-              />
+        {/* Chat icon with optional red dot badge for unread */}
+        {!isBatchMode && (
+          <span className="relative flex-shrink-0" style={{ width: '18px', height: '18px' }}>
+            <ChatBubbleLeftRightIcon
+              className={`${
+                showRunningIndicator
+                  ? 'text-primary animate-pulse'
+                  : 'text-secondary/40'
+              }`}
+              style={{ width: '18px', height: '18px' }}
+            />
+            {showUnreadIndicator && (
+              <span className="absolute -top-0.5 -right-0.5 block w-2 h-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900" />
             )}
-            {isRenaming ? (
+          </span>
+        )}
+        <div className="flex-1 min-w-0 group-hover:pr-8">
+          {isRenaming ? (
+            <div className="flex items-center gap-1.5">
               <input
                 ref={renameInputRef}
                 value={renameValue}
@@ -347,20 +320,24 @@ const CoworkSessionItem: React.FC<CoworkSessionItemProps> = ({
                 onBlur={handleRenameBlur}
                 className="flex-1 min-w-0 rounded-lg border border-border bg-background px-2 py-1 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               />
-            ) : (
-              <h3 className="text-sm font-medium text-foreground truncate">
-                {session.title}
-              </h3>
-            )}
-          </div>
-          <div className="flex items-center gap-2 text-xs text-secondary">
-            <span className="whitespace-nowrap" title={relativeTime.full}>
-              {relativeTime.compact}
-            </span>
-            <span className="text-[10px] uppercase tracking-wider whitespace-nowrap">
-              {i18nService.t(statusLabels[session.status])}
-            </span>
-          </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-1.5">
+                <h3 className="text-[13px] font-normal text-foreground truncate">
+                  {session.title}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-secondary mt-0.5">
+                <span className="whitespace-nowrap">
+                  {relativeTime}
+                </span>
+                <span className="whitespace-nowrap">
+                  {i18nService.t(statusLabels[session.status])}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
