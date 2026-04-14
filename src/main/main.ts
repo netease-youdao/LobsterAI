@@ -1053,7 +1053,10 @@ const syncOpenClawConfig = async (
   // contains ${VAR} placeholders, never plaintext secrets).
   const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
   const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
-  const secretEnvVarsChanged = JSON.stringify(nextSecretEnvVars) !== JSON.stringify(prevSecretEnvVars);
+  // Use sorted-key serialization to avoid false positives from key-order differences.
+  const sortedStringify = (obj: Record<string, string>) =>
+    JSON.stringify(Object.fromEntries(Object.entries(obj).sort(([a], [b]) => a.localeCompare(b))));
+  const secretEnvVarsChanged = sortedStringify(nextSecretEnvVars) !== sortedStringify(prevSecretEnvVars);
   getOpenClawEngineManager().setSecretEnvVars(nextSecretEnvVars);
 
   // When secret env vars change, the running gateway must be restarted even if

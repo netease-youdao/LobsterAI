@@ -157,6 +157,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayRestartTimer: NodeJS.Timeout | null = null;
   private gatewayRestartAttempt = 0;
   private shutdownRequested = false;
+  private statusDebounceTimer: NodeJS.Timeout | null = null;
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   private secretEnvVars: Record<string, string> = {};
@@ -1298,12 +1299,9 @@ export class OpenClawEngineManager extends EventEmitter {
       // the expected-exit guard, triggering a spurious restart.
       if (this.expectedGatewayExits.has(child)) return;
       if (this.shutdownRequested) return;
-      this.setStatus({
-        phase: 'error',
-        version: this.status.version,
-        message: `OpenClaw gateway process error: ${errorMsg}`,
-        canRetry: true,
-      });
+      // Log the error but do NOT change status here — the 'exit' event fires
+      // immediately after and will set the appropriate phase (starting or error).
+      console.warn(`[OpenClaw] gateway process error (will be handled by exit event): ${errorMsg}`);
     });
 
     child.once('exit', (code) => {
@@ -1317,12 +1315,25 @@ export class OpenClawEngineManager extends EventEmitter {
       }
       if (this.shutdownRequested) return;
 
-      this.setStatus({
-        phase: 'error',
-        version: this.status.version,
-        message: `OpenClaw gateway exited unexpectedly (code=${code ?? 'null'}).`,
-        canRetry: true,
-      });
+      // Only show error phase if we've exhausted all restart attempts.
+      // Otherwise keep phase as 'starting' so the overlay stays visible
+      // without the flicker: running → error (overlay gone) → starting (overlay back).
+      if (this.gatewayRestartAttempt >= GATEWAY_MAX_RESTART_ATTEMPTS) {
+        this.setStatus({
+          phase: 'error',
+          version: this.status.version,
+          message: `OpenClaw gateway exited unexpectedly (code=${code ?? 'null'}).`,
+          canRetry: true,
+        });
+      } else {
+        this.setStatus({
+          phase: 'starting',
+          version: this.status.version,
+          progressPercent: 0,
+          message: `OpenClaw gateway exited (code=${code ?? 'null'}), scheduling restart...`,
+          canRetry: false,
+        });
+      }
       this.scheduleGatewayRestart();
     });
   }
@@ -1358,6 +1369,25 @@ export class OpenClawEngineManager extends EventEmitter {
       ...next,
       message: next.message ? next.message.slice(0, 500) : undefined,
     };
-    this.emit('status', this.getStatus());
+
+    // Critical phases (running / error / not_installed) are emitted immediately
+    // so the UI reacts without delay. Transitional phases (starting / installing)
+    // are debounced by 150 ms to collapse rapid consecutive updates (e.g. the
+    // error→starting flip that happens during an auto-restart cycle) into a
+    // single IPC event, preventing overlay flicker.
+    const immediate = next.phase === 'running' || next.phase === 'error' || next.phase === 'not_installed';
+    if (immediate) {
+      if (this.statusDebounceTimer) {
+        clearTimeout(this.statusDebounceTimer);
+        this.statusDebounceTimer = null;
+      }
+      this.emit('status', this.getStatus());
+    } else {
+      if (this.statusDebounceTimer) clearTimeout(this.statusDebounceTimer);
+      this.statusDebounceTimer = setTimeout(() => {
+        this.statusDebounceTimer = null;
+        this.emit('status', this.getStatus());
+      }, 150);
+    }
   }
 }
