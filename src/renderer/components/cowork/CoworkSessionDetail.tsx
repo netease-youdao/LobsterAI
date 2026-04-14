@@ -1224,10 +1224,6 @@ export const UserMessageItem: React.FC<{
                   content={message.content}
                   visible={isHovered}
                 />
-                <ReadButton
-                  content={message.content}
-                  visible={isHovered}
-                />
                 {messageSkills.length > 0 && (
                   <div className="flex items-center gap-1.5 mr-1.5">
                     {messageSkills.map(skill => (
