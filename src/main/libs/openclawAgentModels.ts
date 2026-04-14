@@ -63,7 +63,7 @@ export function resolveManagedSessionModelTarget(options: {
   }
 
   const matchingProviders = Object.entries(options.availableProviders)
-    .filter(([, config]) => config.models.some((model) => model.id === explicitModel))
+    .filter(([, config]) => config.models.some(model => model.id === explicitModel))
     .map(([providerId]) => providerId);
 
   if (fallbackTarget && matchingProviders.includes(fallbackTarget.providerId)) {
@@ -123,7 +123,7 @@ export function resolveQualifiedAgentModelRef(options: {
   }
 
   const matchingProviders = Object.entries(options.availableProviders)
-    .filter(([, config]) => config.models.some((model) => model.id === explicitModel))
+    .filter(([, config]) => config.models.some(model => model.id === explicitModel))
     .map(([providerId]) => providerId);
 
   if (matchingProviders.length === 1) {
@@ -151,21 +151,28 @@ export function buildAgentEntry(
   agent: Agent,
   fallbackPrimaryModel: string,
 ): Record<string, unknown> {
-  const primaryModel = parsePrimaryModelRef(agent.model.trim())?.primaryModel || fallbackPrimaryModel;
+  const primaryModel =
+    parsePrimaryModelRef(agent.model.trim())?.primaryModel || fallbackPrimaryModel;
+  const customWorkspace = (agent.workingDirectory || '').trim();
 
   return {
     id: agent.id,
     ...(agent.isDefault ? { default: true } : {}),
-    ...(agent.name || agent.icon ? {
-      identity: {
-        ...(agent.name ? { name: agent.name } : {}),
-        ...(agent.icon ? { emoji: agent.icon } : {}),
-      },
-    } : {}),
+    ...(agent.name || agent.icon
+      ? {
+          identity: {
+            ...(agent.name ? { name: agent.name } : {}),
+            ...(agent.icon ? { emoji: agent.icon } : {}),
+          },
+        }
+      : {}),
     ...(agent.skillIds && agent.skillIds.length > 0 ? { skills: agent.skillIds } : {}),
     model: {
       primary: primaryModel,
     },
+    // Non-main agents with a custom workspace override get an explicit workspace path.
+    // Without this, OpenClaw falls back to {STATE_DIR}/workspace-{agentId}/.
+    ...(!agent.isDefault && customWorkspace ? { workspace: customWorkspace } : {}),
   };
 }
 
@@ -174,6 +181,6 @@ export function buildManagedAgentEntries({
   fallbackPrimaryModel,
 }: BuildManagedAgentEntriesInput): Array<Record<string, unknown>> {
   return agents
-    .filter((agent) => agent.id !== 'main' && agent.enabled)
-    .map((agent) => buildAgentEntry(agent, fallbackPrimaryModel));
+    .filter(agent => agent.id !== 'main' && agent.enabled)
+    .map(agent => buildAgentEntry(agent, fallbackPrimaryModel));
 }

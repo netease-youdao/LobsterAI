@@ -8,7 +8,7 @@ import {
   updateAgent as updateAgentAction,
 } from '../store/slices/agentSlice';
 import { clearCurrentSession } from '../store/slices/coworkSlice';
-import { clearActiveSkills,setActiveSkillIds } from '../store/slices/skillSlice';
+import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
 
 class AgentService {
@@ -17,7 +17,7 @@ class AgentService {
     try {
       const agents = await window.electron?.agents?.list();
       if (agents) {
-        const mappedAgents = agents.map((a) => ({
+        const mappedAgents = agents.map(a => ({
           id: a.id,
           name: a.name,
           description: a.description,
@@ -27,6 +27,7 @@ class AgentService {
           isDefault: a.isDefault,
           source: a.source,
           skillIds: a.skillIds ?? [],
+          workingDirectory: a.workingDirectory ?? '',
         }));
         store.dispatch(setAgents(mappedAgents));
       }
@@ -45,21 +46,25 @@ class AgentService {
     model?: string;
     icon?: string;
     skillIds?: string[];
+    workingDirectory?: string;
   }): Promise<Agent | null> {
     try {
       const agent = await window.electron?.agents?.create(request);
       if (agent) {
-        store.dispatch(addAgent({
-          id: agent.id,
-          name: agent.name,
-          description: agent.description,
-          icon: agent.icon,
-          model: agent.model ?? '',
-          enabled: agent.enabled,
-          isDefault: agent.isDefault,
-          source: agent.source,
-          skillIds: agent.skillIds ?? [],
-        }));
+        store.dispatch(
+          addAgent({
+            id: agent.id,
+            name: agent.name,
+            description: agent.description,
+            icon: agent.icon,
+            model: agent.model ?? '',
+            enabled: agent.enabled,
+            isDefault: agent.isDefault,
+            source: agent.source,
+            skillIds: agent.skillIds ?? [],
+            workingDirectory: agent.workingDirectory ?? '',
+          }),
+        );
         return agent;
       }
       return null;
@@ -69,30 +74,37 @@ class AgentService {
     }
   }
 
-  async updateAgent(id: string, updates: {
-    name?: string;
-    description?: string;
-    systemPrompt?: string;
-    identity?: string;
-    model?: string;
-    icon?: string;
-    skillIds?: string[];
-    enabled?: boolean;
-  }): Promise<Agent | null> {
+  async updateAgent(
+    id: string,
+    updates: {
+      name?: string;
+      description?: string;
+      systemPrompt?: string;
+      identity?: string;
+      model?: string;
+      icon?: string;
+      skillIds?: string[];
+      workingDirectory?: string;
+      enabled?: boolean;
+    },
+  ): Promise<Agent | null> {
     try {
       const agent = await window.electron?.agents?.update(id, updates);
       if (agent) {
-        store.dispatch(updateAgentAction({
-          id: agent.id,
-          updates: {
-            name: agent.name,
-            description: agent.description,
-            icon: agent.icon,
-            model: agent.model ?? '',
-            enabled: agent.enabled,
-            skillIds: agent.skillIds ?? [],
-          },
-        }));
+        store.dispatch(
+          updateAgentAction({
+            id: agent.id,
+            updates: {
+              name: agent.name,
+              description: agent.description,
+              icon: agent.icon,
+              model: agent.model ?? '',
+              enabled: agent.enabled,
+              skillIds: agent.skillIds ?? [],
+              workingDirectory: agent.workingDirectory ?? '',
+            },
+          }),
+        );
         return agent;
       }
       return null;
@@ -133,17 +145,20 @@ class AgentService {
     try {
       const agent = await window.electron?.agents?.addPreset(presetId);
       if (agent) {
-        store.dispatch(addAgent({
-          id: agent.id,
-          name: agent.name,
-          description: agent.description,
-          icon: agent.icon,
-          model: agent.model ?? '',
-          enabled: agent.enabled,
-          isDefault: agent.isDefault,
-          source: agent.source,
-          skillIds: agent.skillIds ?? [],
-        }));
+        store.dispatch(
+          addAgent({
+            id: agent.id,
+            name: agent.name,
+            description: agent.description,
+            icon: agent.icon,
+            model: agent.model ?? '',
+            enabled: agent.enabled,
+            isDefault: agent.isDefault,
+            source: agent.source,
+            skillIds: agent.skillIds ?? [],
+            workingDirectory: agent.workingDirectory ?? '',
+          }),
+        );
         return agent;
       }
       return null;
@@ -156,7 +171,7 @@ class AgentService {
   switchAgent(agentId: string): void {
     store.dispatch(setCurrentAgentId(agentId));
     store.dispatch(clearCurrentSession());
-    const agent = store.getState().agent.agents.find((a) => a.id === agentId);
+    const agent = store.getState().agent.agents.find(a => a.id === agentId);
     if (agent?.skillIds?.length) {
       store.dispatch(setActiveSkillIds(agent.skillIds));
     } else {

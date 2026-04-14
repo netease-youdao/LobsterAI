@@ -38,7 +38,8 @@ const DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS = 12;
 const MIN_MEMORY_USER_MEMORIES_MAX_ITEMS = 1;
 const MAX_MEMORY_USER_MEMORIES_MAX_ITEMS = 60;
 const MEMORY_NEAR_DUPLICATE_MIN_SCORE = 0.82;
-const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
+const MEMORY_PROCEDURAL_TEXT_RE =
+  /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
 
 function normalizeMemoryGuardLevel(value: string | undefined): CoworkMemoryGuardLevel {
@@ -49,8 +50,10 @@ function normalizeMemoryGuardLevel(value: string | undefined): CoworkMemoryGuard
 function parseBooleanConfig(value: string | undefined, fallback: boolean): boolean {
   if (!value) return fallback;
   const normalized = value.trim().toLowerCase();
-  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
-  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') return false;
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on')
+    return true;
+  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off')
+    return false;
   return fallback;
 }
 
@@ -58,7 +61,7 @@ function clampMemoryUserMemoriesMaxItems(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS;
   return Math.max(
     MIN_MEMORY_USER_MEMORIES_MAX_ITEMS,
-    Math.min(MAX_MEMORY_USER_MEMORIES_MAX_ITEMS, Math.floor(value))
+    Math.min(MAX_MEMORY_USER_MEMORIES_MAX_ITEMS, Math.floor(value)),
   );
 }
 
@@ -85,7 +88,7 @@ function extractConversationSearchTerms(value: string): string[] {
   addTerm(normalized);
   const tokens = normalized
     .split(/[\s,，、|/\\;；]+/g)
-    .map((token) => token.replace(/^['"`]+|['"`]+$/g, '').trim())
+    .map(token => token.replace(/^['"`]+|['"`]+$/g, '').trim())
     .filter(Boolean);
 
   for (const token of tokens) {
@@ -118,7 +121,7 @@ function normalizeMemorySemanticKey(value: string): string {
 function buildTokenFrequencyMap(value: string): Map<string, number> {
   const tokens = value
     .split(/\s+/g)
-    .map((token) => token.trim())
+    .map(token => token.trim())
     .filter(Boolean);
   const map = new Map<string, number>();
   for (const token of tokens) {
@@ -189,14 +192,20 @@ function scoreMemorySimilarity(left: string, right: string): number {
   }
 
   let phraseScore = 0;
-  if (compactLeft && compactRight && (compactLeft.includes(compactRight) || compactRight.includes(compactLeft))) {
-    phraseScore = Math.min(compactLeft.length, compactRight.length) / Math.max(compactLeft.length, compactRight.length);
+  if (
+    compactLeft &&
+    compactRight &&
+    (compactLeft.includes(compactRight) || compactRight.includes(compactLeft))
+  ) {
+    phraseScore =
+      Math.min(compactLeft.length, compactRight.length) /
+      Math.max(compactLeft.length, compactRight.length);
   }
 
   return Math.max(
     phraseScore,
     scoreTokenOverlap(left, right),
-    scoreCharacterBigramDice(left, right)
+    scoreCharacterBigramDice(left, right),
   );
 }
 
@@ -229,7 +238,9 @@ function choosePreferredMemoryText(currentText: string, incomingText: string): s
   const incomingScore = scoreMemoryTextQuality(normalizedIncoming);
   if (incomingScore > currentScore + 1) return normalizedIncoming;
   if (currentScore > incomingScore + 1) return normalizedCurrent;
-  return normalizedIncoming.length >= normalizedCurrent.length ? normalizedIncoming : normalizedCurrent;
+  return normalizedIncoming.length >= normalizedCurrent.length
+    ? normalizedIncoming
+    : normalizedCurrent;
 }
 
 function isMeaningfulDeleteFragment(value: string): boolean {
@@ -288,9 +299,11 @@ function parseTimeToMs(input?: string | null): number | null {
 function shouldAutoDeleteMemoryText(text: string): boolean {
   const normalized = normalizeMemoryText(text);
   if (!normalized) return false;
-  return MEMORY_ASSISTANT_STYLE_TEXT_RE.test(normalized)
-    || MEMORY_PROCEDURAL_TEXT_RE.test(normalized)
-    || isQuestionLikeMemoryText(normalized);
+  return (
+    MEMORY_ASSISTANT_STYLE_TEXT_RE.test(normalized) ||
+    MEMORY_PROCEDURAL_TEXT_RE.test(normalized) ||
+    isQuestionLikeMemoryText(normalized)
+  );
 }
 
 // Types mirroring src/types/cowork.ts for main process use
@@ -310,6 +323,7 @@ export interface Agent {
   model: string;
   icon: string;
   skillIds: string[];
+  workingDirectory: string;
   enabled: boolean;
   isDefault: boolean;
   source: AgentSource;
@@ -327,6 +341,7 @@ export interface CreateAgentRequest {
   model?: string;
   icon?: string;
   skillIds?: string[];
+  workingDirectory?: string;
   source?: AgentSource;
   presetId?: string;
 }
@@ -339,6 +354,7 @@ export interface UpdateAgentRequest {
   model?: string;
   icon?: string;
   skillIds?: string[];
+  workingDirectory?: string;
   enabled?: boolean;
 }
 
@@ -458,18 +474,20 @@ export interface CoworkConfig {
   skipMissedJobs: boolean;
 }
 
-export type CoworkConfigUpdate = Partial<Pick<
-CoworkConfig,
-  | 'workingDirectory'
-  | 'executionMode'
-  | 'agentEngine'
-  | 'memoryEnabled'
-  | 'memoryImplicitUpdateEnabled'
-  | 'memoryLlmJudgeEnabled'
-  | 'memoryGuardLevel'
-  | 'memoryUserMemoriesMaxItems'
-  | 'skipMissedJobs'
->>;
+export type CoworkConfigUpdate = Partial<
+  Pick<
+    CoworkConfig,
+    | 'workingDirectory'
+    | 'executionMode'
+    | 'agentEngine'
+    | 'memoryEnabled'
+    | 'memoryImplicitUpdateEnabled'
+    | 'memoryLlmJudgeEnabled'
+    | 'memoryGuardLevel'
+    | 'memoryUserMemoriesMaxItems'
+    | 'skipMissedJobs'
+  >
+>;
 
 export interface ApplyTurnMemoryUpdatesOptions {
   sessionId: string;
@@ -549,7 +567,7 @@ export class CoworkStore {
     systemPrompt: string = '',
     executionMode: CoworkExecutionMode = 'local',
     activeSkillIds: string[] = [],
-    agentId: string = 'main'
+    agentId: string = 'main',
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
@@ -967,7 +985,9 @@ export class CoworkStore {
     this.db.transaction(() => {
       // Delete all existing user/assistant messages for this session
       this.db
-        .prepare("DELETE FROM cowork_messages WHERE session_id = ? AND type IN ('user', 'assistant')")
+        .prepare(
+          "DELETE FROM cowork_messages WHERE session_id = ? AND type IN ('user', 'assistant')",
+        )
         .run(sessionId);
 
       // Re-insert authoritative messages with correct sequence numbers
@@ -1896,6 +1916,7 @@ export class CoworkStore {
       model: string;
       icon: string;
       skill_ids: string;
+      working_directory: string;
       enabled: number;
       is_default: number;
       source: string;
@@ -1921,6 +1942,7 @@ export class CoworkStore {
       model: string;
       icon: string;
       skill_ids: string;
+      working_directory: string;
       enabled: number;
       is_default: number;
       source: string;
@@ -1954,8 +1976,8 @@ export class CoworkStore {
     this.db
       .prepare(
         `
-      INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
+      INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, working_directory, enabled, is_default, source, preset_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
     `,
       )
       .run(
@@ -1967,6 +1989,7 @@ export class CoworkStore {
         request.model || '',
         request.icon || '',
         JSON.stringify(request.skillIds || []),
+        request.workingDirectory || '',
         request.source || 'custom',
         request.presetId || '',
         now,
@@ -1981,7 +2004,7 @@ export class CoworkStore {
     if (!normalizedModelId) return 0;
 
     const result = this.db
-      .prepare('UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, \'\')) = \'\'')
+      .prepare("UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, '')) = ''")
       .run(normalizedModelId, Date.now());
 
     return result.changes;
@@ -2023,6 +2046,10 @@ export class CoworkStore {
       setClauses.push('skill_ids = ?');
       values.push(JSON.stringify(updates.skillIds));
     }
+    if (updates.workingDirectory !== undefined) {
+      setClauses.push('working_directory = ?');
+      values.push(updates.workingDirectory);
+    }
     if (updates.enabled !== undefined) {
       setClauses.push('enabled = ?');
       values.push(updates.enabled ? 1 : 0);
@@ -2048,6 +2075,7 @@ export class CoworkStore {
     model: string;
     icon: string;
     skill_ids: string;
+    working_directory: string;
     enabled: number;
     is_default: number;
     source: string;
@@ -2070,6 +2098,7 @@ export class CoworkStore {
       model: row.model,
       icon: row.icon,
       skillIds,
+      workingDirectory: row.working_directory || '',
       enabled: Boolean(row.enabled),
       isDefault: Boolean(row.is_default),
       source: row.source as AgentSource,

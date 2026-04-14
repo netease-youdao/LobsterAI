@@ -174,7 +174,7 @@ export class SqliteStore {
     try {
       // Check if execution_mode column exists
       const columns = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
-      const colNames = columns.map((c) => c.name);
+      const colNames = columns.map(c => c.name);
 
       if (!colNames.includes('execution_mode')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN execution_mode TEXT;');
@@ -272,6 +272,17 @@ export class SqliteStore {
       `);
     } catch (error) {
       console.warn('Failed to migrate cowork execution mode:', error);
+    }
+
+    // Migration: Add working_directory column to agents
+    try {
+      const agentCols = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+      const agentColNames = agentCols.map(c => c.name);
+      if (!agentColNames.includes('working_directory')) {
+        this.db.exec("ALTER TABLE agents ADD COLUMN working_directory TEXT NOT NULL DEFAULT '';");
+      }
+    } catch {
+      // Column already exists or migration not needed.
     }
 
     this.migrateLegacyMemoryFileToUserMemories();
