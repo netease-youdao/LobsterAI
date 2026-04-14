@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
 import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+// @ts-ignore
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+// @ts-ignore
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+// @ts-ignore
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { i18nService } from '../../services/i18n';
 
 type DangerLevel = 'safe' | 'caution' | 'destructive';
@@ -41,6 +47,23 @@ const DANGER_REASON_I18N_MAP: Record<string, string> = {
   'git-push': 'dangerReasonGitPush',
   'process-kill': 'dangerReasonProcessKill',
   'permission-change': 'dangerReasonPermissionChange',
+};
+
+const CODE_HIGHLIGHT_STYLE = { margin: 0, borderRadius: 0, padding: '0.5rem 0.75rem' };
+
+/** Syntax-highlighted code block used inside the permission modal. */
+const CodeHighlight: React.FC<{ code: string; language: string }> = ({ code, language }) => {
+  const isDark = document.documentElement.classList.contains('dark');
+  return (
+    <SyntaxHighlighter
+      language={language}
+      style={isDark ? oneDark : oneLight}
+      customStyle={CODE_HIGHLIGHT_STYLE}
+      wrapLongLines
+    >
+      {code}
+    </SyntaxHighlighter>
+  );
 };
 
 /** Fallback detection when dangerLevel is not provided by the adapter */
@@ -382,10 +405,8 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                   <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
                     {i18nService.t('coworkToolInput')}
                   </label>
-                  <div className="px-3 py-2 rounded-lg bg-surface max-h-40 overflow-y-auto">
-                    <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
-                      {requestedCommand}
-                    </pre>
+                  <div className="rounded-lg bg-surface max-h-40 overflow-y-auto text-xs">
+                    <CodeHighlight code={requestedCommand} language="bash" />
                   </div>
                 </div>
               )}
@@ -414,10 +435,8 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                         <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
                           {i18nService.t('coworkToolInput')}
                         </label>
-                        <div className="px-3 py-2 rounded-lg bg-background max-h-40 overflow-y-auto">
-                          <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
-                            {requestedCommand}
-                          </pre>
+                        <div className="rounded-lg bg-background max-h-40 overflow-y-auto text-xs">
+                          <CodeHighlight code={requestedCommand} language="bash" />
                         </div>
                       </div>
                     )}
@@ -467,10 +486,18 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                 <label className="block text-xs font-medium text-secondary uppercase tracking-wider mb-1">
                   {i18nService.t('coworkToolInput')}
                 </label>
-                <div className="px-3 py-2 rounded-lg bg-background">
-                  <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono">
-                    {formatToolInput(permission.toolInput)}
-                  </pre>
+                <div className="rounded-lg bg-background overflow-hidden text-xs">
+                  {permission.toolName === 'Bash' && typeof (permission.toolInput as Record<string, unknown>)?.command === 'string' ? (
+                    <CodeHighlight
+                      code={(permission.toolInput as Record<string, unknown>).command as string}
+                      language="bash"
+                    />
+                  ) : (
+                    <CodeHighlight
+                      code={formatToolInput(permission.toolInput)}
+                      language="json"
+                    />
+                  )}
                 </div>
               </div>
             </>
