@@ -2465,23 +2465,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (!pendingScrollTarget || !currentSession?.messages?.length) return;
 
     // Wait until the correct session is loaded
-    if (currentSession.id !== pendingScrollTarget.sessionId) {
-      console.log(
-        '[BookmarkScroll] waiting for correct session, current:',
-        currentSession.id,
-        'target:',
-        pendingScrollTarget.sessionId,
-      );
-      return;
-    }
+    if (currentSession.id !== pendingScrollTarget.sessionId) return;
 
     const targetMessageId = pendingScrollTarget.messageId;
-    console.log(
-      '[BookmarkScroll] effect fired, targetMessageId:',
-      targetMessageId,
-      'turns:',
-      turns.length,
-    );
 
     setShouldAutoScroll(false);
     isBookmarkScrollingRef.current = true;
@@ -2489,47 +2475,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     // Use setTimeout to ensure React has committed DOM and browser has laid out
     const timer = setTimeout(() => {
       const msgEl = document.querySelector(`[data-message-id="${targetMessageId}"]`);
-      const allMsgEls = document.querySelectorAll('[data-message-id]');
-      console.log(
-        '[BookmarkScroll] found target element:',
-        !!msgEl,
-        'total data-message-id elements:',
-        allMsgEls.length,
-      );
+      const container = scrollContainerRef.current;
 
-      if (msgEl) {
-        const container = scrollContainerRef.current;
-        if (container) {
-          console.log(
-            '[BookmarkScroll] container scrollHeight:',
-            container.scrollHeight,
-            'clientHeight:',
-            container.clientHeight,
-          );
-          const msgRect = msgEl.getBoundingClientRect();
-          const containerRect = container.getBoundingClientRect();
-          console.log(
-            '[BookmarkScroll] BEFORE scroll - msgEl top:',
-            msgRect.top,
-            'container top:',
-            containerRect.top,
-            'container height:',
-            containerRect.height,
-          );
-        }
-
-        msgEl.scrollIntoView({ behavior: 'auto', block: 'center' });
-
-        if (container) {
-          const msgRectAfter = msgEl.getBoundingClientRect();
-          const containerRectAfter = container.getBoundingClientRect();
-          console.log(
-            '[BookmarkScroll] AFTER scroll - msgEl top:',
-            msgRectAfter.top,
-            'container top:',
-            containerRectAfter.top,
-          );
-        }
+      if (msgEl && container) {
+        // Manually compute scrollTop to center the element in the container.
+        // scrollIntoView scrolls ALL scrollable ancestors (including body),
+        // which produces wrong results in nested scroll containers.
+        const containerRect = container.getBoundingClientRect();
+        const msgRect = msgEl.getBoundingClientRect();
+        const elementOffsetInContainer = msgRect.top - containerRect.top + container.scrollTop;
+        const targetScrollTop =
+          elementOffsetInContainer - container.clientHeight / 2 + msgRect.height / 2;
+        container.scrollTop = Math.max(0, targetScrollTop);
 
         msgEl.classList.add('bookmark-flash');
         setTimeout(() => {
@@ -2537,15 +2494,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           isBookmarkScrollingRef.current = false;
         }, 1500);
       } else {
-        console.log(
-          '[BookmarkScroll] target element NOT FOUND. Looking for:',
-          `[data-message-id="${targetMessageId}"]`,
-        );
-        // Log first few message IDs to compare
-        const firstFew = Array.from(allMsgEls)
-          .slice(0, 5)
-          .map(el => el.getAttribute('data-message-id'));
-        console.log('[BookmarkScroll] first 5 message IDs in DOM:', firstFew);
         isBookmarkScrollingRef.current = false;
       }
       onClearPendingScroll?.();

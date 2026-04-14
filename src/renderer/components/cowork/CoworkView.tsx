@@ -506,10 +506,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   }, [currentSession, isOpenClawEngine]);
 
   if (!isInitialized) {
-    console.log(
-      '[BookmarkJump] CoworkView not initialized yet, pendingScrollTarget:',
-      pendingScrollTarget,
-    );
     return (
       <div className="flex-1 h-full flex flex-col bg-background">
         <div className="draggable flex h-12 items-center justify-end px-4 border-b border-border shrink-0">
@@ -609,12 +605,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({
 
   // When there's a current session, show the session detail view
   if (currentSession) {
-    console.log(
-      '[BookmarkJump] CoworkView rendering CoworkSessionDetail, session:',
-      currentSession.id,
-      'pendingScrollTarget:',
-      pendingScrollTarget,
-    );
     return (
       <div className="flex-1 flex flex-col h-full">
         {engineStatusBanner}
