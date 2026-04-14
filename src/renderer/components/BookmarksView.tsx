@@ -74,7 +74,17 @@ const BookmarkItem: React.FC<{
           {i18nService.t('removeBookmark')}
         </button>
         <button
-          onClick={() => sessionExists && onJump(bookmark)}
+          onClick={() => {
+            console.debug(
+              '[BookmarkJump] jump clicked, sessionId:',
+              bookmark.sessionId,
+              'sessionExists:',
+              sessionExists,
+            );
+            if (sessionExists) {
+              onJump(bookmark);
+            }
+          }}
           disabled={!sessionExists}
           className={`text-xs font-medium transition-colors ${
             sessionExists
