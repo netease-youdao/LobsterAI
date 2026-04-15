@@ -111,6 +111,7 @@ const IMSettings: React.FC = () => {
   const [feishuExpanded, setFeishuExpanded] = useState(false);
   const [activeDingTalkInstanceId, setActiveDingTalkInstanceId] = useState<string | null>(null);
   const [dingtalkExpanded, setDingtalkExpanded] = useState(false);
+  const [pendingDeleteInstance, setPendingDeleteInstance] = useState<{ platform: 'dingtalk' | 'feishu' | 'qq'; instanceId: string; instanceName: string } | null>(null);
   const [testingPlatform, setTestingPlatform] = useState<Platform | null>(null);
   const [connectivityResults, setConnectivityResults] = useState<Partial<Record<Platform, IMConnectivityTestResult>>>({});
   const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<Platform | null>(null);
@@ -1363,10 +1364,9 @@ const IMSettings: React.FC = () => {
                 dispatch(setDingTalkInstanceConfig({ instanceId: activeDingTalkInstanceId, config: { instanceName: newName } as any }));
                 await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, { instanceName: newName } as any);
               }}
-              onDelete={async () => {
-                await imService.deleteDingTalkInstance(activeDingTalkInstanceId);
-                const remaining = config.dingtalk.instances.filter(i => i.instanceId !== activeDingTalkInstanceId);
-                setActiveDingTalkInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+              onDelete={() => {
+                const inst = config.dingtalk.instances.find(i => i.instanceId === activeDingTalkInstanceId);
+                setPendingDeleteInstance({ platform: 'dingtalk', instanceId: activeDingTalkInstanceId, instanceName: inst?.instanceName || '' });
               }}
               onToggleEnabled={async () => {
                 const newEnabled = !selectedInstance.enabled;
@@ -1434,10 +1434,9 @@ const IMSettings: React.FC = () => {
                 dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { instanceName: newName } as any }));
                 await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, { instanceName: newName } as any);
               }}
-              onDelete={async () => {
-                await imService.deleteFeishuInstance(activeFeishuInstanceId);
-                const remaining = config.feishu.instances.filter(i => i.instanceId !== activeFeishuInstanceId);
-                setActiveFeishuInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+              onDelete={() => {
+                const inst = config.feishu.instances.find(i => i.instanceId === activeFeishuInstanceId);
+                setPendingDeleteInstance({ platform: 'feishu', instanceId: activeFeishuInstanceId, instanceName: inst?.instanceName || '' });
               }}
               onToggleEnabled={async () => {
                 const newEnabled = !selectedInstance.enabled;
@@ -1505,10 +1504,9 @@ const IMSettings: React.FC = () => {
                 dispatch(setQQInstanceConfig({ instanceId: activeQQInstanceId, config: { instanceName: newName } as any }));
                 await imService.persistQQInstanceConfig(activeQQInstanceId, { instanceName: newName } as any);
               }}
-              onDelete={async () => {
-                await imService.deleteQQInstance(activeQQInstanceId);
-                const remaining = config.qq.instances.filter(i => i.instanceId !== activeQQInstanceId);
-                setActiveQQInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+              onDelete={() => {
+                const inst = config.qq.instances.find(i => i.instanceId === activeQQInstanceId);
+                setPendingDeleteInstance({ platform: 'qq', instanceId: activeQQInstanceId, instanceName: inst?.instanceName || '' });
               }}
               onToggleEnabled={async () => {
                 const newEnabled = !selectedInstance.enabled;
@@ -3186,6 +3184,50 @@ const IMSettings: React.FC = () => {
               </div>
             )}
           </div>
+        )}
+
+        {/* Delete instance confirmation modal */}
+        {pendingDeleteInstance && (
+          <Modal onClose={() => setPendingDeleteInstance(null)} overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60" className="w-full max-w-sm mx-4 rounded-2xl bg-surface border border-border shadow-2xl p-5">
+            <div className="text-lg font-semibold text-foreground">
+              {i18nService.t('confirmDelete')}
+            </div>
+            <p className="mt-2 text-sm text-secondary">
+              {i18nService.t('imDeleteInstanceConfirm').replace('{name}', pendingDeleteInstance.instanceName)}
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteInstance(null)}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border text-secondary hover:bg-surface-raised transition-colors"
+              >
+                {i18nService.t('cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const { platform, instanceId } = pendingDeleteInstance;
+                  if (platform === 'dingtalk') {
+                    await imService.deleteDingTalkInstance(instanceId);
+                    const remaining = config.dingtalk.instances.filter(i => i.instanceId !== instanceId);
+                    setActiveDingTalkInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+                  } else if (platform === 'feishu') {
+                    await imService.deleteFeishuInstance(instanceId);
+                    const remaining = config.feishu.instances.filter(i => i.instanceId !== instanceId);
+                    setActiveFeishuInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+                  } else {
+                    await imService.deleteQQInstance(instanceId);
+                    const remaining = config.qq.instances.filter(i => i.instanceId !== instanceId);
+                    setActiveQQInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+                  }
+                  setPendingDeleteInstance(null);
+                }}
+                className="px-3 py-1.5 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 dark:bg-red-500 dark:hover:bg-red-400 transition-colors"
+              >
+                {i18nService.t('confirmDelete')}
+              </button>
+            </div>
+          </Modal>
         )}
 
         {connectivityModalPlatform && (
