@@ -311,26 +311,16 @@ export class SkillServiceManager {
 
       console.log('[SkillServices] Starting Web Search Bridge Server...');
 
-      await this.startWebSearchServiceProcess(skillPath);
-
-      // Wait a moment for the server to start
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      // Check if server started successfully
-      const pidFile = path.join(skillPath, '.server.pid');
-      if (fs.existsSync(pidFile)) {
-        const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim());
-        this.webSearchPid = pid;
-        console.log(`[SkillServices] Web Search Bridge Server started (PID: ${pid})`);
-      } else {
-        console.warn('[SkillServices] Web Search Bridge Server may not have started correctly');
-      }
+      const t0 = Date.now();
+      const pid = this.startWebSearchServiceProcess(skillPath);
+      this.webSearchPid = pid;
+      console.log(`[SkillServices] Web Search Bridge Server started (PID: ${pid}, ${Date.now() - t0}ms)`);
     } catch (error) {
       console.error('[SkillServices] Failed to start Web Search service:', error);
     }
   }
 
-  private async startWebSearchServiceProcess(skillPath: string): Promise<void> {
+  private startWebSearchServiceProcess(skillPath: string): number {
     const pidFile = path.join(skillPath, '.server.pid');
     const logFile = path.join(skillPath, '.server.log');
     const serverEntry = path.join(skillPath, 'dist', 'server', 'index.js');
@@ -366,6 +356,7 @@ export class SkillServiceManager {
     const runtimeLabel = runtime.command === 'node' ? 'node' : 'electron-node';
     console.log(`[SkillServices] Web Search Bridge Server starting (PID: ${child.pid}, runtime: ${runtimeLabel})`);
     console.log(`[SkillServices] Logs: ${logFile}`);
+    return child.pid!;
   }
 
   /**
