@@ -8,7 +8,7 @@
   "license": "MIT",
   "version": "2026.4.13",
   "openclaw": {
-    "version": "v2026.3.2",
+    "version": "v2026.4.14",
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
@@ -39,7 +39,7 @@
       {
         "id": "moltbot-popo",
         "npm": "moltbot-popo",
-        "version": "1.0.66",
+        "version": "2.0.10",
         "registry": "https://npm.nie.netease.com",
         "optional": true
       },
