@@ -9,6 +9,7 @@ import { getElectronNodeRuntimePath, ensureElectronNodeShim, getSkillsRoot } fro
 import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
+import { getCachedPricingUrl } from './endpoints';
 
 type GatewayProcess = UtilityProcess | ChildProcess;
 
@@ -413,6 +414,7 @@ export class OpenClawEngineManager extends EventEmitter {
       NODE_COMPILE_CACHE: compileCacheDir,
       LOBSTERAI_ELECTRON_PATH: electronNodeRuntimePath.replace(/\\/g, '/'),
       LOBSTERAI_OPENCLAW_ENTRY: openclawEntry.replace(/\\/g, '/'),
+      LOBSTERAI_PRICING_URL: getCachedPricingUrl(),
       // Inject secret values for ${VAR} placeholders in openclaw.json.
       // This keeps plaintext credentials out of the config file on disk.
       ...this.secretEnvVars,

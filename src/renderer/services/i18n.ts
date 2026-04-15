@@ -574,6 +574,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
+    coworkErrorFreeQuotaExhausted: '免费额度已用完，请购买加油包继续使用。',
+    coworkErrorMonthlyQuotaExhausted: '本月积分已用完，请购买加油包继续使用。',
     coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制，请缩短对话内容后重试。',
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。请尝试将 PDF 转换为文本格式后重新发送。',
@@ -589,6 +591,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionContinueFailed: '发送消息失败：{error}',
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
+    coworkErrorUpgradePlan: '升级套餐',
 
     // Skills
     skills: '技能',
@@ -1852,6 +1855,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check and update your API key in settings.',
+    coworkErrorFreeQuotaExhausted: 'Free quota exhausted. Please purchase a boost pack to continue.',
+    coworkErrorMonthlyQuotaExhausted: 'Monthly credits exhausted. Please purchase a boost pack to continue.',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit. Please shorten the conversation and try again.',
     coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file. Please try converting the PDF to text format and resend.',
@@ -1867,8 +1872,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorSessionContinueFailed: 'Failed to send message: {error}',
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
-
-    // Skills
+    coworkErrorUpgradePlan: 'Upgrade Plan',
     skills: 'Skills',
     searchSkills: 'Search skills',
     manageSkills: 'Manage Skills',

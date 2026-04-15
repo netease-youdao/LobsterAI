@@ -36,7 +36,8 @@ import {
 import Database from 'better-sqlite3';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import type { CoworkStore } from '../coworkStore';
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
+import { classifyErrorKey, isQuotaError } from '../../common/coworkErrorClassify';
+import { getPortalPricingUrl } from '../libs/endpoints';
 const CONNECTIVITY_TIMEOUT_MS = 10_000;
 const INBOUND_ACTIVITY_WARN_AFTER_MS = 2 * 60 * 1000;
 
@@ -237,7 +238,10 @@ export class IMGatewayManager extends EventEmitter {
         try {
           const errorKey = classifyErrorKey(error.message);
           const friendlyMessage = errorKey ? t(errorKey) : error.message;
-          await replyFn(`${t('imErrorPrefix')}: ${friendlyMessage}`);
+          const suffix = isQuotaError(errorKey)
+            ? `\n\n[${t('imUpgradePlanHint')}](${getPortalPricingUrl()})`
+            : '';
+          await replyFn(`${t('imErrorPrefix')}: ${friendlyMessage}${suffix}`);
         } catch (replyError) {
           console.error(`[IMGatewayManager] Failed to send error reply: ${replyError}`);
         }

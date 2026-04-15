@@ -70,7 +70,7 @@ import {
   initScheduledTaskHelpers,
 } from './ipcHandlers/scheduledTask';
 import { McpServerManager } from './libs/mcpServerManager';
-import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
+import { getServerApiBaseUrl, refreshEndpointsTestMode, fetchAndCachePricingUrl } from './libs/endpoints';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
@@ -4702,6 +4702,8 @@ if (!gotTheLock) {
     store = await initStore();
     console.log('[Main] initApp: store initialized');
     refreshEndpointsTestMode(store);
+    // Fetch pricing URL in background — don't block startup
+    fetchAndCachePricingUrl().catch(() => {});
 
     // Defensive recovery: app may be force-closed during execution and leave
     // stale running flags in DB. Normalize them on startup.

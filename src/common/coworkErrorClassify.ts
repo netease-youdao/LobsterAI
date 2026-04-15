@@ -9,6 +9,10 @@ const ERROR_RULES: Array<[RegExp, string]> = [
   // Rate limit: HTTP 429, Anthropic/DeepSeek overloaded, Gemini RESOURCE_EXHAUSTED
   // (must precede billing so "RESOURCE_EXHAUSTED: quota exceeded" maps to rate-limit)
   [/\b429\b|rate[_ ]limit|too many requests|overloaded|RESOURCE_EXHAUSTED/i, 'coworkErrorRateLimit'],
+  // Quota: free quota exhausted (server code 40201)
+  [/免费额度已用完|free.quota.exhausted/i, 'coworkErrorFreeQuotaExhausted'],
+  // Quota: monthly credits exhausted (server code 40202)
+  [/本月积分已用完|monthly.credits?.exhausted/i, 'coworkErrorMonthlyQuotaExhausted'],
   // Billing: DeepSeek 402, OpenAI, OpenRouter, Qwen, StepFun
   [/insufficient.*(balance|quota|credits)|billing|quota[_ ]exceeded|Arrearage|account.*not.*in.*good.*standing|余额不足|\b402\b/i, 'coworkErrorInsufficientBalance'],
   // Input too long: context length, HTTP 413, Qwen, payload too large
@@ -40,4 +44,14 @@ export function classifyErrorKey(error: string): string | null {
     if (pattern.test(error)) return key;
   }
   return null;
+}
+
+const QUOTA_ERROR_KEYS = new Set([
+  'coworkErrorFreeQuotaExhausted',
+  'coworkErrorMonthlyQuotaExhausted',
+  'coworkErrorInsufficientBalance',
+]);
+
+export function isQuotaError(key: string | null | undefined): boolean {
+  return key != null && QUOTA_ERROR_KEYS.has(key);
 }

@@ -41,3 +41,8 @@ const getPortalBase = () => isTestMode() ? PORTAL_BASE_TEST : PORTAL_BASE_PROD;
 
 export const getPortalPricingUrl = () => `${getPortalBase()}/pricing`;
 export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
+
+// Pricing URL (overmind remote config)
+export const getPricingOvermindUrl = () => isTestMode()
+  ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/pricing-url'
+  : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/pricing-url';

@@ -3,6 +3,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   DocumentArrowDownIcon,
+  ArrowTopRightOnSquareIcon,
   PhotoIcon,
 } from '@heroicons/react/24/outline';
 import { FolderIcon } from '@heroicons/react/24/solid';
@@ -11,6 +12,7 @@ import { createPortal } from 'react-dom';
 import { useDispatch,useSelector } from 'react-redux';
 
 import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
+import { isQuotaError, classifyErrorKey } from '../../../common/coworkErrorClassify';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
@@ -1237,16 +1239,40 @@ export const AssistantTurnBlock: React.FC<{
     const content = mapDisplayText ? mapDisplayText(normalizedContent) : normalizedContent;
     if (!content.trim()) return null;
 
+    // errorKey is injected by onStreamMessage for real-time events.
+    // For messages loaded from SQLite (e.g. IM sessions), fall back to
+    // classifying the raw error text at render time.
+    let errorKey = message.metadata?.errorKey as string | undefined;
+    if (!errorKey && typeof message.metadata?.error === 'string') {
+      errorKey = classifyErrorKey(message.metadata.error) ?? undefined;
+    }
+    const showQuotaActions = isQuotaError(errorKey);
+
+    const handleUpgrade = async () => {
+      const { getPortalPricingUrl } = await import('../../services/endpoints');
+      await window.electron.shell.openExternal(getPortalPricingUrl());
+    };
+
     return (
       <div className="rounded-lg border border-border bg-background px-3 py-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {isError
             ? <ExclamationTriangleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
             : <InformationCircleIcon className="h-4 w-4 text-secondary flex-shrink-0" />
           }
-          <div className="text-xs whitespace-pre-wrap text-secondary">
+          <span className="text-xs whitespace-pre-wrap text-secondary">
             {content}
-          </div>
+          </span>
+          {showQuotaActions && (
+            <button
+              type="button"
+              onClick={handleUpgrade}
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-primary hover:text-primary-hover border border-border hover:border-primary/60 rounded transition-colors cursor-pointer"
+            >
+              {i18nService.t('coworkErrorUpgradePlan')}
+              <ArrowTopRightOnSquareIcon className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </div>
     );

@@ -54,6 +54,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages (shared with renderer via classifyErrorKey)
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请检查配置。',
+    coworkErrorFreeQuotaExhausted: '免费额度已用完，请购买加油包继续使用。',
+    coworkErrorMonthlyQuotaExhausted: '本月积分已用完，请购买加油包继续使用。',
     coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制。',
     coworkErrorCouldNotProcessPdf: '无法处理 PDF 文件。',
@@ -68,6 +70,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorEngineNotReady: 'AI 引擎正在启动中，请稍等几秒后重试。',
     coworkErrorUnknown: '任务执行出错，请重试。如果问题持续出现，请检查模型配置。',
     imErrorPrefix: '处理消息时出错',
+    imUpgradePlanHint: '点击升级套餐',
 
     // Exec approval continuation
     execApprovalApproved: '用户已确认执行该命令，请检查执行结果并继续。',
@@ -229,6 +232,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork error messages
     coworkErrorAuthInvalid: 'Invalid or expired API key. Please check your configuration.',
+    coworkErrorFreeQuotaExhausted: 'Free quota exhausted. Please purchase a boost pack to continue.',
+    coworkErrorMonthlyQuotaExhausted: 'Monthly credits exhausted. Please purchase a boost pack to continue.',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
     coworkErrorInputTooLong: 'Input too long, exceeding model context limit.',
     coworkErrorCouldNotProcessPdf: 'Unable to process the PDF file.',
@@ -243,6 +248,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkErrorEngineNotReady: 'AI engine is starting up. Please wait a few seconds and try again.',
     coworkErrorUnknown: 'Task failed due to an unexpected error. Please retry. If the issue persists, check your model configuration.',
     imErrorPrefix: 'Error processing message',
+    imUpgradePlanHint: 'Click to upgrade plan',
 
     // Exec approval continuation
     execApprovalApproved: 'The user approved the command execution. Please check the result and continue.',

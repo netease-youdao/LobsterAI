@@ -34,6 +34,8 @@ import { isDeleteCommand, getCommandDangerLevel } from '../commandSafety';
 import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
 import { OPENCLAW_AGENT_TIMEOUT_SECONDS } from '../openclawConfigSync';
 import { t } from '../../i18n';
+import { classifyErrorKey, isQuotaError } from '../../../common/coworkErrorClassify';
+import { getPortalPricingUrl } from '../endpoints';
 
 const OPENCLAW_GATEWAY_TOOL_EVENTS_CAP = 'tool-events';
 const BRIDGE_MAX_MESSAGES = 20;
@@ -2770,6 +2772,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // have unrelated causes and should show their original error message.
     if (/^400\b/.test(errorMessage)) {
       errorMessage += '\n\n[Hint: If the model attempted to read an image file, this may be because the model does not support image input. Consider using a vision-capable model or avoid sending image files.]';
+    }
+
+    // For quota errors, append a markdown upgrade link so IM channels can
+    // render a clickable URL for the user.
+    const errorKey = classifyErrorKey(errorMessage);
+    if (isQuotaError(errorKey)) {
+      errorMessage += `\n\n[${t('imUpgradePlanHint')}](${getPortalPricingUrl()})`;
     }
 
     const erroredSessionKey = turn.sessionKey;

@@ -32,11 +32,6 @@ import type {
 import { i18nService } from './i18n';
 import { classifyErrorKey } from '../../common/coworkErrorClassify';
 
-const classifyError = (error: string): string => {
-  const key = classifyErrorKey(error);
-  return key ? i18nService.t(key) : error;
-};
-
 class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
   private initialized = false;
@@ -108,7 +103,20 @@ class CoworkService {
 
       // Do not force status back to "running" on arbitrary messages.
       // Late stream chunks can arrive after an error/complete event.
-      store.dispatch(addMessage({ sessionId, message }));
+
+      // Classify system error messages from the main process so the UI can
+      // show quota-specific actions (e.g. "Buy Boost Pack" button).
+      // Keep the original server content — only inject errorKey for the UI.
+      let enrichedMessage = message;
+      if (message.type === 'system' && typeof message.metadata?.error === 'string') {
+        const key = classifyErrorKey(message.metadata.error);
+        enrichedMessage = {
+          ...message,
+          metadata: { ...message.metadata, errorKey: key },
+        };
+      }
+
+      store.dispatch(addMessage({ sessionId, message: enrichedMessage }));
     });
     this.streamListenerCleanups.push(messageCleanup);
 
@@ -145,18 +153,13 @@ class CoworkService {
     // Error listener
     const errorCleanup = cowork.onStreamError(({ sessionId, error }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
-      // Surface the error as a visible message so the user knows what happened.
-      if (error) {
-        store.dispatch(addMessage({
-          sessionId,
-          message: {
-            id: `error-${Date.now()}`,
-            type: 'system',
-            content: classifyError(error),
-            timestamp: Date.now(),
-          },
-        }));
-      }
+      // The error system message is already emitted by the main process via
+      // onStreamMessage (handleChatError adds it before emitting the error event).
+      // We only need to update session status here — adding another message would
+      // cause a duplicate.
+      // For non-engine errors that do NOT have a preceding system message (rare),
+      // the caller (startSession / continueSession) handles error display.
+      void error; // consumed by main-process message
     });
     this.streamListenerCleanups.push(errorCleanup);
 
@@ -259,7 +262,7 @@ class CoworkService {
     if (result.error) {
       const errorContent = result.code === 'ENGINE_NOT_READY'
         ? i18nService.t('coworkErrorEngineNotReady')
-        : classifyError(result.error);
+        : result.error;
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
     }
 
@@ -292,23 +295,13 @@ class CoworkService {
       }
       if (result.code !== 'ENGINE_NOT_READY') {
         store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'error' }));
-        if (result.error) {
-          store.dispatch(addMessage({
-            sessionId: options.sessionId,
-            message: {
-              id: `error-${Date.now()}`,
-              type: 'system',
-              content: i18nService.t('coworkErrorSessionContinueFailed').replace('{error}', result.error),
-              timestamp: Date.now(),
-            },
-          }));
-        }
       }
-      // Show a user-visible error message in the session
+      // Show a single user-visible error message in the session
       if (result.error) {
+        const errorKey = result.code === 'ENGINE_NOT_READY' ? null : classifyErrorKey(result.error);
         const errorContent = result.code === 'ENGINE_NOT_READY'
           ? i18nService.t('coworkErrorEngineNotReady')
-          : classifyError(result.error);
+          : result.error;
         store.dispatch(addMessage({
           sessionId: options.sessionId,
           message: {
@@ -316,6 +309,7 @@ class CoworkService {
             type: 'system',
             content: errorContent,
             timestamp: Date.now(),
+            metadata: { errorKey },
           },
         }));
       }
