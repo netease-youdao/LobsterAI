@@ -102,6 +102,14 @@ class AgentService {
     }
   }
 
+  async getAgent(id: string): Promise<Agent | null> {
+    try {
+      return await window.electron?.agents?.get(id) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async deleteAgent(id: string): Promise<boolean> {
     try {
       const wasCurrentAgent = store.getState().agent.currentAgentId === id;

@@ -4,9 +4,10 @@ import { RootState } from '../../store';
 import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
-import { PlusIcon } from '@heroicons/react/24/outline';
+import { ArrowUpTrayIcon, PlusIcon } from '@heroicons/react/24/outline';
 import type { PresetAgent } from '../../types/agent';
 import AgentCreateModal from './AgentCreateModal';
+import AgentImportModal from './AgentImportModal';
 import AgentSettingsPanel from './AgentSettingsPanel';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
@@ -32,6 +33,7 @@ const AgentsView: React.FC<AgentsViewProps> = ({
   const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
   const [presets, setPresets] = useState<PresetAgent[]>([]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null);
   const [addingPreset, setAddingPreset] = useState<string | null>(null);
 
@@ -142,9 +144,19 @@ const AgentsView: React.FC<AgentsViewProps> = ({
 
           {/* Custom Agents Section */}
           <div>
-            <h2 className="text-sm font-medium text-secondary mb-3">
-              {i18nService.t('myCustomAgents')}
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-medium text-secondary">
+                {i18nService.t('myCustomAgents')}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIsImportOpen(true)}
+                className="flex items-center gap-1 text-xs text-secondary hover:text-foreground transition-colors"
+              >
+                <ArrowUpTrayIcon className="h-3.5 w-3.5" />
+                {i18nService.t('agentImport')}
+              </button>
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {customAgents.map((agent) => (
                 <AgentCard
@@ -176,6 +188,7 @@ const AgentsView: React.FC<AgentsViewProps> = ({
 
       {/* Modals */}
       <AgentCreateModal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} />
+      <AgentImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
       <AgentSettingsPanel
         agentId={settingsAgentId}
         onClose={() => setSettingsAgentId(null)}
