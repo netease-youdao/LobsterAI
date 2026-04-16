@@ -5,6 +5,8 @@ export interface UserProfile {
   phone: string;
   nickname: string;
   avatarUrl: string;
+  yid?: string;
+  loginType?: string;
 }
 
 export interface UserQuota {

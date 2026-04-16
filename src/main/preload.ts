@@ -572,8 +572,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   githubCopilot: {
     requestDeviceCode: () =>
-      ipcRenderer.invoke('github-copilot:request-device-code') as Promise<{
-        userCode: string;
+      ipcRenderer.invoke('github-copilot:request-device-code') as Promise<{        userCode: string;
         verificationUri: string;
         deviceCode: string;
         interval: number;
@@ -600,6 +599,34 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: unknown, data: { token: string; baseUrl: string }) => callback(data);
       ipcRenderer.on('github-copilot:token-updated', handler);
       return () => ipcRenderer.removeListener('github-copilot:token-updated', handler);
+    },
+  },
+  ydNim: {
+    sendMessage: (text: string, ext?: object) =>
+      ipcRenderer.invoke('yd-nim:send-message', text, ext) as Promise<{ success: boolean; error?: string }>,
+    saveMessages: (taskId: string, messages: Array<{ messageId: string; role: string; content: string; timestamp: number }>) =>
+      ipcRenderer.invoke('yd-nim:save-messages', taskId, messages) as Promise<{ success: boolean; error?: string }>,
+    simulateIosMessage: (params: { action?: string; taskId?: string; title?: string; conversationId?: string; text?: string }) =>
+      ipcRenderer.invoke('yd-nim:simulate-ios-message', params) as Promise<{ success: boolean; error?: string }>,
+    onMessageSent: (callback: (msg: { text: string; time: number; serverId?: string; error?: string; ext?: object; isAutoReply?: boolean }) => void) => {
+      const handler = (_event: any, msg: any) => callback(msg);
+      ipcRenderer.on('yd-nim:message-sent', handler);
+      return () => ipcRenderer.removeListener('yd-nim:message-sent', handler);
+    },
+    onMessageReceived: (callback: (msg: { from: string; text: string; serverId?: string; time: number; ext?: any }) => void) => {
+      const handler = (_event: any, msg: any) => callback(msg);
+      ipcRenderer.on('yd-nim:message-received', handler);
+      return () => ipcRenderer.removeListener('yd-nim:message-received', handler);
+    },
+    onLog: (callback: (entry: { text: string; time: number }) => void) => {
+      const handler = (_event: any, entry: any) => callback(entry);
+      ipcRenderer.on('yd-nim:log', handler);
+      return () => ipcRenderer.removeListener('yd-nim:log', handler);
+    },
+    onAction: (callback: (data: { action: string; taskId?: string; electronTaskId?: string; conversationId?: string; title?: string; text?: string }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('yd-nim:action', handler);
+      return () => ipcRenderer.removeListener('yd-nim:action', handler);
     },
   },
 });

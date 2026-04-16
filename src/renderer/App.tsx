@@ -41,6 +41,8 @@ import {
   selectFirstPendingPermission,
 } from './store/selectors/coworkSelectors';
 import { setDraftPrompt } from './store/slices/coworkSlice';
+import { IosCommView, IosSimView } from './components/iosComm';
+import { checkForAppUpdate, type AppUpdateDownloadProgress } from './services/appUpdate';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
 import type { CoworkPermissionResult } from './types/cowork';
@@ -48,7 +50,7 @@ import type { CoworkPermissionResult } from './types/cowork';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents' | 'iosComm' | 'iosSim'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -298,6 +300,14 @@ const App: React.FC = () => {
 
   const handleShowAgents = useCallback(() => {
     setMainView('agents');
+  }, []);
+
+  const handleShowIosComm = useCallback(() => {
+    setMainView('iosComm');
+  }, []);
+
+  const handleShowIosSim = useCallback(() => {
+    setMainView('iosSim');
   }, []);
 
   const handleToggleSidebar = useCallback(() => {
@@ -740,6 +750,8 @@ const App: React.FC = () => {
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowMcp={handleShowMcp}
           onShowAgents={handleShowAgents}
+          onShowIosComm={handleShowIosComm}
+          onShowIosSim={handleShowIosSim}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -778,6 +790,20 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 onShowCowork={handleShowCowork}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
+            ) : mainView === 'iosComm' ? (
+              <IosCommView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
+            ) : mainView === 'iosSim' ? (
+              <IosSimView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
               />
             ) : (

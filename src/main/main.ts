@@ -3,6 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, ne
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { initYdNimClient, destroyYdNimClient, sendYdNimMessage, sendExtYdNimMessage, setYdNimServerContext, setYdNimCoworkCallbacks, getTaskIdForElectronSession, saveConversationMessages, simulateIncomingMessage } from './libs/ydNimClient';
 
 import type { OpenClawSessionPatch } from '../common/openclawSession';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
@@ -1269,6 +1270,11 @@ const bindCoworkRuntimeForwarder = (): void => {
   if (coworkRuntimeForwarderBound) return;
   const runtime = getCoworkEngineRouter();
 
+  // Captures final assistant text per iOS session — OpenClaw saves messages
+  // through the renderer→IPC path which is async, so SQLite isn't populated
+  // yet when 'complete' fires. We capture it here synchronously instead.
+  const pendingIosAssistantText = new Map<string, string>();
+
   runtime.on('message', (sessionId: string, message: unknown) => {
     const safeMessage = sanitizeCoworkMessageForIpc(message);
     const windows = BrowserWindow.getAllWindows();
@@ -1284,6 +1290,13 @@ const bindCoworkRuntimeForwarder = (): void => {
         console.error('Failed to forward cowork message:', error);
       }
     });
+    // Capture final assistant content for iOS sessions
+    const msg = message as { type?: string; content?: string; metadata?: { isThinking?: boolean } };
+    if (msg?.type === 'assistant' && !msg?.metadata?.isThinking && msg?.content) {
+      if (getTaskIdForElectronSession(sessionId)) {
+        pendingIosAssistantText.set(sessionId, msg.content);
+      }
+    }
   });
 
   runtime.on('messageUpdate', (sessionId: string, messageId: string, content: string) => {
@@ -1297,6 +1310,10 @@ const bindCoworkRuntimeForwarder = (): void => {
         console.error('Failed to forward cowork message update:', error);
       }
     });
+    // messageUpdate carries cumulative content — last one before 'complete' = full text
+    if (getTaskIdForElectronSession(sessionId)) {
+      pendingIosAssistantText.set(sessionId, content);
+    }
   });
 
   runtime.on('permissionRequest', (sessionId: string, request: unknown) => {
@@ -1333,6 +1350,35 @@ const bindCoworkRuntimeForwarder = (): void => {
       }
     } catch {
       // ignore
+    }
+    // iOS hook: send NIM reply + save assistant message to server
+    const iosTaskId = getTaskIdForElectronSession(sessionId);
+    console.log('[iOS NIM] complete hook — sessionId:', sessionId, 'iosTaskId:', iosTaskId ?? 'none');
+    if (iosTaskId) {
+      try {
+        // Prefer the message captured from the 'message' event (sync, always populated for
+        // OpenClaw sessions). Fall back to SQLite for Claude runtime sessions.
+        const pendingContent = pendingIosAssistantText.get(sessionId);
+        pendingIosAssistantText.delete(sessionId);
+        const content = pendingContent ??
+          getCoworkStore().getSession(sessionId)?.messages
+            .filter(m => m.type === 'assistant' && !m.metadata?.isThinking)
+            .at(-1)?.content;
+        if (content) {
+          sendExtYdNimMessage(content, { action: 'normal', taskId: iosTaskId })
+            .catch(e => console.error('[iOS NIM] reply failed:', (e as Error)?.message));
+          saveConversationMessages(iosTaskId, [{
+            messageId: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content,
+            timestamp: Date.now(),
+          }]).catch(e => console.error('[iOS NIM] save assistant failed:', (e as Error)?.message));
+        } else {
+          console.error('[iOS NIM] complete: no assistant content found for sessionId:', sessionId);
+        }
+      } catch (e) {
+        console.error('[iOS NIM] complete hook error:', (e as Error)?.message);
+      }
     }
   });
 
@@ -1913,8 +1959,15 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
-  // Register custom protocol for OAuth callback
-  app.setAsDefaultProtocolClient('lobsterai');
+  // Register custom protocol for OAuth callback.
+  // In dev mode on Windows, pass execPath + main script so the registry entry is:
+  //   electron.exe "path/to/main.js" "%1"
+  // Without the extra args, Electron receives the deeplink URL as the app path.
+  if (!app.isPackaged) {
+    app.setAsDefaultProtocolClient('lobsterai', process.execPath, [path.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient('lobsterai');
+  }
 
   // Buffer for deep link auth code received before renderer is ready
   let pendingAuthCode: string | null = null;
@@ -2254,6 +2307,7 @@ if (!gotTheLock) {
   ipcMain.handle('auth:exchange', async (_event, { code }: { code: string }) => {
     try {
       const serverBaseUrl = getServerApiBaseUrl();
+      console.log('[Auth] exchange url:', `${serverBaseUrl}/api/auth/exchange`);
       const resp = await net.fetch(`${serverBaseUrl}/api/auth/exchange`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2275,8 +2329,38 @@ if (!gotTheLock) {
       if (body.code !== 0 || !body.data) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
+      console.log('[Auth] exchange full body:', JSON.stringify(body));
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
-      return { success: true, user: body.data.user, quota: normalizeQuota(body.data.quota) };
+      const exchangeUser = body.data.user;
+      console.log('[Auth] exchange raw user:', JSON.stringify(exchangeUser));
+
+      // exchange 响应里没有 loginType，额外调一次 profile 接口拿完整字段
+      let fullUser: Record<string, unknown> = exchangeUser;
+      try {
+        const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
+        if (profileResp.ok) {
+          const profileBody = await profileResp.json() as { code: number; data: Record<string, unknown> };
+          if (profileBody.code === 0 && profileBody.data) {
+            fullUser = profileBody.data;
+            console.log('[Auth] exchange full profile:', JSON.stringify(fullUser));
+          }
+        }
+      } catch (profileErr: any) {
+        console.warn('[Auth] exchange: failed to fetch full profile (using exchange user):', profileErr?.message ?? profileErr);
+      }
+
+      // Trigger hidden YD NIM client if user has a yid (server does not return loginType field)
+      const yid = (fullUser as any)?.yid;
+      console.log('[Auth] exchange yid:', yid);
+      if (yid) {
+        console.log('[Auth] yid present, triggering YdNimClient init');
+        initYdNimClient(String(yid)).catch((e) =>
+          console.error('[Auth] ydNimClient init failed after exchange:', e?.message ?? e)
+        );
+      } else {
+        console.log('[Auth] YdNimClient not triggered (yid missing)');
+      }
+      return { success: true, user: fullUser, quota: normalizeQuota(body.data.quota) };
     } catch (error) {
       console.error('[Auth] exchange failed:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Exchange failed' };
@@ -2293,6 +2377,7 @@ if (!gotTheLock) {
       if (!profileResp.ok) return { success: false };
       const profileBody = await profileResp.json() as { code: number; data: Record<string, unknown> };
       if (profileBody.code !== 0 || !profileBody.data) return { success: false };
+      console.log('[Auth] getUser profile:', JSON.stringify(profileBody.data));
       // Fetch quota separately
       const quotaResp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
       let quota = null;
@@ -2302,7 +2387,20 @@ if (!gotTheLock) {
           quota = normalizeQuota(quotaBody.data);
         }
       }
-      return { success: true, user: profileBody.data, quota };
+      const user = profileBody.data;
+      console.log('[Auth] getUser profile:', JSON.stringify(user));
+      // Trigger hidden YD NIM client if user has a yid (server does not return loginType field)
+      const yid = (user as any).yid;
+      console.log('[Auth] getUser yid:', yid);
+      if (yid) {
+        console.log('[Auth] yid present, triggering YdNimClient init');
+        initYdNimClient(String(yid)).catch((e) =>
+          console.error('[Auth] ydNimClient init failed after getUser:', e?.message ?? e)
+        );
+      } else {
+        console.log('[Auth] YdNimClient not triggered (yid missing)');
+      }
+      return { success: true, user, quota };
     } catch {
       return { success: false };
     }
@@ -2350,11 +2448,45 @@ if (!gotTheLock) {
       }
       clearAuthTokens();
       clearServerModelMetadata();
+      destroyYdNimClient().catch(() => {});
       return { success: true };
     } catch {
       clearAuthTokens();
       clearServerModelMetadata();
+      destroyYdNimClient().catch(() => {});
       return { success: true };
+    }
+  });
+
+  // ── YD NIM debug channel ───────────────────────────────────────────────
+  ipcMain.handle('yd-nim:send-message', async (_event, text: string, ext?: object) => {
+    try {
+      if (ext) {
+        await sendExtYdNimMessage(text, ext);
+      } else {
+        await sendYdNimMessage(text);
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.desc ?? err?.message ?? String(err) };
+    }
+  });
+
+  ipcMain.handle('yd-nim:save-messages', async (_event, taskId: string, messages: any[]) => {
+    try {
+      await saveConversationMessages(taskId, messages);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message ?? String(err) };
+    }
+  });
+
+  ipcMain.handle('yd-nim:simulate-ios-message', async (_event, params: any) => {
+    try {
+      await simulateIncomingMessage(params);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message ?? String(err) };
     }
   });
 
@@ -5368,6 +5500,78 @@ if (!gotTheLock) {
       return tokens;
     });
     setServerBaseUrlGetter(() => getServerApiBaseUrl());
+    setYdNimServerContext(getAuthTokens);
+
+    setYdNimCoworkCallbacks({
+      createSession: async (taskId, title) => {
+        const store = getCoworkStore();
+        const config = store.getConfig();
+        const cwd = resolveTaskWorkingDirectory(config.workingDirectory || process.env.HOME || '.');
+        const systemPrompt = mergeCoworkSystemPrompt(resolveCoworkAgentEngine(), config.systemPrompt);
+        const session = store.createSession(title, cwd, systemPrompt, config.executionMode || 'local', [], 'main');
+        console.log('[iOS] createSession — taskId:', taskId, 'sessionId:', session.id);
+        BrowserWindow.getAllWindows().forEach(win => {
+          if (!win.isDestroyed()) win.webContents.send('cowork:sessions:changed');
+        });
+        return { sessionId: session.id };
+      },
+
+      continueSession: async (sessionId, text) => {
+        const store = getCoworkStore();
+        const runtime = getCoworkEngineRouter();
+        const session = store.getSession(sessionId);
+        if (!session) {
+          console.error('[iOS] continueSession — session not found:', sessionId);
+          return;
+        }
+        store.updateSession(sessionId, { status: 'running' });
+        store.addMessage(sessionId, { type: 'user', content: text });
+        const config = store.getConfig();
+        const systemPrompt = mergeCoworkSystemPrompt(resolveCoworkAgentEngine(), session.systemPrompt ?? config.systemPrompt);
+        const options = {
+          skipInitialUserMessage: true as const,
+          systemPrompt,
+          workspaceRoot: session.cwd || config.workingDirectory,
+          confirmationMode: 'modal' as const,
+        };
+        const userMessages = store.getSession(sessionId)?.messages?.filter(m => m.type === 'user') ?? [];
+        const isFirst = userMessages.length <= 1;
+        console.log('[iOS] continueSession — sessionId:', sessionId, 'isFirst:', isFirst);
+        if (isFirst) {
+          runtime.startSession(sessionId, text, options).catch(err => {
+            console.error('[iOS] startSession error:', (err as Error)?.message);
+          });
+        } else {
+          runtime.continueSession(sessionId, text, options).catch(err => {
+            console.error('[iOS] continueSession error:', (err as Error)?.message);
+          });
+        }
+      },
+
+      setPinned: (sessionId, pinned) => {
+        getCoworkStore().setSessionPinned(sessionId, pinned);
+        console.log('[iOS] setPinned — sessionId:', sessionId, 'pinned:', pinned);
+        BrowserWindow.getAllWindows().forEach(win => {
+          if (!win.isDestroyed()) win.webContents.send('cowork:sessions:changed');
+        });
+      },
+
+      rename: (sessionId, title) => {
+        getCoworkStore().updateSession(sessionId, { title });
+        console.log('[iOS] rename — sessionId:', sessionId, 'title:', title);
+        BrowserWindow.getAllWindows().forEach(win => {
+          if (!win.isDestroyed()) win.webContents.send('cowork:sessions:changed');
+        });
+      },
+
+      deleteSession: (sessionId) => {
+        getCoworkStore().deleteSession(sessionId);
+        console.log('[iOS] deleteSession — sessionId:', sessionId);
+        BrowserWindow.getAllWindows().forEach(win => {
+          if (!win.isDestroyed()) win.webContents.send('cowork:sessions:changed');
+        });
+      },
+    });
 
     // Initialize Copilot token manager and restore token state if available
     initCopilotTokenManager(getStore);

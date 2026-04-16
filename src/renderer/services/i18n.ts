@@ -625,6 +625,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skills
     skills: '技能',
+    iosComm: 'ios通信',
+    iosSim: '模拟iOS发消息',
     searchSkills: '搜索技能',
     manageSkills: '管理技能',
     officialSkills: '官方技能',
@@ -2153,6 +2155,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Skills
     skills: 'Skills',
+    iosComm: 'iOS Comm',
+    iosSim: 'Simulate iOS',
     searchSkills: 'Search skills',
     manageSkills: 'Manage Skills',
     officialSkills: 'Official Skills',
