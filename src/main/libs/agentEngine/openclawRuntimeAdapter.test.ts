@@ -414,6 +414,22 @@ test('prefetchChannelUserMessages also consumes existing reminder history backlo
   expect(getSystemMessages(session).length).toBe(0);
 });
 
+test('syncSystemMessagesFromHistory skips pure heartbeat ack system messages', () => {
+  const { session, store } = createHistoryStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const historyMessages = [
+    { role: 'system', content: 'HEARTBEAT_OK' },
+    { role: 'system', content: 'Reminder fired' },
+  ];
+
+  adapter.syncSystemMessagesFromHistory(session.id, historyMessages, {
+    previousCountKnown: false,
+    previousCount: 0,
+  });
+
+  expect(getSystemMessages(session).map((message) => message.content)).toEqual(['Reminder fired']);
+});
+
 test('getSessionKeysForSession prefers channel keys before managed fallback', () => {
   const { store } = createHistoryStore([]);
   const adapter = new OpenClawRuntimeAdapter(store, {});
