@@ -45,6 +45,27 @@ const PIP_RUNTIME_ARCHIVE_REL_PATH = path.join('tools', 'pip.pyz');
 const PIP_MODULE_MAIN_REL_PATH = path.join('Lib', 'site-packages', 'pip', '__main__.py');
 const PIP_MODULE_INIT_REL_PATH = path.join('Lib', 'site-packages', 'pip', '__init__.py');
 
+const EXPECTED_PIP_MAIN_CONTENT = [
+  'import pathlib',
+  'import runpy',
+  'import sys',
+  '',
+  'root = pathlib.Path(__file__).resolve().parents[3]',
+  "pip_pyz = root / 'tools' / 'pip.pyz'",
+  'if not pip_pyz.exists():',
+  "    raise SystemExit(f'pip runtime archive missing: {pip_pyz}')",
+  '',
+  '# Ensure pip imports resolve to the zipapp payload, not this shim package.',
+  'sys.path.insert(0, str(pip_pyz))',
+  'for name in list(sys.modules):',
+  "    if name == 'pip' or name.startswith('pip.'):",
+  '        del sys.modules[name]',
+  '',
+  "sys.argv[0] = 'pip'",
+  "runpy.run_module('pip', run_name='__main__', alter_sys=True)",
+  '',
+].join('\n');
+
 function hasPipCommand(rootDir) {
   return PIP_EXECUTABLE_CANDIDATES.some((relPath) => fs.existsSync(path.join(rootDir, relPath)));
 }
@@ -52,6 +73,15 @@ function hasPipCommand(rootDir) {
 function hasPipModule(rootDir) {
   return fs.existsSync(path.join(rootDir, PIP_MODULE_MAIN_REL_PATH))
     || fs.existsSync(path.join(rootDir, PIP_MODULE_INIT_REL_PATH));
+}
+
+function isPipShimCurrent(rootDir) {
+  const pipMainPath = path.join(rootDir, PIP_MODULE_MAIN_REL_PATH);
+  try {
+    return fs.readFileSync(pipMainPath, 'utf8') === EXPECTED_PIP_MAIN_CONTENT;
+  } catch {
+    return false;
+  }
 }
 
 function parseArgs(argv) {
@@ -109,6 +139,9 @@ function checkRuntimeHealth(rootDir, options = {}) {
     }
     if (!hasPipModule(rootDir)) {
       missing.push(PIP_MODULE_MAIN_REL_PATH.replace(/\\/g, '/'));
+    }
+    if (!isPipShimCurrent(rootDir)) {
+      missing.push('pip shim (__main__.py) outdated');
     }
   }
 
@@ -274,29 +307,8 @@ async function ensurePipPayload(rootDir, options = {}) {
   const pipModuleDir = path.join(rootDir, 'Lib', 'site-packages', 'pip');
   const pipInitPath = path.join(pipModuleDir, '__init__.py');
   const pipMainPath = path.join(pipModuleDir, '__main__.py');
-  const pipMain = [
-    'import pathlib',
-    'import runpy',
-    'import sys',
-    '',
-    'root = pathlib.Path(__file__).resolve().parents[3]',
-    "pip_pyz = root / 'tools' / 'pip.pyz'",
-    'if not pip_pyz.exists():',
-    "    raise SystemExit(f'pip runtime archive missing: {pip_pyz}')",
-    '',
-    '# Ensure pip imports resolve to the zipapp payload, not this shim package.',
-    'sys.path.insert(0, str(pip_pyz))',
-    'for name in list(sys.modules):',
-    "    if name == 'pip' or name.startswith('pip.'):",
-    '        del sys.modules[name]',
-    '',
-    "sys.argv[0] = 'pip'",
-    "runpy.run_module('pip', run_name='__main__', alter_sys=True)",
-    '',
-  ].join('\n');
-
   writeFileIfChanged(pipInitPath, '');
-  writeFileIfChanged(pipMainPath, pipMain);
+  writeFileIfChanged(pipMainPath, EXPECTED_PIP_MAIN_CONTENT);
   createPipWrappers(rootDir);
 
   const finalHealth = checkRuntimeHealth(rootDir, { requirePip: true });
