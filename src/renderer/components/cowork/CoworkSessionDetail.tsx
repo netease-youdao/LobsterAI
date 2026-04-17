@@ -39,6 +39,7 @@ import WindowTitleBar from '../window/WindowTitleBar';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
 import DiffView, { extractDiffFromToolInput } from './DiffView';
 import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
+import ReadButton from './ReadButton';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
@@ -1294,6 +1295,10 @@ const AssistantMessageItem: React.FC<{
       {showCopyButton && (
         <div className="flex items-center gap-1.5 mt-1">
           <CopyButton
+            content={displayContent}
+            visible={isHovered}
+          />
+          <ReadButton
             content={displayContent}
             visible={isHovered}
           />
