@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { OpenClawSessionPatch } from '../../../common/openclawSession';
+import { OpenClawProviderId } from '../../../shared/providers';
 import type { CoworkExecutionMode, CoworkMessage, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import { getCommandDangerLevel,isDeleteCommand } from '../commandSafety';
@@ -28,6 +29,7 @@ import {
   isHeartbeatAckText,
 } from '../openclawHistory';
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
+import { buildCoworkSessionIdMarker } from '../openclawTokenProxy';
 import type {
   CoworkContinueOptions,
   CoworkRuntime,
@@ -1258,12 +1260,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     const runId = randomUUID();
     const turnToken = this.nextTurnToken(sessionId);
-    const outboundMessage = await this.buildOutboundPrompt(
+    const outboundPrompt = await this.buildOutboundPrompt(
       sessionId,
       prompt,
       options.systemPrompt ?? session.systemPrompt,
       agentId,
     );
+    const outboundMessage = this.buildOutboundMessageForProvider(sessionId, agentId, outboundPrompt);
     const completionPromise = new Promise<void>((resolve, reject) => {
       this.pendingTurns.set(sessionId, { resolve, reject });
     });
@@ -1454,6 +1457,19 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       'Use this prior context for continuity. Focus your final answer on the current request.',
       ...lines,
     ].join('\n');
+  }
+
+  private buildOutboundMessageForProvider(sessionId: string, agentId: string, message: string): string {
+    if (!this.shouldAttachCoworkSessionMarker(agentId)) {
+      return message;
+    }
+    return `${buildCoworkSessionIdMarker(sessionId)}\n\n${message}`;
+  }
+
+  private shouldAttachCoworkSessionMarker(agentId: string): boolean {
+    const agent = this.store.getAgent(agentId);
+    const model = agent?.model?.trim();
+    return !model || model.startsWith(`${OpenClawProviderId.LobsteraiServer}/`);
   }
 
   private async ensureGatewayClientReady(): Promise<void> {
