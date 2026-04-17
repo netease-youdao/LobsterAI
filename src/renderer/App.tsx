@@ -26,6 +26,7 @@ import { scheduledTaskService } from './services/scheduledTask';
 import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
 import { defaultConfig, getProviderDisplayName } from './config';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
+import { setStreaming } from './store/slices/coworkSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
 import { setDraftPrompt } from './store/slices/coworkSlice';
 import type { ApiConfig } from './services/api';
@@ -247,12 +248,19 @@ const App: React.FC = () => {
     ) {
       return;
     }
-    void configService.updateConfig({
+    // Dispatch setStreaming(true) to disable the send button while the config
+    // sync (and possible gateway restart for cross-provider switches) completes.
+    // Without this, the user can fire a request before the new provider's API key
+    // is available, causing a "model service call failed" error.
+    store.dispatch(setStreaming(true));
+    configService.updateConfig({
       model: {
         ...config.model,
         defaultModel: selectedModel.id,
         defaultModelProvider: selectedModel.providerKey,
       },
+    }).finally(() => {
+      store.dispatch(setStreaming(false));
     });
   }, [isInitialized, selectedModel?.id, selectedModel?.providerKey]);
 
