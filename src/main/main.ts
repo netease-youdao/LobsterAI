@@ -2189,6 +2189,10 @@ if (!gotTheLock) {
     try {
       const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
       const finalUrl = `${baseUrl}?source=electron`;
+      if (!isSafeExternalUrl(finalUrl)) {
+        console.warn(`[Security] blocked auth:login for disallowed URL scheme: ${finalUrl}`);
+        return { success: false, error: 'URL scheme not allowed' };
+      }
       await shell.openExternal(finalUrl);
       return { success: true };
     } catch (error) {
@@ -4368,6 +4372,10 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+    if (!isSafeExternalUrl(url)) {
+      console.warn(`[Security] blocked shell:openExternal for disallowed URL scheme: ${url}`);
+      return { success: false, error: 'URL scheme not allowed' };
+    }
     try {
       await shell.openExternal(url);
       return { success: true };
@@ -4621,6 +4629,17 @@ if (!gotTheLock) {
     }
   };
 
+  const ALLOWED_EXTERNAL_SCHEMES = new Set(['https:', 'http:', 'mailto:']);
+
+  const isSafeExternalUrl = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      return ALLOWED_EXTERNAL_SCHEMES.has(parsed.protocol.toLowerCase());
+    } catch {
+      return false;
+    }
+  };
+
   // 设置 Content Security Policy
   const setContentSecurityPolicy = () => {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -4731,7 +4750,11 @@ if (!gotTheLock) {
           },
         };
       }
-      shell.openExternal(url);
+      if (isSafeExternalUrl(url)) {
+        shell.openExternal(url);
+      } else {
+        console.warn(`[Security] blocked window.open for disallowed URL scheme: ${url}`);
+      }
       return { action: 'deny' };
     });
 
