@@ -109,7 +109,7 @@
   },
   "dependencies": {
     "@electron/remote": "^2.0.12",
-    "@headlessui/react": "^1.7.18",
+    "@headlessui/react": "^2.2.10",
     "@heroicons/react": "^2.1.1",
     "@larksuite/openclaw-lark-tools": "~1.0.26",
     "@larksuiteoapi/node-sdk": "^1.58.0",
