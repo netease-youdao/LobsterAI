@@ -1,41 +1,49 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
+import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+
+import AgentsView from './components/agent/AgentsView';
+import { CoworkView } from './components/cowork';
+import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
+import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
+import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
+import { McpView } from './components/mcp';
+import PrivacyDialog from './components/PrivacyDialog';
+import { ScheduledTasksView } from './components/scheduledTasks';
+import Settings, { type SettingsOpenOptions } from './components/Settings';
+import Sidebar from './components/Sidebar';
+import { SkillsView } from './components/skills';
+import Toast from './components/Toast';
+import AppUpdateBadge from './components/update/AppUpdateBadge';
+import AppUpdateModal from './components/update/AppUpdateModal';
+import WindowTitleBar from './components/window/WindowTitleBar';
+import { defaultConfig, getProviderDisplayName } from './config';
+import { SettingsProvider } from './contexts/SettingsContext';
+import type { ApiConfig } from './services/api';
+import { apiService } from './services/api';
+import {
+  type AppUpdateDownloadProgress,
+  type AppUpdateInfo,
+  checkForAppUpdate,
+  UPDATE_HEARTBEAT_INTERVAL_MS,
+  UPDATE_POLL_INTERVAL_MS,
+} from './services/appUpdate';
+import { authService } from './services/auth';
+import { configService } from './services/config';
+import { coworkService } from './services/cowork';
+import { i18nService } from './services/i18n';
+import { scheduledTaskService } from './services/scheduledTask';
+import { matchesShortcut } from './services/shortcuts';
+import { themeService } from './services/theme';
 import { RootState, store } from './store';
 import {
   selectCurrentSessionId,
   selectFirstPendingPermission,
 } from './store/selectors/coworkSelectors';
-import Settings, { type SettingsOpenOptions } from './components/Settings';
-import Sidebar from './components/Sidebar';
-import Toast from './components/Toast';
-import WindowTitleBar from './components/window/WindowTitleBar';
-import { CoworkView } from './components/cowork';
-import { SkillsView } from './components/skills';
-import { ScheduledTasksView } from './components/scheduledTasks';
-import { McpView } from './components/mcp';
-import AgentsView from './components/agent/AgentsView';
-import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
-import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
-import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
-import { configService } from './services/config';
-import { apiService } from './services/api';
-import { themeService } from './services/theme';
-import { coworkService } from './services/cowork';
-import { authService } from './services/auth';
-import { scheduledTaskService } from './services/scheduledTask';
-import { checkForAppUpdate, type AppUpdateInfo, type AppUpdateDownloadProgress, UPDATE_POLL_INTERVAL_MS, UPDATE_HEARTBEAT_INTERVAL_MS } from './services/appUpdate';
-import { defaultConfig, getProviderDisplayName } from './config';
+import { setDraftPrompt } from './store/slices/coworkSlice';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
-import { setDraftPrompt } from './store/slices/coworkSlice';
-import type { ApiConfig } from './services/api';
 import type { CoworkPermissionResult } from './types/cowork';
-import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
-import { i18nService } from './services/i18n';
-import { matchesShortcut } from './services/shortcuts';
-import AppUpdateBadge from './components/update/AppUpdateBadge';
-import AppUpdateModal from './components/update/AppUpdateModal';
-import PrivacyDialog from './components/PrivacyDialog';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -263,6 +271,10 @@ const App: React.FC = () => {
     });
     setShowSettings(true);
   }, []);
+
+  const settingsContextValue = useMemo(() => ({
+    openSettings: handleShowSettings,
+  }), [handleShowSettings]);
 
   const handleShowSkills = useCallback(() => {
     setMainView('skills');
@@ -674,112 +686,114 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
-      {toastMessage && (
-        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
-      )}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        <Sidebar
-          onShowLogin={handleShowLogin}
-          onShowSettings={handleShowSettings}
-          activeView={mainView}
-          onShowSkills={handleShowSkills}
-          onShowCowork={handleShowCowork}
-          onShowScheduledTasks={handleShowScheduledTasks}
-          onShowMcp={handleShowMcp}
-          onShowAgents={handleShowAgents}
-          onNewChat={handleNewChat}
-          isCollapsed={isSidebarCollapsed}
-          onToggleCollapse={handleToggleSidebar}
-          updateBadge={!isSidebarCollapsed ? updateBadge : null}
-          hideLogin={enterpriseConfig?.ui?.login === 'hide'}
-        />
-        <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
-          <div className="relative h-full min-h-0 rounded-xl bg-background overflow-hidden">
-            <EngineStartupOverlay />
-            {mainView === 'skills' ? (
-              <SkillsView
-                isSidebarCollapsed={isSidebarCollapsed}
-                onToggleSidebar={handleToggleSidebar}
-                onNewChat={handleNewChat}
-                onCreateSkillByChat={handleCreateSkillByChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
-                readOnly={enterpriseConfig?.ui?.skills === 'readonly'}
-              />
-            ) : mainView === 'scheduledTasks' ? (
-              <ScheduledTasksView
-                isSidebarCollapsed={isSidebarCollapsed}
-                onToggleSidebar={handleToggleSidebar}
-                onNewChat={handleNewChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
-              />
-            ) : mainView === 'mcp' ? (
-              <McpView
-                isSidebarCollapsed={isSidebarCollapsed}
-                onToggleSidebar={handleToggleSidebar}
-                onNewChat={handleNewChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
-              />
-            ) : mainView === 'agents' ? (
-              <AgentsView
-                isSidebarCollapsed={isSidebarCollapsed}
-                onToggleSidebar={handleToggleSidebar}
-                onNewChat={handleNewChat}
-                onShowCowork={handleShowCowork}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
-              />
-            ) : (
-              <CoworkView
-                onRequestAppSettings={handleShowSettings}
-                onShowSkills={handleShowSkills}
-                isSidebarCollapsed={isSidebarCollapsed}
-                onToggleSidebar={handleToggleSidebar}
-                onNewChat={handleNewChat}
-                updateBadge={isSidebarCollapsed ? updateBadge : null}
-              />
-            )}
+    <SettingsProvider value={settingsContextValue}>
+      <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
+        {toastMessage && (
+          <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
+        )}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          <Sidebar
+            onShowLogin={handleShowLogin}
+            onShowSettings={handleShowSettings}
+            activeView={mainView}
+            onShowSkills={handleShowSkills}
+            onShowCowork={handleShowCowork}
+            onShowScheduledTasks={handleShowScheduledTasks}
+            onShowMcp={handleShowMcp}
+            onShowAgents={handleShowAgents}
+            onNewChat={handleNewChat}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={handleToggleSidebar}
+            updateBadge={!isSidebarCollapsed ? updateBadge : null}
+            hideLogin={enterpriseConfig?.ui?.login === 'hide'}
+          />
+          <div className={`flex-1 min-w-0 py-1.5 pr-1.5 ${isSidebarCollapsed ? 'pl-1.5' : ''}`}>
+            <div className="relative h-full min-h-0 rounded-xl bg-background overflow-hidden">
+              <EngineStartupOverlay />
+              {mainView === 'skills' ? (
+                <SkillsView
+                  isSidebarCollapsed={isSidebarCollapsed}
+                  onToggleSidebar={handleToggleSidebar}
+                  onNewChat={handleNewChat}
+                  onCreateSkillByChat={handleCreateSkillByChat}
+                  updateBadge={isSidebarCollapsed ? updateBadge : null}
+                  readOnly={enterpriseConfig?.ui?.skills === 'readonly'}
+                />
+              ) : mainView === 'scheduledTasks' ? (
+                <ScheduledTasksView
+                  isSidebarCollapsed={isSidebarCollapsed}
+                  onToggleSidebar={handleToggleSidebar}
+                  onNewChat={handleNewChat}
+                  updateBadge={isSidebarCollapsed ? updateBadge : null}
+                />
+              ) : mainView === 'mcp' ? (
+                <McpView
+                  isSidebarCollapsed={isSidebarCollapsed}
+                  onToggleSidebar={handleToggleSidebar}
+                  onNewChat={handleNewChat}
+                  updateBadge={isSidebarCollapsed ? updateBadge : null}
+                />
+              ) : mainView === 'agents' ? (
+                <AgentsView
+                  isSidebarCollapsed={isSidebarCollapsed}
+                  onToggleSidebar={handleToggleSidebar}
+                  onNewChat={handleNewChat}
+                  onShowCowork={handleShowCowork}
+                  updateBadge={isSidebarCollapsed ? updateBadge : null}
+                />
+              ) : (
+                <CoworkView
+                  onRequestAppSettings={handleShowSettings}
+                  onShowSkills={handleShowSkills}
+                  isSidebarCollapsed={isSidebarCollapsed}
+                  onToggleSidebar={handleToggleSidebar}
+                  onNewChat={handleNewChat}
+                  updateBadge={isSidebarCollapsed ? updateBadge : null}
+                />
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
-      {showSettings && (
-        <Settings
-          onClose={handleCloseSettings}
-          initialTab={settingsOptions.initialTab}
-          notice={settingsOptions.notice}
-          onUpdateFound={handleUpdateFound}
-          enterpriseConfig={enterpriseConfig}
-        />
-      )}
-      {showUpdateModal && updateInfo && (
-        <AppUpdateModal
-          updateInfo={updateInfo}
-          onCancel={() => {
-            if (updateModalState === 'info' || updateModalState === 'error') {
-              setShowUpdateModal(false);
-              setUpdateModalState('info');
-              setUpdateError(null);
-              setDownloadProgress(null);
-            }
-          }}
-          onConfirm={handleConfirmUpdate}
-          modalState={updateModalState}
-          downloadProgress={downloadProgress}
-          errorMessage={updateError}
-          onCancelDownload={handleCancelDownload}
-          onRetry={handleRetryUpdate}
-        />
-      )}
-      {permissionModal}
-      {privacyAgreed === false && (
-        <PrivacyDialog
-          onAccept={handlePrivacyAccept}
-          onReject={handlePrivacyReject}
-        />
-      )}
-    </div>
+        {/* 设置窗口显示在所有主内容之上，但不影响主界面的交互 */}
+        {showSettings && (
+          <Settings
+            onClose={handleCloseSettings}
+            initialTab={settingsOptions.initialTab}
+            notice={settingsOptions.notice}
+            onUpdateFound={handleUpdateFound}
+            enterpriseConfig={enterpriseConfig}
+          />
+        )}
+        {showUpdateModal && updateInfo && (
+          <AppUpdateModal
+            updateInfo={updateInfo}
+            onCancel={() => {
+              if (updateModalState === 'info' || updateModalState === 'error') {
+                setShowUpdateModal(false);
+                setUpdateModalState('info');
+                setUpdateError(null);
+                setDownloadProgress(null);
+              }
+            }}
+            onConfirm={handleConfirmUpdate}
+            modalState={updateModalState}
+            downloadProgress={downloadProgress}
+            errorMessage={updateError}
+            onCancelDownload={handleCancelDownload}
+            onRetry={handleRetryUpdate}
+          />
+        )}
+        {permissionModal}
+        {privacyAgreed === false && (
+          <PrivacyDialog
+            onAccept={handlePrivacyAccept}
+            onReject={handlePrivacyReject}
+          />
+        )}
+      </div>
+    </SettingsProvider>
   );
 };
 
-export default App; 
+export default App;

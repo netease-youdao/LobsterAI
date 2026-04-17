@@ -212,7 +212,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
             ...buildApiConfigNotice(apiConfig.error),
           });
           isStartingRef.current = false;
-          return;
+          return false;
         }
       } catch (error) {
         console.error('Failed to check cowork API config:', error);

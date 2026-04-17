@@ -2,6 +2,7 @@ import { CheckIcon,ChevronDownIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
+import { useSettings } from '../contexts/SettingsContext';
 import { i18nService } from '../services/i18n';
 import { RootState } from '../store';
 import type { Model } from '../store/slices/modelSlice';
@@ -27,6 +28,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   defaultLabel,
 }) => {
   const dispatch = useDispatch();
+  const { openSettings } = useSettings();
   const [isOpen, setIsOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
 
@@ -61,12 +63,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     setIsOpen(false);
   };
 
-  // 如果没有可用模型，显示提示
+  // 如果没有可用模型，点击跳转设置
   if (availableModels.length === 0) {
     return (
-      <div className="px-3 py-1.5 rounded-xl bg-surface text-secondary text-sm">
+      <button
+        type="button"
+        onClick={() => openSettings({ initialTab: 'model' })}
+        className="px-3 py-1.5 rounded-xl bg-surface text-secondary text-sm hover:bg-surface-raised transition-colors cursor-pointer"
+      >
         {i18nService.t('modelSelectorNoModels')}
-      </div>
+      </button>
     );
   }
 
