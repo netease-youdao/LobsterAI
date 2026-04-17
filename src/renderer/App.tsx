@@ -381,7 +381,6 @@ const App: React.FC = () => {
 
     try {
       const downloadResult = await window.electron.appUpdate.download(updateInfo.url);
-      unsubscribe();
 
       if (!downloadResult.success) {
         // If user cancelled, handleCancelDownload already set the state — don't overwrite
@@ -402,7 +401,6 @@ const App: React.FC = () => {
       }
       // If successful, app will quit and relaunch
     } catch (error) {
-      unsubscribe();
       const msg = error instanceof Error ? error.message : '';
       // If user cancelled, handleCancelDownload already set the state — don't overwrite
       if (msg === 'Download cancelled') {
@@ -410,6 +408,8 @@ const App: React.FC = () => {
       }
       setUpdateModalState('error');
       setUpdateError(msg || i18nService.t('updateDownloadFailed'));
+    } finally {
+      unsubscribe();
     }
   }, [updateInfo, showToast]);
 
