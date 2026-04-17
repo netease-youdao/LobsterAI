@@ -588,10 +588,14 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           <div className="text-center space-y-5">
             <img src="logo.png" alt="logo" className="w-16 h-16 mx-auto" />
             <h2 className="text-3xl font-bold tracking-tight text-foreground">
-              {i18nService.t('coworkWelcome')}
+              {currentAgentId !== 'main' && currentAgent?.name
+                ? i18nService.t('coworkAgentWelcome').replace('{name}', currentAgent.name)
+                : i18nService.t('coworkWelcome')}
             </h2>
             <p className="text-sm text-secondary max-w-md mx-auto">
-              {i18nService.t('coworkDescription')}
+              {currentAgentId !== 'main' && currentAgent?.description
+                ? currentAgent.description
+                : i18nService.t('coworkDescription')}
             </p>
           </div>
 
