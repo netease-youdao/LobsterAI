@@ -99,7 +99,7 @@ function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown)
 }
 
 function providerRequiresApiKey(providerName: string): boolean {
-  return providerName !== ProviderName.Ollama;
+  return providerName !== ProviderName.Ollama && providerName !== ProviderName.LMStudio;
 }
 
 function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {

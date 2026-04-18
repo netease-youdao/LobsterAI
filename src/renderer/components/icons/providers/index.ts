@@ -3,6 +3,7 @@ export { default as CustomProviderIcon } from './CustomProviderIcon';
 export { default as DeepSeekIcon } from './DeepSeekIcon';
 export { default as GeminiIcon } from './GeminiIcon';
 export { default as GitHubCopilotIcon } from './GitHubCopilotIcon';
+export { default as LMStudioIcon } from './LMStudioIcon';
 export { default as MiniMaxIcon } from './MiniMaxIcon';
 export { default as MoonshotIcon } from './MoonshotIcon';
 export { default as OllamaIcon } from './OllamaIcon';
