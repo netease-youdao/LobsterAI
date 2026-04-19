@@ -40,6 +40,7 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
 }) => {
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
   const [allowedUserIdInput, setAllowedUserIdInput] = useState('');
+  const [groupAllowIdInput, setGroupAllowIdInput] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState(instance.instanceName);
 
@@ -345,27 +346,65 @@ const QQInstanceSettings: React.FC<QQInstanceSettingsProps> = ({
               <label className="block text-xs font-medium text-secondary">
                 Group Allow From (Group IDs)
               </label>
-              <div className="flex flex-wrap gap-1.5">
-                {instance.groupAllowFrom.map((id) => (
-                  <span
-                    key={id}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
-                  >
-                    {id}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const newIds = instance.groupAllowFrom.filter((gid) => gid !== id);
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={groupAllowIdInput}
+                  onChange={(e) => setGroupAllowIdInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const id = groupAllowIdInput.trim();
+                      if (id && !instance.groupAllowFrom.includes(id)) {
+                        const newIds = [...instance.groupAllowFrom, id];
                         onConfigChange({ groupAllowFrom: newIds });
+                        setGroupAllowIdInput('');
                         void onSave({ groupAllowFrom: newIds });
-                      }}
-                      className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                    >
-                      <XMarkIcon className="w-3 h-3" />
-                    </button>
-                  </span>
-                ))}
+                      }
+                    }
+                  }}
+                  className="block flex-1 rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+                  placeholder={i18nService.t('imQQGroupIdPlaceholder')}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = groupAllowIdInput.trim();
+                    if (id && !instance.groupAllowFrom.includes(id)) {
+                      const newIds = [...instance.groupAllowFrom, id];
+                      onConfigChange({ groupAllowFrom: newIds });
+                      setGroupAllowIdInput('');
+                      void onSave({ groupAllowFrom: newIds });
+                    }
+                  }}
+                  className="px-3 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                >
+                  {i18nService.t('add') || '添加'}
+                </button>
               </div>
+              {instance.groupAllowFrom.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {instance.groupAllowFrom.map((id) => (
+                    <span
+                      key={id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
+                    >
+                      {id}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newIds = instance.groupAllowFrom.filter((gid) => gid !== id);
+                          onConfigChange({ groupAllowFrom: newIds });
+                          void onSave({ groupAllowFrom: newIds });
+                        }}
+                        className="text-secondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                      >
+                        <XMarkIcon className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
