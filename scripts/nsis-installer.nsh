@@ -47,6 +47,14 @@
   ; into the new install before the old directory is removed.
   ; If rename fails (ghost file handles), skip — the installer's built-in
   ; uninstall step will handle the old directory.
+  ; Remove any stale .old directory left by a previous interrupted install.
+  ; NSIS Rename silently fails when the destination already exists, which
+  ; would cause the skill-restore logic in customInstall to be skipped.
+  IfFileExists "$INSTDIR.old\*.*" 0 SkipStaleOldDirCleanup
+    nsExec::ExecToLog 'cmd /c rd /s /q "$INSTDIR.old"'
+    Pop $0
+  SkipStaleOldDirCleanup:
+
   IfFileExists "$INSTDIR\*.*" 0 SkipOldDirRemoval
     Rename "$INSTDIR" "$INSTDIR.old"
     IfErrors 0 RenameOK
@@ -99,7 +107,13 @@
   ; are user-created and copied back into the new install.
   ; Falls back to "copy anything not already in the new dir" if the config is absent.
   ; This runs synchronously so the app never launches before skills are ready.
-  IfFileExists "$INSTDIR.old\resources\SKILLs\*.*" 0 SkipSkillRestore
+  IfFileExists "$INSTDIR.old\*.*" 0 OldDirMissing
+    FileWrite $2 "old-dir-status: present$\r$\n"
+    Goto SkillRestoreBegin
+  OldDirMissing:
+    FileWrite $2 "old-dir-status: missing (rename failed or clean install)$\r$\n"
+    Goto SkipSkillRestore
+  SkillRestoreBegin:
     ${GetTime} "" "L" $3 $4 $5 $6 $7 $8 $9
     FileWrite $2 "skill-restore-start: $5-$4-$3 $6:$7:$8$\r$\n"
 
