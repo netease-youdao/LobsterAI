@@ -676,7 +676,7 @@ interface MarkdownContentProps {
   showRevealInFolderAction?: boolean;
 }
 
-const MarkdownContent: React.FC<MarkdownContentProps> = ({
+const MarkdownContent: React.FC<MarkdownContentProps> = React.memo(({
   content,
   className = '',
   resolveLocalFilePath,
@@ -699,6 +699,8 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
       </ReactMarkdown>
     </div>
   );
-};
+});
+
+MarkdownContent.displayName = 'MarkdownContent';
 
 export default MarkdownContent;
