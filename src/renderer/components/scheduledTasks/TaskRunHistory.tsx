@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useSelector } from 'react-redux';
+import { ClockIcon } from '@heroicons/react/24/outline';
 import { RootState } from '../../store';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { i18nService } from '../../services/i18n';
@@ -29,8 +30,14 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
 
   if (runs.length === 0) {
     return (
-      <div className="text-center py-6 text-sm text-secondary">
-        {i18nService.t('scheduledTasksNoRuns')}
+      <div className="flex flex-col items-center justify-center py-12 px-6">
+        <ClockIcon className="h-10 w-10 text-secondary/40 mb-3" />
+        <p className="text-sm font-medium text-secondary mb-1">
+          {i18nService.t('scheduledTasksNoRuns')}
+        </p>
+        <p className="text-xs text-secondary/60">
+          {i18nService.t('scheduledTasksNoRunsHint')}
+        </p>
       </div>
     );
   }
