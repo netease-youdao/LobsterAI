@@ -324,6 +324,7 @@ export interface Agent {
   identity: string;
   model: string;
   icon: string;
+  avatarPath: string;
   skillIds: string[];
   enabled: boolean;
   isDefault: boolean;
@@ -341,6 +342,8 @@ export interface CreateAgentRequest {
   identity?: string;
   model?: string;
   icon?: string;
+  avatarPath?: string;
+  avatarSourcePath?: string;
   skillIds?: string[];
   source?: AgentSource;
   presetId?: string;
@@ -353,6 +356,9 @@ export interface UpdateAgentRequest {
   identity?: string;
   model?: string;
   icon?: string;
+  avatarPath?: string;
+  avatarSourcePath?: string;
+  removeAvatar?: boolean;
   skillIds?: string[];
   enabled?: boolean;
 }
@@ -1785,6 +1791,7 @@ export class CoworkStore {
       identity: string;
       model: string;
       icon: string;
+      avatar_path: string;
       skill_ids: string;
       enabled: number;
       is_default: number;
@@ -1810,6 +1817,7 @@ export class CoworkStore {
       identity: string;
       model: string;
       icon: string;
+      avatar_path: string;
       skill_ids: string;
       enabled: number;
       is_default: number;
@@ -1844,8 +1852,8 @@ export class CoworkStore {
     this.db
       .prepare(
         `
-      INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
+      INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, avatar_path, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
     `,
       )
       .run(
@@ -1856,6 +1864,7 @@ export class CoworkStore {
         request.identity || '',
         request.model || '',
         request.icon || '',
+        request.avatarPath || '',
         JSON.stringify(request.skillIds || []),
         request.source || 'custom',
         request.presetId || '',
@@ -1909,6 +1918,10 @@ export class CoworkStore {
       setClauses.push('icon = ?');
       values.push(updates.icon);
     }
+    if (updates.avatarPath !== undefined) {
+      setClauses.push('avatar_path = ?');
+      values.push(updates.avatarPath);
+    }
     if (updates.skillIds !== undefined) {
       setClauses.push('skill_ids = ?');
       values.push(JSON.stringify(updates.skillIds));
@@ -1937,6 +1950,7 @@ export class CoworkStore {
     identity: string;
     model: string;
     icon: string;
+    avatar_path: string;
     skill_ids: string;
     enabled: number;
     is_default: number;
@@ -1959,6 +1973,7 @@ export class CoworkStore {
       identity: row.identity,
       model: row.model,
       icon: row.icon,
+      avatarPath: row.avatar_path ?? '',
       skillIds,
       enabled: Boolean(row.enabled),
       isDefault: Boolean(row.is_default),

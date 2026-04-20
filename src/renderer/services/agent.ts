@@ -1,3 +1,5 @@
+import { AGENT_AVATAR_MAX_MB, AgentAvatarErrorCode } from '@shared/agentAvatar/constants';
+
 import { store } from '../store';
 import {
   addAgent,
@@ -10,6 +12,39 @@ import {
 import { clearCurrentSession } from '../store/slices/coworkSlice';
 import { clearActiveSkills,setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
+import { i18nService } from './i18n';
+
+const getAgentOperationErrorCode = (error: unknown): string => {
+  if (
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && typeof (error as { code?: unknown }).code === 'string'
+  ) {
+    return (error as { code: string }).code;
+  }
+  return '';
+};
+
+const resolveAgentOperationErrorMessage = (
+  error: unknown,
+  fallbackKey: 'agentCreateFailed' | 'agentSaveFailed',
+): string => {
+  const errorCode = getAgentOperationErrorCode(error);
+  if (errorCode === AgentAvatarErrorCode.UnsupportedFileType) {
+    return i18nService.t('agentAvatarUnsupportedType');
+  }
+  if (errorCode === AgentAvatarErrorCode.FileTooLarge) {
+    return (i18nService.t('agentAvatarFileTooLarge') || '').replace('{size}', String(AGENT_AVATAR_MAX_MB));
+  }
+  if (
+    errorCode === AgentAvatarErrorCode.ImportFailed
+    || errorCode === AgentAvatarErrorCode.SourceNotFound
+  ) {
+    return i18nService.t('agentAvatarImportFailed');
+  }
+  return i18nService.t(fallbackKey);
+};
 
 class AgentService {
   async loadAgents(): Promise<void> {
@@ -22,6 +57,7 @@ class AgentService {
           name: a.name,
           description: a.description,
           icon: a.icon,
+          avatarPath: a.avatarPath ?? '',
           model: a.model ?? '',
           enabled: a.enabled,
           isDefault: a.isDefault,
@@ -44,6 +80,7 @@ class AgentService {
     identity?: string;
     model?: string;
     icon?: string;
+    avatarSourcePath?: string;
     skillIds?: string[];
   }): Promise<Agent | null> {
     try {
@@ -54,6 +91,7 @@ class AgentService {
           name: agent.name,
           description: agent.description,
           icon: agent.icon,
+          avatarPath: agent.avatarPath ?? '',
           model: agent.model ?? '',
           enabled: agent.enabled,
           isDefault: agent.isDefault,
@@ -65,6 +103,9 @@ class AgentService {
       return null;
     } catch (error) {
       console.error('Failed to create agent:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: resolveAgentOperationErrorMessage(error, 'agentCreateFailed'),
+      }));
       return null;
     }
   }
@@ -76,6 +117,8 @@ class AgentService {
     identity?: string;
     model?: string;
     icon?: string;
+    avatarSourcePath?: string;
+    removeAvatar?: boolean;
     skillIds?: string[];
     enabled?: boolean;
   }): Promise<Agent | null> {
@@ -88,6 +131,7 @@ class AgentService {
             name: agent.name,
             description: agent.description,
             icon: agent.icon,
+            avatarPath: agent.avatarPath ?? '',
             model: agent.model ?? '',
             enabled: agent.enabled,
             skillIds: agent.skillIds ?? [],
@@ -98,6 +142,9 @@ class AgentService {
       return null;
     } catch (error) {
       console.error('Failed to update agent:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: resolveAgentOperationErrorMessage(error, 'agentSaveFailed'),
+      }));
       return null;
     }
   }
@@ -138,6 +185,7 @@ class AgentService {
           name: agent.name,
           description: agent.description,
           icon: agent.icon,
+          avatarPath: agent.avatarPath ?? '',
           model: agent.model ?? '',
           enabled: agent.enabled,
           isDefault: agent.isDefault,

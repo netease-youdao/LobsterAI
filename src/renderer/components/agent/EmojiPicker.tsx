@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
 
 interface EmojiCategory {
@@ -101,12 +102,27 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
 interface EmojiPickerProps {
   value: string;
   onChange: (value: string) => void;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-const EmojiPicker: React.FC<EmojiPickerProps> = ({ value, onChange }) => {
-  const [isOpen, setIsOpen] = useState(false);
+const EmojiPicker: React.FC<EmojiPickerProps> = ({
+  value,
+  onChange,
+  isOpen: controlledIsOpen,
+  onOpenChange,
+}) => {
+  const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const lang = i18nService.getLanguage();
+  const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
+
+  const setIsOpen = useCallback((open: boolean) => {
+    if (controlledIsOpen === undefined) {
+      setUncontrolledIsOpen(open);
+    }
+    onOpenChange?.(open);
+  }, [controlledIsOpen, onOpenChange]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -120,7 +136,7 @@ const EmojiPicker: React.FC<EmojiPickerProps> = ({ value, onChange }) => {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isOpen]);
+  }, [isOpen, setIsOpen]);
 
   const handleSelect = (emoji: string) => {
     onChange(emoji);
@@ -132,7 +148,7 @@ const EmojiPicker: React.FC<EmojiPickerProps> = ({ value, onChange }) => {
       {/* Trigger button */}
       <button
         type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={() => setIsOpen(!isOpen)}
         title={i18nService.t('emojiPickerTitle') || 'Choose icon'}
         className={`w-12 h-[38px] flex items-center justify-center rounded-lg border text-lg transition-colors
           dark:border-claude-darkBorder border-claude-border

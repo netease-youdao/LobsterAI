@@ -8,6 +8,7 @@ export interface Agent {
   identity: string;
   model: string;
   icon: string;
+  avatarPath: string;
   skillIds: string[];
   enabled: boolean;
   isDefault: boolean;
@@ -38,6 +39,7 @@ export interface CreateAgentRequest {
   identity?: string;
   model?: string;
   icon?: string;
+  avatarSourcePath?: string;
   skillIds?: string[];
   source?: string;
   presetId?: string;
@@ -50,6 +52,8 @@ export interface UpdateAgentRequest {
   identity?: string;
   model?: string;
   icon?: string;
+  avatarSourcePath?: string;
+  removeAvatar?: boolean;
   skillIds?: string[];
   enabled?: boolean;
 }

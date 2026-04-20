@@ -16,8 +16,9 @@ import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
 import TrashIcon from '../icons/TrashIcon';
 import ModelSelector from '../ModelSelector';
+import AgentAvatar from './AgentAvatar';
+import AgentAvatarField from './AgentAvatarField';
 import AgentSkillSelector from './AgentSkillSelector';
-import EmojiPicker from './EmojiPicker';
 
 type SettingsTab = 'basic' | 'skills' | 'im';
 type MultiInstancePlatform = 'dingtalk' | 'feishu' | 'qq' | 'wecom';
@@ -46,6 +47,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
   const [systemPrompt, setSystemPrompt] = useState('');
   const [identity, setIdentity] = useState('');
   const [icon, setIcon] = useState('');
+  const [avatarPath, setAvatarPath] = useState('');
+  const [avatarSourcePath, setAvatarSourcePath] = useState('');
+  const [avatarPreviewSrc, setAvatarPreviewSrc] = useState('');
+  const [removeAvatar, setRemoveAvatar] = useState(false);
   const [model, setModel] = useState<Model | null>(null);
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -65,6 +70,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     systemPrompt: '',
     identity: '',
     icon: '',
+    avatarPath: '',
     skillIds: [] as string[],
   });
 
@@ -81,6 +87,10 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         setSystemPrompt(a.systemPrompt);
         setIdentity(a.identity);
         setIcon(a.icon);
+        setAvatarPath(a.avatarPath ?? '');
+        setAvatarSourcePath('');
+        setAvatarPreviewSrc('');
+        setRemoveAvatar(false);
         setModel(resolveOpenClawModelRef(a.model, availableModels) ?? null);
         setSkillIds(a.skillIds ?? []);
         initialValuesRef.current = {
@@ -89,6 +99,7 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
           systemPrompt: a.systemPrompt,
           identity: a.identity,
           icon: a.icon,
+          avatarPath: a.avatarPath ?? '',
           skillIds: a.skillIds ?? [],
         };
       }
@@ -118,10 +129,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     if (systemPrompt !== init.systemPrompt) return true;
     if (identity !== init.identity) return true;
     if (icon !== init.icon) return true;
+    const effectiveAvatarPath = removeAvatar ? '' : avatarPath;
+    if (effectiveAvatarPath !== init.avatarPath) return true;
+    if (avatarSourcePath) return true;
     if (skillIds.length !== init.skillIds.length || skillIds.some((id, i) => id !== init.skillIds[i])) return true;
     if (boundKeys.size !== initialBoundKeys.size || [...boundKeys].some((k) => !initialBoundKeys.has(k))) return true;
     return false;
-  }, [name, description, systemPrompt, identity, icon, skillIds, boundKeys, initialBoundKeys]);
+  }, [name, description, systemPrompt, identity, icon, avatarPath, avatarSourcePath, removeAvatar, skillIds, boundKeys, initialBoundKeys]);
 
   if (!agentId) return null;
 
@@ -149,10 +163,11 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         identity: identity.trim(),
         model: model ? toOpenClawModelRef(model) : '',
         icon: icon.trim(),
+        avatarSourcePath: avatarSourcePath || undefined,
+        removeAvatar,
         skillIds,
       });
       if (!result) {
-        window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
         return;
       }
       // Persist IM bindings if changed
@@ -177,8 +192,6 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         await imService.saveAndSyncConfig();
       }
       onClose();
-    } catch {
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('agentSaveFailed') }));
     } finally {
       setSaving(false);
     }
@@ -395,7 +408,14 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
         {/* Header: agent icon + name + close */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2">
-            <span className="text-xl">{icon || '🤖'}</span>
+            <AgentAvatar
+              icon={icon}
+              avatarPath={removeAvatar ? '' : avatarPath}
+              avatarPreviewSrc={avatarPreviewSrc}
+              name={name || (i18nService.t('agentSettings') || 'Agent Settings')}
+              className="h-8 w-8"
+              emojiClassName="text-xl"
+            />
             <h3 className="text-base font-semibold text-foreground">
               {name || (i18nService.t('agentSettings') || 'Agent Settings')}
             </h3>
@@ -432,17 +452,38 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-secondary mb-1">
+                  {i18nService.t('agentAvatar') || 'Avatar'}
+                </label>
+                <AgentAvatarField
+                  icon={icon}
+                  avatarPath={avatarPath}
+                  avatarPreviewSrc={avatarPreviewSrc}
+                  removeAvatar={removeAvatar}
+                  fallbackIcon="🤖"
+                  name={name}
+                  onIconChange={setIcon}
+                  onAvatarSelected={({ sourcePath, previewSrc }) => {
+                    setAvatarSourcePath(sourcePath);
+                    setAvatarPreviewSrc(previewSrc);
+                    setRemoveAvatar(false);
+                  }}
+                  onAvatarRemoved={() => {
+                    setAvatarSourcePath('');
+                    setAvatarPreviewSrc('');
+                    setRemoveAvatar(true);
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">
                   {i18nService.t('agentName') || 'Name'}
                 </label>
-                <div className="flex gap-2">
-                  <EmojiPicker value={icon} onChange={setIcon} />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="flex-1 px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
-                  />
-                </div>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-transparent text-foreground text-sm"
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-secondary mb-1">

@@ -79,6 +79,7 @@ function setupDb(): void {
       identity TEXT NOT NULL DEFAULT '',
       model TEXT NOT NULL DEFAULT '',
       icon TEXT NOT NULL DEFAULT '',
+      avatar_path TEXT NOT NULL DEFAULT '',
       skill_ids TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
       is_default INTEGER NOT NULL DEFAULT 0,
@@ -231,11 +232,11 @@ test('getConfig defaults skipMissedJobs to true when config is missing', () => {
 test('backfillEmptyAgentModels assigns the current default model to empty agents only', () => {
   const now = Date.now();
   db.prepare(
-    `INSERT INTO agents (id, name, model, icon, skill_ids, enabled, is_default, source, preset_id, description, system_prompt, identity, created_at, updated_at)
+    `INSERT INTO agents (id, name, model, icon, avatar_path, skill_ids, enabled, is_default, source, preset_id, description, system_prompt, identity, created_at, updated_at)
      VALUES
-     ('main', 'main', '', '', '[]', 1, 1, 'custom', '', '', '', '', ?, ?),
-     ('writer', 'Writer', '', '', '[]', 1, 0, 'custom', '', '', '', '', ?, ?),
-     ('stockexpert', 'Stock Expert', 'qwen3.5-plus', '', '[]', 1, 0, 'preset', 'stockexpert', '', '', '', ?, ?)`,
+     ('main', 'main', '', '', '', '[]', 1, 1, 'custom', '', '', '', '', ?, ?),
+     ('writer', 'Writer', '', '', '', '[]', 1, 0, 'custom', '', '', '', '', ?, ?),
+     ('stockexpert', 'Stock Expert', 'qwen3.5-plus', '', '', '[]', 1, 0, 'preset', 'stockexpert', '', '', '', ?, ?)`,
   ).run(now, now, now, now, now, now);
 
   expect(store.backfillEmptyAgentModels('deepseek-v3.2')).toBe(2);
@@ -246,4 +247,20 @@ test('backfillEmptyAgentModels assigns the current default model to empty agents
     ['stockexpert', 'qwen3.5-plus'],
     ['writer', 'deepseek-v3.2'],
   ]);
+});
+
+test('createAgent and updateAgent persist avatarPath values', () => {
+  const created = store.createAgent({
+    name: 'Writer',
+    icon: '✍️',
+    avatarPath: '/tmp/writer-avatar.png',
+  });
+
+  expect(created.avatarPath).toBe('/tmp/writer-avatar.png');
+
+  const updated = store.updateAgent(created.id, {
+    avatarPath: '',
+  });
+
+  expect(updated?.avatarPath).toBe('');
 });

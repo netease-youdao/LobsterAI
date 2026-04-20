@@ -180,13 +180,23 @@ contextBridge.exposeInMainWorld('electron', {
       const result = await ipcRenderer.invoke('agents:get', id);
       return result?.success ? result.agent : null;
     },
-    create: async (request: { id?: string; name: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; source?: string; presetId?: string }) => {
+    create: async (request: { id?: string; name: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; avatarSourcePath?: string; skillIds?: string[]; source?: string; presetId?: string }) => {
       const result = await ipcRenderer.invoke('agents:create', request);
-      return result?.success ? result.agent : null;
+      if (!result?.success) {
+        const error = new Error(result?.error || 'Failed to create agent') as Error & { code?: string };
+        error.code = result?.errorCode;
+        throw error;
+      }
+      return result.agent;
     },
-    update: async (id: string, updates: { name?: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; enabled?: boolean }) => {
+    update: async (id: string, updates: { name?: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; avatarSourcePath?: string; removeAvatar?: boolean; skillIds?: string[]; enabled?: boolean }) => {
       const result = await ipcRenderer.invoke('agents:update', id, updates);
-      return result?.success ? result.agent : null;
+      if (!result?.success) {
+        const error = new Error(result?.error || 'Failed to update agent') as Error & { code?: string };
+        error.code = result?.errorCode;
+        throw error;
+      }
+      return result.agent;
     },
     delete: async (id: string) => {
       const result = await ipcRenderer.invoke('agents:delete', id);

@@ -6,6 +6,7 @@ import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import type { PresetAgent } from '../../types/agent';
+import AgentAvatar from './AgentAvatar';
 import AgentCreateModal from './AgentCreateModal';
 import AgentSettingsPanel from './AgentSettingsPanel';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
@@ -116,6 +117,7 @@ const AgentsView: React.FC<AgentsViewProps> = ({
                   <AgentCard
                     key={agent.id}
                     icon={agent.icon}
+                    avatarPath={agent.avatarPath}
                     name={agent.name}
                     description={agent.description}
                     isActive={agent.id === currentAgentId}
@@ -150,6 +152,7 @@ const AgentsView: React.FC<AgentsViewProps> = ({
                 <AgentCard
                   key={agent.id}
                   icon={agent.icon}
+                  avatarPath={agent.avatarPath}
                   name={agent.name}
                   description={agent.description}
                   isActive={agent.id === currentAgentId}
@@ -192,11 +195,12 @@ const AgentsView: React.FC<AgentsViewProps> = ({
 
 const AgentCard: React.FC<{
   icon: string;
+  avatarPath?: string;
   name: string;
   description: string;
   isActive: boolean;
   onClick: () => void;
-}> = ({ icon, name, description, isActive, onClick }) => (
+}> = ({ icon, avatarPath, name, description, isActive, onClick }) => (
   <button
     type="button"
     onClick={onClick}
@@ -206,7 +210,13 @@ const AgentCard: React.FC<{
         : 'border-border'
     }`}
   >
-    <span className="text-3xl">{icon || '🤖'}</span>
+    <AgentAvatar
+      icon={icon}
+      avatarPath={avatarPath}
+      name={name}
+      className="h-12 w-12"
+      emojiClassName="text-3xl"
+    />
     <div className="min-w-0 w-full">
       <div className="text-sm font-semibold text-foreground truncate">
         {name}
@@ -230,7 +240,12 @@ const UninstalledPresetCard: React.FC<{
   onAdd: () => void;
 }> = ({ icon, name, description, isAdding, onAdd }) => (
   <div className="flex flex-col items-start gap-2 p-4 rounded-xl border-2 border-dashed border-border opacity-60 hover:opacity-80 transition-opacity min-h-[140px]">
-    <span className="text-3xl">{icon || '🤖'}</span>
+    <AgentAvatar
+      icon={icon}
+      name={name}
+      className="h-12 w-12"
+      emojiClassName="text-3xl"
+    />
     <div className="min-w-0 w-full flex-1">
       <div className="text-sm font-semibold text-foreground truncate">
         {name}

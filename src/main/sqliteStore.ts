@@ -148,6 +148,7 @@ export class SqliteStore {
         identity TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
         icon TEXT NOT NULL DEFAULT '',
+        avatar_path TEXT NOT NULL DEFAULT '',
         skill_ids TEXT NOT NULL DEFAULT '[]',
         enabled INTEGER NOT NULL DEFAULT 1,
         is_default INTEGER NOT NULL DEFAULT 0,
@@ -224,6 +225,16 @@ export class SqliteStore {
       // Column might not exist yet.
     }
 
+    try {
+      const agentColumns = this.db.pragma('table_info(agents)') as Array<{ name: string }>;
+      const agentColumnNames = agentColumns.map((column) => column.name);
+      if (!agentColumnNames.includes('avatar_path')) {
+        this.db.exec("ALTER TABLE agents ADD COLUMN avatar_path TEXT NOT NULL DEFAULT '';");
+      }
+    } catch {
+      // Column already exists or migration not needed.
+    }
+
     // Migration: Add agent_id column to cowork_sessions
     try {
       const sessionCols = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
@@ -257,8 +268,8 @@ export class SqliteStore {
         this.db
           .prepare(
             `
-          INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
-          VALUES ('main', 'main', '', ?, '', '', '', '[]', 1, 1, 'custom', '', ?, ?)
+          INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, avatar_path, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
+          VALUES ('main', 'main', '', ?, '', '', '', '', '[]', 1, 1, 'custom', '', ?, ?)
         `,
           )
           .run(existingSystemPrompt, now, now);

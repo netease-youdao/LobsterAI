@@ -21,6 +21,7 @@ import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import TrashIcon from './icons/TrashIcon';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import UserGroupIcon from './icons/UserGroupIcon';
+import AgentAvatar from './agent/AgentAvatar';
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -410,7 +411,14 @@ const SidebarAgentList: React.FC<{
             }`}
             onClick={() => handleSwitch(agent.id)}
           >
-            <span className="text-base leading-none">{agent.icon || (agent.id === 'main' ? '🦞' : '🤖')}</span>
+            <AgentAvatar
+              icon={agent.icon}
+              avatarPath={agent.avatarPath}
+              fallbackIcon={agent.id === 'main' ? '🦞' : '🤖'}
+              name={agent.name}
+              className="h-6 w-6 border-transparent bg-transparent"
+              emojiClassName="text-base leading-none"
+            />
             <span className="truncate flex-1 text-xs font-medium">{agent.name}</span>
           </div>
         ))}

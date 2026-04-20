@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 
 import type { OpenClawSessionPatch } from '../common/openclawSession';
+import { deleteManagedAgentAvatar, importAgentAvatar, isAgentAvatarError } from './agentAvatarStore';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
 import { migrateScheduledTaskRunsToOpenclaw, migrateScheduledTasksToOpenclaw } from '../scheduledTask/migrate';
 import { PlatformRegistry } from '../shared/platform';
@@ -285,6 +286,21 @@ const sanitizeAttachmentFileName = (value?: string): string => {
   const fileName = path.basename(raw);
   const sanitized = fileName.replace(INVALID_FILE_NAME_PATTERN, ' ').replace(/\s+/g, ' ').trim();
   return sanitized || 'attachment';
+};
+
+const buildAgentErrorResult = (error: unknown, fallbackMessage: string): {
+  error: string;
+  errorCode?: string;
+} => {
+  if (isAgentAvatarError(error)) {
+    return {
+      error: error.message || fallbackMessage,
+      errorCode: error.code,
+    };
+  }
+  return {
+    error: error instanceof Error ? error.message : fallbackMessage,
+  };
 };
 
 const inferAttachmentExtension = (fileName: string, mimeType?: string): string => {
@@ -2962,29 +2978,113 @@ if (!gotTheLock) {
 
   ipcMain.handle('agents:create', async (_event, request: import('./coworkStore').CreateAgentRequest) => {
     try {
-      const agent = getAgentManager().createAgent(request, resolveDefaultAgentModelRef());
+      const {
+        avatarSourcePath,
+        ...createRequest
+      } = request;
+
+      const agent = getAgentManager().createAgent(createRequest, resolveDefaultAgentModelRef());
+      let avatarPath = '';
+      if (typeof avatarSourcePath === 'string' && avatarSourcePath.trim()) {
+        try {
+          avatarPath = await importAgentAvatar({
+            agentId: agent.id,
+            sourcePath: avatarSourcePath,
+          });
+          const updatedAgent = getAgentManager().updateAgent(agent.id, { avatarPath });
+          if (!updatedAgent) {
+            throw new Error('Failed to save agent avatar');
+          }
+          syncOpenClawConfig({ reason: 'agent-created' }).catch(() => {});
+          return { success: true, agent: updatedAgent };
+        } catch (error) {
+          await deleteManagedAgentAvatar(avatarPath);
+          getAgentManager().deleteAgent(agent.id);
+          throw error;
+        }
+      }
+
       // Sync config so workspace files (SOUL.md, IDENTITY.md) are written
       // before OpenClaw scaffolds default templates for the new agent.
       syncOpenClawConfig({ reason: 'agent-created' }).catch(() => {});
       return { success: true, agent };
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to create agent' };
+      return {
+        success: false,
+        ...buildAgentErrorResult(error, 'Failed to create agent'),
+      };
     }
   });
 
   ipcMain.handle('agents:update', async (_event, id: string, updates: import('./coworkStore').UpdateAgentRequest) => {
     try {
-      const agent = getAgentManager().updateAgent(id, updates);
+      const existingAgent = getAgentManager().getAgent(id);
+      if (!existingAgent) {
+        return { success: false, error: 'Failed to update agent' };
+      }
+
+      const {
+        avatarSourcePath,
+        removeAvatar,
+        ...agentUpdates
+      } = updates;
+
+      let importedAvatarPath = '';
+      let nextAvatarPath = existingAgent.avatarPath;
+      if (typeof avatarSourcePath === 'string' && avatarSourcePath.trim()) {
+        importedAvatarPath = await importAgentAvatar({
+          agentId: id,
+          sourcePath: avatarSourcePath,
+        });
+        nextAvatarPath = importedAvatarPath;
+      } else if (removeAvatar) {
+        nextAvatarPath = '';
+      }
+
+      let agent = null;
+      try {
+        agent = getAgentManager().updateAgent(id, {
+          ...agentUpdates,
+          avatarPath: nextAvatarPath,
+        });
+      } catch (error) {
+        if (importedAvatarPath) {
+          await deleteManagedAgentAvatar(importedAvatarPath);
+        }
+        throw error;
+      }
+
+      if (!agent) {
+        if (importedAvatarPath) {
+          await deleteManagedAgentAvatar(importedAvatarPath);
+        }
+        return { success: false, error: 'Failed to update agent' };
+      }
+
+      if (importedAvatarPath && existingAgent.avatarPath && existingAgent.avatarPath !== importedAvatarPath) {
+        await deleteManagedAgentAvatar(existingAgent.avatarPath);
+      }
+      if (!importedAvatarPath && removeAvatar && existingAgent.avatarPath) {
+        await deleteManagedAgentAvatar(existingAgent.avatarPath);
+      }
+
       syncOpenClawConfig({ reason: 'agent-updated' }).catch(() => {});
       return { success: true, agent };
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to update agent' };
+      return {
+        success: false,
+        ...buildAgentErrorResult(error, 'Failed to update agent'),
+      };
     }
   });
 
   ipcMain.handle('agents:delete', async (_event, id: string) => {
     try {
+      const agent = getAgentManager().getAgent(id);
       const result = getAgentManager().deleteAgent(id);
+      if (result && agent?.avatarPath) {
+        await deleteManagedAgentAvatar(agent.avatarPath);
+      }
 
       // Clean up IM platform bindings that reference the deleted agent
       // so that channels fall back to the default 'main' agent.

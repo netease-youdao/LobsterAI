@@ -18,6 +18,7 @@ describe('buildAgentEntry', () => {
       identity: '',
       model: 'lobsterai-server/deepseek-v3.2',
       icon: '',
+      avatarPath: '',
       skillIds: [],
       enabled: true,
       isDefault: true,
@@ -43,6 +44,7 @@ describe('buildAgentEntry', () => {
       identity: '',
       model: 'deepseek-v3.2',
       icon: '',
+      avatarPath: '',
       skillIds: [],
       enabled: true,
       isDefault: true,
@@ -56,6 +58,33 @@ describe('buildAgentEntry', () => {
       id: 'main',
       model: { primary: 'anthropic/claude-sonnet-4' },
     });
+  });
+
+  test('does not emit image avatar metadata into the OpenClaw identity block', () => {
+    const result = buildAgentEntry({
+      id: 'writer',
+      name: 'Writer',
+      description: '',
+      systemPrompt: '',
+      identity: '',
+      model: 'openai/gpt-4o',
+      icon: '',
+      avatarPath: '/tmp/writer-avatar.png',
+      skillIds: [],
+      enabled: true,
+      isDefault: false,
+      source: 'custom',
+      presetId: '',
+      createdAt: 0,
+      updatedAt: 0,
+    }, 'anthropic/claude-sonnet-4');
+
+    expect(result).toMatchObject({
+      id: 'writer',
+      identity: { name: 'Writer' },
+    });
+    expect(result).not.toHaveProperty('identity.avatarPath');
+    expect(result).not.toHaveProperty('identity.image');
   });
 });
 
@@ -71,6 +100,7 @@ describe('buildManagedAgentEntries', () => {
           identity: '',
           model: 'openai/gpt-4o',
           icon: '✍️',
+          avatarPath: '',
           skillIds: ['docx'],
           enabled: true,
           isDefault: false,
@@ -101,6 +131,7 @@ describe('buildManagedAgentEntries', () => {
           identity: '',
           model: '',
           icon: '✍️',
+          avatarPath: '',
           skillIds: [],
           enabled: true,
           isDefault: false,
