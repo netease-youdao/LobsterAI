@@ -9,7 +9,7 @@ import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import Toast from './components/Toast';
 import WindowTitleBar from './components/window/WindowTitleBar';
-import { CoworkView } from './components/cowork';
+import { CoworkView, BookmarksView } from './components/cowork';
 import { SkillsView } from './components/skills';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import { McpView } from './components/mcp';
@@ -40,7 +40,7 @@ import PrivacyDialog from './components/PrivacyDialog';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'bookmarks' | 'agents'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -280,6 +280,19 @@ const App: React.FC = () => {
     setMainView('mcp');
   }, []);
 
+  const handleShowBookmarks = useCallback(() => {
+    setMainView('bookmarks');
+  }, []);
+
+  const handleNavigateToBookmark = useCallback(async (sessionId: string, messageId: string) => {
+    setMainView('cowork');
+    await coworkService.loadSession(sessionId);
+    // Dispatch a custom event so CoworkSessionDetail can scroll to the message
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('cowork:jump-to-message', {
+        detail: { messageId },
+      }));
+    }, 300);
   const handleShowAgents = useCallback(() => {
     setMainView('agents');
   }, []);
@@ -687,6 +700,7 @@ const App: React.FC = () => {
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowMcp={handleShowMcp}
+          onShowBookmarks={handleShowBookmarks}
           onShowAgents={handleShowAgents}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
@@ -719,6 +733,14 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
+            ) : mainView === 'bookmarks' ? (
+              <BookmarksView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+                onNavigateToSession={handleNavigateToBookmark}
               />
             ) : mainView === 'agents' ? (
               <AgentsView

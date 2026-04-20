@@ -241,3 +241,20 @@ select::-ms-expand {
   0% { left: -40%; }
   100% { left: 100%; }
 }
+
+/* Bookmark jump flash highlight */
+@keyframes bookmark-flash-anim {
+  0% { background-color: rgba(217, 119, 6, 0.15); }
+  100% { background-color: transparent; }
+}
+.bookmark-flash {
+  animation: bookmark-flash-anim 1.5s ease-out;
+  border-radius: 0.5rem;
+}
+.dark .bookmark-flash {
+  animation: bookmark-flash-anim-dark 1.5s ease-out;
+}
+@keyframes bookmark-flash-anim-dark {
+  0% { background-color: rgba(217, 119, 6, 0.2); }
+  100% { background-color: transparent; }
+}
