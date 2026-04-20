@@ -1,10 +1,13 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import type { UserAvatarConfig } from '../../types/avatar';
 
 export interface UserProfile {
   userId: string;
   phone: string;
   nickname: string;
   avatarUrl: string;
+  // 本地头像配置（优先于服务器头像）
+  localAvatar?: UserAvatarConfig;
 }
 
 export interface UserQuota {

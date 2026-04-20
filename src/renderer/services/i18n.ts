@@ -1332,6 +1332,26 @@ const translations: Record<LanguageType, Record<string, string>> = {
     taskFormLeaveConfirm: '离开后修改将丢失，确认离开吗？',
     taskFormLeave: '离开',
     taskFormStay: '继续编辑',
+
+    // Avatar settings
+    avatarSettings: '设置头像',
+    avatarPreset: '系统头像',
+    avatarUpload: '上传图片',
+    avatarUploadHint: '支持 JPG、PNG、GIF，最大 2MB',
+    avatarDragHint: '拖拽图片到此处，或点击上传',
+    avatarRemove: '恢复默认',
+    avatarSave: '保存',
+    avatarCancel: '取消',
+    avatarUploadErrorSize: '图片大小超过 2MB 限制',
+    avatarUploadErrorType: '不支持的图片格式',
+    avatarUploadErrorProcess: '图片处理失败，请重试',
+    avatarAurora: '极光',
+    avatarOcean: '深海',
+    avatarFlame: '火焰',
+    avatarForest: '森林',
+    avatarSunset: '日落',
+    avatarNebula: '星云',
+    avatarChangePhoto: '更换照片',
   },
   en: {
     // Common
@@ -2659,6 +2679,26 @@ const translations: Record<LanguageType, Record<string, string>> = {
     taskFormLeaveConfirm: 'Your changes will be lost if you leave. Are you sure you want to leave?',
     taskFormLeave: 'Leave',
     taskFormStay: 'Keep Editing',
+
+    // Avatar settings
+    avatarSettings: 'Set Avatar',
+    avatarPreset: 'Preset Avatars',
+    avatarUpload: 'Upload Image',
+    avatarUploadHint: 'JPG, PNG, GIF supported, max 2MB',
+    avatarDragHint: 'Drag image here or click to upload',
+    avatarRemove: 'Reset to Default',
+    avatarSave: 'Save',
+    avatarCancel: 'Cancel',
+    avatarUploadErrorSize: 'Image size exceeds 2MB limit',
+    avatarUploadErrorType: 'Unsupported image format',
+    avatarUploadErrorProcess: 'Image processing failed, please try again',
+    avatarAurora: 'Aurora',
+    avatarOcean: 'Ocean',
+    avatarFlame: 'Flame',
+    avatarForest: 'Forest',
+    avatarSunset: 'Sunset',
+    avatarNebula: 'Nebula',
+    avatarChangePhoto: 'Change Photo',
   }
 };
 

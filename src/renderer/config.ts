@@ -97,6 +97,7 @@ export const CONFIG_KEYS = {
   CONVERSATIONS: 'conversations',
   PROVIDERS_EXPORT_KEY: 'providers_export_key',
   SKILLS: 'skills',
+  USER_AVATAR: 'user_avatar_config',
 };
 
 // 模型提供商分类
