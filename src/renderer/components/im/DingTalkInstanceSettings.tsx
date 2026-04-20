@@ -3,14 +3,15 @@
  * Configuration form for a single DingTalk bot instance in multi-instance mode
  */
 
-import React, { useState, useRef, useEffect } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { ArrowPathIcon, CheckCircleIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import TrashIcon from '../icons/TrashIcon';
-import { QRCodeSVG } from 'qrcode.react';
-import type { DingTalkInstanceConfig, DingTalkInstanceStatus, DingTalkOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
-import { i18nService } from '../../services/i18n';
 import { PlatformRegistry } from '@shared/platform';
+import { QRCodeSVG } from 'qrcode.react';
+import React, { useEffect,useRef, useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { DingTalkInstanceConfig, DingTalkInstanceStatus, DingTalkOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
+import TrashIcon from '../icons/TrashIcon';
 
 interface DingTalkInstanceSettingsProps {
   instance: DingTalkInstanceConfig;
@@ -210,10 +211,10 @@ const DingTalkInstanceSettings: React.FC<DingTalkInstanceSettingsProps> = ({
           }
         } catch { /* keep retrying */ }
       }, intervalMs);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!isMountedRef.current) return;
       setQrStatus('error');
-      setQrError(err?.message || '获取二维码失败');
+      setQrError((err instanceof Error ? err.message : undefined) || '获取二维码失败');
     }
   };
 

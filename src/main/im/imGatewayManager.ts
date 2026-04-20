@@ -2718,8 +2718,8 @@ export class IMGatewayManager extends EventEmitter {
         return { success: true };
       }
       return { success: false, error: data.message || t('dingtalkVerifyCredentialsFailed') };
-    } catch (err: any) {
-      return { success: false, error: err?.message || t('dingtalkVerifyFailed') };
+    } catch (err: unknown) {
+      return { success: false, error: (err instanceof Error ? err.message : undefined) || t('dingtalkVerifyFailed') };
     }
   }
 
