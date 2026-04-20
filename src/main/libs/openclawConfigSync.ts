@@ -1766,6 +1766,7 @@ export class OpenClawConfigSync {
         identity: '',
         model: '',
         icon: '',
+        avatarPath: '',
         skillIds: [],
         enabled: true,
         isDefault: true,
