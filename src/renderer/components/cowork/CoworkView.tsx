@@ -1,5 +1,5 @@
 import { ShieldCheckIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useRef,useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
 import { agentService } from '../../services/agent';
@@ -358,7 +358,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       }
 
       // Combine skill prompt with system prompt for continuation.
-      // Skip auto-routing prompt for OpenClaw â€” skills are loaded natively.
+      // Skip auto-routing prompt for OpenClaw â€?skills are loaded natively.
       let effectiveSkillPrompt = skillPrompt;
       if (!skillPrompt && !isOpenClawEngine) {
         effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
