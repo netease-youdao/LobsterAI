@@ -1,5 +1,78 @@
 !include "FileFunc.nsh"
 
+!define ROOT_DRIVE_INSTALL_DIR_SUFFIX "LobsterAI"
+
+Function TrimTrailingPathSeparator
+  Exch $0
+  Push $1
+
+  StrCmp $0 "" TrimTrailingPathSeparatorDone
+
+  StrCpy $1 $0 1 -1
+  StrCmp $1 "\" 0 +2
+  StrCpy $0 $0 -1
+  StrCmp $1 "/" 0 TrimTrailingPathSeparatorDone
+  StrCpy $0 $0 -1
+
+TrimTrailingPathSeparatorDone:
+  Pop $1
+  Exch $0
+FunctionEnd
+
+Function NormalizeRootDriveInstallDirectory
+  Exch $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+
+  ${GetRoot} "$0" $1
+  StrCmp $1 "" NormalizeRootDriveInstallDirectoryDone
+
+  Push $0
+  Call TrimTrailingPathSeparator
+  Pop $2
+
+  Push $1
+  Call TrimTrailingPathSeparator
+  Pop $3
+
+  StrCmp "$2" "$3" 0 NormalizeRootDriveInstallDirectoryDone
+
+  StrLen $4 $3
+  IntCmp $4 2 NormalizeRootDriveInstallDirectoryDone NormalizeRootDriveInstallDirectoryIsDriveRoot NormalizeRootDriveInstallDirectoryDone
+
+NormalizeRootDriveInstallDirectoryIsDriveRoot:
+  StrCpy $5 $3 1 1
+  StrCmp $5 ":" 0 NormalizeRootDriveInstallDirectoryDone
+
+  StrCpy $4 $1 1 -1
+  StrCmp $4 "\" NormalizeRootDriveInstallDirectoryHasSeparator
+  StrCmp $4 "/" NormalizeRootDriveInstallDirectoryHasSeparator
+  StrCpy $1 "$1\"
+
+NormalizeRootDriveInstallDirectoryHasSeparator:
+  StrCpy $0 "$1${ROOT_DRIVE_INSTALL_DIR_SUFFIX}"
+
+NormalizeRootDriveInstallDirectoryDone:
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Exch $0
+FunctionEnd
+
+Function .onVerifyInstDir
+  Push $0
+  StrCpy $0 $INSTDIR
+  Push $0
+  Call NormalizeRootDriveInstallDirectory
+  Pop $INSTDIR
+  Pop $0
+FunctionEnd
+
 !macro customHeader
   ; Request admin privileges for script execution (tar extract, etc.)
   ; This does NOT change the default install path — just ensures UAC elevation.
