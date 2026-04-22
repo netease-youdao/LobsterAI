@@ -247,10 +247,21 @@ export async function installUpdate(filePath: string): Promise<void> {
 }
 
 async function installMacDmg(dmgPath: string): Promise<void> {
+  // Strategy: we must NOT rm+cp the running .app in-process, because
+  // deleting/overwriting the executable that is currently loaded causes
+  // SIGBUS / page-fault freezes on macOS.
+  //
+  // Instead — like the Windows NSIS path — we:
+  //   1. Mount the DMG now (validates it before we quit).
+  //   2. Determine source .app and target path.
+  //   3. Write a detached shell script that waits for our PID to exit,
+  //      then performs the rm+cp, detaches the DMG, and relaunches.
+  //   4. Call app.quit() so the process exits cleanly.
+
   let mountPoint: string | null = null;
 
   try {
-    // Mount the DMG (timeout 60s)
+    // Mount the DMG (timeout 60s) — validates the DMG before we commit to quitting
     console.log('[AppUpdate] Mounting DMG...');
     const mountOutput = await execAsync(
       `hdiutil attach ${shellEscape(dmgPath)} -nobrowse -noautoopen -noverify`,
@@ -290,61 +301,93 @@ async function installMacDmg(dmgPath: string): Promise<void> {
     }
     console.log(`[AppUpdate] Target app: ${targetApp}`);
 
-    // Try to copy the .app bundle (use shellEscape to prevent injection)
-    try {
-      console.log('[AppUpdate] Copying app bundle...');
-      await execAsync(
-        `rm -rf ${shellEscape(targetApp)} && cp -R ${shellEscape(sourceApp)} ${shellEscape(targetApp)}`,
-        300_000,
-      );
-      console.log('[AppUpdate] Copy succeeded');
-    } catch {
-      // Permission denied: try with admin privileges via osascript
-      console.log('[AppUpdate] Normal copy failed, requesting admin privileges...');
-      try {
-        // For osascript, escape backslashes and double quotes for the inner shell
-        const escapeForInnerShell = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
-        const escapedTarget = escapeForInnerShell(targetApp);
-        const escapedSource = escapeForInnerShell(sourceApp);
-        await execAsync(
-          `osascript -e 'do shell script "rm -rf \\"${escapedTarget}\\" && cp -R \\"${escapedSource}\\" \\"${escapedTarget}\\"" with administrator privileges'`,
-          300_000,
-        );
-        console.log('[AppUpdate] Admin copy succeeded');
-      } catch (adminError) {
-        throw new Error(
-          `Installation failed: insufficient permissions. ${adminError instanceof Error ? adminError.message : ''}`,
-        );
-      }
-    }
+    // Build the deferred-install shell script
+    // Note: we use `open -a "$TARGET"` to relaunch, which is the standard
+    // macOS way to open a .app bundle — no need to resolve the inner executable.
+    const ts = Date.now();
+    const tempDir = app.getPath('temp');
+    const logPath = path.join(tempDir, `lobsterai-update-${ts}.log`);
+    const scriptPath = path.join(tempDir, `lobsterai-update-${ts}.sh`);
+    const appPid = process.pid;
 
-    // Detach DMG (timeout 30s)
-    try {
-      await execAsync(`hdiutil detach ${shellEscape(mountPoint)} -force`, 30_000);
-    } catch {
-      // Best effort
-    }
-    mountPoint = null;
+    console.log(`[AppUpdate] Script log: ${logPath}`);
 
-    // Clean up downloaded DMG
-    try {
-      await fs.promises.unlink(dmgPath);
-    } catch {
-      // Best effort
-    }
+    const script = [
+      '#!/bin/bash',
+      '# LobsterAI macOS deferred-install script',
+      `LOG=${shellEscape(logPath)}`,
+      `APP_PID=${appPid}`,
+      `SOURCE=${shellEscape(sourceApp)}`,
+      `TARGET=${shellEscape(targetApp)}`,
+      `MOUNT=${shellEscape(mountPoint)}`,
+      `DMG=${shellEscape(dmgPath)}`,
+      '',
+      'log() { echo "[$(date "+%Y-%m-%d %H:%M:%S")] $*" >> "$LOG"; }',
+      '',
+      'log "Update script started (appPid=$APP_PID)"',
+      '',
+      '# Wait for the app to fully exit (max 120s)',
+      'waited=0',
+      'while [ $waited -lt 120 ]; do',
+      '  if ! kill -0 "$APP_PID" 2>/dev/null; then',
+      '    break',
+      '  fi',
+      '  sleep 1',
+      '  waited=$((waited + 1))',
+      'done',
+      'log "App exited after ${waited}s"',
+      '',
+      '# Perform the copy (try normal first, fall back to admin privileges)',
+      'log "Removing old app and copying new version..."',
+      'if rm -rf "$TARGET" 2>>"$LOG" && cp -R "$SOURCE" "$TARGET" 2>>"$LOG"; then',
+      '  log "Copy succeeded (normal permissions)"',
+      'else',
+      '  log "Normal copy failed, requesting admin privileges via osascript..."',
+      // For the admin fallback, we bake the full osascript command as a literal
+      // at script-generation time, avoiding bash variable expansion + quoting issues.
+      // The inner shell command uses escaped double quotes for paths.
+      `  if osascript -e ${shellEscape(`do shell script "rm -rf \\"${targetApp}\\" && cp -R \\"${sourceApp}\\" \\"${targetApp}\\"" with administrator privileges`)} 2>>"$LOG"; then`,
+      '    log "Copy succeeded (admin privileges)"',
+      '  else',
+      '    log "Admin copy also failed (exit $?), giving up"',
+      '    hdiutil detach "$MOUNT" -force >>/dev/null 2>&1',
+      '    exit 1',
+      '  fi',
+      'fi',
+      '',
+      '# Detach DMG',
+      'log "Detaching DMG: $MOUNT"',
+      'hdiutil detach "$MOUNT" -force >>/dev/null 2>&1',
+      'log "DMG detached"',
+      '',
+      '# Clean up downloaded DMG file',
+      'rm -f "$DMG" 2>/dev/null',
+      '',
+      '# Relaunch the new version',
+      'log "Relaunching: $TARGET"',
+      'open -a "$TARGET"',
+      'log "Done"',
+    ].join('\n');
 
-    // Relaunch from the new app location
-    const executablePath = path.join(targetApp, 'Contents', 'MacOS');
-    const execEntries = await fs.promises.readdir(executablePath);
-    const executable = execEntries[0]; // Should be the app executable
+    await fs.promises.writeFile(scriptPath, script, { mode: 0o755 });
+    console.log(`[AppUpdate] Install script written to: ${scriptPath}`);
 
-    if (executable) {
-      console.log(`[AppUpdate] Relaunching: ${path.join(executablePath, executable)}`);
-      app.relaunch({ execPath: path.join(executablePath, executable) });
-    } else {
-      console.log('[AppUpdate] Relaunching (default)');
-      app.relaunch();
-    }
+    // Launch the script detached from this process
+    const child = spawn('/bin/bash', [scriptPath], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    console.log(`[AppUpdate] Script launched (PID ${child.pid}), calling app.quit()`);
+
+    // Safety net: if before-quit cleanup takes too long (e.g. cowork session
+    // teardown hangs), force-exit so the deferred install script can proceed.
+    setTimeout(() => {
+      console.warn('[AppUpdate] app.quit() did not exit within 10s, forcing exit');
+      app.exit(0);
+    }, 10_000).unref();
+
     app.quit();
   } catch (error) {
     console.error('[AppUpdate] macOS install error:', error);
