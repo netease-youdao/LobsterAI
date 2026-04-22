@@ -1981,7 +1981,7 @@ if (!gotTheLock) {
       refreshEndpointsTestMode(getStore());
       const syncResult = await syncOpenClawConfig({
         reason: 'app-config-change',
-        restartGatewayIfRunning: false,
+        restartGatewayIfRunning: true,
       });
       if (!syncResult.success) {
         console.error('[OpenClaw] Failed to sync config after app_config update:', syncResult.error);
@@ -2404,6 +2404,11 @@ if (!gotTheLock) {
       if (data.code !== 0) return { success: false };
       // Cache server model metadata for use in OpenClaw config sync (supportsImage, etc.)
       updateServerModelMetadata(data.data);
+      // Re-sync so the gateway picks up the correct supportsImage values for server models.
+      // The startup sync runs before this IPC call, so the cache was empty then.
+      // restartGatewayIfRunning:true ensures the gateway restarts only when the config
+      // actually changed; the deferred-restart mechanism keeps active sessions safe.
+      syncOpenClawConfig({ reason: 'server-models-updated', restartGatewayIfRunning: true }).catch(() => {});
       return { success: true, models: data.data };
     } catch (e) {
       console.error('[Auth:getModels] Error:', e);
