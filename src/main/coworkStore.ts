@@ -1825,21 +1825,14 @@ export class CoworkStore {
   }
 
   createAgent(request: CreateAgentRequest): Agent {
-    const id =
-      request.id ||
-      request.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '') ||
-      uuidv4();
-    const now = Date.now();
+    // Generate a short unique ID using first 8 chars of UUID v4
+    const generateShortId = (): string => {
+      const shortId = uuidv4().split('-')[0];
+      return this.getAgent(shortId) ? generateShortId() : shortId;
+    };
 
-    // Ensure no duplicate ID
-    const existing = this.getAgent(id);
-    if (existing) {
-      // Append timestamp to make unique
-      return this.createAgent({ ...request, id: `${id}-${Date.now()}` });
-    }
+    const id = request.id || generateShortId();
+    const now = Date.now();
 
     this.db
       .prepare(
