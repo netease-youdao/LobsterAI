@@ -2,6 +2,7 @@ import { PlatformRegistry } from '@shared/platform';
 import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
+import { DeliveryMode } from '../../../scheduledTask/constants';
 import type {
   ScheduledTask,
   ScheduledTaskChannelOption,
@@ -109,7 +110,7 @@ function createFormState(task?: ScheduledTask): FormState {
     weekdays: planInfo.weekdays,
     monthDay: planInfo.monthDay,
     payloadText: task.payload.kind === 'systemEvent' ? task.payload.text : task.payload.message,
-    notifyChannel: task.delivery.channel || 'none',
+    notifyChannel: task.delivery.mode === DeliveryMode.None ? 'none' : (task.delivery.channel || 'none'),
     notifyTo: task.delivery.to || '',
     notifyAccountId: task.delivery.accountId,
     modelId: task.payload.kind === 'agentTurn' ? (task.payload.model ?? '') : '',
