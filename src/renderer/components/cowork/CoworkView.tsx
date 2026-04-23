@@ -618,6 +618,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
                   await coworkService.updateConfig({ workingDirectory: dir });
                 }}
                 showFolderSelector={true}
+                showModelSelector={true}
                 onManageSkills={() => onShowSkills?.()}
               />
             </div>
