@@ -21,8 +21,8 @@ export class ApiError extends Error {
   }
 }
 
-// 生成唯一的请求 ID
-const generateRequestId = () => `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+// 生成唯一的请求 ID（使用加密安全的 crypto.randomUUID()）
+const generateRequestId = () => `req_${crypto.randomUUID()}`;
 
 class ApiService {
   private config: ApiConfig | null = null;
