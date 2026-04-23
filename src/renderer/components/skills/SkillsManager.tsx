@@ -55,6 +55,12 @@ const importTabConfig: Record<ImportSourceType, {
   },
 };
 
+function dispatchSkillAddedToast(): void {
+  window.dispatchEvent(
+    new CustomEvent('app:showToast', { detail: i18nService.t('skillAddSuccess') }),
+  );
+}
+
 interface SkillsManagerProps {
   readOnly?: boolean;
   onCreateByChat?: () => void;
@@ -289,7 +295,13 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       return;
     }
     if (result.skills) {
-      dispatch(setSkills(result.skills));
+      try {
+        const fresh = await skillService.loadSkills();
+        dispatch(setSkills(fresh));
+      } catch {
+        dispatch(setSkills(result.skills));
+      }
+      dispatchSkillAddedToast();
     }
     setSkillDownloadSource('');
     setIsAddSkillMenuOpen(false);
@@ -508,7 +520,13 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     try {
       const result = await skillService.confirmInstall(pendingInstallId, action);
       if (result.success && result.skills) {
-        dispatch(setSkills(result.skills));
+        try {
+          const fresh = await skillService.loadSkills();
+          dispatch(setSkills(fresh));
+        } catch {
+          dispatch(setSkills(result.skills));
+        }
+        dispatchSkillAddedToast();
       }
       if (!result.success && result.error) {
         setSkillActionError(result.error);
