@@ -363,7 +363,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           <button
             onClick={handleDeny}
             className="p-2 rounded-lg hover:bg-surface-raised text-secondary transition-colors"
-            aria-label="Close"
+            aria-label={i18nService.t('close')}
           >
             <XMarkIcon className="h-5 w-5" />
           </button>

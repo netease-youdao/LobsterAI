@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import i18nService from '../../services/i18n';
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
 import { XCircleIcon as XCircleIconSolid, ChevronRightIcon } from '@heroicons/react/20/solid';
 
@@ -181,7 +182,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
                   type="button"
                   onClick={() => handleChange('')}
                   className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                  title="Clear"
+                  title={i18nService.t('clear')}
                 >
                   <XCircleIconSolid className="h-4 w-4" />
                 </button>
@@ -221,7 +222,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
                   type="button"
                   onClick={() => handleChange('')}
                   className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                  title="Clear"
+                  title={i18nService.t('clear')}
                 >
                   <XCircleIconSolid className="h-4 w-4" />
                 </button>

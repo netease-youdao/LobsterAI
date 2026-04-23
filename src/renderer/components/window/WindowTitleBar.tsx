@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import i18nService from '../../services/i18n';
 
 interface WindowTitleBarProps {
   isOverlayActive?: boolean;
@@ -95,8 +96,8 @@ const WindowTitleBar: React.FC<WindowTitleBarProps> = ({
         type="button"
         onClick={handleMinimize}
         className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg transition-colors text-secondary hover:hover:bg-surface-raised"
-        aria-label="Minimize"
-        title="Minimize"
+        aria-label={i18nService.t('minimize')}
+        title={i18nService.t('minimize')}
       >
         <svg viewBox="0 0 12 12" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
           <path d="M2 6h8" />
@@ -106,8 +107,8 @@ const WindowTitleBar: React.FC<WindowTitleBarProps> = ({
         type="button"
         onClick={handleToggleMaximize}
         className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg transition-colors text-secondary hover:hover:bg-surface-raised"
-        aria-label={state.isMaximized ? 'Restore' : 'Maximize'}
-        title={state.isMaximized ? 'Restore' : 'Maximize'}
+        aria-label={state.isMaximized ? i18nService.t('restore') : i18nService.t('maximize')}
+        title={state.isMaximized ? i18nService.t('restore') : i18nService.t('maximize')}
       >
         {state.isMaximized ? (
           <svg viewBox="0 0 12 12" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
@@ -124,8 +125,8 @@ const WindowTitleBar: React.FC<WindowTitleBarProps> = ({
         type="button"
         onClick={handleClose}
         className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg transition-colors text-secondary hover:bg-red-500 hover:text-white dark:hover:bg-red-500"
-        aria-label="Close"
-        title="Close"
+        aria-label={i18nService.t('close')}
+        title={i18nService.t('close')}
       >
         <svg viewBox="0 0 12 12" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 3l6 6" />

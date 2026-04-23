@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import SkillsPopover from './SkillsPopover';
 import { Skill } from '../../types/skill';
+import i18nService from '../../services/i18n';
 
 interface SkillsButtonProps {
   onSelectSkill: (skill: Skill) => void;
@@ -32,7 +33,7 @@ const SkillsButton: React.FC<SkillsButtonProps> = ({
         type="button"
         onClick={handleButtonClick}
         className={`p-2 rounded-xl bg-surface text-secondary hover:text-primary dark:hover:text-primary hover:bg-surface-raised transition-colors ${className}`}
-        title="Skills"
+        title={i18nService.t('skills')}
       >
         <PuzzleIcon className="h-5 w-5" />
       </button>
