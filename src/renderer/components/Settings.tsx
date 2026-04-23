@@ -2097,6 +2097,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           body: JSON.stringify({
             model: firstModel.id,
             max_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
+            stream: false,
             messages: [{ role: 'user', content: 'Hi' }],
           }),
         });
@@ -2127,6 +2128,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           : {
               model: firstModel.id,
               messages: [{ role: 'user', content: 'Hi' }],
+              stream: false,
             };
         if (!useResponsesApi && shouldUseMaxCompletionTokensForOpenAI(testingProvider, firstModel.id)) {
           openAIRequestBody.max_completion_tokens = CONNECTIVITY_TEST_TOKEN_BUDGET;
@@ -2147,10 +2149,37 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         enableProvider(testingProvider);
         showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
       } else {
+        // HTTP 429 means rate-limited — the connection and auth are working
+        if (response.status === 429) {
+          enableProvider(testingProvider);
+          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
+          return;
+        }
         const data = response.data || {};
-        // 提取错误信息
-        const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
-        if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
+        // Extract error info — data may be a string (e.g. SSE text) or an object
+        const errorMsg = typeof data === 'object'
+          ? (data as Record<string, unknown> & { error?: { message?: string }; message?: string }).error?.message
+            || (data as Record<string, unknown> & { message?: string }).message
+            || ''
+          : String(data);
+        const errorMessage = errorMsg || `${i18nService.t('connectionFailed')}: ${response.status}`;
+        // Certain error messages indicate the model actually processed the request,
+        // which means the connection and API key are valid.
+        const lowerError = typeof errorMessage === 'string' ? errorMessage.toLowerCase() : '';
+        const errorCode = typeof data === 'object'
+          ? (data as Record<string, unknown> & { error?: { code?: string; type?: string } }).error?.code
+            || (data as Record<string, unknown> & { error?: { code?: string; type?: string } }).error?.type
+            || ''
+          : '';
+        const connectionWorking = lowerError.includes('model output limit was reached')
+          || lowerError.includes('maximum context length')
+          || lowerError.includes('max_tokens')
+          || lowerError.includes('context_length_exceeded')
+          || lowerError.includes('reduce the length')
+          || (/\btokens?\b/.test(lowerError) && (lowerError.includes('limit') || lowerError.includes('exceed') || lowerError.includes('max')))
+          || errorCode === 'context_length_exceeded'
+          || errorCode === 'rate_limit_exceeded';
+        if (connectionWorking) {
           enableProvider(testingProvider);
           showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
           return;
