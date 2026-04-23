@@ -6,6 +6,7 @@ import { i18nService } from '../../services/i18n';
 import type { ScheduledTaskRunWithName } from '../../../scheduledTask/types';
 import { ClockIcon } from '@heroicons/react/24/outline';
 import RunSessionModal from './RunSessionModal';
+import TaskStatsPanel from './TaskStatsPanel';
 import { formatDateTime, formatDuration } from './utils';
 
 const statusConfig: Record<string, { label: string; color: string }> = {
@@ -46,6 +47,9 @@ const AllRunsHistory: React.FC = () => {
 
   return (
     <div>
+      {/* Stats dashboard */}
+      <TaskStatsPanel runs={allRuns} />
+
       {/* Column Headers */}
       <div className="grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-2 border-b border-border-subtle">
         <div className="text-xs font-medium text-secondary">
