@@ -250,14 +250,13 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
     return undefined;
   }
   if (delivery.mode === DeliveryMode.None) {
-    // Preserve channel/to even with mode='none' so IM notification target round-trips
-    // through the gateway for the edit form to display.
-    const result: GatewayDelivery = {
-      mode: DeliveryMode.None,
-      ...(delivery.channel ? { channel: delivery.channel } : {}),
-      ...(delivery.to ? { to: delivery.to } : {}),
-    } as GatewayDelivery;
-    console.log('[CronJobService][toGatewayDelivery] mode=none with preserved channel/to:', JSON.stringify(result));
+    // Do NOT forward channel/to to the gateway when mode='none'.
+    // Sending channel with mode=none triggers a multi-channel validation error on
+    // the gateway side ("Channel is required when multiple channels are configured")
+    // even though no delivery is intended.  The edit form should rely on locally
+    // stored delivery config rather than round-tripping through the gateway.
+    const result: GatewayDelivery = { mode: DeliveryMode.None } as GatewayDelivery;
+    console.log('[CronJobService][toGatewayDelivery] mode=none, omitting channel/to to avoid gateway validation error');
     return result;
   }
 
