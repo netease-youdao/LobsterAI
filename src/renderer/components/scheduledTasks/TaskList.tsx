@@ -139,6 +139,34 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
   const tasks = useSelector((state: RootState) => state.scheduledTask.tasks);
   const loading = useSelector((state: RootState) => state.scheduledTask.loading);
 
+  // Sort tasks:
+  // 1. Enabled tasks before disabled tasks
+  // 2. Within enabled: nextRunAtMs asc (soonest first), null last
+  // 3. Same nextRunAtMs: createdAt desc (newest first, easy to find just-created tasks)
+  // 4. Within disabled: createdAt desc (newest first)
+  const sortedTasks = React.useMemo(() => {
+    return [...tasks].sort((a, b) => {
+      // Rule 1: enabled before disabled
+      if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+
+      if (a.enabled && b.enabled) {
+        // Rule 2: nextRunAtMs asc, null sorted to end of enabled group
+        const aNext = a.state.nextRunAtMs;
+        const bNext = b.state.nextRunAtMs;
+        if (aNext !== bNext) {
+          if (aNext === null) return 1;
+          if (bNext === null) return -1;
+          return aNext - bNext;
+        }
+      }
+
+      // Rule 3 & 4: createdAt desc (newest first)
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      return bTime - aTime;
+    });
+  }, [tasks]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -179,7 +207,7 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
           {i18nService.t('scheduledTasksListColMore')}
         </div>
       </div>
-      {tasks.map((task) => (
+      {sortedTasks.map((task) => (
         <TaskListItem key={task.id} task={task} onRequestDelete={onRequestDelete} />
       ))}
     </div>
