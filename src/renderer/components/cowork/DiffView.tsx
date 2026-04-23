@@ -336,7 +336,7 @@ export function extractDiffFromToolInput(
   if (!toolName || !toolInput) return null;
   const normalized = toolName.toLowerCase().replace(/[\s_]+/g, '');
 
-  if (normalized === 'edit' || normalized === 'editfile') {
+  if (normalized.includes('edit') && normalized !== 'multiedit') {
     const filePath = extractString(toolInput, ['file_path', 'path', 'filePath', 'target_file', 'targetFile']);
     const oldStr = extractString(toolInput, ['old_str', 'old_string', 'old_text', 'oldStr', 'oldText', 'search']);
     const newStr = extractString(toolInput, ['new_str', 'new_string', 'new_text', 'newStr', 'newText', 'replace']);
