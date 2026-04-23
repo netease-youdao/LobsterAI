@@ -21,7 +21,7 @@ interface LLMConfig {
 export interface IMChatHandlerOptions {
   getLLMConfig: () => Promise<LLMConfig | null>;
   getSkillsPrompt?: () => Promise<string | null>;
-  imSettings: IMSettings;
+  imSettings: IMSettings | (() => IMSettings);
 }
 
 export class IMChatHandler {
@@ -29,6 +29,14 @@ export class IMChatHandler {
 
   constructor(options: IMChatHandlerOptions) {
     this.options = options;
+  }
+
+  /**
+   * Resolve imSettings, supporting both static object and getter function.
+   */
+  private resolveIMSettings(): IMSettings {
+    const s = this.options.imSettings;
+    return typeof s === 'function' ? s() : s;
   }
 
   /**
@@ -40,10 +48,12 @@ export class IMChatHandler {
       throw new Error('LLM configuration not found');
     }
 
-    // Build system prompt with optional skills
-    let systemPrompt = this.options.imSettings.systemPrompt || '';
+    const imSettings = this.resolveIMSettings();
 
-    if (this.options.imSettings.skillsEnabled && this.options.getSkillsPrompt) {
+    // Build system prompt with optional skills
+    let systemPrompt = imSettings.systemPrompt || '';
+
+    if (imSettings.skillsEnabled && this.options.getSkillsPrompt) {
       const skillsPrompt = await this.options.getSkillsPrompt();
       if (skillsPrompt) {
         systemPrompt = systemPrompt
@@ -53,7 +63,7 @@ export class IMChatHandler {
     }
 
     // Append IM media sending instruction
-    const mediaInstruction = buildIMMediaInstruction(this.options.imSettings);
+    const mediaInstruction = buildIMMediaInstruction(imSettings);
     if (mediaInstruction) {
       systemPrompt = systemPrompt
         ? `${systemPrompt}\n\n${mediaInstruction}`
@@ -287,9 +297,10 @@ export class IMChatHandler {
     }
 
     // Build system prompt
-    let systemPrompt = this.options.imSettings.systemPrompt || '';
+    const imSettings = this.resolveIMSettings();
+    let systemPrompt = imSettings.systemPrompt || '';
 
-    if (this.options.imSettings.skillsEnabled && this.options.getSkillsPrompt) {
+    if (imSettings.skillsEnabled && this.options.getSkillsPrompt) {
       const skillsPrompt = await this.options.getSkillsPrompt();
       if (skillsPrompt) {
         systemPrompt = systemPrompt

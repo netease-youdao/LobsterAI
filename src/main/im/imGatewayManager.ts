@@ -301,12 +301,10 @@ export class IMGatewayManager extends EventEmitter {
       return;
     }
 
-    const imSettings = this.imStore.getIMSettings();
-
     this.chatHandler = new IMChatHandler({
       getLLMConfig: this.getLLMConfig,
       getSkillsPrompt: this.getSkillsPrompt || undefined,
-      imSettings,
+      imSettings: () => this.imStore.getIMSettings(),
     });
 
     // Update or create Cowork handler if dependencies are available
