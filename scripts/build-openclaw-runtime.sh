@@ -58,10 +58,25 @@ trap cleanup EXIT
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
+    # Fallback: when bash is spawned via nested npm/cmd.exe chains, MSYS2
+    # auto path-conversion can silently fail. Use LOBSTER_NODE_MSYS_DIR
+    # (MSYS2-format node dir set by the CJS launcher) as an explicit path.
+    if [[ -n "${LOBSTER_NODE_MSYS_DIR:-}" && -x "${LOBSTER_NODE_MSYS_DIR}/$1" ]]; then
+      export PATH="${LOBSTER_NODE_MSYS_DIR}:${PATH}"
+      return 0
+    fi
     echo "Missing required command: $1" >&2
     exit 1
   fi
 }
+
+# On Windows/Git Bash: MSYS2 auto path-conversion is unreliable when bash is
+# spawned through nested npm/cmd.exe/node process chains. The CJS launcher
+# (run-build-openclaw-runtime.cjs) converts the node dir to MSYS2 format and
+# passes it via LOBSTER_NODE_MSYS_DIR; prepend it unconditionally here.
+if [[ -n "${LOBSTER_NODE_MSYS_DIR:-}" ]]; then
+  export PATH="${LOBSTER_NODE_MSYS_DIR}:${PATH}"
+fi
 
 need_cmd node
 need_cmd npm
