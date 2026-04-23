@@ -61,27 +61,27 @@ const formatRelativeTime = (timestamp: number): { compact: string; full: string 
 
   if (minutes < 1) {
     return {
-      compact: 'now',
+      compact: i18nService.t('justNow'),
       full: i18nService.t('justNow'),
     };
   } else if (minutes < 60) {
     return {
-      compact: `${minutes}m`,
+      compact: `${minutes} ${i18nService.t('minutesAgo')}`,
       full: `${minutes} ${i18nService.t('minutesAgo')}`,
     };
   } else if (hours < 24) {
     return {
-      compact: `${hours}h`,
+      compact: `${hours} ${i18nService.t('hoursAgo')}`,
       full: `${hours} ${i18nService.t('hoursAgo')}`,
     };
   } else if (days === 1) {
     return {
-      compact: '1d',
+      compact: i18nService.t('yesterday'),
       full: i18nService.t('yesterday'),
     };
   } else {
     return {
-      compact: `${days}d`,
+      compact: `${days} ${i18nService.t('daysAgo')}`,
       full: `${days} ${i18nService.t('daysAgo')}`,
     };
   }
