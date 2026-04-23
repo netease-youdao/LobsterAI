@@ -2053,6 +2053,9 @@ if (!gotTheLock) {
           { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
           { archiveName: 'gateway.log', filePath: manager.getGatewayLogPath() },
           ...getRecentOpenClawDailyLogEntries(manager.getOpenClawDailyLogDir()),
+          ...(process.platform === 'win32'
+            ? [{ archiveName: 'install-timing.log', filePath: path.join(app.getPath('appData'), 'LobsterAI', 'install-timing.log') }]
+            : []),
         ],
       });
 
