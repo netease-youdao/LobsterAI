@@ -79,8 +79,21 @@ function isDirectoryWritable(path: string): boolean {
   }
 }
 
+// Flags that are unsupported or cause Chrome to display a warning banner.
+// Chrome 130+ shows "You are using an unsupported command-line flag" for these.
+const BLOCKED_CHROME_FLAGS = [
+  '--disable-blink-features=AutomationControlled',
+];
+
 function resolveRuntimeChromeFlags(configFlags: string[] = []): string[] {
-  const runtimeFlags = [...configFlags];
+  const filtered = configFlags.filter((flag) => {
+    if (BLOCKED_CHROME_FLAGS.includes(flag)) {
+      console.warn(`[Browser] Ignoring unsupported Chrome flag: ${flag}`);
+      return false;
+    }
+    return true;
+  });
+  const runtimeFlags = [...filtered];
 
   if (process.platform === 'linux') {
     if (!isDirectoryWritable('/dev/shm')) {
