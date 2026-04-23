@@ -1724,6 +1724,51 @@ export class CoworkStore {
     return records;
   }
 
+  /**
+   * Search sessions by title or message content for the UI search modal.
+   * Returns matching sessions ordered by most recently updated.
+   */
+  searchSessions(query: string, maxResults = 50): CoworkSessionSummary[] {
+    const trimmed = query.trim().toLowerCase();
+
+    const rows = this.getAll<{
+      id: string;
+      title: string;
+      status: string;
+      pinned: number;
+      agent_id: string;
+      created_at: number;
+      updated_at: number;
+    }>(
+      trimmed
+        ? `
+          SELECT DISTINCT s.id, s.title, s.status, s.pinned, s.agent_id, s.created_at, s.updated_at
+          FROM cowork_sessions s
+          LEFT JOIN cowork_messages m ON m.session_id = s.id AND m.type IN ('user', 'assistant')
+          WHERE LOWER(s.title) LIKE ? OR LOWER(m.content) LIKE ?
+          ORDER BY s.updated_at DESC
+          LIMIT ?
+          `
+        : `
+          SELECT id, title, status, pinned, agent_id, created_at, updated_at
+          FROM cowork_sessions
+          ORDER BY updated_at DESC
+          LIMIT ?
+          `,
+      trimmed ? [`%${trimmed}%`, `%${trimmed}%`, maxResults] : [maxResults],
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      title: row.title || 'Untitled',
+      status: (row.status as CoworkSessionStatus) || 'idle',
+      pinned: Boolean(row.pinned),
+      agentId: row.agent_id || 'main',
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }));
+  }
+
   recentChats(options: {
     n?: number;
     sortOrder?: 'asc' | 'desc';

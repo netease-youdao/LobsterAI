@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import SearchIcon from '../icons/SearchIcon';
 import { i18nService } from '../../services/i18n';
@@ -11,7 +11,8 @@ const emptySet = new Set<string>();
 interface CoworkSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  sessions: CoworkSessionSummary[];
+  /** Recent sessions shown when query is empty */
+  recentSessions: CoworkSessionSummary[];
   currentSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
@@ -22,7 +23,7 @@ interface CoworkSearchModalProps {
 const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   isOpen,
   onClose,
-  sessions,
+  recentSessions,
   currentSessionId,
   onSelectSession,
   onDeleteSession,
@@ -30,13 +31,35 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
   onRenameSession,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<CoworkSessionSummary[] | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const filteredSessions = useMemo(() => {
-    const trimmedQuery = searchQuery.trim().toLowerCase();
-    if (!trimmedQuery) return sessions;
-    return sessions.filter((session) => session.title.toLowerCase().includes(trimmedQuery));
-  }, [sessions, searchQuery]);
+  const runSearch = useCallback(async (query: string) => {
+    setIsSearching(true);
+    try {
+      const trimmed = query.trim();
+      // Always query the backend so results are always cross-agent
+      const result = await window.electron?.cowork?.searchSessions(trimmed);
+      if (result?.success) {
+        setSearchResults(result.sessions ?? []);
+      }
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Skip debounce trigger on initial mount (isOpen=false) and let the
+    // open-modal effect handle the first fetch immediately.
+    if (!isOpen) return;
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => runSearch(searchQuery), 250);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [searchQuery, runSearch, isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -44,10 +67,13 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
       });
+      // Immediately load all sessions cross-agent when modal opens
+      void runSearch('');
       return;
     }
     setSearchQuery('');
-  }, [isOpen]);
+    setSearchResults(null);
+  }, [isOpen, runSearch]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -64,6 +90,10 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
     await onSelectSession(sessionId);
     onClose();
   };
+
+  // Always use backend search results (cross-agent); fall back to recentSessions only before first fetch
+  const displaySessions = searchResults !== null ? searchResults : recentSessions;
+  const isEmpty = !isSearching && displaySessions.length === 0;
 
   if (!isOpen) return null;
 
@@ -99,13 +129,17 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
           </button>
         </div>
         <div className="px-3 py-3 max-h-[60vh] overflow-y-auto">
-          {filteredSessions.length === 0 ? (
+          {isSearching ? (
             <div className="py-10 text-center text-sm text-secondary">
-              {i18nService.t('searchNoResults')}
+              {i18nService.t('searching')}
+            </div>
+          ) : isEmpty ? (
+            <div className="py-10 text-center text-sm text-secondary">
+              {searchQuery.trim() ? i18nService.t('searchNoResults') : i18nService.t('searchNoConversations')}
             </div>
           ) : (
             <CoworkSessionList
-              sessions={filteredSessions}
+              sessions={displaySessions}
               currentSessionId={currentSessionId}
               isBatchMode={false}
               selectedIds={emptySet}
