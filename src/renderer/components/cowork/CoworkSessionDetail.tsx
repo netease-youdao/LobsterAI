@@ -34,6 +34,7 @@ import PencilSquareIcon from '../icons/PencilSquareIcon';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import TrashIcon from '../icons/TrashIcon';
+import XMarkIcon from '../icons/XMarkIcon';
 import MarkdownContent from '../MarkdownContent';
 import WindowTitleBar from '../window/WindowTitleBar';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
@@ -1581,6 +1582,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const lastMessageContent = useSelector(selectLastMessageContent);
   const messagesLength = useSelector(selectCurrentMessagesLength);
   const skills = useSelector((state: RootState) => state.skill.skills);
+  const agents = useSelector((state: RootState) => state.agent.agents);
+  const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+  const currentAgent = agents.find((a) => a.id === currentAgentId);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<CoworkPromptInputRef>(null);
@@ -1614,6 +1618,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isExportingImage, setIsExportingImage] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
+  const [isCopyingMarkdown, setIsCopyingMarkdown] = useState(false);
 
   // Rename states
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1794,43 +1799,67 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const sessionToMarkdown = useCallback((): string => {
     if (!currentSession) return '';
     const lines: string[] = [];
+
+    // ── Header ──
     lines.push(`# ${currentSession.title}`);
     lines.push('');
-    lines.push(`> ${i18nService.t('coworkExportCreatedAt')}: ${new Date(currentSession.createdAt).toLocaleString()}`);
+
+    // Metadata block (valid Markdown table)
+    const agentName = currentAgent?.name ?? i18nService.t('defaultAgentName');
+    lines.push(`| ${i18nService.t('coworkExportMetaAgent')} | ${agentName} |`);
+    lines.push('| --- | --- |');
+    lines.push(`| ${i18nService.t('coworkExportCreatedAt')} | ${new Date(currentSession.createdAt).toLocaleString()} |`);
+    lines.push(`| ${i18nService.t('coworkExportMetaUpdatedAt')} | ${new Date(currentSession.updatedAt).toLocaleString()} |`);
+    lines.push(`| ${i18nService.t('coworkExportMetaMessages')} | ${currentSession.messages.filter((m) => m.type === 'user' || m.type === 'assistant').length} |`);
     lines.push('');
     lines.push('---');
     lines.push('');
+
+    // ── Messages ──
     for (const msg of currentSession.messages) {
+      const ts = msg.timestamp ? `  \n*${new Date(msg.timestamp).toLocaleString()}*` : '';
       if (msg.type === 'user') {
-        lines.push(`## 🧑 User`);
+        lines.push(`## 🧑 ${i18nService.t('coworkExportRoleUser')}`);
         lines.push('');
         lines.push(msg.content);
+        if (ts) lines.push(ts);
         lines.push('');
       } else if (msg.type === 'assistant') {
-        lines.push(`## 🤖 Assistant`);
+        lines.push(`## 🤖 ${i18nService.t('coworkExportRoleAssistant')}`);
         lines.push('');
         lines.push(msg.content);
+        if (ts) lines.push(ts);
         lines.push('');
       } else if (msg.type === 'tool_use' && msg.metadata?.toolName) {
-        lines.push(`### 🔧 Tool: ${msg.metadata.toolName}`);
+        lines.push(`<details>`);
+        lines.push(`<summary>🔧 Tool: <code>${msg.metadata.toolName}</code></summary>`);
         lines.push('');
         if (msg.metadata.toolInput) {
           lines.push('```json');
           lines.push(JSON.stringify(msg.metadata.toolInput, null, 2));
           lines.push('```');
-          lines.push('');
         }
+        lines.push('</details>');
+        lines.push('');
       } else if (msg.type === 'tool_result') {
-        lines.push('#### Tool Result');
+        lines.push(`<details>`);
+        lines.push(`<summary>📋 ${i18nService.t('coworkExportToolResult')}</summary>`);
         lines.push('');
         lines.push('```');
-        lines.push(msg.content.slice(0, 2000) + (msg.content.length > 2000 ? '\n... (truncated)' : ''));
+        lines.push(msg.content);
         lines.push('```');
+        lines.push('</details>');
         lines.push('');
       }
     }
+
+    // ── Footer ──
+    lines.push('---');
+    lines.push('');
+    lines.push(`*${i18nService.t('coworkExportFooter')}*`);
+
     return lines.join('\n');
-  }, [currentSession]);
+  }, [currentSession, currentAgent]);
 
   const sessionToJSON = useCallback((): string => {
     if (!currentSession) return '{}';
@@ -1875,6 +1904,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       }));
     }
   }, [currentSession, closeMenu, sessionToMarkdown, sessionToJSON]);
+
+  const handleCopyMarkdown = useCallback(async () => {
+    if (!currentSession || isCopyingMarkdown) return;
+    setIsCopyingMarkdown(true);
+    setShowExportOptions(false);
+    try {
+      const content = sessionToMarkdown();
+      await navigator.clipboard.writeText(content);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportCopySuccess'),
+      }));
+    } catch {
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: i18nService.t('coworkExportTextFailed'),
+      }));
+    } finally {
+      setIsCopyingMarkdown(false);
+    }
+  }, [currentSession, isCopyingMarkdown, sessionToMarkdown]);
 
   const handleShareClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2479,57 +2527,94 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
       {/* Export Options Modal */}
       {showExportOptions && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
-          onClick={() => setShowExportOptions(false)}
+        <Modal
+          onClose={() => setShowExportOptions(false)}
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center modal-backdrop"
+          className="w-full max-w-sm mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden modal-content"
         >
-          <div
-            className="w-full max-w-xs mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden modal-content"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-5 py-4 border-b dark:border-claude-darkBorder border-claude-border">
-              <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
-                {i18nService.t('coworkExportAs')}
-              </h3>
-            </div>
-            <div className="py-1">
-              <button
-                type="button"
-                onClick={(e) => { setShowExportOptions(false); handleShareClick(e); }}
-                disabled={isExportingImage}
-                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
-              >
-                <PhotoIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-                <div>
-                  <div className="font-medium">{i18nService.t('coworkExportImage')}</div>
-                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportImageDesc')}</div>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setShowExportOptions(false); handleExportText('md'); }}
-                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-              >
-                <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-                <div>
-                  <div className="font-medium">Markdown</div>
-                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportMarkdownDesc')}</div>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setShowExportOptions(false); handleExportText('json'); }}
-                className="w-full flex items-center gap-3 px-5 py-3 text-left text-sm dark:text-claude-darkText text-claude-text hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-              >
-                <DocumentArrowDownIcon className="h-5 w-5 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
-                <div>
-                  <div className="font-medium">JSON</div>
-                  <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('coworkExportJSONDesc')}</div>
-                </div>
-              </button>
-            </div>
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+            <h3 className="text-base font-semibold text-foreground">
+              {i18nService.t('coworkExportAs')}
+            </h3>
+            <button
+              type="button"
+              onClick={() => setShowExportOptions(false)}
+              className="p-1 rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+              aria-label={i18nService.t('close')}
+            >
+              <XMarkIcon className="h-4 w-4" />
+            </button>
           </div>
-        </div>
+
+          {/* Export options */}
+          <div className="py-2">
+            {/* PNG Image */}
+            <button
+              type="button"
+              onClick={(e) => { setShowExportOptions(false); handleShareClick(e); }}
+              disabled={isExportingImage}
+              className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-surface-raised transition-colors disabled:opacity-50 group"
+            >
+              <div className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900/30">
+                <PhotoIcon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-foreground">{i18nService.t('coworkExportImage')}</div>
+                <div className="text-xs text-secondary mt-0.5">{i18nService.t('coworkExportImageDesc')}</div>
+              </div>
+              {isExportingImage && (
+                <div className="w-4 h-4 border-2 border-secondary border-t-transparent rounded-full animate-spin flex-shrink-0" />
+              )}
+            </button>
+
+            {/* Markdown file */}
+            <button
+              type="button"
+              onClick={() => { setShowExportOptions(false); handleExportText('md'); }}
+              className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-surface-raised transition-colors group"
+            >
+              <div className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-purple-100 dark:bg-purple-900/30">
+                <DocumentArrowDownIcon className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-foreground">Markdown</div>
+                <div className="text-xs text-secondary mt-0.5">{i18nService.t('coworkExportMarkdownDesc')}</div>
+              </div>
+            </button>
+
+            {/* Copy Markdown */}
+            <button
+              type="button"
+              onClick={() => void handleCopyMarkdown()}
+              disabled={isCopyingMarkdown}
+              className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-surface-raised transition-colors disabled:opacity-50 group"
+            >
+              <div className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-green-100 dark:bg-green-900/30">
+                <CheckIcon className="h-5 w-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-foreground">{i18nService.t('coworkExportCopyMarkdown')}</div>
+                <div className="text-xs text-secondary mt-0.5">{i18nService.t('coworkExportCopyMarkdownDesc')}</div>
+              </div>
+            </button>
+
+            {/* JSON file */}
+            <button
+              type="button"
+              onClick={() => { setShowExportOptions(false); handleExportText('json'); }}
+              className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-surface-raised transition-colors group"
+            >
+              <div className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-orange-100 dark:bg-orange-900/30">
+                <DocumentArrowDownIcon className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-foreground">JSON</div>
+                <div className="text-xs text-secondary mt-0.5">{i18nService.t('coworkExportJSONDesc')}</div>
+              </div>
+            </button>
+          </div>
+        </Modal>
       )}
 
       {/* Delete Confirmation Modal */}
