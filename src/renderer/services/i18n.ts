@@ -415,7 +415,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryEmbeddingEnabledHint: '在词法检索基础上用向量相似度重排结果，提升召回质量',
     coworkMemoryEmbeddingModel: 'Embedding 模型',
     coworkMemoryEmbeddingModelHint:
-      '推荐 BAAI/bge-m3；可改为你已下载的其他 sentence-transformers 模型',
+      '留空使用提供者默认模型。如 OpenAI 默认 text-embedding-3-large，Gemini 默认 gemini-embedding-001',
     coworkMemoryEmbeddingLocalModelPath: '本地模型目录（可选）',
     coworkMemoryEmbeddingLocalModelPathHint: '填写后优先加载本地目录；留空时按模型名加载',
     coworkMemoryEmbeddingAutoDownload: '允许自动下载模型',
@@ -1952,7 +1952,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
       'Rerank lexical hits with vector similarity for better recall quality',
     coworkMemoryEmbeddingModel: 'Embedding model',
     coworkMemoryEmbeddingModelHint:
-      'Recommended: BAAI/bge-m3. You can switch to any downloaded sentence-transformers model',
+      'Leave empty to use the provider default. e.g. OpenAI defaults to text-embedding-3-large, Gemini to gemini-embedding-001',
     coworkMemoryEmbeddingLocalModelPath: 'Local model path (optional)',
     coworkMemoryEmbeddingLocalModelPathHint:
       'If set, load model from this directory first; if empty, load by model id',

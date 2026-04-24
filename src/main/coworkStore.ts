@@ -37,8 +37,8 @@ const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?followin
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
 
 const DEFAULT_EMBEDDING_ENABLED = false;
-const DEFAULT_EMBEDDING_PROVIDER = 'local';
-const DEFAULT_EMBEDDING_MODEL = 'hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf';
+const DEFAULT_EMBEDDING_PROVIDER = 'openai';
+const DEFAULT_EMBEDDING_MODEL = '';
 const DEFAULT_EMBEDDING_LOCAL_MODEL_PATH = '';
 const DEFAULT_EMBEDDING_VECTOR_WEIGHT = 0.7;
 const DEFAULT_EMBEDDING_REMOTE_BASE_URL = '';

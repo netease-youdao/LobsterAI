@@ -6,14 +6,12 @@ interface EmbeddingSettingsSectionProps {
   embeddingEnabled: boolean;
   embeddingProvider: string;
   embeddingModel: string;
-  embeddingLocalModelPath: string;
   embeddingVectorWeight: number;
   embeddingRemoteBaseUrl: string;
   embeddingRemoteApiKey: string;
   onEmbeddingEnabledChange: (value: boolean) => void;
   onEmbeddingProviderChange: (value: string) => void;
   onEmbeddingModelChange: (value: string) => void;
-  onEmbeddingLocalModelPathChange: (value: string) => void;
   onEmbeddingVectorWeightChange: (value: number) => void;
   onEmbeddingRemoteBaseUrlChange: (value: string) => void;
   onEmbeddingRemoteApiKeyChange: (value: string) => void;
@@ -23,14 +21,12 @@ const EmbeddingSettingsSection: React.FC<EmbeddingSettingsSectionProps> = ({
   embeddingEnabled,
   embeddingProvider,
   embeddingModel,
-  embeddingLocalModelPath,
   embeddingVectorWeight,
   embeddingRemoteBaseUrl,
   embeddingRemoteApiKey,
   onEmbeddingEnabledChange,
   onEmbeddingProviderChange,
   onEmbeddingModelChange,
-  onEmbeddingLocalModelPathChange,
   onEmbeddingVectorWeightChange,
   onEmbeddingRemoteBaseUrlChange,
   onEmbeddingRemoteApiKeyChange,
@@ -77,7 +73,6 @@ const EmbeddingSettingsSection: React.FC<EmbeddingSettingsSectionProps> = ({
               onChange={(e) => onEmbeddingProviderChange(e.target.value)}
               className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface"
             >
-              <option value="local">{i18nService.t('coworkMemoryEmbeddingProviderLocal')}</option>
               <option value="openai">{i18nService.t('coworkMemoryEmbeddingProviderOpenai')}</option>
               <option value="gemini">{i18nService.t('coworkMemoryEmbeddingProviderGemini')}</option>
               <option value="voyage">{i18nService.t('coworkMemoryEmbeddingProviderVoyage')}</option>
@@ -98,9 +93,7 @@ const EmbeddingSettingsSection: React.FC<EmbeddingSettingsSectionProps> = ({
               type="text"
               value={embeddingModel}
               onChange={(e) => onEmbeddingModelChange(e.target.value)}
-              placeholder={embeddingProvider === 'local'
-                ? 'hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf'
-                : 'text-embedding-3-large'}
+              placeholder="text-embedding-3-large"
               className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface font-mono"
             />
             <div className="text-xs text-secondary mt-1">
@@ -108,41 +101,37 @@ const EmbeddingSettingsSection: React.FC<EmbeddingSettingsSectionProps> = ({
             </div>
           </div>
 
-          {/* Remote config fields (shown for non-local providers) */}
-          {embeddingProvider !== 'local' && (
-            <>
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">
-                  {i18nService.t('coworkMemoryEmbeddingRemoteBaseUrl')}
-                </label>
-                <input
-                  type="text"
-                  value={embeddingRemoteBaseUrl}
-                  onChange={(e) => onEmbeddingRemoteBaseUrlChange(e.target.value)}
-                  placeholder="https://api.openai.com/v1"
-                  className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface font-mono"
-                />
-                <div className="text-xs text-secondary mt-1">
-                  {i18nService.t('coworkMemoryEmbeddingRemoteBaseUrlHint')}
-                </div>
-              </div>
+          {/* Remote config fields */}
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">
+              {i18nService.t('coworkMemoryEmbeddingRemoteBaseUrl')}
+            </label>
+            <input
+              type="text"
+              value={embeddingRemoteBaseUrl}
+              onChange={(e) => onEmbeddingRemoteBaseUrlChange(e.target.value)}
+              placeholder="https://api.openai.com/v1"
+              className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface font-mono"
+            />
+            <div className="text-xs text-secondary mt-1">
+              {i18nService.t('coworkMemoryEmbeddingRemoteBaseUrlHint')}
+            </div>
+          </div>
 
-              <div>
-                <label className="block text-xs font-medium text-foreground mb-1">
-                  {i18nService.t('coworkMemoryEmbeddingRemoteApiKey')}
-                </label>
-                <input
-                  type="password"
-                  value={embeddingRemoteApiKey}
-                  onChange={(e) => onEmbeddingRemoteApiKeyChange(e.target.value)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface font-mono"
-                />
-                <div className="text-xs text-secondary mt-1">
-                  {i18nService.t('coworkMemoryEmbeddingRemoteApiKeyHint')}
-                </div>
-              </div>
-            </>
-          )}
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">
+              {i18nService.t('coworkMemoryEmbeddingRemoteApiKey')}
+            </label>
+            <input
+              type="password"
+              value={embeddingRemoteApiKey}
+              onChange={(e) => onEmbeddingRemoteApiKeyChange(e.target.value)}
+              className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface font-mono"
+            />
+            <div className="text-xs text-secondary mt-1">
+              {i18nService.t('coworkMemoryEmbeddingRemoteApiKeyHint')}
+            </div>
+          </div>
 
           {/* Collapsible advanced section */}
           <button
@@ -157,24 +146,6 @@ const EmbeddingSettingsSection: React.FC<EmbeddingSettingsSectionProps> = ({
 
           {showAdvanced && (
             <div className="space-y-3">
-              {/* Local model path (only relevant when provider=local) */}
-              {embeddingProvider === 'local' && (
-                <div>
-                  <label className="block text-xs font-medium text-foreground mb-1">
-                    {i18nService.t('coworkMemoryEmbeddingLocalModelPath')}
-                  </label>
-                  <input
-                    type="text"
-                    value={embeddingLocalModelPath}
-                    onChange={(e) => onEmbeddingLocalModelPathChange(e.target.value)}
-                    className="w-full rounded-lg border px-3 py-2 text-sm border-border bg-surface font-mono"
-                  />
-                  <div className="text-xs text-secondary mt-1">
-                    {i18nService.t('coworkMemoryEmbeddingLocalModelPathHint')}
-                  </div>
-                </div>
-              )}
-
               {/* Vector weight slider */}
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">
