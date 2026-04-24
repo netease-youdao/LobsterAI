@@ -7,7 +7,7 @@ import {
   setLoading,
   updateAgent as updateAgentAction,
 } from '../store/slices/agentSlice';
-import { clearCurrentSession } from '../store/slices/coworkSlice';
+import { clearCurrentSession, clearDraftAttachments,setDraftPrompt } from '../store/slices/coworkSlice';
 import { clearActiveSkills,setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
 
@@ -156,6 +156,8 @@ class AgentService {
   switchAgent(agentId: string): void {
     store.dispatch(setCurrentAgentId(agentId));
     store.dispatch(clearCurrentSession());
+    store.dispatch(setDraftPrompt({ sessionId: '__home__', draft: '' }));
+    store.dispatch(clearDraftAttachments('__home__'));
     const agent = store.getState().agent.agents.find((a) => a.id === agentId);
     if (agent?.skillIds?.length) {
       store.dispatch(setActiveSkillIds(agent.skillIds));

@@ -264,6 +264,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]); // intentionally omit other deps to only trigger on session switch
 
+  // Clear input when switching agents on the home page
+  const prevAgentIdRef = useRef(currentAgentId);
+  useEffect(() => {
+    if (prevAgentIdRef.current !== currentAgentId) {
+      prevAgentIdRef.current = currentAgentId;
+      if (!sessionId) {
+        setValue('');
+      }
+    }
+  }, [currentAgentId, sessionId]);
+
   useEffect(() => {
     if (value !== draftPrompt) {
       const timer = setTimeout(() => {
