@@ -368,6 +368,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
         setSkillActionError(i18nService.t('importSourceMismatchClawhub'));
         return;
       }
+      // GitHub tab: 校验 owner/repo 格式
+      const ownerRepoPattern = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+      if (!ownerRepoPattern.test(trimmed)) {
+        setSkillActionError(i18nService.t('importSourceMismatchGithub'));
+        return;
+      }
     }
 
     await handleAddSkillFromSource(trimmed);
