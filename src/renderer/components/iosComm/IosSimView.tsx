@@ -9,7 +9,7 @@ import WindowTitleBar from '../window/WindowTitleBar';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type ActionType = 'normal' | 'create' | 'update' | 'pin' | 'unpin' | 'delete' | 'ack';
+type ActionType = 'normal' | 'normal_right' | 'create' | 'update' | 'pin' | 'unpin' | 'delete' | 'ack';
 
 interface SimForm {
   action: ActionType;
@@ -44,8 +44,9 @@ function formatTime(ts: number): string {
 }
 
 const ACTION_OPTIONS: { value: ActionType; label: string; desc: string }[] = [
-  { value: 'normal', label: '普通消息', desc: '带 taskId 的文本消息，触发 AI 路由' },
-  { value: 'create', label: '创建会话', desc: '新建任务会话，需要 taskId + title' },
+  { value: 'normal',       label: '普通消息',   desc: '带 taskId 的文本消息，触发 AI 路由' },
+  { value: 'normal_right', label: '普通(右侧)', desc: 'Electron 侧用户消息转发给 iOS，显示在右侧' },
+  { value: 'create',       label: '创建会话',   desc: '新建任务会话，需要 taskId + title' },
   { value: 'update', label: '更新会话', desc: '修改会话标题，需要 taskId + title' },
   { value: 'pin',    label: '置顶会话', desc: '置顶指定任务，需要 taskId' },
   { value: 'unpin',  label: '取消置顶', desc: '取消置顶，需要 taskId' },
@@ -55,13 +56,14 @@ const ACTION_OPTIONS: { value: ActionType; label: string; desc: string }[] = [
 
 // Which extra fields each action needs
 const NEEDS: Record<ActionType, { taskId: boolean; title: boolean; text: boolean }> = {
-  normal:  { taskId: true,  title: false, text: true },
-  create:  { taskId: true,  title: true,  text: false },
-  update:  { taskId: true,  title: true,  text: false },
-  pin:     { taskId: true,  title: false, text: false },
-  unpin:   { taskId: true,  title: false, text: false },
-  delete:  { taskId: true,  title: false, text: false },
-  ack:     { taskId: true,  title: false, text: false },
+  normal:        { taskId: true,  title: false, text: true },
+  normal_right:  { taskId: true,  title: false, text: true },
+  create:        { taskId: true,  title: true,  text: false },
+  update:        { taskId: true,  title: true,  text: false },
+  pin:           { taskId: true,  title: false, text: false },
+  unpin:         { taskId: true,  title: false, text: false },
+  delete:        { taskId: true,  title: false, text: false },
+  ack:           { taskId: true,  title: false, text: false },
 };
 
 // ── Component ──────────────────────────────────────────────────────────────

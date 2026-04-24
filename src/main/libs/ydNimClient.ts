@@ -64,6 +64,8 @@ interface IosCoworkCallbacks {
   setPinned: (sessionId: string, pinned: boolean) => void;
   rename: (sessionId: string, title: string) => void;
   deleteSession: (sessionId: string) => void;
+  persistIosMapping?: (electronTaskId: string, iosTaskId: string) => void;
+  deleteIosMapping?: (electronTaskId: string) => void;
 }
 
 let coworkCallbacks: IosCoworkCallbacks | null = null;
@@ -111,6 +113,12 @@ async function callLobsterApi(path: string, body: object): Promise<any> {
     headers['Authorization'] = `Bearer ${tokens.accessToken}`;
   }
   console.log('[YdNimClient] callLobsterApi →', path, body);
+  console.log('[YdNimClient] callLobsterApi headers:', JSON.stringify({
+    ...headers,
+    Authorization: headers['Authorization']
+      ? headers['Authorization'].slice(0, 20) + '…(len=' + headers['Authorization'].length + ')'
+      : '(none)',
+  }));
   const resp = await net.fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   const result = await resp.json() as { code: number; msg?: string; data?: any };
   console.log('[YdNimClient] callLobsterApi ←', path, 'code:', result.code);
@@ -188,6 +196,7 @@ async function resolveElectronTaskId(taskId: string): Promise<string | undefined
   if (electronTaskId) {
     taskIdCache.set(taskId, { electronTaskId });
     electronTaskIdToTaskId.set(electronTaskId, taskId);
+    coworkCallbacks?.persistIosMapping?.(electronTaskId, taskId);
   }
   return electronTaskId;
 }
@@ -221,12 +230,14 @@ async function handleCreateConversation(_msg: any, ext: any): Promise<void> {
       // Cache the mapping for subsequent messages
       taskIdCache.set(taskId, { electronTaskId });
       electronTaskIdToTaskId.set(electronTaskId, taskId);
+      coworkCallbacks?.persistIosMapping?.(electronTaskId, taskId);
     } catch (serverErr: any) {
       // Conversation not yet on server (simulation mode) — generate local ID and cache
       if (serverErr?.message?.includes('4009')) {
         if (!electronTaskId) electronTaskId = `electron-task-${Date.now()}`;
         taskIdCache.set(taskId, { electronTaskId });
         electronTaskIdToTaskId.set(electronTaskId, taskId);
+        coworkCallbacks?.persistIosMapping?.(electronTaskId, taskId);
         broadcastToRenderer('yd-nim:log', {
           text: `[模拟模式] 服务器无此会话，本地生成 electronTaskId=${electronTaskId}`,
           time: Date.now(),
@@ -272,6 +283,7 @@ async function handleNormalMessage(msg: any, ext: any): Promise<void> {
         if (electronTaskId) {
           electronTaskIdToTaskId.set(electronTaskId, taskId);
           taskIdCache.set(taskId, { electronTaskId });
+          coworkCallbacks?.persistIosMapping?.(electronTaskId, taskId);
         }
       }
 
@@ -390,6 +402,7 @@ async function handleDeleteConversation(_msg: any, ext: any): Promise<void> {
     taskIdCache.delete(taskId);
     if (electronTaskId) {
       electronTaskIdToTaskId.delete(electronTaskId);
+      coworkCallbacks?.deleteIosMapping?.(electronTaskId);
       coworkCallbacks?.deleteSession(electronTaskId);
     }
     broadcastToRenderer('yd-nim:action', { action: 'delete', taskId, electronTaskId });
@@ -447,6 +460,10 @@ async function routeIncomingMessage(msg: any): Promise<void> {
       await handleUnpinConversation(msg, ext);
     } else if (action === 'delete') {
       await handleDeleteConversation(msg, ext);
+    } else if (action === 'normal_right') {
+      // Electron user message echoed back from iOS — just log, do not re-process
+      console.log('[YdNimClient] normal_right echo received, taskId:', ext?.taskId);
+      broadcastToRenderer('yd-nim:log', { text: `normal_right echo: taskId=${ext?.taskId ?? 'n/a'}`, time: Date.now() });
     } else if (action === 'ack') {
       // Ack from iOS — just log, no further action needed
       console.log('[YdNimClient] iOS ack received, taskId:', ext?.taskId);
@@ -674,6 +691,80 @@ export function setYdNimCoworkCallbacks(callbacks: IosCoworkCallbacks): void {
 
 export function getTaskIdForElectronSession(sessionId: string): string | undefined {
   return electronTaskIdToTaskId.get(sessionId);
+}
+
+/**
+ * Like getTaskIdForElectronSession, but falls back to a server-side reverse lookup
+ * (/conversation/getByElectronTaskId) when the in-memory map has no entry.
+ *
+ * Only performs the server call when the NIM SDK is initialized (i.e. a yid
+ * session is active), so Electron-only sessions that never talked to iOS will
+ * never trigger a round-trip.  Results are cached in the in-memory map and
+ * persisted to SQLite via the persistIosMapping callback so future calls are
+ * instant.
+ */
+export async function resolveIosTaskIdForElectronSession(electronTaskId: string): Promise<string | undefined> {
+  const cached = electronTaskIdToTaskId.get(electronTaskId);
+  if (cached) return cached;
+
+  // Guard: only attempt server lookup when the NIM SDK is active (yid context).
+  if (!initialized) return undefined;
+
+  try {
+    const data = await callLobsterApi('/lobster/conversation/getByElectronTaskId', { electronTaskId });
+    // Support both { conversation: { taskId } } and { taskId } response shapes.
+    const iosTaskId: string | undefined = data?.conversation?.taskId ?? data?.taskId;
+    if (iosTaskId) {
+      electronTaskIdToTaskId.set(electronTaskId, iosTaskId);
+      taskIdCache.set(iosTaskId, { electronTaskId });
+      coworkCallbacks?.persistIosMapping?.(electronTaskId, iosTaskId);
+      console.log('[YdNimClient] resolveIosTaskIdForElectronSession — recovered', electronTaskId, '→', iosTaskId);
+      broadcastToRenderer('yd-nim:log', { text: `[恢复映射] electronTaskId=${electronTaskId} → iosTaskId=${iosTaskId}`, time: Date.now() });
+    }
+    return iosTaskId;
+  } catch (e: any) {
+    const msg: string = e?.message ?? String(e);
+    // 4009 = conversation not found on server → this is a pure Electron session, not an error.
+    if (!msg.includes('4009')) {
+      console.warn('[YdNimClient] resolveIosTaskIdForElectronSession failed:', msg);
+    }
+    return undefined;
+  }
+}
+
+/**
+ * Restore electronTaskId ↔ iosTaskId mappings from persistent storage (SQLite).
+ * Call once on app startup before any messages can arrive.
+ */
+export function restoreTaskIdMappings(entries: Array<{ electronTaskId: string; iosTaskId: string }>): void {
+  for (const { electronTaskId, iosTaskId } of entries) {
+    electronTaskIdToTaskId.set(electronTaskId, iosTaskId);
+    taskIdCache.set(iosTaskId, { electronTaskId });
+  }
+  console.log('[YdNimClient] restoreTaskIdMappings — restored', entries.length, 'mappings');
+}
+
+/**
+ * Remap an electronTaskId after a CoworkSession is recreated for an iOS task.
+ * Updates in-memory maps, triggers SQLite persist/delete via callbacks, and
+ * notifies the Lobster server of the new electronTaskId.
+ */
+export async function remapElectronTaskId(oldElectronTaskId: string, newElectronTaskId: string): Promise<void> {
+  const iosTaskId = electronTaskIdToTaskId.get(oldElectronTaskId);
+  if (!iosTaskId) {
+    console.warn('[YdNimClient] remapElectronTaskId — no mapping for', oldElectronTaskId);
+    return;
+  }
+  electronTaskIdToTaskId.delete(oldElectronTaskId);
+  electronTaskIdToTaskId.set(newElectronTaskId, iosTaskId);
+  taskIdCache.set(iosTaskId, { electronTaskId: newElectronTaskId });
+  coworkCallbacks?.persistIosMapping?.(newElectronTaskId, iosTaskId);
+  coworkCallbacks?.deleteIosMapping?.(oldElectronTaskId);
+  console.log('[YdNimClient] remapElectronTaskId', oldElectronTaskId, '→', newElectronTaskId, 'iosTaskId:', iosTaskId);
+  await callLobsterApi('/lobster/conversation/electron-task-id/update', {
+    taskId: iosTaskId,
+    electronTaskId: newElectronTaskId,
+  });
 }
 
 export interface NimMessage {

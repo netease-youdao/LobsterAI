@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, ne
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initYdNimClient, destroyYdNimClient, sendYdNimMessage, sendExtYdNimMessage, setYdNimServerContext, setYdNimCoworkCallbacks, getTaskIdForElectronSession, saveConversationMessages, simulateIncomingMessage, getNimEventHistory } from './libs/ydNimClient';
+import { initYdNimClient, destroyYdNimClient, sendYdNimMessage, sendExtYdNimMessage, setYdNimServerContext, setYdNimCoworkCallbacks, getTaskIdForElectronSession, resolveIosTaskIdForElectronSession, saveConversationMessages, simulateIncomingMessage, getNimEventHistory, restoreTaskIdMappings, remapElectronTaskId } from './libs/ydNimClient';
 
 import type { OpenClawSessionPatch } from '../common/openclawSession';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
@@ -2975,6 +2975,22 @@ if (!gotTheLock) {
           })),
         });
       }
+      // Lazy recovery: if this session has no cached iOS mapping but NIM is
+      // active, ask the server.  This covers sessions created before SQLite
+      // persistence was added, so the mapping survives across restarts.
+      // Runs before the agent starts so messageUpdate / complete hooks will
+      // already see the mapping in the in-memory map.
+      if (!getTaskIdForElectronSession(options.sessionId)) {
+        await resolveIosTaskIdForElectronSession(options.sessionId).catch(() => {});
+      }
+
+      // If this Electron session has an iOS task mapping, forward the user message to iOS
+      const iosTaskIdForContinue = getTaskIdForElectronSession(options.sessionId);
+      if (iosTaskIdForContinue) {
+        sendExtYdNimMessage(options.prompt, { action: 'normal_right', taskId: iosTaskIdForContinue })
+          .catch(e => console.error('[iOS NIM] forward Electron user msg failed:', (e as Error)?.message));
+      }
+
       runtime.continueSession(options.sessionId, options.prompt, {
         systemPrompt: mergeCoworkSystemPrompt(
           activeEngine,
@@ -5506,6 +5522,23 @@ if (!gotTheLock) {
     setServerBaseUrlGetter(() => getServerApiBaseUrl());
     setYdNimServerContext(getAuthTokens);
 
+    // Restore electronTaskId ↔ iosTaskId mappings from SQLite so the NIM client
+    // can forward messages and send replies across app restarts.
+    try {
+      const db = getStore().getDatabase();
+      db.exec(`CREATE TABLE IF NOT EXISTS ios_task_mapping (
+        electron_task_id TEXT PRIMARY KEY,
+        ios_task_id TEXT NOT NULL
+      )`);
+      const rows = db.prepare('SELECT electron_task_id, ios_task_id FROM ios_task_mapping').all() as Array<{ electron_task_id: string; ios_task_id: string }>;
+      if (rows.length > 0) {
+        restoreTaskIdMappings(rows.map(r => ({ electronTaskId: r.electron_task_id, iosTaskId: r.ios_task_id })));
+        console.log('[iOS] Restored', rows.length, 'iOS task mappings from SQLite');
+      }
+    } catch (err) {
+      console.warn('[iOS] Failed to initialize ios_task_mapping table:', err);
+    }
+
     setYdNimCoworkCallbacks({
       createSession: async (taskId, title) => {
         const store = getCoworkStore();
@@ -5523,13 +5556,33 @@ if (!gotTheLock) {
       continueSession: async (sessionId, text) => {
         const store = getCoworkStore();
         const runtime = getCoworkEngineRouter();
-        const session = store.getSession(sessionId);
+        let activeSessionId = sessionId;
+        let session = store.getSession(sessionId);
         if (!session) {
           console.error('[iOS] continueSession — session not found:', sessionId);
-          return;
+          // CoworkSession was deleted (or app restarted with new DB). Recreate it
+          // if we still have the iOS task mapping.
+          const iosTaskId = getTaskIdForElectronSession(sessionId);
+          if (!iosTaskId) {
+            console.error('[iOS] continueSession — no iOS mapping found, giving up');
+            return;
+          }
+          console.log('[iOS] continueSession — recreating session for iosTaskId:', iosTaskId);
+          const cfg = store.getConfig();
+          const cwd = resolveTaskWorkingDirectory(cfg.workingDirectory || process.env.HOME || '.');
+          const sp = mergeCoworkSystemPrompt(resolveCoworkAgentEngine(), cfg.systemPrompt);
+          const newSession = store.createSession('iOS Task', cwd, sp, cfg.executionMode || 'local', [], 'main');
+          activeSessionId = newSession.id;
+          session = newSession;
+          BrowserWindow.getAllWindows().forEach(win => {
+            if (!win.isDestroyed()) win.webContents.send('cowork:sessions:changed');
+          });
+          remapElectronTaskId(sessionId, activeSessionId).catch(err => {
+            console.warn('[iOS] remapElectronTaskId failed:', (err as Error)?.message);
+          });
         }
-        store.updateSession(sessionId, { status: 'running' });
-        store.addMessage(sessionId, { type: 'user', content: text });
+        store.updateSession(activeSessionId, { status: 'running' });
+        store.addMessage(activeSessionId, { type: 'user', content: text });
         const config = store.getConfig();
         const systemPrompt = mergeCoworkSystemPrompt(resolveCoworkAgentEngine(), session.systemPrompt ?? config.systemPrompt);
         const options = {
@@ -5538,15 +5591,15 @@ if (!gotTheLock) {
           workspaceRoot: session.cwd || config.workingDirectory,
           confirmationMode: 'modal' as const,
         };
-        const userMessages = store.getSession(sessionId)?.messages?.filter(m => m.type === 'user') ?? [];
+        const userMessages = store.getSession(activeSessionId)?.messages?.filter(m => m.type === 'user') ?? [];
         const isFirst = userMessages.length <= 1;
-        console.log('[iOS] continueSession — sessionId:', sessionId, 'isFirst:', isFirst);
+        console.log('[iOS] continueSession — sessionId:', activeSessionId, 'isFirst:', isFirst, 'recreated:', sessionId !== activeSessionId);
         if (isFirst) {
-          runtime.startSession(sessionId, text, options).catch(err => {
+          runtime.startSession(activeSessionId, text, options).catch(err => {
             console.error('[iOS] startSession error:', (err as Error)?.message);
           });
         } else {
-          runtime.continueSession(sessionId, text, options).catch(err => {
+          runtime.continueSession(activeSessionId, text, options).catch(err => {
             console.error('[iOS] continueSession error:', (err as Error)?.message);
           });
         }
@@ -5574,6 +5627,26 @@ if (!gotTheLock) {
         BrowserWindow.getAllWindows().forEach(win => {
           if (!win.isDestroyed()) win.webContents.send('cowork:sessions:changed');
         });
+      },
+
+      persistIosMapping: (electronTaskId, iosTaskId) => {
+        try {
+          getStore().getDatabase()
+            .prepare('INSERT OR REPLACE INTO ios_task_mapping (electron_task_id, ios_task_id) VALUES (?, ?)')
+            .run(electronTaskId, iosTaskId);
+        } catch (err) {
+          console.warn('[iOS] persistIosMapping failed:', err);
+        }
+      },
+
+      deleteIosMapping: (electronTaskId) => {
+        try {
+          getStore().getDatabase()
+            .prepare('DELETE FROM ios_task_mapping WHERE electron_task_id = ?')
+            .run(electronTaskId);
+        } catch (err) {
+          console.warn('[iOS] deleteIosMapping failed:', err);
+        }
       },
     });
 

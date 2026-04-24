@@ -28,6 +28,7 @@ function makeId(): string {
 
 const ACTION_LABELS: Record<string, string> = {
   normal: '普通',
+  normal_right: '普通(Electron)',
   create: '创建会话',
   update: '更新会话',
   pin: '置顶',
@@ -127,11 +128,11 @@ const IosCommView: React.FC<IosCommViewProps> = ({
                 persistedMessages = entries;
                 return entries;
               }
-              // Prepend history entries older than anything already in state
-              const oldestExisting = Math.min(...prev.map(m => m.time));
-              const older = entries.filter(e => e.time < oldestExisting);
-              if (older.length === 0) return prev;
-              const merged = [...older, ...prev];
+              // Merge ring buffer with current state, deduplicate by kind+time+text fingerprint
+              const existingKeys = new Set(prev.map(m => `${m.kind}:${m.time}:${m.text}`));
+              const toAdd = entries.filter(e => !existingKeys.has(`${e.kind}:${e.time}:${e.text}`));
+              if (toAdd.length === 0) return prev;
+              const merged = [...prev, ...toAdd].sort((a, b) => a.time - b.time);
               persistedMessages = merged;
               return merged;
             });
