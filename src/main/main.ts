@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, ne
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initYdNimClient, destroyYdNimClient, sendYdNimMessage, sendExtYdNimMessage, setYdNimServerContext, setYdNimCoworkCallbacks, getTaskIdForElectronSession, saveConversationMessages, simulateIncomingMessage } from './libs/ydNimClient';
+import { initYdNimClient, destroyYdNimClient, sendYdNimMessage, sendExtYdNimMessage, setYdNimServerContext, setYdNimCoworkCallbacks, getTaskIdForElectronSession, saveConversationMessages, simulateIncomingMessage, getNimEventHistory } from './libs/ydNimClient';
 
 import type { OpenClawSessionPatch } from '../common/openclawSession';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
@@ -2488,6 +2488,10 @@ if (!gotTheLock) {
     } catch (err: any) {
       return { success: false, error: err?.message ?? String(err) };
     }
+  });
+
+  ipcMain.handle('yd-nim:get-history', () => {
+    return getNimEventHistory();
   });
 
   ipcMain.handle('auth:refreshToken', async () => {

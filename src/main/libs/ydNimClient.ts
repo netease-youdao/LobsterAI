@@ -42,16 +42,21 @@ let currentAccid: string | null = null;
 let initialized = false;
 
 /**
- * Local cache: taskId → {electronTaskId, conversationId}
+ * Local cache: taskId → {electronTaskId}
  * Populated after every successful GET or create. Avoids repeated server
- * round-trips for the same conversation (docs recommend this pattern).
- * Also used as a fallback when the server doesn't have the conversation yet
- * (simulator / offline testing).
+ * round-trips for the same conversation.
  */
-const taskIdCache = new Map<string, { electronTaskId: string; conversationId: string }>();
+const taskIdCache = new Map<string, { electronTaskId: string }>();
 
 /** Reverse lookup: electronTaskId (= CoworkSession.id) → iOS taskId */
 const electronTaskIdToTaskId = new Map<string, string>();
+
+/**
+ * In-flight create handlers register a promise here so concurrent
+ * handleNormalMessage calls can wait for the electronTaskId instead of
+ * racing against the server update.  keyed by iOS taskId.
+ */
+const pendingCreates = new Map<string, Promise<{ electronTaskId: string } | null>>();
 
 interface IosCoworkCallbacks {
   createSession: (taskId: string, title: string) => Promise<{ sessionId: string }>;
@@ -68,11 +73,32 @@ let lifecyclePromise: Promise<void> = Promise.resolve();
 
 // ── Renderer broadcast ─────────────────────────────────────────────────────
 
+// Ring buffer of recent NIM events for IosCommView catch-up on mount.
+// Stores the last 200 events across all debug channels.
+const NIM_HISTORY_MAX = 200;
+const nimEventHistory: Array<{ channel: string; data: unknown }> = [];
+
 function broadcastToRenderer(channel: string, data: unknown): void {
+  // Record in history ring buffer (only debug-relevant channels)
+  if (
+    channel === 'yd-nim:message-received' ||
+    channel === 'yd-nim:message-sent' ||
+    channel === 'yd-nim:log' ||
+    channel === 'yd-nim:action'
+  ) {
+    nimEventHistory.push({ channel, data });
+    if (nimEventHistory.length > NIM_HISTORY_MAX) {
+      nimEventHistory.splice(0, nimEventHistory.length - NIM_HISTORY_MAX);
+    }
+  }
   const wins = BrowserWindow.getAllWindows();
   wins.forEach(win => {
     if (!win.isDestroyed()) win.webContents.send(channel, data);
   });
+}
+
+export function getNimEventHistory(): Array<{ channel: string; data: unknown }> {
+  return nimEventHistory.slice();
 }
 
 // ── Lobster server API ──────────────────────────────────────────────────────
@@ -159,9 +185,8 @@ async function resolveElectronTaskId(taskId: string): Promise<string | undefined
   if (cached) return cached.electronTaskId;
   const data = await callLobsterApi('/lobster/conversation/get', { taskId });
   const electronTaskId: string | undefined = data.conversation?.electronTaskId;
-  const conversationId: string | undefined = data.conversation?.conversationId;
-  if (electronTaskId && conversationId) {
-    taskIdCache.set(taskId, { electronTaskId, conversationId });
+  if (electronTaskId) {
+    taskIdCache.set(taskId, { electronTaskId });
     electronTaskIdToTaskId.set(electronTaskId, taskId);
   }
   return electronTaskId;
@@ -169,34 +194,20 @@ async function resolveElectronTaskId(taskId: string): Promise<string | undefined
 
 // ── Action handlers ────────────────────────────────────────────────────────
 
-// ── Auto-reply helper ──────────────────────────────────────────────────────
-
-async function autoReply(originalMsg: any, _originalExt: any, extraExt?: object): Promise<void> {
-  const replyText = `[Electron] ${originalMsg.text ?? ''}`.trim();
-  const replyExt: any = {
-    action: 'normal',
-    ...extraExt,
-  };
-  const serverId = await doSendMessage(replyText, replyExt);
-  broadcastToRenderer('yd-nim:message-sent', { text: replyText, time: Date.now(), serverId, isAutoReply: true, ext: replyExt });
-}
-
-// ── Action handlers ────────────────────────────────────────────────────────
-
-async function handleCreateConversation(msg: any, ext: any): Promise<void> {
+async function handleCreateConversation(_msg: any, ext: any): Promise<void> {
   const { taskId, title } = ext;
   console.log('[YdNimClient] handleCreate — taskId:', taskId, 'title:', title);
   broadcastToRenderer('yd-nim:log', { text: `处理 create: taskId=${taskId}`, time: Date.now() });
+
+  // Register before first await so concurrent handleNormalMessage can wait on it
+  let resolveCreate!: (v: { electronTaskId: string } | null) => void;
+  pendingCreates.set(taskId, new Promise(r => { resolveCreate = r; }));
+
   try {
-    let conversationId: string;
-    let electronTaskId: string;
+    let electronTaskId!: string;
 
     try {
-      // Step 1: fetch full conversation from server (iOS should have created it already)
-      const data = await callLobsterApi('/lobster/conversation/get', { taskId });
-      conversationId = data.conversation.conversationId;
-
-      // Step 2: create real CoworkSession (or fall back to a generated ID)
+      // Step 1: create real CoworkSession (or fall back to a generated ID)
       if (coworkCallbacks) {
         const { sessionId } = await coworkCallbacks.createSession(taskId, title ?? 'iOS Task');
         electronTaskId = sessionId;
@@ -204,18 +215,17 @@ async function handleCreateConversation(msg: any, ext: any): Promise<void> {
         electronTaskId = `electron-task-${Date.now()}`;
       }
 
-      // Step 3: register mapping on server
+      // Step 2: register mapping on server
       await callLobsterApi('/lobster/conversation/electron-task-id/update', { taskId, electronTaskId });
 
       // Cache the mapping for subsequent messages
-      taskIdCache.set(taskId, { electronTaskId, conversationId });
+      taskIdCache.set(taskId, { electronTaskId });
       electronTaskIdToTaskId.set(electronTaskId, taskId);
     } catch (serverErr: any) {
-      // Conversation not yet on server (simulation mode) — generate local IDs and cache them
+      // Conversation not yet on server (simulation mode) — generate local ID and cache
       if (serverErr?.message?.includes('4009')) {
-        electronTaskId = `electron-task-${Date.now()}`;
-        conversationId = `sim-conv-${taskId}`;
-        taskIdCache.set(taskId, { electronTaskId, conversationId });
+        if (!electronTaskId) electronTaskId = `electron-task-${Date.now()}`;
+        taskIdCache.set(taskId, { electronTaskId });
         electronTaskIdToTaskId.set(electronTaskId, taskId);
         broadcastToRenderer('yd-nim:log', {
           text: `[模拟模式] 服务器无此会话，本地生成 electronTaskId=${electronTaskId}`,
@@ -226,14 +236,18 @@ async function handleCreateConversation(msg: any, ext: any): Promise<void> {
       }
     }
 
-    broadcastToRenderer('yd-nim:action', { action: 'create', taskId, electronTaskId, conversationId, title });
-    // Auto-reply as ack — create has no agent execution
-    await autoReply(msg, ext, { taskId, electronTaskId });
+    // Unblock any concurrent normal-message handlers waiting for this taskId
+    resolveCreate({ electronTaskId });
+
+    broadcastToRenderer('yd-nim:action', { action: 'create', taskId, electronTaskId, title });
     broadcastToRenderer('yd-nim:log', { text: `✓ create处理完成，electronTaskId=${electronTaskId}`, time: Date.now() });
   } catch (e: any) {
+    resolveCreate(null);
     const errMsg = e?.message ?? String(e);
     console.error('[YdNimClient] handleCreate failed:', errMsg);
     broadcastToRenderer('yd-nim:log', { text: `✗ create处理失败: ${errMsg}`, time: Date.now() });
+  } finally {
+    pendingCreates.delete(taskId);
   }
 }
 
@@ -242,13 +256,11 @@ async function handleNormalMessage(msg: any, ext: any): Promise<void> {
   console.log('[YdNimClient] handleNormal — taskId:', taskId, 'text:', msg.text);
   broadcastToRenderer('yd-nim:log', { text: `处理普通消息: taskId=${taskId ?? 'none'}`, time: Date.now() });
   try {
-    let conversationId: string | undefined;
     let electronTaskId: string | undefined;
 
     if (taskId) {
       const cached = taskIdCache.get(taskId);
       if (cached) {
-        conversationId = cached.conversationId;
         electronTaskId = cached.electronTaskId;
         broadcastToRenderer('yd-nim:log', {
           text: `[本地缓存] electronTaskId=${electronTaskId}`,
@@ -256,11 +268,23 @@ async function handleNormalMessage(msg: any, ext: any): Promise<void> {
         });
       } else {
         const data = await callLobsterApi('/lobster/conversation/get', { taskId });
-        conversationId = data.conversation?.conversationId;
         electronTaskId = data.conversation?.electronTaskId;
-        if (conversationId && electronTaskId) {
-          taskIdCache.set(taskId, { electronTaskId, conversationId });
+        if (electronTaskId) {
           electronTaskIdToTaskId.set(electronTaskId, taskId);
+          taskIdCache.set(taskId, { electronTaskId });
+        }
+      }
+
+      // create and normal messages arrive nearly simultaneously; if electronTaskId
+      // is still missing, the create handler may still be in-flight — wait for it
+      if (!electronTaskId && pendingCreates.has(taskId)) {
+        broadcastToRenderer('yd-nim:log', { text: `等待 create 完成: taskId=${taskId}`, time: Date.now() });
+        const createResult = await Promise.race([
+          pendingCreates.get(taskId)!,
+          new Promise<null>(r => setTimeout(() => r(null), 5000)),
+        ]);
+        if (createResult) {
+          electronTaskId = createResult.electronTaskId;
         }
       }
     }
@@ -269,7 +293,6 @@ async function handleNormalMessage(msg: any, ext: any): Promise<void> {
       action: 'normal',
       taskId,
       electronTaskId,
-      conversationId,
       text: msg.text,
     });
 
@@ -281,9 +304,6 @@ async function handleNormalMessage(msg: any, ext: any): Promise<void> {
         if (electronTaskId && coworkCallbacks) {
           // Real flow: hand off to agent; reply comes via runtime complete hook
           await coworkCallbacks.continueSession(electronTaskId, msg.text ?? '');
-        } else {
-          // Debug fallback when callbacks not registered
-          await autoReply(msg, ext, taskId ? { taskId } : {});
         }
       })(),
       (async () => {
@@ -309,7 +329,7 @@ async function handleNormalMessage(msg: any, ext: any): Promise<void> {
   }
 }
 
-async function handleUpdateConversation(msg: any, ext: any): Promise<void> {
+async function handleUpdateConversation(_msg: any, ext: any): Promise<void> {
   const { taskId, title } = ext;
   console.log('[YdNimClient] handleUpdate — taskId:', taskId, 'title:', title);
   try {
@@ -317,7 +337,6 @@ async function handleUpdateConversation(msg: any, ext: any): Promise<void> {
     await callLobsterApi('/lobster/conversation/update', { taskId, title });
     if (electronTaskId) coworkCallbacks?.rename(electronTaskId, title);
     broadcastToRenderer('yd-nim:action', { action: 'update', taskId, electronTaskId, title });
-    await autoReply(msg, ext, { taskId });
     broadcastToRenderer('yd-nim:log', { text: `✓ update处理完成: taskId=${taskId}`, time: Date.now() });
   } catch (e: any) {
     const errMsg = e?.message ?? String(e);
@@ -326,7 +345,7 @@ async function handleUpdateConversation(msg: any, ext: any): Promise<void> {
   }
 }
 
-async function handlePinConversation(msg: any, ext: any): Promise<void> {
+async function handlePinConversation(_msg: any, ext: any): Promise<void> {
   const { taskId } = ext;
   console.log('[YdNimClient] handlePin — taskId:', taskId);
   try {
@@ -336,7 +355,6 @@ async function handlePinConversation(msg: any, ext: any): Promise<void> {
       electronTaskId ? Promise.resolve(coworkCallbacks?.setPinned(electronTaskId, true)) : Promise.resolve(),
     ]);
     broadcastToRenderer('yd-nim:action', { action: 'pin', taskId, electronTaskId });
-    await autoReply(msg, ext, { taskId });
     broadcastToRenderer('yd-nim:log', { text: `✓ pin处理完成: taskId=${taskId}`, time: Date.now() });
   } catch (e: any) {
     const errMsg = e?.message ?? String(e);
@@ -345,7 +363,7 @@ async function handlePinConversation(msg: any, ext: any): Promise<void> {
   }
 }
 
-async function handleUnpinConversation(msg: any, ext: any): Promise<void> {
+async function handleUnpinConversation(_msg: any, ext: any): Promise<void> {
   const { taskId } = ext;
   console.log('[YdNimClient] handleUnpin — taskId:', taskId);
   try {
@@ -355,7 +373,6 @@ async function handleUnpinConversation(msg: any, ext: any): Promise<void> {
       electronTaskId ? Promise.resolve(coworkCallbacks?.setPinned(electronTaskId, false)) : Promise.resolve(),
     ]);
     broadcastToRenderer('yd-nim:action', { action: 'unpin', taskId, electronTaskId });
-    await autoReply(msg, ext, { taskId });
     broadcastToRenderer('yd-nim:log', { text: `✓ unpin处理完成: taskId=${taskId}`, time: Date.now() });
   } catch (e: any) {
     const errMsg = e?.message ?? String(e);
@@ -364,7 +381,7 @@ async function handleUnpinConversation(msg: any, ext: any): Promise<void> {
   }
 }
 
-async function handleDeleteConversation(msg: any, ext: any): Promise<void> {
+async function handleDeleteConversation(_msg: any, ext: any): Promise<void> {
   const { taskId } = ext;
   console.log('[YdNimClient] handleDelete — taskId:', taskId);
   try {
@@ -376,7 +393,6 @@ async function handleDeleteConversation(msg: any, ext: any): Promise<void> {
       coworkCallbacks?.deleteSession(electronTaskId);
     }
     broadcastToRenderer('yd-nim:action', { action: 'delete', taskId, electronTaskId });
-    await autoReply(msg, ext, { taskId });
     broadcastToRenderer('yd-nim:log', { text: `✓ delete处理完成: taskId=${taskId}`, time: Date.now() });
   } catch (e: any) {
     const errMsg = e?.message ?? String(e);
@@ -388,6 +404,13 @@ async function handleDeleteConversation(msg: any, ext: any): Promise<void> {
 // ── Message routing ────────────────────────────────────────────────────────
 
 async function routeIncomingMessage(msg: any): Promise<void> {
+  // Only process messages from iOS clients (fromClientType 2).
+  // Electron's own sent messages echo back via onReceiveMessages with fromClientType 16
+  // and must be ignored to avoid re-processing our own replies.
+  if (msg.fromClientType !== 2) {
+    return;
+  }
+
   // Parse serverExtension
   let ext: any = null;
   if (msg.serverExtension) {
@@ -675,7 +698,6 @@ export interface SimulateIosParams {
   action?: string;   // create | update | pin | unpin | delete | ack | undefined (normal)
   taskId?: string;
   title?: string;
-  conversationId?: string;
   text?: string;
 }
 
@@ -685,18 +707,17 @@ export interface SimulateIosParams {
  * useful for local testing without an iOS device.
  */
 export async function simulateIncomingMessage(params: SimulateIosParams): Promise<void> {
-  const { action, taskId, title, conversationId, text = '' } = params;
+  const { action, taskId, title, text = '' } = params;
   const ext: Record<string, string> = {};
   if (action) ext.action = action;
   if (taskId) ext.taskId = taskId;
   if (title) ext.title = title;
-  if (conversationId) ext.conversationId = conversationId;
 
   const fakeMsg = {
     conversationType: 1,
     senderId: currentAccid ?? 'sim-sender',
     receiverId: currentAccid ?? 'sim-sender',
-    fromClientType: 16,  // iOS
+    fromClientType: 2,  // simulate iOS client
     createTime: Date.now(),
     messageType: 0,
     text,

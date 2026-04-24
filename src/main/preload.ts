@@ -606,8 +606,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('yd-nim:send-message', text, ext) as Promise<{ success: boolean; error?: string }>,
     saveMessages: (taskId: string, messages: Array<{ messageId: string; role: string; content: string; timestamp: number }>) =>
       ipcRenderer.invoke('yd-nim:save-messages', taskId, messages) as Promise<{ success: boolean; error?: string }>,
-    simulateIosMessage: (params: { action?: string; taskId?: string; title?: string; conversationId?: string; text?: string }) =>
+    simulateIosMessage: (params: { action?: string; taskId?: string; title?: string; text?: string }) =>
       ipcRenderer.invoke('yd-nim:simulate-ios-message', params) as Promise<{ success: boolean; error?: string }>,
+    getHistory: () =>
+      ipcRenderer.invoke('yd-nim:get-history') as Promise<Array<{ channel: string; data: unknown }>>,
     onMessageSent: (callback: (msg: { text: string; time: number; serverId?: string; error?: string; ext?: object; isAutoReply?: boolean }) => void) => {
       const handler = (_event: any, msg: any) => callback(msg);
       ipcRenderer.on('yd-nim:message-sent', handler);
@@ -623,7 +625,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('yd-nim:log', handler);
       return () => ipcRenderer.removeListener('yd-nim:log', handler);
     },
-    onAction: (callback: (data: { action: string; taskId?: string; electronTaskId?: string; conversationId?: string; title?: string; text?: string }) => void) => {
+    onAction: (callback: (data: { action: string; taskId?: string; electronTaskId?: string; title?: string; text?: string }) => void) => {
       const handler = (_event: any, data: any) => callback(data);
       ipcRenderer.on('yd-nim:action', handler);
       return () => ipcRenderer.removeListener('yd-nim:action', handler);

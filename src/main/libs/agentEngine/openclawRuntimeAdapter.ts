@@ -1162,7 +1162,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
     await this.runTurn(sessionId, prompt, {
-      skipInitialUserMessage: false,
+      skipInitialUserMessage: options.skipInitialUserMessage ?? false,
       systemPrompt: options.systemPrompt,
       skillIds: options.skillIds,
       imageAttachments: options.imageAttachments,

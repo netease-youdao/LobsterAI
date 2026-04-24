@@ -691,6 +691,89 @@ exports.plugin = {
   } else {
     log('openclaw-lark not found, skipping deferred loading patch');
   }
+
+  // --- Post-install patch: openclaw-nim-channel plugin ID fix + deferred startup loading ---
+  // The openclaw-nim-channel plugin has two issues:
+  // 1. Its openclaw.plugin.json declares id="nimsuite-openclaw-nim-channel" but LobsterAI's
+  //    config entry key is "openclaw-nim-channel".  The gateway cannot match the config entry
+  //    to the discovered plugin, and the plugin is loaded without a config entry (default state),
+  //    causing gateway startup to hang as the NIM SDK (@yxim/nim-bot) initialises eagerly.
+  // 2. index.js runs init_runtime() at module level, loading the heavy @yxim/nim-bot ESM SDK
+  //    synchronously and blocking the gateway event loop before the HTTP server starts.
+  //
+  // This patch mirrors the openclaw-lark fix:
+  // 1. Fixes the plugin id in openclaw.plugin.json to "openclaw-nim-channel"
+  // 2. Generates a zero-dependency setup-entry.js with static channel metadata
+  // 3. Adds setupEntry + startup.deferConfiguredChannelFullLoadUntilAfterListen to package.json
+  const nimChannelPluginDir = path.join(runtimeExtensionsDir, 'openclaw-nim-channel');
+  const nimChannelPackageJsonPath = path.join(nimChannelPluginDir, 'package.json');
+  const nimChannelPluginJsonPath = path.join(nimChannelPluginDir, 'openclaw.plugin.json');
+  if (fs.existsSync(nimChannelPackageJsonPath)) {
+    // Fix plugin ID mismatch
+    if (fs.existsSync(nimChannelPluginJsonPath)) {
+      const pluginJson = readJsonFile(nimChannelPluginJsonPath);
+      if (pluginJson && pluginJson.id !== 'openclaw-nim-channel') {
+        pluginJson.id = 'openclaw-nim-channel';
+        fs.writeFileSync(nimChannelPluginJsonPath, JSON.stringify(pluginJson, null, 2) + '\n', 'utf-8');
+        log('Patched openclaw-nim-channel/openclaw.plugin.json: fixed plugin id to "openclaw-nim-channel"');
+      } else {
+        log('openclaw-nim-channel/openclaw.plugin.json already has correct id, skipping');
+      }
+    }
+
+    const nimPkg = readJsonFile(nimChannelPackageJsonPath);
+    const needsSetupPatch = nimPkg && nimPkg.openclaw && !nimPkg.openclaw.setupEntry;
+
+    if (needsSetupPatch) {
+      // 1. Generate lightweight setup-entry.js (zero require() calls)
+      const setupEntryContent = `"use strict";
+// Lightweight setup entry for deferred loading (patched by LobsterAI).
+// Only static channel metadata — no heavy dependencies.
+// The full plugin (index.js) loads after the HTTP server starts listening.
+exports.plugin = {
+  // id must match the patched plugin manifest id (openclaw-nim-channel), NOT the channel id (nim).
+  // The loader checks: setupEntry.plugin.id === record.id (the manifest id).
+  // The full plugin (index.js) registers the channel with id 'nim' during deferred reload.
+  id: 'openclaw-nim-channel',
+  meta: {
+    id: 'nim',
+    label: 'NIM',
+    selectionLabel: 'NetEase IM (\\u7F51\\u6613\\u4E91\\u4FE1)',
+    docsPath: '/channels/nim',
+    docsLabel: 'nim',
+    blurb: '\\u7F51\\u6613\\u4E91\\u4FE1 IM \\u5373\\u65F6\\u901A\\u8BAF\\u3002',
+    aliases: ['netease', 'yunxin'],
+    order: 80,
+  },
+  capabilities: {
+    chatTypes: ['direct', 'group'],
+    polls: false,
+    threads: false,
+    media: true,
+    reactions: false,
+    edit: false,
+    reply: false,
+  },
+  reload: { configPrefixes: ['channels.nim'] },
+};
+`;
+      const setupEntryPath = path.join(nimChannelPluginDir, 'setup-entry.js');
+      fs.writeFileSync(setupEntryPath, setupEntryContent, 'utf-8');
+
+      // 2. Patch package.json to declare setupEntry and deferred startup
+      nimPkg.openclaw.setupEntry = './setup-entry.js';
+      nimPkg.openclaw.startup = {
+        deferConfiguredChannelFullLoadUntilAfterListen: true,
+      };
+      fs.writeFileSync(nimChannelPackageJsonPath, JSON.stringify(nimPkg, null, 2) + '\n', 'utf-8');
+
+      log('Patched openclaw-nim-channel: added setup-entry.js + deferred startup loading');
+    } else {
+      log('openclaw-nim-channel already has setupEntry, skipping deferred loading patch');
+    }
+  } else {
+    log('openclaw-nim-channel not found, skipping nim-channel patches');
+  }
 }
 
 if (require.main === module) {

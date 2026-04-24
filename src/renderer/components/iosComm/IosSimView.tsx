@@ -15,7 +15,6 @@ interface SimForm {
   action: ActionType;
   taskId: string;
   title: string;
-  conversationId: string;
   text: string;
 }
 
@@ -50,19 +49,19 @@ const ACTION_OPTIONS: { value: ActionType; label: string; desc: string }[] = [
   { value: 'update', label: '更新会话', desc: '修改会话标题，需要 taskId + title' },
   { value: 'pin',    label: '置顶会话', desc: '置顶指定任务，需要 taskId' },
   { value: 'unpin',  label: '取消置顶', desc: '取消置顶，需要 taskId' },
-  { value: 'delete', label: '删除会话', desc: '软删除会话，需要 taskId (或 conversationId)' },
+  { value: 'delete', label: '删除会话', desc: '软删除会话，需要 taskId' },
   { value: 'ack',    label: 'Ack',     desc: 'iOS 回执，只记录日志，不处理' },
 ];
 
 // Which extra fields each action needs
-const NEEDS: Record<ActionType, { taskId: boolean; title: boolean; conversationId: boolean; text: boolean }> = {
-  normal:  { taskId: true,  title: false, conversationId: false, text: true },
-  create:  { taskId: true,  title: true,  conversationId: false, text: false },
-  update:  { taskId: true,  title: true,  conversationId: false, text: false },
-  pin:     { taskId: true,  title: false, conversationId: false, text: false },
-  unpin:   { taskId: true,  title: false, conversationId: false, text: false },
-  delete:  { taskId: true,  title: false, conversationId: true,  text: false },
-  ack:     { taskId: true,  title: false, conversationId: false, text: false },
+const NEEDS: Record<ActionType, { taskId: boolean; title: boolean; text: boolean }> = {
+  normal:  { taskId: true,  title: false, text: true },
+  create:  { taskId: true,  title: true,  text: false },
+  update:  { taskId: true,  title: true,  text: false },
+  pin:     { taskId: true,  title: false, text: false },
+  unpin:   { taskId: true,  title: false, text: false },
+  delete:  { taskId: true,  title: false, text: false },
+  ack:     { taskId: true,  title: false, text: false },
 };
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -85,7 +84,6 @@ const IosSimView: React.FC<IosSimViewProps> = ({
     action: 'normal',
     taskId: '',
     title: '',
-    conversationId: '',
     text: '测试消息',
   });
   const [sending, setSending] = useState(false);
@@ -110,7 +108,7 @@ const IosSimView: React.FC<IosSimViewProps> = ({
       }
     );
     const unsubAction = (window.electron as any).ydNim.onAction(
-      (data: { action: string; taskId?: string; electronTaskId?: string; conversationId?: string; title?: string; text?: string }) => {
+      (data: { action: string; taskId?: string; electronTaskId?: string; title?: string; text?: string }) => {
         setLogs(prev => [...prev, {
           id: makeId(), time: Date.now(), kind: 'action',
           text: `[路由结果] action=${data.action}`,
@@ -132,7 +130,6 @@ const IosSimView: React.FC<IosSimViewProps> = ({
     const params: any = { action: form.action === 'normal' ? undefined : form.action };
     if (form.taskId.trim()) params.taskId = form.taskId.trim();
     if (needs.title && form.title.trim()) params.title = form.title.trim();
-    if (needs.conversationId && form.conversationId.trim()) params.conversationId = form.conversationId.trim();
     if (needs.text) params.text = form.text.trim();
 
     addLog({
@@ -259,20 +256,6 @@ const IosSimView: React.FC<IosSimViewProps> = ({
                 onChange={e => handleSet('title', e.target.value)}
                 placeholder="例：翻译这段话"
                 className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-secondary focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-          )}
-
-          {/* conversationId */}
-          {needs.conversationId && (
-            <div>
-              <label className="block text-xs font-medium text-secondary mb-1">conversationId（可选，delete 时填）</label>
-              <input
-                type="text"
-                value={form.conversationId}
-                onChange={e => handleSet('conversationId', e.target.value)}
-                placeholder="留空则由 Electron 先查询再删除"
-                className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-secondary focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
           )}

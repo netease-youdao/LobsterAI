@@ -64,6 +64,10 @@ function ExtBadge({ ext }: { ext: ExtCommand }) {
   );
 }
 
+// ── Module-level message cache (survives tab switches) ─────────────────────
+
+let persistedMessages: (MessageEntry & { id: string })[] = [];
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 interface IosCommViewProps {
@@ -73,15 +77,6 @@ interface IosCommViewProps {
   updateBadge?: React.ReactNode;
 }
 
-// Preset ext templates for quick send
-const EXT_PRESETS: { label: string; ext: ExtCommand }[] = [
-  { label: '普通消息', ext: { taskId: '' } },
-  { label: '创建会话', ext: { action: 'create', taskId: '', title: '测试会话' } },
-  { label: '置顶', ext: { action: 'pin', taskId: '' } },
-  { label: '取消置顶', ext: { action: 'unpin', taskId: '' } },
-  { label: '删除', ext: { action: 'delete', taskId: '' } },
-];
-
 const IosCommView: React.FC<IosCommViewProps> = ({
   isSidebarCollapsed,
   onToggleSidebar,
@@ -89,13 +84,13 @@ const IosCommView: React.FC<IosCommViewProps> = ({
   updateBadge,
 }) => {
   const isMac = window.electron.platform === 'darwin';
-  const [messages, setMessages] = useState<(MessageEntry & { id: string })[]>([]);
-  const [inputText, setInputText] = useState('');
-  const [extText, setExtText] = useState('');
-  const [showExtInput, setShowExtInput] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [extError, setExtError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<(MessageEntry & { id: string })[]>(() => persistedMessages);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Sync to module-level cache so remounts restore the list
+  useEffect(() => {
+    persistedMessages = messages;
+  }, [messages]);
 
   const addEntry = useCallback((entry: MessageEntry) => {
     setMessages(prev => [...prev, { ...entry, id: makeId() }]);
@@ -106,8 +101,47 @@ const IosCommView: React.FC<IosCommViewProps> = ({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Subscribe to IPC events
+  // Subscribe to IPC events and load history on mount
   useEffect(() => {
+    // Fetch buffered history from main process first
+    (async () => {
+      try {
+        const history = await (window.electron as any).ydNim.getHistory() as Array<{ channel: string; data: any }>;
+        if (history.length > 0) {
+          const entries: (MessageEntry & { id: string })[] = [];
+          for (const item of history) {
+            if (item.channel === 'yd-nim:message-received') {
+              const d = item.data;
+              entries.push({ kind: 'received', id: makeId(), from: d.from, text: d.text, serverId: d.serverId, time: d.time, ext: d.ext });
+            } else if (item.channel === 'yd-nim:message-sent') {
+              const d = item.data;
+              entries.push({ kind: 'sent', id: makeId(), text: d.text, time: d.time, serverId: d.serverId, error: d.error, ext: d.ext, isAutoReply: d.isAutoReply });
+            } else if (item.channel === 'yd-nim:log') {
+              const d = item.data;
+              entries.push({ kind: 'log', id: makeId(), text: d.text, time: d.time });
+            }
+          }
+          if (entries.length > 0) {
+            setMessages(prev => {
+              if (prev.length === 0) {
+                persistedMessages = entries;
+                return entries;
+              }
+              // Prepend history entries older than anything already in state
+              const oldestExisting = Math.min(...prev.map(m => m.time));
+              const older = entries.filter(e => e.time < oldestExisting);
+              if (older.length === 0) return prev;
+              const merged = [...older, ...prev];
+              persistedMessages = merged;
+              return merged;
+            });
+          }
+        }
+      } catch {
+        // ignore — main process may not have the handler yet
+      }
+    })();
+
     const unsubSent = (window.electron as any).ydNim.onMessageSent(
       (msg: { text: string; time: number; serverId?: string; error?: string; ext?: ExtCommand; isAutoReply?: boolean }) => {
         addEntry({ kind: 'sent', ...msg });
@@ -129,47 +163,6 @@ const IosCommView: React.FC<IosCommViewProps> = ({
       unsubLog();
     };
   }, [addEntry]);
-
-  const handleSend = useCallback(async () => {
-    const text = inputText.trim();
-    if (!text || sending) return;
-
-    // Parse ext if shown
-    let ext: object | undefined;
-    if (showExtInput && extText.trim()) {
-      try {
-        ext = JSON.parse(extText.trim());
-        setExtError(null);
-      } catch {
-        setExtError('JSON 格式错误');
-        return;
-      }
-    }
-
-    setSending(true);
-    setInputText('');
-    try {
-      await (window.electron as any).ydNim.sendMessage(text, ext);
-    } finally {
-      setSending(false);
-    }
-  }, [inputText, extText, showExtInput, sending]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend]
-  );
-
-  const applyPreset = useCallback((preset: { label: string; ext: ExtCommand }) => {
-    setExtText(JSON.stringify(preset.ext, null, 2));
-    setShowExtInput(true);
-    setExtError(null);
-  }, []);
 
   return (
     <div className="flex-1 flex flex-col bg-background h-full">
@@ -211,7 +204,7 @@ const IosCommView: React.FC<IosCommViewProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setMessages([])}
+            onClick={() => { setMessages([]); persistedMessages = []; }}
             className="text-xs text-secondary hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-surface-raised"
           >
             清空
@@ -278,64 +271,6 @@ const IosCommView: React.FC<IosCommViewProps> = ({
           );
         })}
         <div ref={bottomRef} />
-      </div>
-
-      {/* Input area */}
-      <div className="shrink-0 border-t border-border px-4 py-3 space-y-2">
-        {/* Presets */}
-        <div className="flex flex-wrap gap-1">
-          {EXT_PRESETS.map(p => (
-            <button
-              key={p.label}
-              type="button"
-              onClick={() => applyPreset(p)}
-              className="text-[11px] px-2 py-0.5 rounded border border-border text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
-            >
-              {p.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setShowExtInput(v => !v)}
-            className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${showExtInput ? 'border-primary text-primary bg-primary/10' : 'border-border text-secondary hover:text-foreground hover:bg-surface-raised'}`}
-          >
-            {showExtInput ? '隐藏 ext' : '显示 ext'}
-          </button>
-        </div>
-
-        {/* Ext JSON input */}
-        {showExtInput && (
-          <div>
-            <textarea
-              value={extText}
-              onChange={e => { setExtText(e.target.value); setExtError(null); }}
-              placeholder='{"action":"create","taskId":"..."}'
-              rows={3}
-              className={`w-full resize-none rounded-lg border bg-surface px-3 py-2 text-xs font-mono text-foreground placeholder:text-secondary focus:outline-none focus:ring-1 focus:ring-primary ${extError ? 'border-red-400' : 'border-border'}`}
-            />
-            {extError && <p className="text-[11px] text-red-400 mt-0.5">{extError}</p>}
-          </div>
-        )}
-
-        {/* Text + Send */}
-        <div className="flex gap-2 items-end">
-          <textarea
-            value={inputText}
-            onChange={e => setInputText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-            rows={2}
-            className="flex-1 resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-secondary focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!inputText.trim() || sending}
-            className="shrink-0 px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {sending ? '发送中…' : '发送'}
-          </button>
-        </div>
       </div>
     </div>
   );
