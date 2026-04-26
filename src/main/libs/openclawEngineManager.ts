@@ -1428,6 +1428,10 @@ export class OpenClawEngineManager extends EventEmitter {
   private scheduleGatewayRestart(): void {
     if (this.shutdownRequested) return;
     if (this.gatewayRestartTimer) return;
+    if (this.startGatewayPromise) {
+      console.log('[OpenClaw] scheduleGatewayRestart: startGateway already in progress, skipping');
+      return;
+    }
 
     if (this.gatewayRestartAttempt >= GATEWAY_MAX_RESTART_ATTEMPTS) {
       console.error(`[OpenClaw] gateway auto-restart limit reached (${GATEWAY_MAX_RESTART_ATTEMPTS} attempts), giving up`);
@@ -1447,6 +1451,10 @@ export class OpenClawEngineManager extends EventEmitter {
     this.gatewayRestartTimer = setTimeout(() => {
       this.gatewayRestartTimer = null;
       if (this.shutdownRequested) return;
+      if (this.startGatewayPromise) {
+        console.log('[OpenClaw] scheduleGatewayRestart: startGateway already in progress at timer fire, skipping');
+        return;
+      }
       void this.startGateway();
     }, delay);
   }
