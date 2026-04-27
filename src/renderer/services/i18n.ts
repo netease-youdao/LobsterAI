@@ -216,6 +216,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authLearnMore: '了解更多',
     authValueAddedServices: '增值服务',
     authZeroCredits: '0积分',
+    planFree: '免费',
+    planStandard: '标准',
+    planAdvanced: '进阶',
+    planPro: '专业',
 
     // 错误信息
     failedToLoadSettings: '加载设置失败',
@@ -405,6 +409,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryCategoryAll: '全部分类',
     coworkMemoryEmpty: '暂无记忆条目',
     coworkMemoryCrudTextPlaceholder: '输入要保存的记忆内容',
+    coworkMemoryCrudContentLabel: '记忆内容',
     coworkMemoryCrudCreate: '新增条目',
     coworkMemoryCrudUpdate: '更新条目',
     coworkMemoryCrudSaveFailed: '保存记忆条目失败',
@@ -1742,6 +1747,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authLearnMore: 'Learn More',
     authValueAddedServices: 'Premium Services',
     authZeroCredits: '0 credits',
+    planFree: 'Free',
+    planStandard: 'Standard',
+    planAdvanced: 'Advanced',
+    planPro: 'Pro',
 
     // Error Messages
     failedToLoadSettings: 'Failed to load settings',
@@ -1941,6 +1950,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkMemoryCategoryAll: 'All categories',
     coworkMemoryEmpty: 'No memory entries yet',
     coworkMemoryCrudTextPlaceholder: 'Enter memory text',
+    coworkMemoryCrudContentLabel: 'Memory content',
     coworkMemoryCrudCreate: 'Create entry',
     coworkMemoryCrudUpdate: 'Update entry',
     coworkMemoryCrudSaveFailed: 'Failed to save memory entry',

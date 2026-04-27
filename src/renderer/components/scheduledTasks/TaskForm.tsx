@@ -148,7 +148,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
     const savedChannel = task?.delivery.channel;
-    if (savedChannel && isIMChannel(savedChannel) && !base.some((o) => o.value === savedChannel)) {
+    if (savedChannel && isIMChannel(savedChannel) && !base.some(o => o.value === savedChannel)) {
       const platform = PlatformRegistry.platformOfChannel(savedChannel);
       const label = platform ? PlatformRegistry.get(platform).label : savedChannel;
       base.push({ value: savedChannel, label });
@@ -178,14 +178,14 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
 
   useEffect(() => {
     let cancelled = false;
-    void scheduledTaskService.listChannels().then((channels) => {
+    void scheduledTaskService.listChannels().then(channels => {
       if (cancelled || channels.length === 0) return;
-      setChannelOptions((current) => {
+      setChannelOptions(current => {
         // Use the server-returned order (DEFINITIONS order) as the base,
         // then append any saved channel that is not in the list (e.g. disabled platform).
         const next = [...channels];
         for (const saved of current) {
-          if (!next.some((item) => item.value === saved.value)) {
+          if (!next.some(item => item.value === saved.value)) {
             next.push(saved);
           }
         }
@@ -218,7 +218,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       setConversationsLoading(false);
 
       if (result.length > 0 && !form.notifyTo) {
-        setForm((current) => ({ ...current, notifyTo: result[0].conversationId }));
+        setForm(current => ({ ...current, notifyTo: result[0].conversationId }));
       }
     });
 
@@ -229,7 +229,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
   }, [form.notifyChannel, form.notifyAccountId, channelOptions]);
 
   const updateForm = (patch: Partial<FormState>) => {
-    setForm((current) => ({ ...current, ...patch }));
+    setForm(current => ({ ...current, ...patch }));
   };
 
   const validate = (): boolean => {
@@ -243,7 +243,14 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
     }
 
     if (form.planType === 'once') {
-      const runAt = new Date(form.year, form.month - 1, form.day, form.hour, form.minute, form.second);
+      const runAt = new Date(
+        form.year,
+        form.month - 1,
+        form.day,
+        form.hour,
+        form.minute,
+        form.second,
+      );
       if (runAt.getTime() <= Date.now()) {
         nextErrors.schedule = i18nService.t('scheduledTasksFormValidationDatetimeFuture');
       }
@@ -267,9 +274,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const schedule = isAdvanced && task
-        ? task.schedule
-        : buildScheduleInput(form);
+      const schedule = isAdvanced && task ? task.schedule : buildScheduleInput(form);
 
       const input: ScheduledTaskInput = {
         name: form.name.trim(),
@@ -283,14 +288,15 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
           message: form.payloadText.trim(),
           ...(form.modelId ? { model: form.modelId } : {}),
         },
-        delivery: form.notifyChannel === 'none'
-          ? { mode: 'none' }
-          : {
-              mode: 'announce',
-              channel: form.notifyChannel,
-              ...(form.notifyTo ? { to: form.notifyTo } : {}),
-              ...(form.notifyAccountId ? { accountId: form.notifyAccountId } : {}),
-            },
+        delivery:
+          form.notifyChannel === 'none'
+            ? { mode: 'none' }
+            : {
+                mode: 'announce',
+                channel: form.notifyChannel,
+                ...(form.notifyTo ? { to: form.notifyTo } : {}),
+                ...(form.notifyAccountId ? { accountId: form.notifyAccountId } : {}),
+              },
       };
 
       if (mode === 'create') {
@@ -309,13 +315,15 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
     }
   };
 
-  const inputClass = 'w-full rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent/50';
-  const textareaInputClass = 'w-full rounded-t-lg px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none resize-none bg-transparent';
+  const inputClass =
+    'w-full rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none focus:ring-2 focus:ring-claude-accent/50';
+  const textareaInputClass =
+    'w-full rounded-t-lg px-3 py-2 text-sm dark:text-claude-darkText text-claude-text focus:outline-none resize-none bg-transparent';
   const labelClass = 'block text-sm font-medium dark:text-claude-darkText text-claude-text mb-1';
   const errorClass = 'text-xs text-red-500 mt-1';
 
   const selectedModelValue: Model | null = form.modelId
-    ? availableModels.find((m) => toOpenClawModelRef(m) === form.modelId) ?? null
+    ? (availableModels.find(m => toOpenClawModelRef(m) === form.modelId) ?? null)
     : null;
 
   const handleModelChange = (model: Model | null) => {
@@ -336,9 +344,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
         <div>
           <label className={labelClass}>{i18nService.t('scheduledTasksFormScheduleType')}</label>
           <div className="rounded-lg bg-surface-raised/30 p-3">
-            <p className="text-sm text-secondary">
-              {formatScheduleLabel(task!.schedule)}
-            </p>
+            <p className="text-sm text-secondary">{formatScheduleLabel(task!.schedule)}</p>
             <p className="text-xs text-secondary mt-1">
               {i18nService.t('scheduledTasksAdvancedSchedule')}
             </p>
@@ -350,7 +356,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
     const planSelect = (
       <select
         value={form.planType}
-        onChange={(event) => updateForm({ planType: event.target.value as PlanType })}
+        onChange={event => updateForm({ planType: event.target.value as PlanType })}
         className={`${inputClass} flex-1 min-w-0`}
       >
         <option value="once">{i18nService.t('scheduledTasksFormScheduleModeOnce')}</option>
@@ -372,7 +378,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
             <input
               type="date"
               value={dateValue}
-              onChange={(e) => {
+              onChange={e => {
                 const [y, mo, d] = e.target.value.split('-').map(Number);
                 if (!Number.isNaN(y)) updateForm({ year: y, month: mo, day: d });
               }}
@@ -382,7 +388,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
               type="time"
               step="1"
               value={fullTimeValue}
-              onChange={(e) => {
+              onChange={e => {
                 const parts = e.target.value.split(':').map(Number);
                 const patch: Partial<FormState> = {};
                 if (!Number.isNaN(parts[0])) patch.hour = parts[0];
@@ -406,7 +412,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
             <input
               type="time"
               value={timeValue}
-              onChange={(e) => handleTimeChange(e.target.value)}
+              onChange={e => handleTimeChange(e.target.value)}
               className={`${inputClass} flex-1 min-w-0`}
             />
           </div>
@@ -422,14 +428,18 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
             {planSelect}
             <select
               value={form.minute}
-              onChange={(e) => updateForm({ minute: Number(e.target.value) })}
+              onChange={e => updateForm({ minute: Number(e.target.value) })}
               className="w-20 shrink-0 rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white px-3 py-2 text-sm dark:text-claude-darkText text-claude-text text-center focus:outline-none focus:ring-2 focus:ring-claude-accent/50"
             >
               {Array.from({ length: 60 }, (_, i) => (
-                <option key={i} value={i}>{String(i).padStart(2, '0')}</option>
+                <option key={i} value={i}>
+                  {String(i).padStart(2, '0')}
+                </option>
               ))}
             </select>
-            <span className="shrink-0 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">{i18nService.t('scheduledTasksFormHourlyMinuteSuffix')}</span>
+            <span className="shrink-0 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              {i18nService.t('scheduledTasksFormHourlyMinuteSuffix')}
+            </span>
           </div>
         </div>
       );
@@ -462,9 +472,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
 
       const toggleWeekday = (day: number) => {
         const current = form.weekdays;
-        const next = current.includes(day)
-          ? current.filter((d) => d !== day)
-          : [...current, day];
+        const next = current.includes(day) ? current.filter(d => d !== day) : [...current, day];
         updateForm({ weekdays: next });
       };
 
@@ -476,7 +484,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
             <input
               type="time"
               value={timeValue}
-              onChange={(e) => handleTimeChange(e.target.value)}
+              onChange={e => handleTimeChange(e.target.value)}
               className={`${inputClass} flex-1 min-w-0`}
             />
           </div>
@@ -510,19 +518,20 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
           {planSelect}
           <select
             value={form.monthDay}
-            onChange={(e) => updateForm({ monthDay: Number(e.target.value) })}
+            onChange={e => updateForm({ monthDay: Number(e.target.value) })}
             className={`${inputClass} flex-1 min-w-0`}
           >
-            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+            {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
               <option key={d} value={d}>
-                {d}{i18nService.t('scheduledTasksFormMonthDaySuffix')}
+                {d}
+                {i18nService.t('scheduledTasksFormMonthDaySuffix')}
               </option>
             ))}
           </select>
           <input
             type="time"
             value={timeValue}
-            onChange={(e) => handleTimeChange(e.target.value)}
+            onChange={e => handleTimeChange(e.target.value)}
             className={`${inputClass} flex-1 min-w-0`}
           />
         </div>
@@ -537,7 +546,10 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (channelDropdownRef.current && !channelDropdownRef.current.contains(event.target as Node)) {
+      if (
+        channelDropdownRef.current &&
+        !channelDropdownRef.current.contains(event.target as Node)
+      ) {
         setChannelDropdownOpen(false);
       }
       if (convDropdownRef.current && !convDropdownRef.current.contains(event.target as Node)) {
@@ -566,7 +578,9 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
     const platform = PlatformRegistry.platformOfChannel(channelValue);
     if (platform) {
       const label = i18nService.t(platform) || PlatformRegistry.get(platform).label;
-      return isChannelUnsupported(channelValue) ? `${label} (${i18nService.t('scheduledTasksChannelUnsupported')})` : label;
+      return isChannelUnsupported(channelValue)
+        ? `${label} (${i18nService.t('scheduledTasksChannelUnsupported')})`
+        : label;
     }
     const option = channelOptions.find(c => c.value === channelValue);
     return option ? option.label : channelValue;
@@ -585,7 +599,10 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       <div>
         <label className={labelClass}>{i18nService.t('scheduledTasksFormNotifyChannel')}</label>
         <div className="flex items-center gap-3">
-          <div className={`relative ${showConversationSelector ? 'flex-1 min-w-0' : 'w-full'}`} ref={channelDropdownRef}>
+          <div
+            className={`relative ${showConversationSelector ? 'flex-1 min-w-0' : 'w-full'}`}
+            ref={channelDropdownRef}
+          >
             <button
               type="button"
               onClick={() => setChannelDropdownOpen(!channelDropdownOpen)}
@@ -595,17 +612,29 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
                 {selectedLogo && (
                   <img src={selectedLogo} alt="" className="w-5 h-5 object-contain rounded" />
                 )}
-                <span className="truncate">{(() => {
-                  const base = getChannelDisplayLabel(form.notifyChannel);
-                  if (!form.notifyAccountId) return base;
-                  const selected = channelOptions.find(
-                    (o) => o.value === form.notifyChannel && o.accountId === form.notifyAccountId,
-                  );
-                  return selected ? `${base} · ${selected.label}` : base;
-                })()}</span>
+                <span className="truncate">
+                  {(() => {
+                    const base = getChannelDisplayLabel(form.notifyChannel);
+                    if (!form.notifyAccountId) return base;
+                    const selected = channelOptions.find(
+                      o => o.value === form.notifyChannel && o.accountId === form.notifyAccountId,
+                    );
+                    return selected ? `${base} · ${selected.label}` : base;
+                  })()}
+                </span>
               </span>
-              <svg className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${channelDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              <svg
+                className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${channelDropdownOpen ? 'rotate-180' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 9l-7 7-7-7"
+                />
               </svg>
             </button>
 
@@ -613,20 +642,32 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
               <div className="absolute z-50 w-full mt-1 rounded-xl border border-border bg-surface shadow-lg overflow-hidden">
                 <div
                   className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-raised transition-colors"
-                  onClick={() => { updateForm({ notifyChannel: 'none', notifyTo: '', notifyAccountId: undefined }); setChannelDropdownOpen(false); }}
+                  onClick={() => {
+                    updateForm({ notifyChannel: 'none', notifyTo: '', notifyAccountId: undefined });
+                    setChannelDropdownOpen(false);
+                  }}
                 >
                   <span className="w-5 h-5" />
-                  <span className="text-sm text-foreground">{i18nService.t('scheduledTasksFormNotifyChannelNone')}</span>
+                  <span className="text-sm text-foreground">
+                    {i18nService.t('scheduledTasksFormNotifyChannelNone')}
+                  </span>
                 </div>
-                {channelOptions.map((channel) => {
+                {channelOptions.map(channel => {
                   const unsupported = isChannelUnsupported(channel.value);
                   const logo = getChannelLogo(channel.value);
                   const platform = PlatformRegistry.platformOfChannel(channel.value);
-                  const platformLabel = platform ? (i18nService.t(platform) || channel.label) : channel.label;
+                  const platformLabel = platform
+                    ? i18nService.t(platform) || channel.label
+                    : channel.label;
                   // For multi-instance options, show "平台 · 实例名"; for single-instance use platform label only.
-                  const displayName = channel.accountId ? `${platformLabel} · ${channel.label}` : platformLabel;
-                  const isActive = form.notifyChannel === channel.value &&
-                    (channel.accountId ? form.notifyAccountId === channel.accountId : !form.notifyAccountId);
+                  const displayName = channel.accountId
+                    ? `${platformLabel} · ${channel.label}`
+                    : platformLabel;
+                  const isActive =
+                    form.notifyChannel === channel.value &&
+                    (channel.accountId
+                      ? form.notifyAccountId === channel.accountId
+                      : !form.notifyAccountId);
                   return (
                     <div
                       key={`${channel.value}:${channel.accountId ?? ''}`}
@@ -637,17 +678,27 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
                       } ${isActive ? 'bg-surface-raised' : ''}`}
                       onClick={() => {
                         if (!unsupported) {
-                          updateForm({ notifyChannel: channel.value, notifyTo: '', notifyAccountId: channel.accountId });
+                          updateForm({
+                            notifyChannel: channel.value,
+                            notifyTo: '',
+                            notifyAccountId: channel.accountId,
+                          });
                           setChannelDropdownOpen(false);
                         }
                       }}
                     >
                       {logo ? (
-                        <img src={logo} alt={displayName} className="w-5 h-5 object-contain rounded" />
+                        <img
+                          src={logo}
+                          alt={displayName}
+                          className="w-5 h-5 object-contain rounded"
+                        />
                       ) : (
                         <span className="w-5 h-5" />
                       )}
-                      <span className={`text-sm ${unsupported ? 'text-foreground-secondary' : 'text-foreground'}`}>
+                      <span
+                        className={`text-sm ${unsupported ? 'text-foreground-secondary' : 'text-foreground'}`}
+                      >
                         {unsupported
                           ? `${displayName} (${i18nService.t('scheduledTasksChannelUnsupported')})`
                           : displayName}
@@ -662,7 +713,9 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
             <div className="relative flex-1 min-w-0" ref={convDropdownRef}>
               <button
                 type="button"
-                onClick={() => { if (!conversationsLoading) setConvDropdownOpen(!convDropdownOpen); }}
+                onClick={() => {
+                  if (!conversationsLoading) setConvDropdownOpen(!convDropdownOpen);
+                }}
                 disabled={conversationsLoading}
                 className={`${inputClass} w-full flex items-center justify-between cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`}
               >
@@ -671,8 +724,18 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
                     ? i18nService.t('scheduledTasksFormNotifyConversationLoading')
                     : selectedConversationLabel || i18nService.t('scheduledTasksFormNotifyConversationNone')}
                 </span>
-                <svg className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${convDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <svg
+                  className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${convDropdownOpen ? 'rotate-180' : ''}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
                 </svg>
               </button>
               {convDropdownOpen && !conversationsLoading && (
@@ -711,7 +774,9 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
   return (
     <div className="p-4 space-y-4 max-w-3xl mx-auto">
       <h2 className="text-lg font-semibold text-foreground">
-        {mode === 'create' ? i18nService.t('scheduledTasksFormCreate') : i18nService.t('scheduledTasksFormUpdate')}
+        {mode === 'create'
+          ? i18nService.t('scheduledTasksFormCreate')
+          : i18nService.t('scheduledTasksFormUpdate')}
       </h2>
 
       <div>
@@ -719,7 +784,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
         <input
           type="text"
           value={form.name}
-          onChange={(event) => updateForm({ name: event.target.value })}
+          onChange={event => updateForm({ name: event.target.value })}
           className={inputClass}
           placeholder={i18nService.t('scheduledTasksFormNamePlaceholder')}
         />
@@ -733,7 +798,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
         <div className="rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white focus-within:ring-1 focus-within:ring-claude-accent/40 focus-within:border-claude-accent">
           <textarea
             value={form.payloadText}
-            onChange={(event) => updateForm({ payloadText: event.target.value })}
+            onChange={event => updateForm({ payloadText: event.target.value })}
             className={textareaInputClass}
             placeholder={i18nService.t('scheduledTasksFormPromptPlaceholder')}
             rows={4}
@@ -758,7 +823,8 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       {submitError && (
         <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/40">
           <span className="text-sm text-red-600 dark:text-red-400 break-words min-w-0">
-            {i18nService.t('scheduledTasksFormSubmitError')}{submitError}
+            {i18nService.t('scheduledTasksFormSubmitError')}
+            {submitError}
           </span>
           <button
             type="button"
@@ -767,7 +833,11 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
             aria-label="dismiss"
           >
             <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+              <path
+                fillRule="evenodd"
+                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                clipRule="evenodd"
+              />
             </svg>
           </button>
         </div>

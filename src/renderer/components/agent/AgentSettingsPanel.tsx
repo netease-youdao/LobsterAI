@@ -438,7 +438,8 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-secondary mb-1">
-                  {i18nService.t('agentName') || 'Name'}
+                  {i18nService.t('agentName') || 'Name'}{' '}
+                  <span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
                 </label>
                 <div className="flex gap-2">
                   <EmojiPicker value={icon} onChange={setIcon} />

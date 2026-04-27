@@ -5,10 +5,21 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowPathIcon, CheckCircleIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import {
+  ArrowPathIcon,
+  CheckCircleIcon,
+  SignalIcon,
+  XCircleIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import TrashIcon from '../icons/TrashIcon';
 import { QRCodeSVG } from 'qrcode.react';
-import type { FeishuInstanceConfig, FeishuInstanceStatus, FeishuOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
+import type {
+  FeishuInstanceConfig,
+  FeishuInstanceStatus,
+  FeishuOpenClawConfig,
+  IMConnectivityTestResult,
+} from '../../types/im';
 import { i18nService } from '../../services/i18n';
 import { PlatformRegistry } from '@shared/platform';
 
@@ -58,16 +69,25 @@ const PairingSection: React.FC<{
   platform: string;
 }> = ({ platform }) => {
   const [pairingCodeInput, setPairingCodeInput] = useState('');
-  const [pairingStatus, setPairingStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [pairingStatus, setPairingStatus] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
 
   const handleApprovePairing = async (code: string) => {
     setPairingStatus(null);
     try {
       const result = await window.electron.im.approvePairingCode(platform, code);
       if (result.success) {
-        setPairingStatus({ type: 'success', message: i18nService.t('imPairingCodeApproved').replace('{code}', code) });
+        setPairingStatus({
+          type: 'success',
+          message: i18nService.t('imPairingCodeApproved').replace('{code}', code),
+        });
       } else {
-        setPairingStatus({ type: 'error', message: result.error || i18nService.t('imPairingCodeInvalid') });
+        setPairingStatus({
+          type: 'error',
+          message: result.error || i18nService.t('imPairingCodeInvalid'),
+        });
       }
     } catch {
       setPairingStatus({ type: 'error', message: i18nService.t('imPairingCodeInvalid') });
@@ -83,11 +103,11 @@ const PairingSection: React.FC<{
         <input
           type="text"
           value={pairingCodeInput}
-          onChange={(e) => {
+          onChange={e => {
             setPairingCodeInput(e.target.value.toUpperCase());
             if (pairingStatus) setPairingStatus(null);
           }}
-          onKeyDown={(e) => {
+          onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault();
               const code = pairingCodeInput.trim();
@@ -118,7 +138,9 @@ const PairingSection: React.FC<{
         </button>
       </div>
       {pairingStatus && (
-        <p className={`text-xs ${pairingStatus.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+        <p
+          className={`text-xs ${pairingStatus.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+        >
           {pairingStatus.type === 'success' ? '\u2713' : '\u2717'} {pairingStatus.message}
         </p>
       )}
@@ -146,7 +168,9 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
   const [nameValue, setNameValue] = useState(instance.instanceName);
 
   // QR code scanning state
-  const [qrStatus, setQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
+  const [qrStatus, setQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>(
+    'idle',
+  );
   const [qrUrl, setQrUrl] = useState('');
   const [qrTimeLeft, setQrTimeLeft] = useState(0);
   const [qrError, setQrError] = useState('');
@@ -179,11 +203,14 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
       setQrStatus('showing');
 
       qrCountdownTimerRef.current = setInterval(() => {
-        setQrTimeLeft((prev) => {
+        setQrTimeLeft(prev => {
           if (prev <= 1) {
             clearInterval(qrCountdownTimerRef.current!);
             qrCountdownTimerRef.current = null;
-            if (qrPollTimerRef.current) { clearInterval(qrPollTimerRef.current); qrPollTimerRef.current = null; }
+            if (qrPollTimerRef.current) {
+              clearInterval(qrPollTimerRef.current);
+              qrPollTimerRef.current = null;
+            }
             setQrStatus('error');
             setQrError(i18nService.t('feishuBotCreateWizardQrcodeExpired'));
             return 0;
@@ -198,18 +225,36 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
           const pollResult = await window.electron.feishu.install.poll(qrDeviceCodeRef.current);
           if (!isMountedRef.current) return;
           if (pollResult.done && pollResult.appId && pollResult.appSecret) {
-            clearInterval(qrPollTimerRef.current!); qrPollTimerRef.current = null;
-            clearInterval(qrCountdownTimerRef.current!); qrCountdownTimerRef.current = null;
-            onConfigChange({ appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true });
-            await onSave({ appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true });
+            clearInterval(qrPollTimerRef.current!);
+            qrPollTimerRef.current = null;
+            clearInterval(qrCountdownTimerRef.current!);
+            qrCountdownTimerRef.current = null;
+            onConfigChange({
+              appId: pollResult.appId,
+              appSecret: pollResult.appSecret,
+              enabled: true,
+            });
+            await onSave({
+              appId: pollResult.appId,
+              appSecret: pollResult.appSecret,
+              enabled: true,
+            });
             setQrStatus('success');
-          } else if (pollResult.error && pollResult.error !== 'authorization_pending' && pollResult.error !== 'slow_down') {
-            clearInterval(qrPollTimerRef.current!); qrPollTimerRef.current = null;
-            clearInterval(qrCountdownTimerRef.current!); qrCountdownTimerRef.current = null;
+          } else if (
+            pollResult.error &&
+            pollResult.error !== 'authorization_pending' &&
+            pollResult.error !== 'slow_down'
+          ) {
+            clearInterval(qrPollTimerRef.current!);
+            qrPollTimerRef.current = null;
+            clearInterval(qrCountdownTimerRef.current!);
+            qrCountdownTimerRef.current = null;
             setQrStatus('error');
             setQrError(pollResult.error);
           }
-        } catch { /* keep retrying */ }
+        } catch {
+          /* keep retrying */
+        }
       }, intervalMs);
     } catch (err: any) {
       if (!isMountedRef.current) return;
@@ -250,11 +295,14 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             <input
               type="text"
               value={nameValue}
-              onChange={(e) => setNameValue(e.target.value)}
+              onChange={e => setNameValue(e.target.value)}
               onBlur={handleNameBlur}
-              onKeyDown={(e) => {
+              onKeyDown={e => {
                 if (e.key === 'Enter') handleNameBlur();
-                if (e.key === 'Escape') { setNameValue(instance.instanceName); setEditingName(false); }
+                if (e.key === 'Escape') {
+                  setNameValue(instance.instanceName);
+                  setEditingName(false);
+                }
               }}
               autoFocus
               className="text-sm font-medium text-foreground bg-transparent border-b border-primary focus:outline-none px-0 py-0"
@@ -271,14 +319,14 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
         </div>
 
         {/* Status badge */}
-        <div className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${
-          instanceStatus?.connected
-            ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-            : 'bg-gray-500/15 text-gray-500 dark:text-gray-400'
-        }`}>
-          {instanceStatus?.connected
-            ? i18nService.t('connected')
-            : i18nService.t('disconnected')}
+        <div
+          className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${
+            instanceStatus?.connected
+              ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+              : 'bg-gray-500/15 text-gray-500 dark:text-gray-400'
+          }`}
+        >
+          {instanceStatus?.connected ? i18nService.t('connected') : i18nService.t('disconnected')}
         </div>
 
         {/* Enable toggle */}
@@ -288,18 +336,28 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
           disabled={!instance.enabled && !(instance.appId && instance.appSecret)}
           className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
             instance.enabled
-              ? (instanceStatus?.connected ? 'bg-green-500' : 'bg-yellow-500')
+              ? instanceStatus?.connected
+                ? 'bg-green-500'
+                : 'bg-yellow-500'
               : 'bg-gray-400 dark:bg-gray-600'
           } ${!instance.enabled && !(instance.appId && instance.appSecret) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-          title={instance.enabled
-            ? (language === 'zh' ? '禁用此实例' : 'Disable this instance')
-            : (!(instance.appId && instance.appSecret)
-              ? i18nService.t('imInstanceFillCredentials')
-              : (language === 'zh' ? '启用此实例' : 'Enable this instance'))}
+          title={
+            instance.enabled
+              ? language === 'zh'
+                ? '禁用此实例'
+                : 'Disable this instance'
+              : !(instance.appId && instance.appSecret)
+                ? i18nService.t('imInstanceFillCredentials')
+                : language === 'zh'
+                  ? '启用此实例'
+                  : 'Enable this instance'
+          }
         >
-          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-            instance.enabled ? 'translate-x-4' : 'translate-x-0'
-          }`} />
+          <span
+            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+              instance.enabled ? 'translate-x-4' : 'translate-x-0'
+            }`}
+          />
         </button>
 
         {/* Delete button */}
@@ -339,7 +397,9 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
         {qrStatus === 'loading' && (
           <div className="flex flex-col items-center gap-2 py-2">
             <ArrowPathIcon className="h-7 w-7 text-primary animate-spin" />
-            <span className="text-xs text-secondary">{i18nService.t('feishuBotCreateWizardGenerating') || '正在生成二维码…'}</span>
+            <span className="text-xs text-secondary">
+              {i18nService.t('feishuBotCreateWizardGenerating') || '正在生成二维码…'}
+            </span>
           </div>
         )}
         {qrStatus === 'showing' && qrUrl && (
@@ -350,9 +410,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             <p className="text-xs text-secondary max-w-[240px]">
               {i18nService.t('feishuBotCreateWizardQrcodeDesc')}
             </p>
-            <p className="text-xs text-secondary">
-              {qrTimeLeft}s
-            </p>
+            <p className="text-xs text-secondary">{qrTimeLeft}s</p>
           </div>
         )}
         {qrStatus === 'success' && (
@@ -374,23 +432,20 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
       {/* Guide */}
       <PlatformGuide
-        steps={[
-          i18nService.t('imFeishuGuideStep1'),
-          i18nService.t('imFeishuGuideStep2'),
-        ]}
+        steps={[i18nService.t('imFeishuGuideStep1'), i18nService.t('imFeishuGuideStep2')]}
         guideUrl={PlatformRegistry.guideUrl('feishu')}
       />
 
       {/* App ID */}
       <div className="space-y-1.5">
         <label className="block text-xs font-medium text-secondary">
-          App ID
+          App ID <span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
         </label>
         <div className="relative">
           <input
             type="text"
             value={instance.appId}
-            onChange={(e) => onConfigChange({ appId: e.target.value })}
+            onChange={e => onConfigChange({ appId: e.target.value })}
             onBlur={() => void onSave()}
             className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
             placeholder="cli_xxxxx"
@@ -399,7 +454,10 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             <div className="absolute right-2 inset-y-0 flex items-center">
               <button
                 type="button"
-                onClick={() => { onConfigChange({ appId: '' }); void onSave({ appId: '' }); }}
+                onClick={() => {
+                  onConfigChange({ appId: '' });
+                  void onSave({ appId: '' });
+                }}
                 className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
@@ -413,13 +471,13 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
       {/* App Secret */}
       <div className="space-y-1.5">
         <label className="block text-xs font-medium text-secondary">
-          App Secret
+          App Secret <span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
         </label>
         <div className="relative">
           <input
             type={showSecrets['appSecret'] ? 'text' : 'password'}
             value={instance.appSecret}
-            onChange={(e) => onConfigChange({ appSecret: e.target.value })}
+            onChange={e => onConfigChange({ appSecret: e.target.value })}
             onBlur={() => void onSave()}
             className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
             placeholder="••••••••••••"
@@ -428,7 +486,10 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             {instance.appSecret && (
               <button
                 type="button"
-                onClick={() => { onConfigChange({ appSecret: '' }); void onSave({ appSecret: '' }); }}
+                onClick={() => {
+                  onConfigChange({ appSecret: '' });
+                  void onSave({ appSecret: '' });
+                }}
                 className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                 title={i18nService.t('clear') || 'Clear'}
               >
@@ -437,11 +498,19 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             )}
             <button
               type="button"
-              onClick={() => setShowSecrets(prev => ({ ...prev, 'appSecret': !prev['appSecret'] }))}
+              onClick={() => setShowSecrets(prev => ({ ...prev, appSecret: !prev['appSecret'] }))}
               className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-              title={showSecrets['appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+              title={
+                showSecrets['appSecret']
+                  ? i18nService.t('hide') || 'Hide'
+                  : i18nService.t('show') || 'Show'
+              }
             >
-              {showSecrets['appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+              {showSecrets['appSecret'] ? (
+                <EyeIcon className="h-4 w-4" />
+              ) : (
+                <EyeSlashIcon className="h-4 w-4" />
+              )}
             </button>
           </div>
         </div>
@@ -449,12 +518,10 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
       {/* Domain */}
       <div className="space-y-1.5">
-        <label className="block text-xs font-medium text-secondary">
-          Domain
-        </label>
+        <label className="block text-xs font-medium text-secondary">Domain</label>
         <select
           value={instance.domain}
-          onChange={(e) => {
+          onChange={e => {
             const update = { domain: e.target.value };
             onConfigChange(update);
             void onSave(update);
@@ -474,12 +541,10 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
         <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
           {/* DM Policy */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-secondary">
-              DM Policy
-            </label>
+            <label className="block text-xs font-medium text-secondary">DM Policy</label>
             <select
               value={instance.dmPolicy}
-              onChange={(e) => {
+              onChange={e => {
                 const update = { dmPolicy: e.target.value as FeishuOpenClawConfig['dmPolicy'] };
                 onConfigChange(update);
                 void onSave(update);
@@ -494,9 +559,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
           </div>
 
           {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
-          {instance.dmPolicy === 'pairing' && (
-            <PairingSection platform="feishu" />
-          )}
+          {instance.dmPolicy === 'pairing' && <PairingSection platform="feishu" />}
 
           {/* Allow From (User IDs) */}
           <div className="space-y-1.5">
@@ -507,8 +570,8 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
               <input
                 type="text"
                 value={allowedUserIdInput}
-                onChange={(e) => setAllowedUserIdInput(e.target.value)}
-                onKeyDown={(e) => {
+                onChange={e => setAllowedUserIdInput(e.target.value)}
+                onKeyDown={e => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     const id = allowedUserIdInput.trim();
@@ -541,7 +604,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             </div>
             {instance.allowFrom.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {instance.allowFrom.map((id) => (
+                {instance.allowFrom.map(id => (
                   <span
                     key={id}
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -550,7 +613,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const newIds = instance.allowFrom.filter((uid) => uid !== id);
+                        const newIds = instance.allowFrom.filter(uid => uid !== id);
                         onConfigChange({ allowFrom: newIds });
                         void onSave({ allowFrom: newIds });
                       }}
@@ -566,13 +629,13 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
           {/* Group Policy */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-secondary">
-              Group Policy
-            </label>
+            <label className="block text-xs font-medium text-secondary">Group Policy</label>
             <select
               value={instance.groupPolicy}
-              onChange={(e) => {
-                const update = { groupPolicy: e.target.value as FeishuOpenClawConfig['groupPolicy'] };
+              onChange={e => {
+                const update = {
+                  groupPolicy: e.target.value as FeishuOpenClawConfig['groupPolicy'],
+                };
                 onConfigChange(update);
                 void onSave(update);
               }}
@@ -593,8 +656,8 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
               <input
                 type="text"
                 value={groupAllowIdInput}
-                onChange={(e) => setGroupAllowIdInput(e.target.value)}
-                onKeyDown={(e) => {
+                onChange={e => setGroupAllowIdInput(e.target.value)}
+                onKeyDown={e => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     const id = groupAllowIdInput.trim();
@@ -627,7 +690,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             </div>
             {instance.groupAllowFrom.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {instance.groupAllowFrom.map((id) => (
+                {instance.groupAllowFrom.map(id => (
                   <span
                     key={id}
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-surface border-border-subtle border text-foreground"
@@ -636,7 +699,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const newIds = instance.groupAllowFrom.filter((gid) => gid !== id);
+                        const newIds = instance.groupAllowFrom.filter(gid => gid !== id);
                         onConfigChange({ groupAllowFrom: newIds });
                         void onSave({ groupAllowFrom: newIds });
                       }}
@@ -729,12 +792,10 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
           {/* Reply Mode */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-secondary">
-              Reply Mode
-            </label>
+            <label className="block text-xs font-medium text-secondary">Reply Mode</label>
             <select
               value={instance.replyMode}
-              onChange={(e) => {
+              onChange={e => {
                 const update = { replyMode: e.target.value as FeishuOpenClawConfig['replyMode'] };
                 onConfigChange(update);
                 void onSave(update);
@@ -780,13 +841,11 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
           {/* History Limit */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-secondary">
-              History Limit
-            </label>
+            <label className="block text-xs font-medium text-secondary">History Limit</label>
             <input
               type="number"
               value={instance.historyLimit}
-              onChange={(e) => onConfigChange({ historyLimit: parseInt(e.target.value) || 50 })}
+              onChange={e => onConfigChange({ historyLimit: parseInt(e.target.value) || 50 })}
               onBlur={() => void onSave()}
               className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
               min="1"
@@ -796,13 +855,11 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
 
           {/* Media Max MB */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-secondary">
-              Media Max (MB)
-            </label>
+            <label className="block text-xs font-medium text-secondary">Media Max (MB)</label>
             <input
               type="number"
               value={instance.mediaMaxMb}
-              onChange={(e) => onConfigChange({ mediaMaxMb: parseInt(e.target.value) || 30 })}
+              onChange={e => onConfigChange({ mediaMaxMb: parseInt(e.target.value) || 30 })}
               onBlur={() => void onSave()}
               className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
               min="1"
