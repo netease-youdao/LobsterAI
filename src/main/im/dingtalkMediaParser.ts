@@ -74,15 +74,11 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
   const markers: MediaMarker[] = [];
   const processedPaths = new Set<string>();
 
-  console.log(`[DingTalk MediaParser] 开始解析媒体标记, 文本长度: ${text.length}`);
-
   // 1. 解析 Markdown 图片 ![alt](path)
   for (const match of text.matchAll(MARKDOWN_IMAGE_RE)) {
     const [fullMatch, altText, rawPath] = match;
     const path = cleanPath(rawPath);
-    // 使用 alt 文本作为文件名（如果有的话），否则从路径提取
     const name = altText?.trim() || undefined;
-    console.log(`[DingTalk MediaParser] 发现 Markdown 图片:`, JSON.stringify({ rawPath, cleanedPath: path, name, fullMatch }));
     if (!processedPaths.has(path)) {
       processedPaths.add(path);
       markers.push({
@@ -99,9 +95,7 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
     const [fullMatch, linkText, rawPath] = match;
     const path = cleanPath(rawPath);
     const mediaType = getMediaTypeByExtension(path);
-    // 使用链接文本作为文件名（如果有的话）
     const name = linkText?.trim() || undefined;
-    console.log(`[DingTalk MediaParser] 发现 Markdown 链接:`, JSON.stringify({ rawPath, cleanedPath: path, mediaType, name, fullMatch }));
     if (mediaType && !processedPaths.has(path)) {
       processedPaths.add(path);
       markers.push({
@@ -117,7 +111,6 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
   for (const match of text.matchAll(BARE_IMAGE_PATH_RE)) {
     const [fullMatch, rawPath] = match;
     const path = cleanPath(rawPath.trim());
-    console.log(`[DingTalk MediaParser] 发现裸图片路径:`, JSON.stringify({ rawPath, cleanedPath: path, fullMatch: fullMatch.trim() }));
     if (!processedPaths.has(path)) {
       processedPaths.add(path);
       markers.push({
@@ -133,7 +126,6 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
     const [fullMatch, rawPath] = match;
     const path = cleanPath(rawPath.trim());
     const mediaType = getMediaTypeByExtension(path);
-    console.log(`[DingTalk MediaParser] 发现裸音视频路径:`, JSON.stringify({ rawPath, cleanedPath: path, mediaType, fullMatch: fullMatch.trim() }));
     if (mediaType && !processedPaths.has(path)) {
       processedPaths.add(path);
       markers.push({
@@ -148,7 +140,6 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
   for (const match of text.matchAll(BARE_FILE_PATH_RE)) {
     const [fullMatch, rawPath] = match;
     const path = cleanPath(rawPath.trim());
-    console.log(`[DingTalk MediaParser] 发现裸文件路径:`, JSON.stringify({ rawPath, cleanedPath: path, fullMatch: fullMatch.trim() }));
     if (!processedPaths.has(path)) {
       processedPaths.add(path);
       markers.push({
@@ -163,7 +154,6 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
   for (const match of text.matchAll(VIDEO_MARKER_RE)) {
     try {
       const info = JSON.parse(match[1]);
-      console.log(`[DingTalk MediaParser] 发现视频标记:`, JSON.stringify({ info, fullMatch: match[0] }));
       if (info.path && !processedPaths.has(info.path)) {
         processedPaths.add(info.path);
         markers.push({
@@ -174,7 +164,7 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
         });
       }
     } catch (e) {
-      console.warn(`[DingTalk MediaParser] 解析视频标记失败:`, match[0], e);
+      console.warn('[DingTalkMediaParser] failed to parse video marker:', e);
     }
   }
 
@@ -182,7 +172,6 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
   for (const match of text.matchAll(AUDIO_MARKER_RE)) {
     try {
       const info = JSON.parse(match[1]);
-      console.log(`[DingTalk MediaParser] 发现音频标记:`, JSON.stringify({ info, fullMatch: match[0] }));
       if (info.path && !processedPaths.has(info.path)) {
         processedPaths.add(info.path);
         markers.push({
@@ -192,7 +181,7 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
         });
       }
     } catch (e) {
-      console.warn(`[DingTalk MediaParser] 解析音频标记失败:`, match[0], e);
+      console.warn('[DingTalkMediaParser] failed to parse audio marker:', e);
     }
   }
 
@@ -200,7 +189,6 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
   for (const match of text.matchAll(FILE_MARKER_RE)) {
     try {
       const info = JSON.parse(match[1]);
-      console.log(`[DingTalk MediaParser] 发现文件标记:`, JSON.stringify({ info, fullMatch: match[0] }));
       if (info.path && !processedPaths.has(info.path)) {
         processedPaths.add(info.path);
         markers.push({
@@ -211,11 +199,13 @@ export function parseMediaMarkers(text: string): MediaMarker[] {
         });
       }
     } catch (e) {
-      console.warn(`[DingTalk MediaParser] 解析文件标记失败:`, match[0], e);
+      console.warn('[DingTalkMediaParser] failed to parse file marker:', e);
     }
   }
 
-  console.log(`[DingTalk MediaParser] 解析完成, 共发现 ${markers.length} 个媒体标记:`, JSON.stringify(markers, null, 2));
+  if (markers.length > 0) {
+    console.debug(`[DingTalkMediaParser] parsed ${markers.length} media marker(s) from ${text.length} chars`);
+  }
 
   return markers;
 }

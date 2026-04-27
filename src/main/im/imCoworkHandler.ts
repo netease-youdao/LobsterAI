@@ -227,17 +227,12 @@ export class IMCoworkHandler extends EventEmitter {
       console.warn('[IMCoworkHandler] Skills auto-routing prompt missing for current IM turn');
     }
 
-    // 打印完整的输入消息日志
-    console.log(`[IMCoworkHandler] 处理消息:`, JSON.stringify({
-      platform: message.platform,
-      conversationId: message.conversationId,
-      coworkSessionId,
-      isActive,
-      originalContent: message.content,
-      formattedContent,
-      attachments: message.attachments,
-      hasAvailableSkills,
-    }, null, 2));
+    console.log(
+      `[IMCoworkHandler] dispatching ${message.platform} message to cowork session ${coworkSessionId} ` +
+      `(active=${isActive}, contentChars=${message.content?.length ?? 0}, ` +
+      `formattedChars=${formattedContent.length}, attachments=${message.attachments?.length ?? 0}, ` +
+      `hasSkills=${hasAvailableSkills})`,
+    );
 
     const onSessionStartError = (error: unknown) => {
       this.rejectAccumulator(
@@ -857,14 +852,12 @@ export class IMCoworkHandler extends EventEmitter {
       ? this.formatReplyRaw(messages)
       : this.formatReply(sessionId, messages);
 
-    console.log(`[IMCoworkHandler] 会话完成:`, JSON.stringify({
-      sessionId,
-      messageCount: messages.length,
-      replyLength: replyText.length,
-      reply: replyText,
-      backgroundDelivery: accumulator.backgroundDelivery ?? null,
-      usedStoreMessages: storeMessages.length > 0,
-    }, null, 2));
+    console.log(
+      `[IMCoworkHandler] session ${sessionId} completed ` +
+      `(messages=${messages.length}, replyChars=${replyText.length}, ` +
+      `background=${Boolean(accumulator.backgroundDelivery)}, ` +
+      `usedStoreMessages=${storeMessages.length > 0})`,
+    );
 
     this.cleanupAccumulator(sessionId);
 
