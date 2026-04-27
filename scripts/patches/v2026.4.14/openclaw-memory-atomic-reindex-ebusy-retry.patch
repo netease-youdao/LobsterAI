@@ -1,0 +1,48 @@
+diff --git a/extensions/memory-core/src/memory/manager-atomic-reindex.ts b/extensions/memory-core/src/memory/manager-atomic-reindex.ts
+index 792023fbd6..fb5a4a6642 100644
+--- a/extensions/memory-core/src/memory/manager-atomic-reindex.ts
++++ b/extensions/memory-core/src/memory/manager-atomic-reindex.ts
+@@ -1,13 +1,42 @@
+ import { randomUUID } from "node:crypto";
+ import fs from "node:fs/promises";
+
++// LobsterAI patch: Windows EBUSY retry for atomic memory reindex (openclaw#64187).
++// SQLite WAL-mode holds file locks that cause fs.rename() to fail with EBUSY on
++// Windows.  Retry with exponential back-off and fall back to copy+unlink for
++// EPERM/EEXIST, mirroring the pattern already used in src/cron/store.ts.
++const RENAME_MAX_RETRIES = 3;
++const RENAME_BASE_DELAY_MS = 50;
++
++async function renameWithRetry(src: string, dest: string): Promise<void> {
++  for (let attempt = 0; attempt <= RENAME_MAX_RETRIES; attempt++) {
++    try {
++      await fs.rename(src, dest);
++      return;
++    } catch (err) {
++      const code = (err as { code?: string }).code;
++      if (code === "EBUSY" && attempt < RENAME_MAX_RETRIES) {
++        await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
++        continue;
++      }
++      // Windows doesn't reliably support atomic replace via rename when dest exists.
++      if (code === "EPERM" || code === "EEXIST") {
++        await fs.copyFile(src, dest);
++        await fs.unlink(src).catch(() => {});
++        return;
++      }
++      throw err;
++    }
++  }
++}
++
+ export async function moveMemoryIndexFiles(sourceBase: string, targetBase: string): Promise<void> {
+   const suffixes = ["", "-wal", "-shm"];
+   for (const suffix of suffixes) {
+     const source = `${sourceBase}${suffix}`;
+     const target = `${targetBase}${suffix}`;
+     try {
+-      await fs.rename(source, target);
++      await renameWithRetry(source, target);
+     } catch (err) {
+       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+         throw err;

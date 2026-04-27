@@ -1,5 +1,6 @@
-import { test, expect } from 'vitest';
-import { buildScheduledTaskEnginePrompt, SCHEDULED_TASK_SWITCH_MESSAGE } from './enginePrompt';
+import { expect,test } from 'vitest';
+
+import { buildScheduledTaskEnginePrompt } from './enginePrompt';
 
 test('openclaw prompt points scheduled task requests to the native cron tool', () => {
   const prompt = buildScheduledTaskEnginePrompt('openclaw');
@@ -23,9 +24,9 @@ test('openclaw prompt points scheduled task requests to the native cron tool', (
   expect(prompt).toMatch(/output your results as plain text/i);
 });
 
-test('yd_cowork prompt tells the user to switch engines', () => {
-  const prompt = buildScheduledTaskEnginePrompt('yd_cowork');
+test('scheduled task prompt always uses the openclaw instructions', () => {
+  const prompt = buildScheduledTaskEnginePrompt('openclaw');
 
-  expect(prompt).toMatch(new RegExp(SCHEDULED_TASK_SWITCH_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  expect(prompt).toMatch(/do not attempt to create, update, list, enable, disable, or delete scheduled tasks/i);
+  expect(prompt).not.toMatch(/switch the agent engine/i);
+  expect(prompt).not.toMatch(/do not attempt to create, update, list, enable, disable, or delete scheduled tasks/i);
 });

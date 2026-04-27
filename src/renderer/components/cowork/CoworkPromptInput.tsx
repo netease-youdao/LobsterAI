@@ -1,20 +1,28 @@
-import { ExclamationTriangleIcon,PhotoIcon } from '@heroicons/react/24/outline';
-import { FolderIcon,PaperAirplaneIcon, StopIcon } from '@heroicons/react/24/solid';
+import { CheckIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, FolderIcon, PaperAirplaneIcon, StopIcon } from '@heroicons/react/24/solid';
 import React, { useCallback,useEffect, useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
+import { defaultConfig } from '../../config';
+import { agentService } from '../../services/agent';
+import { configService } from '../../services/config';
+import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
-import { addDraftAttachment, clearDraftAttachments, type DraftAttachment,setDraftAttachments, setDraftPrompt } from '../../store/slices/coworkSlice';
+import { selectDraftPrompts } from '../../store/selectors/coworkSelectors';
+import { addDraftAttachment, clearDraftAttachments, type DraftAttachment, setDraftAttachments, setDraftPrompt } from '../../store/slices/coworkSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import { CoworkImageAttachment } from '../../types/cowork';
 import { Skill } from '../../types/skill';
+import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getCompactFolderName } from '../../utils/path';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import { ActiveSkillBadge,SkillsButton } from '../skills';
+import { resolveAgentModelSelection } from './agentModelSelection';
+import AttachmentCard from './AttachmentCard';
 import FolderSelectorPopover from './FolderSelectorPopover';
 
 // CoworkAttachment is aliased from the Redux-persisted DraftAttachment type
@@ -22,7 +30,7 @@ import FolderSelectorPopover from './FolderSelectorPopover';
 type CoworkAttachment = DraftAttachment;
 
 
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tiff', '.tif', '.ico', '.avif']);
 
 const isImagePath = (filePath: string): boolean => {
   const dotIndex = filePath.lastIndexOf('.');
@@ -66,6 +74,21 @@ const buildInlinedSkillPrompt = (skill: Skill): string => {
     '',
     skill.prompt,
   ].join('\n');
+};
+
+const SEND_SHORTCUT_OPTIONS = [
+  { value: 'Enter', label: 'Enter', labelMac: 'Enter' },
+  { value: 'Shift+Enter', label: 'Shift+Enter', labelMac: 'Shift+Enter' },
+  { value: 'Ctrl+Enter', label: 'Ctrl+Enter', labelMac: 'Cmd+Enter' },
+  { value: 'Alt+Enter', label: 'Alt+Enter', labelMac: 'Option+Enter' },
+] as const;
+
+const isMacPlatform = navigator.platform.includes('Mac');
+
+const getSendShortcutLabel = (value: string): string => {
+  const option = SEND_SHORTCUT_OPTIONS.find(o => o.value === value);
+  if (!option) return value;
+  return isMacPlatform ? option.labelMac : option.label;
 };
 
 export interface CoworkPromptInputRef {
@@ -113,8 +136,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     } = props;
     const dispatch = useDispatch();
     const draftKey = sessionId || '__home__';
-    const draftPrompt = useSelector((state: RootState) => state.cowork.draftPrompts[draftKey] || '');
+    const draftPrompt = useSelector((state: RootState) => selectDraftPrompts(state)[draftKey] || '');
     const attachments = useSelector((state: RootState) => state.cowork.draftAttachments[draftKey] || []) as CoworkAttachment[];
+    const currentAgentId = useSelector((state: RootState) => state.agent.currentAgentId);
+    const agents = useSelector((state: RootState) => state.agent.agents);
+    const coworkAgentEngine = useSelector((state: RootState) => state.cowork.config.agentEngine);
+    const availableModels = useSelector((state: RootState) => state.model.availableModels);
+    const globalSelectedModel = useSelector((state: RootState) => state.model.selectedModel);
+    const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
     const [value, setValue] = useState(draftPrompt);
     const [showFolderMenu, setShowFolderMenu] = useState(false);
     const [showFolderRequiredWarning, setShowFolderRequiredWarning] = useState(false);
@@ -156,6 +185,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
+  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
+  const {
+    selectedModel: agentSelectedModel,
+    hasInvalidExplicitModel: agentModelIsInvalid,
+  } = resolveAgentModelSelection({
+    sessionModel: currentSession && currentSession.id === sessionId ? currentSession.modelOverride : '',
+    agentModel: currentAgent?.model ?? '',
+    availableModels,
+    fallbackModel: globalSelectedModel,
+    engine: coworkAgentEngine,
+  });
 
   const isLarge = size === 'large';
   const minHeight = isLarge ? 60 : 24;
@@ -196,6 +236,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       if (shouldClear) {
         setValue('');
         dispatch(clearDraftAttachments(draftKey));
+        setImageVisionHint(false);
       }
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
@@ -217,7 +258,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   // Sync value from draft when sessionId changes
   useEffect(() => {
     setValue(draftPrompt);
-  }, [draftKey]); // intentionally omit draftPrompt to only trigger on session switch
+    // Re-derive imageVisionHint from the new session's draft attachments
+    const hasImageWithoutVision = !modelSupportsImage && attachments.some(a => a.isImage || isImagePath(a.path));
+    setImageVisionHint(hasImageWithoutVision);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]); // intentionally omit other deps to only trigger on session switch
 
   useEffect(() => {
     if (value !== draftPrompt) {
@@ -252,6 +297,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       : undefined;
 
     // Extract image attachments (with base64 data) for vision-capable models
+    console.log('[CoworkPromptInput] handleSubmit: attachment diagnosis', {
+      totalAttachments: attachments.length,
+      modelSupportsImage,
+      effectiveModelId: effectiveSelectedModel?.id ?? null,
+      attachmentDetails: attachments.map(a => ({
+        path: a.path,
+        name: a.name,
+        isImage: a.isImage,
+        hasDataUrl: !!a.dataUrl,
+        dataUrlLength: a.dataUrl?.length ?? 0,
+      })),
+    });
     const imageAtts: CoworkImageAttachment[] = [];
     for (const attachment of attachments) {
       if (attachment.isImage && attachment.dataUrl) {
@@ -262,7 +319,19 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             mimeType: extracted.mimeType,
             base64Data: extracted.base64Data,
           });
+        } else {
+          console.warn('[CoworkPromptInput] handleSubmit: extractBase64FromDataUrl returned null', {
+            name: attachment.name,
+            dataUrlPrefix: attachment.dataUrl.slice(0, 60),
+          });
         }
+      } else if (attachment.isImage) {
+        console.warn('[CoworkPromptInput] handleSubmit: image attachment missing dataUrl', {
+          path: attachment.path,
+          name: attachment.name,
+          isImage: attachment.isImage,
+          hasDataUrl: !!attachment.dataUrl,
+        });
       }
     }
 
@@ -270,8 +339,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     // Image attachments also need their file paths in the prompt so the model knows
     // where the original files are located (e.g., for skills like seedream that need --image <path>).
     // Note: inline/clipboard images have pseudo-paths starting with 'inline:' and are excluded.
+    // Note: image attachments that already carry base64 data are excluded — their content
+    // is delivered via the attachments parameter of chat.send. Including the file path
+    // would trigger OpenClaw's Native-image detection, which rejects paths outside allowed
+    // directories and can drop the base64 image during sanitization (macOS-only bug).
     const attachmentLines = attachments
-      .filter((a) => !a.path.startsWith('inline:'))
+      .filter((a) => !a.path.startsWith('inline:') && !(a.isImage && a.dataUrl))
       .map((attachment) => `${i18nService.t('inputFileLabel')}: ${attachment.path}`)
       .join('\n');
     const finalPrompt = trimmedValue
@@ -284,6 +357,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         names: imageAtts.map(a => a.name),
         base64Lengths: imageAtts.map(a => a.base64Data.length),
       });
+    } else if (attachments.some(a => a.isImage || isImagePath(a.path))) {
+      console.warn('[CoworkPromptInput] handleSubmit: has image-like attachments but imageAtts is EMPTY — images will NOT be sent as base64', {
+        imageAttachments: attachments.filter(a => a.isImage || isImagePath(a.path)).map(a => ({
+          path: a.path,
+          isImage: a.isImage,
+          hasDataUrl: !!a.dataUrl,
+        })),
+      });
     }
     const result = await onSubmit(finalPrompt, skillPrompt, imageAtts.length > 0 ? imageAtts : undefined);
     if (result === false) return;
@@ -291,7 +372,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     dispatch(setDraftPrompt({ sessionId: draftKey, draft: '' }));
     dispatch(clearDraftAttachments(draftKey));
     setImageVisionHint(false);
-  }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch]);
+  }, [value, isStreaming, disabled, onSubmit, activeSkillIds, skills, attachments, showFolderSelector, workingDirectory, dispatch, draftKey]);
 
   const handleSelectSkill = useCallback((skill: Skill) => {
     dispatch(toggleActiveSkill(skill.id));
@@ -304,15 +385,43 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, [onManageSkills]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to submit, any modifier+Enter (Shift/Ctrl/Cmd/Alt) for new line
     const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
-    if (event.key === 'Enter' && !isComposing) {
-      const hasModifier = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
-      if (!hasModifier && !isStreaming && !disabled) {
-        event.preventDefault();
-        handleSubmit();
-      } else if (hasModifier && !event.shiftKey) {
-        // Shift+Enter already inserts newline natively; for Ctrl/Cmd/Alt+Enter, insert via execCommand to preserve undo history
+    if (event.key !== 'Enter' || isComposing) return;
+
+    // Use synced state (kept up-to-date via config-updated event) so that
+    // changes made in the Settings panel are reflected immediately without
+    // requiring a configService read at event time.
+    const sendKey = currentSendShortcut;
+
+    let isSendCombo = false;
+    switch (sendKey) {
+      case 'Enter':
+        isSendCombo = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+        break;
+      case 'Shift+Enter':
+        isSendCombo = event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+        break;
+      case 'Ctrl+Enter':
+        isSendCombo = isMacPlatform
+          ? event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+          : event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+        break;
+      case 'Alt+Enter':
+        isSendCombo = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+        break;
+      default:
+        // Unknown config value — fall back to bare Enter so the user can always send
+        isSendCombo = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+        break;
+    }
+
+    if (isSendCombo && !isStreaming && !disabled) {
+      event.preventDefault();
+      handleSubmit();
+    } else {
+      // Any non-send Enter combo inserts a newline.
+      // Shift+Enter inserts newline natively; for other combos use execCommand.
+      if (!event.shiftKey) {
         event.preventDefault();
         document.execCommand('insertText', false, '\n');
       }
@@ -344,8 +453,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
   };
 
-  const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
-  const modelSupportsImage = !!selectedModel?.supportsImage;
+  const effectiveSelectedModel = coworkAgentEngine === 'openclaw' ? agentSelectedModel : globalSelectedModel;
+  const modelSupportsImage = !!effectiveSelectedModel?.supportsImage;
 
   const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
     if (!filePath) return;
@@ -451,6 +560,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         ? isImagePath(nativePath)
         : isImageMimeType(file.type);
 
+      console.log('[CoworkPromptInput] handleIncomingFiles: processing file', {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        nativePath,
+        fileIsImage,
+        modelSupportsImage,
+        effectiveModelId: effectiveSelectedModel?.id ?? null,
+        effectiveModelSupportsImage: effectiveSelectedModel?.supportsImage ?? null,
+      });
+
       if (fileIsImage) {
         if (modelSupportsImage) {
           // For images on vision-capable models, read as data URL
@@ -458,30 +578,52 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             try {
               const result = await window.electron.dialog.readFileAsDataUrl(nativePath);
               if (result.success && result.dataUrl) {
+                console.log('[CoworkPromptInput] handleIncomingFiles: native image read OK', { nativePath, dataUrlLength: result.dataUrl.length });
                 addAttachment(nativePath, { isImage: true, dataUrl: result.dataUrl });
                 continue;
               }
+              console.warn('[CoworkPromptInput] handleIncomingFiles: readFileAsDataUrl returned falsy', { nativePath, success: result.success });
             } catch (error) {
               console.error('Failed to read image as data URL:', error);
             }
             // Fallback: add as regular file attachment
+            console.warn('[CoworkPromptInput] handleIncomingFiles: native image fallback to path-only (no dataUrl)', { nativePath });
             addAttachment(nativePath);
           } else {
-            // No native path (clipboard/drag from browser) - read via FileReader
+            // No native path (clipboard/drag from browser):
+            // 1. Read as dataUrl for preview + base64 vision
+            // 2. Save to disk so the agent can access the file in later turns
+            let dataUrl: string | null = null;
             try {
-              const dataUrl = await fileToDataUrl(file);
-              addImageAttachmentFromDataUrl(file.name, dataUrl);
+              dataUrl = await fileToDataUrl(file);
+              console.log('[CoworkPromptInput] handleIncomingFiles: clipboard fileToDataUrl OK', { dataUrlLength: dataUrl?.length ?? 0 });
             } catch (error) {
-              console.error('Failed to read image from clipboard:', error);
-              const stagedPath = await saveInlineFile(file);
-              if (stagedPath) {
-                addAttachment(stagedPath);
-              }
+              console.error('[CoworkPromptInput] handleIncomingFiles: clipboard fileToDataUrl FAILED:', error);
+            }
+
+            const stagedPath = await saveInlineFile(file);
+            console.log('[CoworkPromptInput] handleIncomingFiles: clipboard saveInlineFile result', { stagedPath, hasDataUrl: !!dataUrl });
+
+            if (stagedPath) {
+              addAttachment(stagedPath, {
+                isImage: true,
+                dataUrl: dataUrl ?? undefined,
+              });
+            } else if (dataUrl) {
+              console.warn('Clipboard image saved only in memory (disk save failed)');
+              addImageAttachmentFromDataUrl(file.name, dataUrl);
+            } else {
+              console.error('Failed to process clipboard image: both dataUrl and disk save failed');
             }
           }
           continue;
         }
         // Model doesn't support image input — add as file path and show hint
+        console.warn('[CoworkPromptInput] handleIncomingFiles: image skipped vision path because modelSupportsImage=false', {
+          fileName: file.name,
+          effectiveModelId: effectiveSelectedModel?.id ?? null,
+          effectiveModelSupportsImage: effectiveSelectedModel?.supportsImage ?? null,
+        });
         hasImageWithoutVision = true;
       }
 
@@ -499,7 +641,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     if (hasImageWithoutVision) {
       setImageVisionHint(true);
     }
-  }, [addAttachment, addImageAttachmentFromDataUrl, disabled, fileToDataUrl, getNativeFilePath, isStreaming, modelSupportsImage, saveInlineFile]);
+  }, [addAttachment, addImageAttachmentFromDataUrl, disabled, effectiveSelectedModel, fileToDataUrl, getNativeFilePath, isStreaming, modelSupportsImage, saveInlineFile]);
 
   const handleAddFile = useCallback(async () => {
     if (isAddingFile || disabled || isStreaming) return;
@@ -516,14 +658,19 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             try {
               const readResult = await window.electron.dialog.readFileAsDataUrl(filePath);
               if (readResult.success && readResult.dataUrl) {
+                console.log('[CoworkPromptInput] handleAddFile: image read OK', { filePath, dataUrlLength: readResult.dataUrl.length });
                 addAttachment(filePath, { isImage: true, dataUrl: readResult.dataUrl });
                 continue;
               }
+              console.warn('[CoworkPromptInput] handleAddFile: readFileAsDataUrl returned falsy', { filePath });
             } catch (error) {
               console.error('Failed to read image as data URL:', error);
-
             }
           } else {
+            console.warn('[CoworkPromptInput] handleAddFile: image skipped vision path because modelSupportsImage=false', {
+              filePath,
+              effectiveModelId: effectiveSelectedModel?.id ?? null,
+            });
             hasImageWithoutVision = true;
           }
         }
@@ -538,7 +685,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     } finally {
       setIsAddingFile(false);
     }
-  }, [addAttachment, isAddingFile, disabled, isStreaming, modelSupportsImage]);
+  }, [addAttachment, effectiveSelectedModel, isAddingFile, disabled, isStreaming, modelSupportsImage]);
 
   const handleRemoveAttachment = useCallback((path: string) => {
     dispatch(setDraftAttachments({
@@ -598,37 +745,81 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     void handleIncomingFiles(files);
   }, [disabled, handleIncomingFiles, isStreaming]);
 
-  const canSubmit = !disabled && (!!value.trim() || attachments.length > 0);
+  const canSubmit = !disabled && !agentModelIsInvalid && (!!value.trim() || attachments.length > 0);
   const enhancedContainerClass = isDraggingFiles
     ? `${containerClass} ring-2 ring-primary/50 border-primary/60`
     : containerClass;
 
+  const [showSendShortcutMenu, setShowSendShortcutMenu] = useState(false);
+  const sendShortcutMenuRef = useRef<HTMLDivElement>(null);
+  const sendShortcutBtnRef = useRef<HTMLButtonElement>(null);
+  const [currentSendShortcut, setCurrentSendShortcut] = useState(
+    () => configService.getConfig().shortcuts?.sendMessage ?? 'Enter'
+  );
+
+  // Sync when config is updated elsewhere (e.g. Settings panel)
+  useEffect(() => {
+    const syncFromConfig = () => {
+      const latest = configService.getConfig().shortcuts?.sendMessage ?? 'Enter';
+      setCurrentSendShortcut(latest);
+    };
+    window.addEventListener('config-updated', syncFromConfig);
+    return () => window.removeEventListener('config-updated', syncFromConfig);
+  }, []);
+  useEffect(() => {
+    if (!showSendShortcutMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        sendShortcutMenuRef.current && !sendShortcutMenuRef.current.contains(e.target as Node) &&
+        sendShortcutBtnRef.current && !sendShortcutBtnRef.current.contains(e.target as Node)
+      ) {
+        setShowSendShortcutMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showSendShortcutMenu]);
+
+  const handleSendShortcutChange = async (value: string) => {
+    const config = configService.getConfig();
+    await configService.updateConfig({
+      shortcuts: { ...(config.shortcuts ?? defaultConfig.shortcuts), sendMessage: value } as NonNullable<typeof config.shortcuts>,
+    });
+    setCurrentSendShortcut(value);
+    setShowSendShortcutMenu(false);
+  };
+
+  const sendShortcutDropdown = (
+    <div
+      ref={sendShortcutMenuRef}
+      className="absolute bottom-full mb-1 right-0 z-50 min-w-[160px] rounded-xl border border-border bg-surface shadow-elevated py-1"
+    >
+      {SEND_SHORTCUT_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => handleSendShortcutChange(option.value)}
+          className="flex items-center justify-between w-full px-3 py-1.5 text-sm text-foreground hover:bg-surface-raised transition-colors"
+        >
+          <span>{isMacPlatform ? option.labelMac : option.label}</span>
+          {currentSendShortcut === option.value && (
+            <CheckIcon className="h-4 w-4 text-primary" />
+          )}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div className="relative">
       {attachments.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
+        <div className="mb-2 flex flex-wrap gap-2 max-h-[136px] overflow-y-auto">
           {attachments.map((attachment) => (
-              <div
-                key={attachment.path}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-foreground max-w-full"
-                title={attachment.path}
-              >
-                {attachment.isImage ? (
-                  <PhotoIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
-                ) : (
-                  <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                )}
-                <span className="truncate max-w-[180px]">{attachment.name}</span>
-                <button
-                  type="button"
-                  onClick={() => handleRemoveAttachment(attachment.path)}
-                  className="ml-0.5 rounded-full p-0.5 hover:bg-surface-raised"
-                  aria-label={i18nService.t('coworkAttachmentRemove')}
-                  title={i18nService.t('coworkAttachmentRemove')}
-                >
-                  <XMarkIcon className="h-3 w-3" />
-                </button>
-              </div>
+            <AttachmentCard
+              key={attachment.path}
+              attachment={attachment}
+              onRemove={handleRemoveAttachment}
+            />
           ))}
         </div>
       )}
@@ -720,7 +911,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     )}
                   </>
                 )}
-                {showModelSelector && !remoteManaged && <ModelSelector dropdownDirection="up" />}
+                {showModelSelector && (
+                  <div className="flex flex-col items-start gap-1">
+                    <ModelSelector
+                      dropdownDirection="up"
+                      value={coworkAgentEngine === 'openclaw' ? agentSelectedModel : null}
+                      onChange={coworkAgentEngine === 'openclaw'
+                        ? async (nextModel) => {
+                            if (sessionId) {
+                              if (!nextModel) return;
+                              await coworkService.patchSession(sessionId, { model: toOpenClawModelRef(nextModel) });
+                              return;
+                            }
+                            if (!currentAgent || !nextModel) return;
+                            await agentService.updateAgent(currentAgent.id, { model: toOpenClawModelRef(nextModel) });
+                          }
+                        : undefined}
+                    />
+                    {coworkAgentEngine === 'openclaw' && agentModelIsInvalid && (
+                      <span className="max-w-60 text-[11px] leading-4 text-red-500">
+                        {i18nService.t('agentModelInvalidHint')}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {!remoteManaged && (
                   <button
                     type="button"
@@ -754,15 +968,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                     <StopIcon className="h-5 w-5" />
                   </button>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                    className="p-2 rounded-xl bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                    aria-label="Send"
-                  >
-                    <PaperAirplaneIcon className="h-5 w-5" />
-                  </button>
+                  <div className="relative">
+                    <div className={`flex items-stretch rounded-xl shadow-subtle hover:shadow-card ${!canSubmit ? 'opacity-50' : ''}`}>
+                      <button
+                        type="button"
+                        onClick={handleSubmit}
+                        disabled={!canSubmit}
+                        className="p-2 rounded-l-xl bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 disabled:cursor-not-allowed"
+                        aria-label="Send"
+                        title={currentSendShortcut !== 'Enter' ? getSendShortcutLabel(currentSendShortcut) : undefined}
+                      >
+                        <PaperAirplaneIcon className="h-5 w-5" />
+                      </button>
+                      <button
+                        ref={sendShortcutBtnRef}
+                        type="button"
+                        onClick={() => setShowSendShortcutMenu(!showSendShortcutMenu)}
+                        className="px-1 flex items-center rounded-r-xl bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 border-l border-white/20"
+                        aria-label="Change send shortcut"
+                      >
+                        <ChevronDownIcon className="h-3 w-3" />
+                      </button>
+                    </div>
+                    {showSendShortcutMenu && sendShortcutDropdown}
+                  </div>
                 )}
               </div>
             </div>
@@ -806,15 +1035,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 <StopIcon className="h-4 w-4" />
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                className="flex-shrink-0 p-2 rounded-lg bg-primary hover:bg-primary-hover text-white transition-all shadow-subtle hover:shadow-card active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                aria-label="Send"
-              >
-                <PaperAirplaneIcon className="h-4 w-4" />
-              </button>
+              <div className="relative flex-shrink-0">
+                <div className={`flex items-stretch rounded-lg shadow-subtle hover:shadow-card ${!canSubmit ? 'opacity-50' : ''}`}>
+                  <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={!canSubmit}
+                    className="p-2 rounded-l-lg bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 disabled:cursor-not-allowed"
+                    aria-label="Send"
+                    title={currentSendShortcut !== 'Enter' ? getSendShortcutLabel(currentSendShortcut) : undefined}
+                  >
+                    <PaperAirplaneIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    ref={sendShortcutBtnRef}
+                    type="button"
+                    onClick={() => setShowSendShortcutMenu(!showSendShortcutMenu)}
+                    className="px-1 flex items-center rounded-r-lg bg-primary hover:bg-primary-hover text-white transition-all active:scale-95 border-l border-white/20"
+                    aria-label="Change send shortcut"
+                  >
+                    <ChevronDownIcon className="h-3 w-3" />
+                  </button>
+                </div>
+                {showSendShortcutMenu && sendShortcutDropdown}
+              </div>
             )}
           </>
         )}

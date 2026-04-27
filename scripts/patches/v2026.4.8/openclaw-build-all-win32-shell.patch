@@ -1,0 +1,14 @@
+--- a/scripts/build-all.mjs
++++ b/scripts/build-all.mjs
+@@ -25,9 +25,11 @@ const steps = [
+ ];
+
+ for (const step of steps) {
++  const needsShell = process.platform === "win32" && step.cmd.endsWith(".cmd");
+   const result = spawnSync(step.cmd, step.args, {
+     stdio: "inherit",
+     env: process.env,
++    ...(needsShell ? { shell: true } : {}),
+   });
+   if (typeof result.status === "number") {
+     if (result.status !== 0) {

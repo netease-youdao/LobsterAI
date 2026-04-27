@@ -1,14 +1,14 @@
 import { store } from '../store';
 import {
+  addAgent,
+  removeAgent,
   setAgents,
   setCurrentAgentId,
   setLoading,
-  addAgent,
   updateAgent as updateAgentAction,
-  removeAgent,
 } from '../store/slices/agentSlice';
-import { setActiveSkillIds, clearActiveSkills } from '../store/slices/skillSlice';
 import { clearCurrentSession } from '../store/slices/coworkSlice';
+import { clearActiveSkills,setActiveSkillIds } from '../store/slices/skillSlice';
 import type { Agent, PresetAgent } from '../types/agent';
 
 class AgentService {
@@ -17,16 +17,18 @@ class AgentService {
     try {
       const agents = await window.electron?.agents?.list();
       if (agents) {
-        store.dispatch(setAgents(agents.map((a) => ({
+        const mappedAgents = agents.map((a) => ({
           id: a.id,
           name: a.name,
           description: a.description,
           icon: a.icon,
+          model: a.model ?? '',
           enabled: a.enabled,
           isDefault: a.isDefault,
           source: a.source,
           skillIds: a.skillIds ?? [],
-        }))));
+        }));
+        store.dispatch(setAgents(mappedAgents));
       }
     } catch (error) {
       console.error('Failed to load agents:', error);
@@ -52,6 +54,7 @@ class AgentService {
           name: agent.name,
           description: agent.description,
           icon: agent.icon,
+          model: agent.model ?? '',
           enabled: agent.enabled,
           isDefault: agent.isDefault,
           source: agent.source,
@@ -85,6 +88,7 @@ class AgentService {
             name: agent.name,
             description: agent.description,
             icon: agent.icon,
+            model: agent.model ?? '',
             enabled: agent.enabled,
             skillIds: agent.skillIds ?? [],
           },
@@ -134,6 +138,7 @@ class AgentService {
           name: agent.name,
           description: agent.description,
           icon: agent.icon,
+          model: agent.model ?? '',
           enabled: agent.enabled,
           isDefault: agent.isDefault,
           source: agent.source,

@@ -1,6 +1,5 @@
 /**
- * Shared dangerous-command detection used by both local Cowork (coworkRunner)
- * and IM channel auto-approve logic (imCoworkHandler).
+ * Shared dangerous-command detection used by Cowork and IM channel auto-approve logic.
  */
 
 // Delete patterns

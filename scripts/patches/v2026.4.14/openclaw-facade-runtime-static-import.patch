@@ -1,0 +1,79 @@
+diff --git a/src/plugin-sdk/facade-runtime.ts b/src/plugin-sdk/facade-runtime.ts
+index 2ecef96fe2..23afdfcb72 100644
+--- a/src/plugin-sdk/facade-runtime.ts
++++ b/src/plugin-sdk/facade-runtime.ts
+@@ -1,6 +1,12 @@
+ import fs from "node:fs";
+ import { createRequire } from "node:module";
+ import path from "node:path";
++// LobsterAI patch: static import so esbuild can bundle facade-activation-check
++// into gateway-bundle.mjs.  The original dynamic createRequire(import.meta.url)
++// resolves relative to the bundle location, not the original module, and the
++// built chunk has ESM dependencies on sibling chunks that don't exist outside
++// the dist/ directory.  A static import lets esbuild inline everything.
++import * as _facadeActivationCheckStatic from "./facade-activation-check.runtime.js";
+ import { fileURLToPath } from "node:url";
+ import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+@@ -170,47 +176,11 @@ type FacadeActivationCheckRuntimeModule = typeof import("./facade-activation-che
+ type JitiLoader = ReturnType<(typeof import("jiti"))["createJiti"]>;
+
+ const nodeRequire = createRequire(import.meta.url);
+-const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
+-  "./facade-activation-check.runtime.js",
+-  "./facade-activation-check.runtime.ts",
+-] as const;
+-
+-let facadeActivationCheckRuntimeModule: FacadeActivationCheckRuntimeModule | undefined;
+-let facadeActivationCheckRuntimeJiti: JitiLoader | undefined;
+-
+-function getFacadeActivationCheckRuntimeJiti(): JitiLoader {
+-  if (facadeActivationCheckRuntimeJiti) {
+-    return facadeActivationCheckRuntimeJiti;
+-  }
+-  const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
+-  facadeActivationCheckRuntimeJiti = createJiti(import.meta.url, { tryNative: false });
+-  return facadeActivationCheckRuntimeJiti;
+-}
+
++// LobsterAI patch: use static import for facade-activation-check.runtime
++// to support esbuild bundling (see import statement at top of file).
+ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
+-  if (facadeActivationCheckRuntimeModule) {
+-    return facadeActivationCheckRuntimeModule;
+-  }
+-  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
+-    try {
+-      facadeActivationCheckRuntimeModule = nodeRequire(
+-        candidate,
+-      ) as FacadeActivationCheckRuntimeModule;
+-      return facadeActivationCheckRuntimeModule;
+-    } catch {
+-      // Try source/runtime candidates in order.
+-    }
+-  }
+-  const jiti = getFacadeActivationCheckRuntimeJiti();
+-  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
+-    try {
+-      facadeActivationCheckRuntimeModule = jiti(candidate) as FacadeActivationCheckRuntimeModule;
+-      return facadeActivationCheckRuntimeModule;
+-    } catch {
+-      // Try source/runtime candidates in order.
+-    }
+-  }
+-  throw new Error("Unable to load facade activation check runtime");
++  return _facadeActivationCheckStatic as FacadeActivationCheckRuntimeModule;
+ }
+
+ function loadFacadeModuleAtLocationSync<T extends object>(params: {
+@@ -287,9 +257,7 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
+
+ export function resetFacadeRuntimeStateForTest(): void {
+   resetFacadeLoaderStateForTest();
+-  facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
+-  facadeActivationCheckRuntimeModule = undefined;
+-  facadeActivationCheckRuntimeJiti = undefined;
++  (_facadeActivationCheckStatic as any).resetFacadeActivationCheckRuntimeStateForTest?.();
+   cachedFacadeModuleLocationsByKey.clear();
+ }
+

@@ -1,6 +1,12 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { contextBridge, ipcRenderer } from 'electron';
+
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import type { Platform } from '../shared/platform';
+import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
+import { OpenClawSessionIpc } from './openclawSession/constants';
+import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -25,6 +31,7 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (skillId: string, config: Record<string, string>) => ipcRenderer.invoke('skills:setConfig', skillId, config),
     testEmailConnectivity: (skillId: string, config: Record<string, string>) =>
       ipcRenderer.invoke('skills:testEmailConnectivity', skillId, config),
+    fetchMarketplace: () => ipcRenderer.invoke('skills:fetchMarketplace'),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on('skills:changed', handler);
@@ -148,6 +155,24 @@ contextBridge.exposeInMainWorld('electron', {
         return () => ipcRenderer.removeListener('openclaw:engine:onProgress', handler);
       },
     },
+    sessionPolicy: {
+      get: () => ipcRenderer.invoke(OpenClawSessionPolicyIpc.Get),
+      set: (config: { keepAlive: '1d' | '7d' | '30d' | '365d' }) =>
+        ipcRenderer.invoke(OpenClawSessionPolicyIpc.Set, config),
+    },
+    session: {
+      patch: (options: {
+        sessionId: string;
+        patch: {
+          model?: string | null;
+          thinkingLevel?: string | null;
+          reasoningLevel?: string | null;
+          elevatedLevel?: string | null;
+          responseUsage?: 'off' | 'tokens' | 'full' | null;
+          sendPolicy?: 'allow' | 'deny' | null;
+        };
+      }) => ipcRenderer.invoke(OpenClawSessionIpc.Patch, options),
+    },
   },
   agents: {
     list: async () => {
@@ -220,12 +245,20 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (config: {
       workingDirectory?: string;
       executionMode?: 'auto' | 'local' | 'sandbox';
-      agentEngine?: 'openclaw' | 'yd_cowork';
+      agentEngine?: 'openclaw';
       memoryEnabled?: boolean;
       memoryImplicitUpdateEnabled?: boolean;
       memoryLlmJudgeEnabled?: boolean;
       memoryGuardLevel?: 'strict' | 'standard' | 'relaxed';
       memoryUserMemoriesMaxItems?: number;
+      skipMissedJobs?: boolean;
+      embeddingEnabled?: boolean;
+      embeddingProvider?: string;
+      embeddingModel?: string;
+      embeddingLocalModelPath?: string;
+      embeddingVectorWeight?: number;
+      embeddingRemoteBaseUrl?: string;
+      embeddingRemoteApiKey?: string;
     }) =>
       ipcRenderer.invoke('cowork:config:set', config),
     listMemoryEntries: (input: {
@@ -305,6 +338,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('dialog:saveInlineFile', options),
     readFileAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('dialog:readFileAsDataUrl', filePath),
+    showMessageBox: (options: { message: string; type?: 'none' | 'info' | 'error' | 'question' | 'warning'; title?: string }) =>
+      ipcRenderer.invoke('dialog:showMessageBox', options),
   },
   shell: {
     openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
@@ -324,13 +359,15 @@ contextBridge.exposeInMainWorld('electron', {
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
   },
   appUpdate: {
-    download: (url: string) => ipcRenderer.invoke('appUpdate:download', url),
-    cancelDownload: () => ipcRenderer.invoke('appUpdate:cancelDownload'),
-    install: (filePath: string) => ipcRenderer.invoke('appUpdate:install', filePath),
-    onDownloadProgress: (callback: (data: any) => void) => {
+    getState: () => ipcRenderer.invoke(AppUpdateIpc.GetState),
+    checkNow: (options?: { manual?: boolean; userId?: string | null }) => ipcRenderer.invoke(AppUpdateIpc.CheckNow, options),
+    retryDownload: () => ipcRenderer.invoke(AppUpdateIpc.RetryDownload),
+    cancelDownload: () => ipcRenderer.invoke(AppUpdateIpc.CancelDownload),
+    installReady: () => ipcRenderer.invoke(AppUpdateIpc.InstallReady),
+    onStateChanged: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('appUpdate:downloadProgress', handler);
-      return () => ipcRenderer.removeListener('appUpdate:downloadProgress', handler);
+      ipcRenderer.on(AppUpdateIpc.StateChanged, handler);
+      return () => ipcRenderer.removeListener(AppUpdateIpc.StateChanged, handler);
     },
   },
   log: {
@@ -363,6 +400,10 @@ contextBridge.exposeInMainWorld('electron', {
     weixinQrLoginStart: () => ipcRenderer.invoke('im:weixin:qr-login-start'),
     weixinQrLoginWait: (accountId?: string) => ipcRenderer.invoke('im:weixin:qr-login-wait', accountId),
 
+    // POPO QR login
+    popoQrLoginStart: () => ipcRenderer.invoke('im:popo:qr-login-start'),
+    popoQrLoginPoll: (taskToken: string) => ipcRenderer.invoke('im:popo:qr-login-poll', taskToken),
+
     // Pairing
     listPairingRequests: (platform: string) => ipcRenderer.invoke('im:pairing:list', platform),
     approvePairingCode: (platform: string, code: string) => ipcRenderer.invoke('im:pairing:approve', platform, code),
@@ -373,6 +414,14 @@ contextBridge.exposeInMainWorld('electron', {
     deleteDingTalkInstance: (instanceId: string) => ipcRenderer.invoke('im:dingtalk:instance:delete', instanceId),
     setDingTalkInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
       ipcRenderer.invoke('im:dingtalk:instance:config:set', instanceId, config, options),
+
+    // NIM Multi-Instance
+    addNimInstance: (name: string) => ipcRenderer.invoke('im:nim:instance:add', name),
+    deleteNimInstance: (instanceId: string) => ipcRenderer.invoke('im:nim:instance:delete', instanceId),
+    setNimInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:nim:instance:config:set', instanceId, config, options),
+    nimQrLoginStart: () => ipcRenderer.invoke(NimQrLoginIpc.Start),
+    nimQrLoginPoll: (uuid: string) => ipcRenderer.invoke(NimQrLoginIpc.Poll, uuid),
 
     // QQ Multi-Instance
     addQQInstance: (name: string) => ipcRenderer.invoke('im:qq:instance:add', name),
@@ -385,6 +434,30 @@ contextBridge.exposeInMainWorld('electron', {
     deleteFeishuInstance: (instanceId: string) => ipcRenderer.invoke('im:feishu:instance:delete', instanceId),
     setFeishuInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
       ipcRenderer.invoke('im:feishu:instance:config:set', instanceId, config, options),
+
+    // Email Multi-Instance
+    addEmailInstance: (name: string) => ipcRenderer.invoke('im:email:instance:add', name),
+    deleteEmailInstance: (instanceId: string) => ipcRenderer.invoke('im:email:instance:delete', instanceId),
+    setEmailInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:email:instance:config:set', instanceId, config, options),
+
+    // WeCom Multi-Instance
+    addWecomInstance: (name: string) => ipcRenderer.invoke('im:wecom:instance:add', name),
+    deleteWecomInstance: (instanceId: string) => ipcRenderer.invoke('im:wecom:instance:delete', instanceId),
+    setWecomInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:wecom:instance:config:set', instanceId, config, options),
+
+    // Telegram Multi-Instance
+    addTelegramInstance: (name: string) => ipcRenderer.invoke('im:telegram:instance:add', name),
+    deleteTelegramInstance: (instanceId: string) => ipcRenderer.invoke('im:telegram:instance:delete', instanceId),
+    setTelegramInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:telegram:instance:config:set', instanceId, config, options),
+
+    // Discord Multi-Instance
+    addDiscordInstance: (name: string) => ipcRenderer.invoke('im:discord:instance:add', name),
+    deleteDiscordInstance: (instanceId: string) => ipcRenderer.invoke('im:discord:instance:delete', instanceId),
+    setDiscordInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+      ipcRenderer.invoke('im:discord:instance:config:set', instanceId, config, options),
 
     // Event listeners
     onStatusChange: (callback: (status: any) => void) => {
@@ -422,7 +495,12 @@ contextBridge.exposeInMainWorld('electron', {
 
     // Delivery channels
     listChannels: () => ipcRenderer.invoke(ScheduledTaskIpc.ListChannels),
-    listChannelConversations: (channel: string, accountId?: string) => ipcRenderer.invoke(ScheduledTaskIpc.ListChannelConversations, channel, accountId),
+    listChannelConversations: (channel: string, accountId?: string, filterAccountId?: string) => ipcRenderer.invoke(
+      ScheduledTaskIpc.ListChannelConversations,
+      channel,
+      accountId,
+      filterAccountId,
+    ),
 
     // Stream event listeners
     onStatusUpdate: (callback: (data: any) => void) => {
@@ -443,18 +521,6 @@ contextBridge.exposeInMainWorld('electron', {
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
-  },
-  qwen: {
-    // OAuth登录
-    oauthLogin: () => ipcRenderer.invoke('qwen:oauth:login'),
-    // OAuth刷新token
-    oauthRefresh: (refreshToken: string) => ipcRenderer.invoke('qwen:oauth:refresh', refreshToken),
-    // OAuth进度监听
-    onOAuthProgress: (callback: (message: string) => void) => {
-      const handler = (_event: any, message: string) => callback(message);
-      ipcRenderer.on('qwen:oauth:progress', handler);
-      return () => ipcRenderer.removeListener('qwen:oauth:progress', handler);
-    },
   },
   auth: {
     login: (loginUrl?: string) => ipcRenderer.invoke('auth:login', { loginUrl }),
@@ -496,6 +562,29 @@ contextBridge.exposeInMainWorld('electron', {
         }>,
       verify: (appId: string, appSecret: string) =>
         ipcRenderer.invoke('feishu:install:verify', { appId, appSecret }) as Promise<{
+          success: boolean;
+          error?: string;
+        }>,
+    },
+  },
+  dingtalk: {
+    install: {
+      qrcode: () =>
+        ipcRenderer.invoke('dingtalk:install:qrcode') as Promise<{
+          url: string;
+          deviceCode: string;
+          interval: number;
+          expireIn: number;
+        }>,
+      poll: (deviceCode: string) =>
+        ipcRenderer.invoke('dingtalk:install:poll', { deviceCode }) as Promise<{
+          done: boolean;
+          clientId?: string;
+          clientSecret?: string;
+          error?: string;
+        }>,
+      verify: (clientId: string, clientSecret: string) =>
+        ipcRenderer.invoke('dingtalk:install:verify', { clientId, clientSecret }) as Promise<{
           success: boolean;
           error?: string;
         }>,

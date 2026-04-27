@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
 import { setViewMode, selectTask } from '../../store/slices/scheduledTaskSlice';
@@ -37,6 +37,13 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<{ id: string; name: string } | null>(null);
+  const isFormDirtyRef = useRef(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const pendingBackActionRef = useRef<(() => void) | null>(null);
+
+  const handleFormDirtyChange = useCallback((dirty: boolean) => {
+    isFormDirtyRef.current = dirty;
+  }, []);
 
   const handleRequestDelete = useCallback((taskId: string, taskName: string) => {
     setDeleteTaskInfo({ id: taskId, name: taskName });
@@ -62,10 +69,33 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
     scheduledTaskService.loadTasks();
   }, []);
 
+  const requestLeave = useCallback((action: () => void) => {
+    if (isFormDirtyRef.current) {
+      pendingBackActionRef.current = () => {
+        isFormDirtyRef.current = false;
+        action();
+      };
+      setShowLeaveConfirm(true);
+    } else {
+      action();
+    }
+  }, []);
+
   const handleBackToList = () => {
-    dispatch(selectTask(null));
-    dispatch(setViewMode('list'));
+    const action = () => {
+      dispatch(selectTask(null));
+      dispatch(setViewMode('list'));
+    };
+    if (viewMode === 'create' || viewMode === 'edit') {
+      requestLeave(action);
+    } else {
+      action();
+    }
   };
+
+  const handleEditCancel = useCallback(() => {
+    requestLeave(() => dispatch(setViewMode('detail')));
+  }, [requestLeave, dispatch]);
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
@@ -175,14 +205,16 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
                 mode="create"
                 onCancel={handleBackToList}
                 onSaved={handleBackToList}
+                onDirtyChange={handleFormDirtyChange}
               />
             )}
             {viewMode === 'edit' && selectedTask && (
               <TaskForm
                 mode="edit"
                 task={selectedTask}
-                onCancel={() => dispatch(setViewMode('detail'))}
+                onCancel={handleEditCancel}
                 onSaved={() => dispatch(setViewMode('detail'))}
+                onDirtyChange={handleFormDirtyChange}
               />
             )}
             {viewMode === 'detail' && selectedTask && (
@@ -199,6 +231,45 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           onConfirm={handleConfirmDelete}
           onCancel={handleCancelDelete}
         />
+      )}
+
+      {/* Unsaved changes confirmation overlay (back arrow) */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl bg-background border-border border shadow-modal p-5"
+          >
+            <h4 className="text-sm font-semibold text-foreground mb-2">
+              {i18nService.t('taskFormUnsavedChanges')}
+            </h4>
+            <p className="text-sm text-secondary mb-4">
+              {i18nService.t('taskFormLeaveConfirm')}
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLeaveConfirm(false)}
+                className="px-4 py-2 text-sm rounded-lg text-secondary hover:bg-surface-raised transition-colors border border-border"
+              >
+                {i18nService.t('taskFormStay')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLeaveConfirm(false);
+                  pendingBackActionRef.current?.();
+                  pendingBackActionRef.current = null;
+                }}
+                className="px-4 py-2 text-sm font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                {i18nService.t('taskFormLeave')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

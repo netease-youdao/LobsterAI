@@ -1,9 +1,10 @@
+import { ArrowRightIcon } from '@heroicons/react/24/outline';
 import React from 'react';
-import { useSelector, useDispatch } from 'react-redux';
+import { useDispatch,useSelector } from 'react-redux';
+
 import { RootState } from '../../store';
 import { selectPrompt } from '../../store/slices/quickActionSlice';
-import type { LocalizedQuickAction, LocalizedPrompt } from '../../types/quickAction';
-import { ArrowRightIcon } from '@heroicons/react/24/outline';
+import type { LocalizedPrompt,LocalizedQuickAction } from '../../types/quickAction';
 
 interface PromptPanelProps {
   action: LocalizedQuickAction;
@@ -49,7 +50,7 @@ const PromptPanel: React.FC<PromptPanelProps> = ({ action, onPromptSelect }) => 
                 border text-left transition-all duration-200
                 ${
                   isPromptSelected
-                    ? 'dark:bg-primary-muted bg-primary-muted border-primary/50'
+                    ? 'dark:bg-primary-muted bg-primary-muted border-[color-mix(in_srgb,var(--lobster-primary)_50%,transparent)]'
                     : 'bg-surface border-border hover:border-border hover:border-border hover:bg-surface-raised'
                 }
               `}

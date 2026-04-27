@@ -1,0 +1,47 @@
+diff --git a/src/plugins/provider-runtime.ts b/src/plugins/provider-runtime.ts
+index b59f66ab21..c4e56e4bc7 100644
+--- a/src/plugins/provider-runtime.ts
++++ b/src/plugins/provider-runtime.ts
+@@ -8,6 +8,7 @@ import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts
+ import { resolveCatalogHookProviderPluginIds } from "./providers.js";
+ import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
+ import { resolvePluginCacheInputs } from "./roots.js";
++import { getActivePluginRegistry } from "./runtime.js";
+ import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+ import type {
+   ProviderAuthDoctorHintContext,
+@@ -141,6 +142,16 @@ function resolveProviderPluginsForHooks(params: {
+   onlyPluginIds?: string[];
+   providerRefs?: string[];
+ }): ProviderPlugin[] {
++  // LobsterAI patch: during gateway startup (pre-activation),
++  // getActivePluginRegistry() is null; skip JITI provider plugin loading
++  // entirely.  After full activation, getCompatibleActivePluginRegistry
++  // resolves from the active registry without JITI.  Early return (before
++  // cacheBucket.set) so no stale [] gets cached for post-activation calls.
++  // Saves ~17s on cold start (14 provider JITI loads via applyModelDefaults).
++  if (!getActivePluginRegistry()) {
++    process.stderr.write("[cfg-diag2] resolveProviderPluginsForHooks: pre-activation skip\n");
++    return [];
++  }
+   const env = params.env ?? process.env;
+   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+   const cacheBucket = resolveHookProviderCacheBucket({
+@@ -171,6 +182,7 @@ function resolveProviderPluginsForHooks(params: {
+   ) {
+     return [];
+   }
++  const _t0ResolveProviders = Date.now();
+   const resolved = resolvePluginProviders({
+     ...params,
+     workspaceDir,
+@@ -180,6 +192,9 @@ function resolveProviderPluginsForHooks(params: {
+     bundledProviderAllowlistCompat: true,
+     bundledProviderVitestCompat: true,
+   });
++  process.stderr.write(
++    `[cfg-diag2] resolveProviderPluginsForHooks: loaded ${resolved.length} providers, ${Date.now() - _t0ResolveProviders}ms\n`,
++  );
+   cacheBucket.set(cacheKey, resolved);
+   return resolved;
+ }

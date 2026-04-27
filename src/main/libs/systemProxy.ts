@@ -19,6 +19,13 @@ const originalProxyEnv: ProxyEnvSnapshot = PROXY_ENV_KEYS.reduce((acc, key) => {
 
 let systemProxyEnabled = false;
 
+export const DEFAULT_PROXY_RESOLUTION_TARGETS = [
+  'https://api.openai.com',
+  'https://api.anthropic.com',
+  'https://generativelanguage.googleapis.com',
+  'https://openrouter.ai',
+] as const;
+
 function setEnvValue(key: ProxyEnvKey, value: string | undefined): void {
   if (typeof value === 'string' && value.length > 0) {
     process.env[key] = value;
@@ -110,4 +117,17 @@ export async function resolveSystemProxyUrl(targetUrl: string): Promise<string |
   }
 
   return null;
+}
+
+export async function resolveSystemProxyUrlForTargets(
+  targetUrls: readonly string[] = DEFAULT_PROXY_RESOLUTION_TARGETS,
+): Promise<{ proxyUrl: string | null; targetUrl: string | null }> {
+  for (const targetUrl of targetUrls) {
+    const proxyUrl = await resolveSystemProxyUrl(targetUrl);
+    if (proxyUrl) {
+      return { proxyUrl, targetUrl };
+    }
+  }
+
+  return { proxyUrl: null, targetUrl: null };
 }

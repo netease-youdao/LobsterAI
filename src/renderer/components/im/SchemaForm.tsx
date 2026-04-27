@@ -9,7 +9,7 @@ import { XCircleIcon as XCircleIconSolid, ChevronRightIcon } from '@heroicons/re
 
 /** A single uiHint entry from the gateway */
 export interface UiHint {
-  order: number;
+  order?: number;
   label: string;
   sensitive?: boolean;
   advanced?: boolean;
@@ -31,6 +31,8 @@ export interface SchemaFormProps {
   showSecrets?: Record<string, boolean>;
   /** Toggle secret field visibility */
   onToggleSecret?: (path: string) => void;
+  /** Optional field filter by relative dot-path */
+  includePath?: (path: string, hint: UiHint) => boolean;
 }
 
 /** Deep-get a value from nested object by dot path */
@@ -61,13 +63,16 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
   onBlur,
   showSecrets = {},
   onToggleSecret,
+  includePath,
 }) => {
   // Identify groups and fields
   const groups: string[] = [];
   const topLevelFields: string[] = [];
 
   // Sort all hint keys by order
-  const sortedKeys = Object.keys(hints).sort((a, b) => hints[a].order - hints[b].order);
+  const sortedKeys = Object.keys(hints)
+    .filter((key) => includePath ? includePath(key, hints[key]) : true)
+    .sort((a, b) => (hints[a].order ?? Number.MAX_SAFE_INTEGER) - (hints[b].order ?? Number.MAX_SAFE_INTEGER));
 
   for (const key of sortedKeys) {
     // Skip 'enabled' field
@@ -140,7 +145,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
             value={String(fieldValue || '')}
             onChange={(e) => handleChange(e.target.value)}
             onBlur={onBlur}
-            className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+            className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
           >
             {enumValues.map((v) => (
               <option key={v} value={v}>
@@ -167,7 +172,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               value={strValue}
               onChange={(e) => handleChange(e.target.value)}
               onBlur={onBlur}
-              className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
+              className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
               placeholder="••••••••••••"
             />
             <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -208,7 +213,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               value={strValue}
               onChange={(e) => handleChange(e.target.value)}
               onBlur={onBlur}
-              className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
+              className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
             />
             {strValue && (
               <div className="absolute right-2 inset-y-0 flex items-center">
@@ -242,7 +247,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
               handleChange(lines);
             }}
             onBlur={onBlur}
-            className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors min-h-[60px] resize-y"
+            className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors min-h-[60px] resize-y"
           />
         </div>
       );
@@ -261,7 +266,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
             value={numValue}
             onChange={(e) => handleChange(e.target.value ? Number(e.target.value) : undefined)}
             onBlur={onBlur}
-            className="block w-full rounded-lg/80 bg-surface/80/60 border-border/60 border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+            className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
           />
         </div>
       );
@@ -284,7 +289,7 @@ export const SchemaForm: React.FC<SchemaFormProps> = ({
           <ChevronRightIcon className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
           {groupHint.label}
         </summary>
-        <div className="space-y-3 mt-2 ml-1 pl-3 border-l-2 border-border/30/30">
+        <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
           {childFields.map((field) => renderField(field, hints[field]))}
         </div>
       </details>

@@ -1,0 +1,67 @@
+diff --git a/src/config/schema.help.ts b/src/config/schema.help.ts
+index f4f0023f7f..4677736316 100644
+--- a/src/config/schema.help.ts
++++ b/src/config/schema.help.ts
+@@ -1077,6 +1077,8 @@ export const FIELD_HELP: Record<string, string> = {
+   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
+   "cron.enabled":
+     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
++  "cron.skipMissedJobs":
++    "When true, the cron service will not run missed (past-due) jobs on startup. Useful when you want to skip catch-up runs after a long gateway downtime.",
+   "cron.store":
+     "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
+   "cron.maxConcurrentRuns":
+diff --git a/src/config/schema.labels.ts b/src/config/schema.labels.ts
+index ee1b09e322..a48a094129 100644
+--- a/src/config/schema.labels.ts
++++ b/src/config/schema.labels.ts
+@@ -513,6 +513,7 @@ export const FIELD_LABELS: Record<string, string> = {
+   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
+   cron: "Cron",
+   "cron.enabled": "Cron Enabled",
++  "cron.skipMissedJobs": "Cron Skip Missed Jobs",
+   "cron.store": "Cron Store Path",
+   "cron.maxConcurrentRuns": "Cron Max Concurrent Runs",
+   "cron.retry": "Cron Retry Policy",
+diff --git a/src/config/types.cron.ts b/src/config/types.cron.ts
+index 251592251b..9cbca4f8cb 100644
+--- a/src/config/types.cron.ts
++++ b/src/config/types.cron.ts
+@@ -29,6 +29,8 @@ export type CronFailureDestinationConfig = {
+
+ export type CronConfig = {
+   enabled?: boolean;
++  /** Skip running missed jobs on cron service startup (default: false). */
++  skipMissedJobs?: boolean;
+   store?: string;
+   maxConcurrentRuns?: number;
+   /** Override default retry policy for one-shot jobs on transient errors. */
+diff --git a/src/config/zod-schema.ts b/src/config/zod-schema.ts
+index 600603cabd..3ca37c63bc 100644
+--- a/src/config/zod-schema.ts
++++ b/src/config/zod-schema.ts
+@@ -427,6 +427,7 @@ export const OpenClawSchema = z
+     cron: z
+       .object({
+         enabled: z.boolean().optional(),
++        skipMissedJobs: z.boolean().optional(),
+         store: z.string().optional(),
+         maxConcurrentRuns: z.number().int().positive().optional(),
+         retry: z
+diff --git a/src/cron/service/ops.ts b/src/cron/service/ops.ts
+index dd02ca4ab6..c09369ab4d 100644
+--- a/src/cron/service/ops.ts
++++ b/src/cron/service/ops.ts
+@@ -109,7 +109,11 @@ export async function start(state: CronServiceState) {
+     await persist(state);
+   });
+
+-  await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
++  if (!state.deps.cronConfig?.skipMissedJobs) {
++    await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
++  } else {
++    state.deps.log.info({}, "cron: skipping missed jobs on startup (skipMissedJobs=true)");
++  }
+
+   await locked(state, async () => {
+     await ensureLoaded(state, { forceReload: true, skipRecompute: true });

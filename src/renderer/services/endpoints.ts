@@ -39,5 +39,6 @@ const PORTAL_BASE_PROD = 'https://c.youdao.com/dict/hardware/octopus/lobsterai-p
 
 const getPortalBase = () => isTestMode() ? PORTAL_BASE_TEST : PORTAL_BASE_PROD;
 
+export const getPortalLoginUrl = () => `${getPortalBase()}/login`;
 export const getPortalPricingUrl = () => `${getPortalBase()}/pricing`;
 export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
