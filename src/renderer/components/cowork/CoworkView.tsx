@@ -24,6 +24,7 @@ import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ModelSelector from '../ModelSelector';
 import { PromptPanel,QuickActionBar } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
+import { ChatSkeleton } from '../SkeletonLoader';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { resolveAgentModelSelection } from './agentModelSelection';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
@@ -474,10 +475,15 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         <div className="draggable flex h-12 items-center justify-end px-4 border-b border-border shrink-0">
           <WindowTitleBar inline />
         </div>
+<<<<<<< HEAD
         <div className="flex-1 flex items-center justify-center">
           <div className="text-secondary">
             {i18nService.t('loading')}
           </div>
+=======
+        <div className="flex-1 overflow-hidden">
+          <ChatSkeleton />
+>>>>>>> 50ed9ad (feat(ui): add skeleton loading screen for cowork initialization)
         </div>
       </div>
     );
