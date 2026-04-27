@@ -1212,6 +1212,21 @@ export const UserMessageItem: React.FC<{
                     ))}
                   </div>
                 )}
+                {message.timestamp > 0 && (
+                  <div className="flex justify-end mt-1">
+                    <span className="text-[10px] dark:text-claude-darkTextSecondary/50 text-claude-textSecondary/50 select-none">
+                      {(() => {
+                        const d = new Date(message.timestamp);
+                        const mm = String(d.getMonth() + 1).padStart(2, '0');
+                        const dd = String(d.getDate()).padStart(2, '0');
+                        const hh = String(d.getHours()).padStart(2, '0');
+                        const min = String(d.getMinutes()).padStart(2, '0');
+                        const ss = String(d.getSeconds()).padStart(2, '0');
+                        return `${mm}-${dd} ${hh}:${min}:${ss}`;
+                      })()}
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-end gap-1.5 mt-1">
                 {onReEdit && (
@@ -1268,14 +1283,34 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
+  durationMs?: number | null;
 }> = ({
   message,
   resolveLocalFilePath,
   mapDisplayText,
   showCopyButton = false,
+  durationMs,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
+
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${mm}-${dd} ${hh}:${min}:${ss}`;
+  };
+
+  const formatDuration = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    const m = Math.floor(ms / 60000);
+    const s = Math.round((ms % 60000) / 1000);
+    return `${m}m${s}s`;
+  };
 
   return (
     <div
@@ -1291,14 +1326,24 @@ const AssistantMessageItem: React.FC<{
           showRevealInFolderAction
         />
       </div>
-      {showCopyButton && (
-        <div className="flex items-center gap-1.5 mt-1">
+      <div className="flex items-center gap-1.5 mt-1">
+        {message.timestamp > 0 && (
+          <span className="text-[10px] dark:text-claude-darkTextSecondary/50 text-claude-textSecondary/50 select-none">
+            {formatTime(message.timestamp)}
+          </span>
+        )}
+        {durationMs != null && durationMs > 0 && (
+          <span className="text-[10px] dark:text-claude-darkTextSecondary/40 text-claude-textSecondary/40 select-none">
+            · {formatDuration(durationMs)}
+          </span>
+        )}
+        {showCopyButton && (
           <CopyButton
             content={displayContent}
             visible={isHovered}
           />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
@@ -1406,12 +1451,14 @@ export const AssistantTurnBlock: React.FC<{
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
+  durationMs?: number | null;
 }> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
   showCopyButtons = true,
+  durationMs,
 }) => {
   const visibleAssistantItems = getVisibleAssistantItems(turn.assistantItems);
 
@@ -1491,6 +1538,9 @@ export const AssistantTurnBlock: React.FC<{
     );
   };
 
+  const lastAssistantIndex = visibleAssistantItems.reduce<number>((last, item, i) =>
+    item.type === 'assistant' && !item.message.metadata?.isThinking ? i : last, -1);
+
   return (
     <div className="px-4 py-2">
       <div className="max-w-5xl min-w-[320px] mx-auto">
@@ -1511,6 +1561,7 @@ export const AssistantTurnBlock: React.FC<{
                 const hasToolGroupAfter = visibleAssistantItems
                   .slice(index + 1)
                   .some(laterItem => laterItem.type === 'tool_group');
+                const isLastAssistant = index === lastAssistantIndex;
 
                 return (
                   <AssistantMessageItem
@@ -1519,6 +1570,7 @@ export const AssistantTurnBlock: React.FC<{
                     resolveLocalFilePath={resolveLocalFilePath}
                     mapDisplayText={mapDisplayText}
                     showCopyButton={showCopyButtons && !hasToolGroupAfter}
+                    durationMs={isLastAssistant ? durationMs : null}
                   />
                 );
               }
@@ -2319,6 +2371,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX)
       const alwaysRender = index >= turns.length - 3;
 
+      // Compute duration: from user message send time to first assistant message time
+      let durationMs: number | null = null;
+      if (turn.userMessage && turn.userMessage.timestamp > 0) {
+        const firstAssistant = turn.assistantItems.find(
+          item => item.type === 'assistant' && !item.message.metadata?.isThinking
+        );
+        if (firstAssistant && firstAssistant.type === 'assistant' && firstAssistant.message.timestamp > 0) {
+          durationMs = firstAssistant.message.timestamp - turn.userMessage.timestamp;
+        }
+      }
+
       // Compute rail indices for user/assistant messages (must match rail IIFE logic)
       let asstContent = '';
       for (const item of turn.assistantItems) {
@@ -2344,6 +2407,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
                 showCopyButtons={!isStreaming}
+                durationMs={durationMs}
               />
             </div>
           )}
