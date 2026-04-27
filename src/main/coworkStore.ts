@@ -33,7 +33,8 @@ const DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS = 12;
 const MIN_MEMORY_USER_MEMORIES_MAX_ITEMS = 1;
 const MAX_MEMORY_USER_MEMORIES_MAX_ITEMS = 60;
 const MEMORY_NEAR_DUPLICATE_MIN_SCORE = 0.82;
-const MEMORY_PROCEDURAL_TEXT_RE = /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
+const MEMORY_PROCEDURAL_TEXT_RE =
+  /(执行以下命令|run\s+(?:the\s+)?following\s+command|\b(?:cd|npm|pnpm|yarn|node|python|bash|sh|git|curl|wget)\b|\$[A-Z_][A-Z0-9_]*|&&|--[a-z0-9-]+|\/tmp\/|\.sh\b|\.bat\b|\.ps1\b)/i;
 const MEMORY_ASSISTANT_STYLE_TEXT_RE = /^(?:使用|use)\s+[A-Za-z0-9._-]+\s*(?:技能|skill)/i;
 
 const DEFAULT_EMBEDDING_ENABLED = false;
@@ -72,8 +73,10 @@ function normalizeMemoryGuardLevel(value: string | undefined): CoworkMemoryGuard
 function parseBooleanConfig(value: string | undefined, fallback: boolean): boolean {
   if (!value) return fallback;
   const normalized = value.trim().toLowerCase();
-  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
-  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') return false;
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on')
+    return true;
+  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off')
+    return false;
   return fallback;
 }
 
@@ -81,7 +84,7 @@ function clampMemoryUserMemoriesMaxItems(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS;
   return Math.max(
     MIN_MEMORY_USER_MEMORIES_MAX_ITEMS,
-    Math.min(MAX_MEMORY_USER_MEMORIES_MAX_ITEMS, Math.floor(value))
+    Math.min(MAX_MEMORY_USER_MEMORIES_MAX_ITEMS, Math.floor(value)),
   );
 }
 
@@ -115,7 +118,7 @@ function extractConversationSearchTerms(value: string): string[] {
   addTerm(normalized);
   const tokens = normalized
     .split(/[\s,，、|/\\;；]+/g)
-    .map((token) => token.replace(/^['"`]+|['"`]+$/g, '').trim())
+    .map(token => token.replace(/^['"`]+|['"`]+$/g, '').trim())
     .filter(Boolean);
 
   for (const token of tokens) {
@@ -148,7 +151,7 @@ function normalizeMemorySemanticKey(value: string): string {
 function buildTokenFrequencyMap(value: string): Map<string, number> {
   const tokens = value
     .split(/\s+/g)
-    .map((token) => token.trim())
+    .map(token => token.trim())
     .filter(Boolean);
   const map = new Map<string, number>();
   for (const token of tokens) {
@@ -219,14 +222,20 @@ function scoreMemorySimilarity(left: string, right: string): number {
   }
 
   let phraseScore = 0;
-  if (compactLeft && compactRight && (compactLeft.includes(compactRight) || compactRight.includes(compactLeft))) {
-    phraseScore = Math.min(compactLeft.length, compactRight.length) / Math.max(compactLeft.length, compactRight.length);
+  if (
+    compactLeft &&
+    compactRight &&
+    (compactLeft.includes(compactRight) || compactRight.includes(compactLeft))
+  ) {
+    phraseScore =
+      Math.min(compactLeft.length, compactRight.length) /
+      Math.max(compactLeft.length, compactRight.length);
   }
 
   return Math.max(
     phraseScore,
     scoreTokenOverlap(left, right),
-    scoreCharacterBigramDice(left, right)
+    scoreCharacterBigramDice(left, right),
   );
 }
 
@@ -259,7 +268,9 @@ function choosePreferredMemoryText(currentText: string, incomingText: string): s
   const incomingScore = scoreMemoryTextQuality(normalizedIncoming);
   if (incomingScore > currentScore + 1) return normalizedIncoming;
   if (currentScore > incomingScore + 1) return normalizedCurrent;
-  return normalizedIncoming.length >= normalizedCurrent.length ? normalizedIncoming : normalizedCurrent;
+  return normalizedIncoming.length >= normalizedCurrent.length
+    ? normalizedIncoming
+    : normalizedCurrent;
 }
 
 function buildMemoryFingerprint(text: string): string {
@@ -282,9 +293,11 @@ function parseTimeToMs(input?: string | null): number | null {
 function shouldAutoDeleteMemoryText(text: string): boolean {
   const normalized = normalizeMemoryText(text);
   if (!normalized) return false;
-  return MEMORY_ASSISTANT_STYLE_TEXT_RE.test(normalized)
-    || MEMORY_PROCEDURAL_TEXT_RE.test(normalized)
-    || isQuestionLikeMemoryText(normalized);
+  return (
+    MEMORY_ASSISTANT_STYLE_TEXT_RE.test(normalized) ||
+    MEMORY_PROCEDURAL_TEXT_RE.test(normalized) ||
+    isQuestionLikeMemoryText(normalized)
+  );
 }
 
 // Types mirroring src/types/cowork.ts for main process use
@@ -376,6 +389,10 @@ export interface CoworkSession {
   activeSkillIds: string[];
   agentId: string;
   messages: CoworkMessage[];
+  /** Offset of the first loaded message in the full message history. */
+  messagesOffset: number;
+  /** Total number of messages stored for this session. */
+  totalMessages: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -547,7 +564,7 @@ export class CoworkStore {
     systemPrompt: string = '',
     executionMode: CoworkExecutionMode = 'local',
     activeSkillIds: string[] = [],
-    agentId: string = 'main'
+    agentId: string = 'main',
   ): CoworkSession {
     const id = uuidv4();
     const now = Date.now();
@@ -584,12 +601,14 @@ export class CoworkStore {
       activeSkillIds,
       agentId,
       messages: [],
+      messagesOffset: 0,
+      totalMessages: 0,
       createdAt: now,
       updatedAt: now,
     };
   }
 
-  getSession(id: string): CoworkSession | null {
+  getSession(id: string, messageLimit = 50): CoworkSession | null {
     interface SessionRow {
       id: string;
       title: string;
@@ -617,7 +636,12 @@ export class CoworkStore {
 
     if (!row) return null;
 
-    const messages = this.getSessionMessages(id);
+    const totalMessages = this.countSessionMessages(id);
+    const messageOffset = Math.max(0, totalMessages - messageLimit);
+    const messages =
+      messageOffset > 0
+        ? this.getPagedSessionMessages(id, messageLimit, messageOffset)
+        : this.getSessionMessages(id);
 
     let activeSkillIds: string[] = [];
     if (row.active_skill_ids) {
@@ -642,6 +666,8 @@ export class CoworkStore {
       activeSkillIds,
       agentId: row.agent_id || 'main',
       messages,
+      messagesOffset: messageOffset,
+      totalMessages,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -721,7 +747,20 @@ export class CoworkStore {
     this.db.prepare('UPDATE cowork_sessions SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id);
   }
 
-  listSessions(agentId?: string): CoworkSessionSummary[] {
+  countSessions(agentId?: string): number {
+    if (agentId) {
+      const row = this.db
+        .prepare('SELECT COUNT(*) as count FROM cowork_sessions WHERE agent_id = ?')
+        .get(agentId) as { count: number } | undefined;
+      return row?.count || 0;
+    }
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM cowork_sessions').get() as
+      | { count: number }
+      | undefined;
+    return row?.count || 0;
+  }
+
+  listSessions(limit = 50, offset = 0, agentId?: string): CoworkSessionSummary[] {
     interface SessionSummaryRow {
       id: string;
       title: string;
@@ -740,15 +779,20 @@ export class CoworkStore {
         FROM cowork_sessions
         WHERE agent_id = ?
         ORDER BY pinned DESC, updated_at DESC
+        LIMIT ? OFFSET ?
       `,
-        [agentId],
+        [agentId, limit, offset],
       );
     } else {
-      rows = this.getAll<SessionSummaryRow>(`
+      rows = this.getAll<SessionSummaryRow>(
+        `
         SELECT id, title, status, pinned, agent_id, created_at, updated_at
         FROM cowork_sessions
         ORDER BY pinned DESC, updated_at DESC
-      `);
+        LIMIT ? OFFSET ?
+      `,
+        [limit, offset],
+      );
     }
 
     return rows.map(row => ({
@@ -808,6 +852,38 @@ export class CoworkStore {
     }
 
     return deduped;
+  }
+
+  countSessionMessages(sessionId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) as count FROM cowork_messages WHERE session_id = ?')
+      .get(sessionId) as { count: number } | undefined;
+    return row?.count || 0;
+  }
+
+  getPagedSessionMessages(sessionId: string, limit: number, offset: number): CoworkMessage[] {
+    const rows = this.getAll<CoworkMessageRow>(
+      `
+      SELECT id, type, content, metadata, created_at, sequence
+      FROM (
+        SELECT id, type, content, metadata, created_at, sequence, ROWID as rowid_
+        FROM cowork_messages
+        WHERE session_id = ?
+        ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
+        LIMIT ? OFFSET ?
+      )
+      ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, rowid_ ASC
+    `,
+      [sessionId, limit, offset],
+    );
+
+    return rows.map(row => ({
+      id: row.id,
+      type: row.type as CoworkMessageType,
+      content: row.content,
+      timestamp: row.created_at,
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+    }));
   }
 
   private getSessionMessages(sessionId: string): CoworkMessage[] {
@@ -972,7 +1048,9 @@ export class CoworkStore {
     this.db.transaction(() => {
       // Delete all existing user/assistant messages for this session
       this.db
-        .prepare("DELETE FROM cowork_messages WHERE session_id = ? AND type IN ('user', 'assistant')")
+        .prepare(
+          "DELETE FROM cowork_messages WHERE session_id = ? AND type IN ('user', 'assistant')",
+        )
         .run(sessionId);
 
       // Re-insert authoritative messages with correct sequence numbers
@@ -1812,7 +1890,7 @@ export class CoworkStore {
     if (!normalizedModelId) return 0;
 
     const result = this.db
-      .prepare('UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, \'\')) = \'\'')
+      .prepare("UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, '')) = ''")
       .run(normalizedModelId, Date.now());
 
     return result.changes;

@@ -19,6 +19,8 @@ export interface DraftAttachment {
 
 interface CoworkState {
   sessions: CoworkSessionSummary[];
+  /** Whether more sessions exist on the server beyond what is currently loaded. */
+  hasMoreSessions: boolean;
   currentSessionId: string | null;
   currentSession: CoworkSession | null;
   draftPrompts: Record<string, string>;
@@ -34,6 +36,7 @@ interface CoworkState {
 
 const initialState: CoworkState = {
   sessions: [],
+  hasMoreSessions: false,
   currentSessionId: null,
   currentSession: null,
   draftPrompts: {},
@@ -94,13 +97,35 @@ const coworkSlice = createSlice({
       });
     },
 
+    setHasMoreSessions(state, action: PayloadAction<boolean>) {
+      state.hasMoreSessions = action.payload;
+    },
+
+    appendSessions(state, action: PayloadAction<{ sessions: CoworkSessionSummary[]; hasMore: boolean }>) {
+      const { sessions, hasMore } = action.payload;
+      const existingIds = new Set(state.sessions.map(s => s.id));
+      const newSessions = sessions.filter(s => !existingIds.has(s.id));
+      state.sessions = [...state.sessions, ...newSessions];
+      state.hasMoreSessions = hasMore;
+    },
+
     setCurrentSessionId(state, action: PayloadAction<string | null>) {
       state.currentSessionId = action.payload;
       markSessionRead(state, action.payload);
     },
 
     setCurrentSession(state, action: PayloadAction<CoworkSession | null>) {
-      state.currentSession = action.payload;
+      if (action.payload) {
+        const session = action.payload;
+        // Ensure pagination fields are always present (guard against stale IPC data).
+        state.currentSession = {
+          ...session,
+          messagesOffset: session.messagesOffset ?? 0,
+          totalMessages: session.totalMessages ?? session.messages.length,
+        };
+      } else {
+        state.currentSession = null;
+      }
       if (action.payload) {
         state.currentSessionId = action.payload.id;
         if (!action.payload.id.startsWith('temp-')) {
@@ -146,7 +171,11 @@ const coworkSlice = createSlice({
         updatedAt: action.payload.updatedAt,
       };
       state.sessions.unshift(summary);
-      state.currentSession = action.payload;
+      state.currentSession = {
+        ...action.payload,
+        messagesOffset: action.payload.messagesOffset ?? 0,
+        totalMessages: action.payload.totalMessages ?? action.payload.messages.length,
+      };
       state.currentSessionId = action.payload.id;
       markSessionRead(state, action.payload.id);
     },
@@ -186,6 +215,7 @@ const coworkSlice = createSlice({
         if (!exists) {
           state.currentSession.messages.push(message);
           state.currentSession.updatedAt = message.timestamp;
+          state.currentSession.totalMessages += 1;
         }
       }
 
@@ -196,6 +226,17 @@ const coworkSlice = createSlice({
       }
 
       markSessionUnread(state, sessionId);
+    },
+
+    /** Prepend older messages when user scrolls up to load more history. */
+    prependMessages(state, action: PayloadAction<{ sessionId: string; messages: CoworkMessage[]; newOffset: number }>) {
+      const { sessionId, messages, newOffset } = action.payload;
+      if (state.currentSession?.id !== sessionId) return;
+      if (messages.length === 0) return;
+      const existingIds = new Set(state.currentSession.messages.map(m => m.id));
+      const toInsert = messages.filter(m => !existingIds.has(m.id));
+      state.currentSession.messages = [...toInsert, ...state.currentSession.messages];
+      state.currentSession.messagesOffset = newOffset;
     },
 
     updateMessageContent(state, action: PayloadAction<{ sessionId: string; messageId: string; content: string }>) {
@@ -306,6 +347,8 @@ const coworkSlice = createSlice({
 export const {
   setCoworkActive,
   setSessions,
+  setHasMoreSessions,
+  appendSessions,
   setCurrentSessionId,
   setCurrentSession,
   setDraftPrompt,
@@ -317,6 +360,7 @@ export const {
   deleteSession,
   deleteSessions,
   addMessage,
+  prependMessages,
   updateMessageContent,
   setStreaming,
   setRemoteManaged,

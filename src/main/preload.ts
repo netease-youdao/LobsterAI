@@ -224,8 +224,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:get', sessionId),
     remoteManaged: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
-    listSessions: (agentId?: string) =>
-      ipcRenderer.invoke('cowork:session:list', agentId),
+    listSessions: (options?: { limit?: number; offset?: number; agentId?: string }) =>
+      ipcRenderer.invoke('cowork:session:list', options),
+    getSessionMessages: (options: { sessionId: string; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke('cowork:session:getMessages', options),
     exportResultImage: (options: { rect: { x: number; y: number; width: number; height: number }; defaultFileName?: string }) =>
       ipcRenderer.invoke('cowork:session:exportResultImage', options),
     captureImageChunk: (options: { rect: { x: number; y: number; width: number; height: number } }) =>

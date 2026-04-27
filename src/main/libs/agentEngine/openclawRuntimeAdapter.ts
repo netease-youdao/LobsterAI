@@ -856,6 +856,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         agentId: 'main',
         createdAt: now,
         updatedAt: now,
+        messagesOffset: 0,
+        totalMessages: messages.length,
       };
     } catch (error) {
       console.error('[OpenClawRuntime] fetchSessionByKey: failed to fetch history:', error);

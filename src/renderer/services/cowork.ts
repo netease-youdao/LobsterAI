@@ -4,14 +4,17 @@ import { store } from '../store';
 import {
   addMessage,
   addSession,
+  appendSessions,
   clearCurrentSession,
   clearPendingPermissions,
   deleteSession as deleteSessionAction,
   deleteSessions as deleteSessionsAction,
   dequeuePendingPermission,
   enqueuePendingPermission,
+  prependMessages,
   setConfig,
   setCurrentSession,
+  setHasMoreSessions,
   setRemoteManaged,
   setSessions,
   setStreaming,
@@ -214,7 +217,7 @@ class CoworkService {
 
   async loadSessions(agentId?: string): Promise<void> {
     const requestId = ++this.latestLoadSessionsRequestId;
-    const result = await window.electron?.cowork?.listSessions(agentId);
+    const result = await window.electron?.cowork?.listSessions({ limit: 50, offset: 0, agentId });
     if (result?.success && result.sessions) {
       // High-frequency IM traffic can trigger overlapping list refreshes.
       // Ignore stale responses so an older snapshot does not hide newer sessions.
@@ -222,7 +225,21 @@ class CoworkService {
         return;
       }
       store.dispatch(setSessions(result.sessions));
+      store.dispatch(setHasMoreSessions(result.hasMore ?? false));
     }
+  }
+
+  async loadMoreSessions(): Promise<boolean> {
+    const state = store.getState().cowork;
+    if (!state.hasMoreSessions) return false;
+
+    const offset = state.sessions.length;
+    const result = await window.electron?.cowork?.listSessions({ limit: 50, offset });
+    if (result?.success && result.sessions) {
+      store.dispatch(appendSessions({ sessions: result.sessions, hasMore: result.hasMore ?? false }));
+      return true;
+    }
+    return false;
   }
 
   async loadConfig(): Promise<void> {
@@ -505,6 +522,29 @@ class CoworkService {
 
     console.error('Failed to load session:', result.error);
     return null;
+  }
+
+  /** Load older messages for the current session (for scroll-up history). */
+  async loadMoreMessages(sessionId: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.getSessionMessages) return false;
+
+    const state = store.getState().cowork;
+    if (state.currentSession?.id !== sessionId) return false;
+
+    const currentOffset = state.currentSession.messagesOffset;
+    if (currentOffset <= 0) return false;
+
+    const PAGE_SIZE = 50;
+    const newOffset = Math.max(0, currentOffset - PAGE_SIZE);
+    const limit = currentOffset - newOffset;
+
+    const result = await cowork.getSessionMessages({ sessionId, limit, offset: newOffset });
+    if (result.success && result.messages && result.messages.length > 0) {
+      store.dispatch(prependMessages({ sessionId, messages: result.messages, newOffset }));
+      return true;
+    }
+    return false;
   }
 
   async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSession | null> {

@@ -39,7 +39,12 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
       if (sessionId) {
         const result = await window.electron?.cowork?.getSession(sessionId);
         if (result?.success && result.session) {
-          loadedSession = result.session;
+          const s = result.session;
+          loadedSession = {
+            ...s,
+            messagesOffset: s.messagesOffset ?? 0,
+            totalMessages: s.totalMessages ?? s.messages?.length ?? 0,
+          };
         }
       }
 
@@ -47,7 +52,12 @@ const RunSessionModal: React.FC<RunSessionModalProps> = ({ sessionId, sessionKey
       if (!loadedSession && sessionKey) {
         const result = await window.electron?.scheduledTasks?.resolveSession(sessionKey);
         if (result?.success && result.session) {
-          loadedSession = result.session;
+          const s = result.session;
+          loadedSession = {
+            ...s,
+            messagesOffset: s.messagesOffset ?? 0,
+            totalMessages: s.totalMessages ?? s.messages?.length ?? 0,
+          };
         }
       }
 
