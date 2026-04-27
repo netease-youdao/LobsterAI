@@ -94,6 +94,7 @@ import { SkillManager } from './skillManager';
 import { getSkillServiceManager } from './skillServices';
 import { SqliteStore } from './sqliteStore';
 import { StartupProfiler } from './startupProfiler';
+import { describeSensitiveKeyDenial, isSensitiveStoreKey } from './storeAccessControl';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 
 // 设置应用程序名称
@@ -1972,10 +1973,18 @@ if (!gotTheLock) {
 
   // IPC 处理程序
   ipcMain.handle('store:get', (_event, key) => {
+    if (isSensitiveStoreKey(key)) {
+      console.warn('[Store] denied store:get for reserved key from renderer');
+      throw new Error(describeSensitiveKeyDenial('store:get'));
+    }
     return getStore().get(key);
   });
 
   ipcMain.handle('store:set', async (_event, key, value) => {
+    if (isSensitiveStoreKey(key)) {
+      console.warn('[Store] denied store:set for reserved key from renderer');
+      throw new Error(describeSensitiveKeyDenial('store:set'));
+    }
     getStore().set(key, value);
     if (key === 'app_config') {
       refreshEndpointsTestMode(getStore());
@@ -1990,6 +1999,10 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('store:remove', (_event, key) => {
+    if (isSensitiveStoreKey(key)) {
+      console.warn('[Store] denied store:remove for reserved key from renderer');
+      throw new Error(describeSensitiveKeyDenial('store:remove'));
+    }
     getStore().delete(key);
   });
 
