@@ -314,19 +314,11 @@ class CoworkService {
       }
       if (result.code !== 'ENGINE_NOT_READY') {
         store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'error' }));
-        if (result.error) {
-          store.dispatch(addMessage({
-            sessionId: options.sessionId,
-            message: {
-              id: `error-${Date.now()}`,
-              type: 'system',
-              content: i18nService.t('coworkErrorSessionContinueFailed').replace('{error}', result.error),
-              timestamp: Date.now(),
-            },
-          }));
-        }
       }
-      // Show a user-visible error message in the session
+      // Surface a single user-visible system message: engine-not-ready
+      // gets a dedicated copy, every other error goes through classifyError
+      // which already produces a more diagnostic, user-friendly string than
+      // the bare `coworkErrorSessionContinueFailed` template would.
       if (result.error) {
         const errorContent = result.code === 'ENGINE_NOT_READY'
           ? i18nService.t('coworkErrorEngineNotReady')
