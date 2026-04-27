@@ -121,11 +121,6 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           </div>
         )}
 
-        {isInstalling && (
-          <p className="mt-4 text-sm text-secondary">
-            {i18nService.t('updateInstallingHint')}
-          </p>
-        )}
 
         {updateState.errorMessage && (
           <p className="mt-4 text-sm text-secondary break-words">
