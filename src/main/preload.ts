@@ -113,16 +113,36 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener(`api:stream:${requestId}:abort`, handler);
     },
   },
-  ipcRenderer: {
-    send: (channel: string, ...args: any[]) => {
-      ipcRenderer.send(channel, ...args);
-    },
-    on: (channel: string, func: (...args: any[]) => void) => {
-      const handler = (_event: any, ...args: any[]) => func(...args);
-      ipcRenderer.on(channel, handler);
-      return () => ipcRenderer.removeListener(channel, handler);
-    },
-  },
+  ipcRenderer: (() => {
+    // Generic ipcRenderer bridge is intentionally narrow. Anything not in this
+    // allowlist must go through a dedicated, typed entry on `window.electron`.
+    const ALLOWED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
+      'app:openSettings',
+      'app:newTask',
+    ]);
+    const ALLOWED_OUTBOUND_CHANNELS: ReadonlySet<string> = new Set<string>();
+
+    return {
+      send: (channel: string, ...args: any[]) => {
+        if (!ALLOWED_OUTBOUND_CHANNELS.has(channel)) {
+          console.warn(`[Preload] blocked ipcRenderer.send on unsupported channel: ${channel}`);
+          return;
+        }
+        ipcRenderer.send(channel, ...args);
+      },
+      on: (channel: string, func: (...args: any[]) => void) => {
+        if (!ALLOWED_INBOUND_CHANNELS.has(channel)) {
+          console.warn(`[Preload] blocked ipcRenderer.on for unsupported channel: ${channel}`);
+          return () => {
+            // No-op unsubscribe so renderer code never has to special-case this.
+          };
+        }
+        const handler = (_event: any, ...args: any[]) => func(...args);
+        ipcRenderer.on(channel, handler);
+        return () => ipcRenderer.removeListener(channel, handler);
+      },
+    };
+  })(),
   window: {
     minimize: () => ipcRenderer.send('window-minimize'),
     toggleMaximize: () => ipcRenderer.send('window-maximize'),
