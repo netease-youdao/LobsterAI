@@ -1,9 +1,10 @@
 import React from 'react';
+
 import { i18nService } from '../../services/i18n';
-import McpManager from './McpManager';
-import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
+import McpManager from './McpManager';
 
 interface McpViewProps {
   isSidebarCollapsed?: boolean;

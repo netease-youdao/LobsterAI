@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { getFileTypeInfo } from '.';
 
 interface FileTypeIconProps {

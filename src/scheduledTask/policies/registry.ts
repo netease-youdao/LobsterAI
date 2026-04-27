@@ -1,10 +1,10 @@
-import type { TaskOrigin } from '../origin';
-import type { TaskPolicy } from './types';
-import { LegacyTaskPolicy } from './legacyPolicy';
-import { IMTaskPolicy } from './imPolicy';
-import { CoworkTaskPolicy } from './coworkPolicy';
-import { ManualTaskPolicy } from './manualPolicy';
 import { OriginKind } from '../constants';
+import type { TaskOrigin } from '../origin';
+import { CoworkTaskPolicy } from './coworkPolicy';
+import { IMTaskPolicy } from './imPolicy';
+import { LegacyTaskPolicy } from './legacyPolicy';
+import { ManualTaskPolicy } from './manualPolicy';
+import type { TaskPolicy } from './types';
 
 export class TaskPolicyRegistry {
   private readonly policies: Map<string, TaskPolicy>;

@@ -1,6 +1,7 @@
-import { test, expect, describe } from 'vitest';
-import { __openAICompatProxyTestUtils, isAllowedProxyHost } from './coworkOpenAICompatProxy';
 import type http from 'http';
+import { describe,expect, test } from 'vitest';
+
+import { __openAICompatProxyTestUtils, isAllowedProxyHost } from './coworkOpenAICompatProxy';
 
 const testUtils = __openAICompatProxyTestUtils;
 

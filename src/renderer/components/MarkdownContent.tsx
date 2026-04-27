@@ -1,20 +1,22 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import ReactMarkdown from 'react-markdown';
-// @ts-ignore
-import remarkGfm from 'remark-gfm';
-// @ts-ignore
-import remarkMath from 'remark-math';
-// @ts-ignore
-import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import 'katex/contrib/mhchem';
+
+import { CheckIcon, ClipboardDocumentIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 // @ts-ignore
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 // @ts-ignore
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 // @ts-ignore
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+// @ts-ignore
+import rehypeKatex from 'rehype-katex';
+// @ts-ignore
+import remarkGfm from 'remark-gfm';
+// @ts-ignore
+import remarkMath from 'remark-math';
+
 import { i18nService } from '../services/i18n';
 
 const CODE_BLOCK_LINE_LIMIT = 200;

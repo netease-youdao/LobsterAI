@@ -1,7 +1,8 @@
-import { test, expect } from 'vitest';
 import Database from 'better-sqlite3';
+import { expect,test } from 'vitest';
+
+import { BindingKind,OriginKind } from './constants';
 import { ScheduledTaskMetaStore } from './metaStore';
-import { OriginKind, BindingKind } from './constants';
 
 function createMetaStore() {
   const db = new Database(':memory:');

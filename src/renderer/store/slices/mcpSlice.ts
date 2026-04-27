@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import { McpServerConfig } from '../../types/mcp';
 
 interface McpState {

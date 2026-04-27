@@ -1,10 +1,11 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
 import {
-  buildDingTalkSessionKeyCandidates,
   buildDingTalkSendParamsFromRoute,
+  buildDingTalkSessionKeyCandidates,
   extractOpenClawDeliveryRoute,
-  resolveOpenClawDeliveryRouteForSessionKeys,
   resolveManagedSessionDeliveryRoute,
+  resolveOpenClawDeliveryRouteForSessionKeys,
 } from './imDeliveryRoute';
 
 test('managed session delivery route prefers deliveryContext over legacy last route fields', () => {

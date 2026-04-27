@@ -1,7 +1,7 @@
-import { test, expect, describe, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
-import path from 'path';
 import os from 'os';
+import path from 'path';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const electronPaths = vi.hoisted(() => ({
   userData: '',

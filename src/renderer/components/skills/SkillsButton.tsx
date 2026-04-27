@@ -1,7 +1,8 @@
 import React, { useRef, useState } from 'react';
+
+import { Skill } from '../../types/skill';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import SkillsPopover from './SkillsPopover';
-import { Skill } from '../../types/skill';
 
 interface SkillsButtonProps {
   onSelectSkill: (skill: Skill) => void;

@@ -1,7 +1,8 @@
-import { app } from 'electron';
 import { spawnSync } from 'child_process';
+import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
+
 import { cpRecursiveSync } from '../fsCompat';
 
 const PYTHON_RUNTIME_DIR_NAME = 'python-win';

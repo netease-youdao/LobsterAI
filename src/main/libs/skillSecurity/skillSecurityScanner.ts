@@ -1,14 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
+
+import { scanPromptInjection } from './skillSecurityPromptAudit';
+import { getRulesForFile } from './skillSecurityRules';
 import {
-  SecurityFinding,
   FindingSeverity,
+  SecurityDimension,
+  SecurityFinding,
   SecurityRiskLevel,
   SkillSecurityReport,
-  SecurityDimension,
 } from './skillSecurityTypes';
-import { getRulesForFile } from './skillSecurityRules';
-import { scanPromptInjection } from './skillSecurityPromptAudit';
 
 const MAX_FILES = 500;
 const MAX_FILE_SIZE_BYTES = 512 * 1024;

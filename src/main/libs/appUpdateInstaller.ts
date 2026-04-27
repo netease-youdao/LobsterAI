@@ -1,5 +1,5 @@
-import { app, session } from 'electron';
 import { exec, spawn } from 'child_process';
+import { app, session } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';

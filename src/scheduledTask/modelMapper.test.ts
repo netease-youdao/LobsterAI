@@ -1,12 +1,13 @@
-import { test, expect } from 'vitest';
-import { makeTask, makeModel } from './fixtures';
-import { TaskModelMapper } from './modelMapper';
-import { ManualTaskPolicy } from './policies/manualPolicy';
-import { CoworkTaskPolicy } from './policies/coworkPolicy';
+import { expect,test } from 'vitest';
+
 import {
-  OriginKind, BindingKind, ScheduleKind, PayloadKind,
-  DeliveryMode, DeliveryChannel, SessionTarget, WakeMode,
+BindingKind, DeliveryChannel,   DeliveryMode,   OriginKind, PayloadKind,
+ScheduleKind, SessionTarget, WakeMode,
 } from './constants';
+import { makeModel,makeTask } from './fixtures';
+import { TaskModelMapper } from './modelMapper';
+import { CoworkTaskPolicy } from './policies/coworkPolicy';
+import { ManualTaskPolicy } from './policies/manualPolicy';
 
 const mapper = new TaskModelMapper();
 const manualPolicy = new ManualTaskPolicy();

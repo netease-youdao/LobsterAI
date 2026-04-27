@@ -1,5 +1,5 @@
-import type { TaskOrigin, ExecutionBinding } from '../origin';
-import type { SessionTarget, WakeMode, DeliveryMode } from '../constants';
+import type { DeliveryMode,SessionTarget, WakeMode } from '../constants';
+import type { ExecutionBinding,TaskOrigin } from '../origin';
 
 export interface WireBinding {
   sessionTarget: SessionTarget;

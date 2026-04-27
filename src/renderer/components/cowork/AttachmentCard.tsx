@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import XMarkIcon from '../icons/XMarkIcon';
-import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
-import { ImageFileIcon, getFileTypeInfo } from '../icons/fileTypes/index';
+import React, { useEffect,useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
 import type { DraftAttachment } from '../../store/slices/coworkSlice';
+import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import { getFileTypeInfo,ImageFileIcon } from '../icons/fileTypes/index';
+import XMarkIcon from '../icons/XMarkIcon';
 
 interface AttachmentCardProps {
   attachment: DraftAttachment;

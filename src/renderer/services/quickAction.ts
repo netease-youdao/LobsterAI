@@ -1,4 +1,4 @@
-import type { QuickActionsConfig, QuickAction, Prompt, LocalizedQuickAction, QuickActionsI18n } from '../types/quickAction';
+import type { LocalizedQuickAction, Prompt, QuickAction, QuickActionsConfig, QuickActionsI18n } from '../types/quickAction';
 import { i18nService } from './i18n';
 
 const CONFIG_PATH = './quick-actions.json';

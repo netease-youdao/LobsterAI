@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import type { LocalizedQuickAction } from '../../types/quickAction';
 
 interface QuickActionState {

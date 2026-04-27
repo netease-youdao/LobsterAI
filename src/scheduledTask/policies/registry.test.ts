@@ -1,7 +1,8 @@
-import { test, expect } from 'vitest';
-import { TaskPolicyRegistry, taskPolicyRegistry } from './registry';
-import { ManualTaskPolicy } from './manualPolicy';
+import { expect,test } from 'vitest';
+
 import { OriginKind } from '../constants';
+import { ManualTaskPolicy } from './manualPolicy';
+import { TaskPolicyRegistry, taskPolicyRegistry } from './registry';
 
 test('registry: returns LegacyTaskPolicy for legacy origin', () => {
   const policy = taskPolicyRegistry.get({ kind: OriginKind.Legacy });

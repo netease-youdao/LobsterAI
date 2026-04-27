@@ -1,6 +1,6 @@
+import { BindingKind, DeliveryChannel, DeliveryMode, OriginKind, RunBehavior,SessionTarget, WakeMode } from '../constants';
 import type { ExecutionBinding } from '../origin';
-import type { TaskPolicy, PolicyTaskModel, PolicyTaskInput, PolicyDelivery, WireBinding } from './types';
-import { OriginKind, BindingKind, SessionTarget, WakeMode, DeliveryMode, DeliveryChannel, RunBehavior } from '../constants';
+import type { PolicyDelivery, PolicyTaskInput, PolicyTaskModel, TaskPolicy, WireBinding } from './types';
 
 export class LegacyTaskPolicy implements TaskPolicy {
   readonly kind = OriginKind.Legacy;

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+
 import { extractOpenClawAssistantStreamText } from './openclawAssistantText';
 
 describe('extractOpenClawAssistantStreamText', () => {

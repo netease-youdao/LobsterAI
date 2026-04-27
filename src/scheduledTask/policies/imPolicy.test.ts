@@ -1,9 +1,10 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
+import {
+BindingKind, DeliveryMode,   OriginKind, SessionTarget,
+} from '../constants';
 import { makeModel } from '../fixtures';
 import { IMTaskPolicy } from './imPolicy';
-import {
-  OriginKind, BindingKind, DeliveryMode, SessionTarget,
-} from '../constants';
 
 test('IMPolicy.getCreateDefaults: with im origin -> delivery defaults to announce + platform', () => {
   const policy = new IMTaskPolicy();

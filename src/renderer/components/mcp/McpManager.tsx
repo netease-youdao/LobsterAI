@@ -1,7 +1,6 @@
+import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-
-import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';

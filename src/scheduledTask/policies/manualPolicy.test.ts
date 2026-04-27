@@ -1,9 +1,10 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
+import {
+BindingKind, DeliveryChannel, DeliveryMode,   OriginKind, SessionTarget,
+} from '../constants';
 import { makeModel } from '../fixtures';
 import { ManualTaskPolicy } from './manualPolicy';
-import {
-  OriginKind, BindingKind, DeliveryMode, DeliveryChannel, SessionTarget,
-} from '../constants';
 
 test('ManualPolicy.normalizeDraft: IM announce + non-im binding -> auto-links to im_session', () => {
   const policy = new ManualTaskPolicy();

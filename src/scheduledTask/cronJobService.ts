@@ -1,4 +1,23 @@
 import { BrowserWindow } from 'electron';
+
+import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
+import { PlatformRegistry } from '../shared/platform';
+import type {
+  DeliveryMode as DeliveryModeType,
+  GatewayStatus as GatewayStatusType,
+  SessionTarget as SessionTargetType,
+  WakeMode as WakeModeType,
+} from './constants';
+import {
+  DeliveryMode,
+  GatewayStatus,
+  IpcChannel,
+  PayloadKind,
+  ScheduleKind,
+  SessionTarget,
+  TaskStatus,
+  WakeMode,
+} from './constants';
 import type {
   Schedule,
   ScheduledTask,
@@ -9,24 +28,6 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
 } from './types';
-import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
-import { PlatformRegistry } from '../shared/platform';
-import {
-  ScheduleKind,
-  PayloadKind,
-  DeliveryMode,
-  SessionTarget,
-  WakeMode,
-  TaskStatus,
-  GatewayStatus,
-  IpcChannel,
-} from './constants';
-import type {
-  SessionTarget as SessionTargetType,
-  WakeMode as WakeModeType,
-  DeliveryMode as DeliveryModeType,
-  GatewayStatus as GatewayStatusType,
-} from './constants';
 
 type GatewayClientLike = {
   request: <T = Record<string, unknown>>(

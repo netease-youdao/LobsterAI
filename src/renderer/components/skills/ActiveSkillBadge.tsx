@@ -1,10 +1,11 @@
 import React from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import XMarkIcon from '../icons/XMarkIcon';
-import PuzzleIcon from '../icons/PuzzleIcon';
-import { RootState } from '../../store';
-import { toggleActiveSkill, clearActiveSkills } from '../../store/slices/skillSlice';
+import { useDispatch,useSelector } from 'react-redux';
+
 import { i18nService } from '../../services/i18n';
+import { RootState } from '../../store';
+import { clearActiveSkills,toggleActiveSkill } from '../../store/slices/skillSlice';
+import PuzzleIcon from '../icons/PuzzleIcon';
+import XMarkIcon from '../icons/XMarkIcon';
 
 const ActiveSkillBadge: React.FC = () => {
   const dispatch = useDispatch();

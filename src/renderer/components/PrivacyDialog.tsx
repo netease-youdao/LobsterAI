@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { i18nService } from '@/services/i18n';
 
 const PRIVACY_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';

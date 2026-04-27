@@ -1,5 +1,6 @@
-import { app, Tray, Menu, nativeImage, BrowserWindow } from 'electron';
+import { app, BrowserWindow,Menu, nativeImage, Tray } from 'electron';
 import path from 'path';
+
 import { APP_NAME } from './appConstants';
 import { t } from './i18n';
 

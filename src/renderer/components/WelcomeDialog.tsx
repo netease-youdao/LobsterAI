@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { i18nService } from '@/services/i18n';
 
 interface WelcomeDialogProps {

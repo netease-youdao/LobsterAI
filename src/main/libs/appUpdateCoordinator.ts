@@ -7,8 +7,8 @@ import {
   type AppUpdateCheckResult,
   type AppUpdateInfo,
   AppUpdateIpc,
-  AppUpdateSource,
   type AppUpdateRuntimeState,
+  AppUpdateSource,
   AppUpdateStatus,
 } from '../../shared/appUpdate/constants';
 import type { SqliteStore } from '../sqliteStore';

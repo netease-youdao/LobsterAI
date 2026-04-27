@@ -1,10 +1,11 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import type {
   ScheduledTask,
   ScheduledTaskRun,
   ScheduledTaskRunWithName,
-  TaskState,
   ScheduledTaskViewMode,
+  TaskState,
 } from '../../../scheduledTask/types';
 
 interface ScheduledTaskState {

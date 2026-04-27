@@ -5,11 +5,12 @@
  * Safe to call multiple times — a kv flag prevents re-running.
  */
 
+import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import type Database from 'better-sqlite3';
+
+import { DefaultAgentId,DeliveryMode, GatewayStatus, MigrationKey, PayloadKind, ScheduleKind, SessionTarget, WakeMode } from './constants';
 import type { CronJobService } from './cronJobService';
-import { MigrationKey, ScheduleKind, PayloadKind, DeliveryMode, SessionTarget, WakeMode, GatewayStatus, DefaultAgentId } from './constants';
 import type { Schedule, ScheduledTaskDelivery, ScheduledTaskInput } from './types';
 
 // ---------------------------------------------------------------------------

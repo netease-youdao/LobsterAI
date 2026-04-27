@@ -1,7 +1,7 @@
-import type { TaskOrigin, ExecutionBinding } from '../origin';
-import type { TaskPolicy, PolicyTaskModel, PolicyTaskInput, PolicyDelivery, WireBinding } from './types';
 import { buildManagedSessionKey } from '../../main/libs/openclawChannelSessionSync';
-import { OriginKind, BindingKind, SessionTarget, WakeMode, DeliveryMode, DeliveryChannel, RunBehavior } from '../constants';
+import { BindingKind, DeliveryChannel, DeliveryMode, OriginKind, RunBehavior,SessionTarget, WakeMode } from '../constants';
+import type { ExecutionBinding,TaskOrigin } from '../origin';
+import type { PolicyDelivery, PolicyTaskInput, PolicyTaskModel, TaskPolicy, WireBinding } from './types';
 
 export class CoworkTaskPolicy implements TaskPolicy {
   readonly kind = OriginKind.Cowork;

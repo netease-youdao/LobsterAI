@@ -1,5 +1,5 @@
-import http from 'http';
 import { net } from 'electron';
+import http from 'http';
 
 const PROXY_BIND_HOST = '127.0.0.1';
 

@@ -1,12 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { CoworkSessionSummary, CoworkSessionStatus } from '../../types/cowork';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { CoworkSessionStatus,CoworkSessionSummary } from '../../types/cowork';
+import Modal from '../common/Modal';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
+import ListChecksIcon from '../icons/ListChecksIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
-import ListChecksIcon from '../icons/ListChecksIcon';
-import { i18nService } from '../../services/i18n';
-import Modal from '../common/Modal';
 
 interface CoworkSessionItemProps {
   session: CoworkSessionSummary;

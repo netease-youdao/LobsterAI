@@ -1,5 +1,7 @@
-import { test, expect } from 'vitest';
 import EventEmitter from 'node:events';
+
+import { expect,test } from 'vitest';
+
 import { IMCoworkHandler } from './imCoworkHandler';
 
 class FakeRuntime extends EventEmitter {

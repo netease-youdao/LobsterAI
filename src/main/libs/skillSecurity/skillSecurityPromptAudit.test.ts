@@ -1,4 +1,5 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
 import { scanPromptInjection } from './skillSecurityPromptAudit';
 
 const FILE_PATH = 'SKILL.md';

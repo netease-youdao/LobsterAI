@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useEffect,useRef, useState } from 'react';
 
 /**
  * LazyRenderTurn — Viewport-based lazy rendering wrapper for conversation turns.

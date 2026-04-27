@@ -1,6 +1,6 @@
-import { configService } from './config';
-import { ThemeManager, allThemes } from '../theme';
 import type { ThemeDefinition } from '../theme';
+import { allThemes,ThemeManager } from '../theme';
+import { configService } from './config';
 
 type ThemeType = 'light' | 'dark' | 'system';
 

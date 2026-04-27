@@ -1,9 +1,10 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
+import {
+BindingKind, DeliveryChannel,
+DeliveryMode,   OriginKind, } from './constants';
 import { makeTask } from './fixtures';
 import { inferOriginAndBinding } from './origin';
-import {
-  OriginKind, BindingKind, DeliveryMode, DeliveryChannel,
-} from './constants';
 
 test('infer: managed key without IM channel -> cowork origin + ui_session binding', () => {
   const result = inferOriginAndBinding(

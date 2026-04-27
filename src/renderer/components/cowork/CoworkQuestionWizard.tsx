@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
 import { ChevronLeftIcon, ChevronRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useMemo, useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
+import type { CoworkPermissionRequest, CoworkPermissionResult } from '../../types/cowork';
 
 interface CoworkQuestionWizardProps {
   permission: CoworkPermissionRequest;

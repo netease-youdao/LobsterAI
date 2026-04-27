@@ -3,9 +3,9 @@
  * Renders form fields dynamically from JSON Schema + uiHints
  */
 
-import React from 'react';
+import { ChevronRightIcon,XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
-import { XCircleIcon as XCircleIconSolid, ChevronRightIcon } from '@heroicons/react/20/solid';
+import React from 'react';
 
 /** A single uiHint entry from the gateway */
 export interface UiHint {

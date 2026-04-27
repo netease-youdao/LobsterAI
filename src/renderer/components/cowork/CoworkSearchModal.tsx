@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
-import SearchIcon from '../icons/SearchIcon';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
 import type { CoworkSessionSummary } from '../../types/cowork';
-import CoworkSessionList from './CoworkSessionList';
 import Modal from '../common/Modal';
+import SearchIcon from '../icons/SearchIcon';
+import CoworkSessionList from './CoworkSessionList';
 
 const emptySet = new Set<string>();
 

@@ -1,4 +1,5 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
 import { __skillManagerTestUtils } from './skillManager';
 
 const { parseFrontmatter, isTruthy, extractDescription } = __skillManagerTestUtils;
@@ -15,7 +16,8 @@ test('parseFrontmatter: simple key-value pairs', () => {
 });
 
 test('parseFrontmatter: block scalar with pipe (|)', () => {
-  const raw = '---\nname: demo\ndescription: |\n  A multi-line description.\n  Second line.\n---\n# Content\n';
+  const raw =
+    '---\nname: demo\ndescription: |\n  A multi-line description.\n  Second line.\n---\n# Content\n';
   const { frontmatter, content } = parseFrontmatter(raw);
   expect(frontmatter.name).toBe('demo');
   expect(frontmatter.description).toBe('A multi-line description.\nSecond line.\n');
@@ -37,7 +39,8 @@ test('parseFrontmatter: quoted strings', () => {
 });
 
 test('parseFrontmatter: nested objects', () => {
-  const raw = '---\nname: demo\nmetadata:\n  short-description: A short desc\n  version: 2\n---\n# Content\n';
+  const raw =
+    '---\nname: demo\nmetadata:\n  short-description: A short desc\n  version: 2\n---\n# Content\n';
   const { frontmatter } = parseFrontmatter(raw);
   expect(frontmatter.name).toBe('demo');
   expect(frontmatter.metadata).toEqual({ 'short-description': 'A short desc', version: 2 });
@@ -199,7 +202,9 @@ test('integration: skill with block scalar description', () => {
 
   const { frontmatter, content } = parseFrontmatter(raw);
   expect(frontmatter.name).toBe('demo');
-  expect(String(frontmatter.description || '').trim()).toBe('A multi-line description.\nSecond line.');
+  expect(String(frontmatter.description || '').trim()).toBe(
+    'A multi-line description.\nSecond line.',
+  );
   expect(content).toMatch(/# Demo Skill/);
 });
 
@@ -252,7 +257,9 @@ test('clawhub: /{owner}/{name} with www prefix', () => {
 });
 
 test('clawhub: /{owner}/{name} with trailing slash', () => {
-  expect(parseClawhubUrl('https://clawhub.ai/anthropic/web-search/')).toEqual({ name: 'web-search' });
+  expect(parseClawhubUrl('https://clawhub.ai/anthropic/web-search/')).toEqual({
+    name: 'web-search',
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -264,7 +271,9 @@ test('clawhub: /skills/{owner}/{name} extracts skill name', () => {
 });
 
 test('clawhub: /skills/{owner}/{name} with trailing slash', () => {
-  expect(parseClawhubUrl('https://clawhub.ai/skills/anthropic/web-search/')).toEqual({ name: 'web-search' });
+  expect(parseClawhubUrl('https://clawhub.ai/skills/anthropic/web-search/')).toEqual({
+    name: 'web-search',
+  });
 });
 
 // ---------------------------------------------------------------------------

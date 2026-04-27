@@ -11,6 +11,7 @@
  */
 
 import { BrowserWindow } from 'electron';
+
 import { getCopilotToken } from './githubCopilotAuth';
 
 /** Refresh 5 minutes before expiry (same as OpenClaw's RUNTIME_AUTH_REFRESH_MARGIN_MS). */

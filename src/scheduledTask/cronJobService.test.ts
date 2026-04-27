@@ -1,6 +1,7 @@
-import { test, expect, describe } from 'vitest';
-import { mapGatewayJob, mapGatewayRun, mapGatewayTaskState } from './cronJobService';
+import { describe,expect, test } from 'vitest';
+
 import { DeliveryMode, GatewayStatus, TaskStatus } from './constants';
+import { mapGatewayJob, mapGatewayRun, mapGatewayTaskState } from './cronJobService';
 
 describe('mapGatewayRun', () => {
   const baseEntry = {
@@ -111,25 +112,22 @@ describe('mapGatewayJob', () => {
 
 describe('mapGatewayTaskState', () => {
   test('maps ok status to success', () => {
-    const state = mapGatewayTaskState(
-      { lastRunStatus: GatewayStatus.Ok, lastRunAtMs: 1700000000000 },
-    );
+    const state = mapGatewayTaskState({
+      lastRunStatus: GatewayStatus.Ok,
+      lastRunAtMs: 1700000000000,
+    });
     expect(state.lastStatus).toBe(TaskStatus.Success);
     expect(state.lastError).toBeNull();
   });
 
   test('maps error status to error', () => {
-    const state = mapGatewayTaskState(
-      { lastRunStatus: GatewayStatus.Error, lastError: 'fail' },
-    );
+    const state = mapGatewayTaskState({ lastRunStatus: GatewayStatus.Error, lastError: 'fail' });
     expect(state.lastStatus).toBe(TaskStatus.Error);
     expect(state.lastError).toBe('fail');
   });
 
   test('maps running state', () => {
-    const state = mapGatewayTaskState(
-      { runningAtMs: Date.now(), lastRunStatus: GatewayStatus.Ok },
-    );
+    const state = mapGatewayTaskState({ runningAtMs: Date.now(), lastRunStatus: GatewayStatus.Ok });
     expect(state.lastStatus).toBe(TaskStatus.Running);
   });
 

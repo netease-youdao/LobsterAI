@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
-  ShieldCheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ShieldCheckIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
+
 import { i18nService } from '../../services/i18n';
 import Modal from '../common/Modal';
 

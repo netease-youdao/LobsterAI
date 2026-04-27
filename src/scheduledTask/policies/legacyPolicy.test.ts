@@ -1,10 +1,11 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
+import {
+BindingKind, DeliveryChannel,
+DeliveryMode,   OriginKind,   SessionTarget, WakeMode,
+} from '../constants';
 import { makeModel } from '../fixtures';
 import { LegacyTaskPolicy } from './legacyPolicy';
-import {
-  OriginKind, BindingKind, DeliveryMode, DeliveryChannel,
-  SessionTarget, WakeMode,
-} from '../constants';
 
 test('LegacyPolicy.getCreateDefaults: returns sessionTarget main + next-heartbeat wakeMode', () => {
   const policy = new LegacyTaskPolicy();

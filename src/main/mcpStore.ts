@@ -1,5 +1,5 @@
-import crypto from 'crypto';
 import Database from 'better-sqlite3';
+import crypto from 'crypto';
 
 export interface McpServerRecord {
   id: string;

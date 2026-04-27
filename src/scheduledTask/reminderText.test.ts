@@ -1,10 +1,11 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
 import {
-  parseScheduledReminderPrompt,
-  parseLegacyScheduledReminderSystemMessage,
-  isSimpleScheduledReminderText,
-  parseSimpleScheduledReminderText,
   getScheduledReminderDisplayText,
+  isSimpleScheduledReminderText,
+  parseLegacyScheduledReminderSystemMessage,
+  parseScheduledReminderPrompt,
+  parseSimpleScheduledReminderText,
 } from './reminderText';
 
 const PREFIX = 'A scheduled reminder has been triggered. The reminder content is:';

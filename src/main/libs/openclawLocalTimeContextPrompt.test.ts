@@ -1,4 +1,5 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
 import { buildOpenClawLocalTimeContextPrompt } from './openclawLocalTimeContextPrompt';
 
 test('openclaw local time context prompt makes future at-timestamps explicit', () => {

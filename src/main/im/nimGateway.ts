@@ -4,30 +4,31 @@
  * Adapted from openclaw-nim for Electron main process
  */
 
-import { EventEmitter } from 'events';
-import * as path from 'path';
-import * as os from 'os';
-import * as fs from 'fs';
 import { app } from 'electron';
+import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 const NIM = require('nim-web-sdk-ng/dist/nodejs/nim.js').default;
 import type { V2NIM } from 'nim-web-sdk-ng/dist/nodejs/nim';
+
+import { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
 import {
+  cleanupOldNimMediaFiles,
+  downloadNimMedia,
+  inferMediaPlaceholder,
+  sendNimMediaMessage,
+} from './nimMedia';
+import { NimQChatClient, QChatInboundMessage } from './nimQChatClient';
+import {
+  DEFAULT_NIM_STATUS,
+  IMMediaAttachment,
+  IMMessage,
   NimConfig,
   NimGatewayStatus,
-  IMMessage,
-  IMMediaAttachment,
-  DEFAULT_NIM_STATUS,
-  NimTeamPolicy,
   NimSessionType,
+  NimTeamPolicy,
 } from './types';
-import {
-  downloadNimMedia,
-  sendNimMediaMessage,
-  inferMediaPlaceholder,
-  cleanupOldNimMediaFiles,
-} from './nimMedia';
-import { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
-import { NimQChatClient, QChatInboundMessage } from './nimQChatClient';
 
 // Message deduplication cache
 const processedMessages = new Map<string, number>();

@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import { CheckIcon } from '@heroicons/react/24/outline';
+import React, { useEffect,useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { RootState } from '../../store';
+
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
-import { CheckIcon } from '@heroicons/react/24/outline';
+import { RootState } from '../../store';
 import SearchIcon from '../icons/SearchIcon';
 
 interface AgentSkillSelectorProps {

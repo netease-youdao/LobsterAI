@@ -1,9 +1,10 @@
 import React from 'react';
+
 import { i18nService } from '../../services/i18n';
-import SkillsManager from './SkillsManager';
-import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
+import SkillsManager from './SkillsManager';
 
 interface SkillsViewProps {
   isSidebarCollapsed?: boolean;

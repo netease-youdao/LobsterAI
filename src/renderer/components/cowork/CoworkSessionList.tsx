@@ -1,10 +1,11 @@
+import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 import React, { useMemo } from 'react';
 import { useSelector } from 'react-redux';
+
+import { i18nService } from '../../services/i18n';
 import { selectUnreadSessionIds } from '../../store/selectors/coworkSelectors';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionItem from './CoworkSessionItem';
-import { i18nService } from '../../services/i18n';
-import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 
 interface CoworkSessionListProps {
   sessions: CoworkSessionSummary[];
@@ -46,12 +47,8 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
       return b.createdAt - a.createdAt;
     };
 
-    const pinnedSessions = sessions
-      .filter((session) => session.pinned)
-      .sort(sortByRecentActivity);
-    const unpinnedSessions = sessions
-      .filter((session) => !session.pinned)
-      .sort(sortByRecentActivity);
+    const pinnedSessions = sessions.filter(session => session.pinned).sort(sortByRecentActivity);
+    const unpinnedSessions = sessions.filter(session => !session.pinned).sort(sortByRecentActivity);
     return [...pinnedSessions, ...unpinnedSessions];
   }, [sessions]);
 
@@ -59,9 +56,25 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
     if (isLoading) {
       return (
         <div className="flex items-center justify-center py-10">
-          <svg className="animate-spin h-6 w-6 dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          <svg
+            className="animate-spin h-6 w-6 dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
         </div>
       );
@@ -81,7 +94,7 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
 
   return (
     <div className="space-y-2">
-      {sortedSessions.map((session) => (
+      {sortedSessions.map(session => (
         <CoworkSessionItem
           key={session.id}
           session={session}
@@ -92,8 +105,8 @@ const CoworkSessionList: React.FC<CoworkSessionListProps> = ({
           showBatchOption={showBatchOption}
           onSelect={() => onSelectSession(session.id)}
           onDelete={() => onDeleteSession(session.id)}
-          onTogglePin={(pinned) => onTogglePin(session.id, pinned)}
-          onRename={(title) => onRenameSession(session.id, title)}
+          onTogglePin={pinned => onTogglePin(session.id, pinned)}
+          onRename={title => onRenameSession(session.id, title)}
           onToggleSelection={() => onToggleSelection(session.id)}
           onEnterBatchMode={() => onEnterBatchMode(session.id)}
         />

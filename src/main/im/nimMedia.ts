@@ -5,11 +5,12 @@
  * 参考 openclaw-nim/src/media.ts 实现，适配 LobsterAI Gateway 架构
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import * as https from 'https';
-import * as http from 'http';
 import { app } from 'electron';
+import * as fs from 'fs';
+import * as http from 'http';
+import * as https from 'https';
+import * as path from 'path';
+
 import type { IMMediaAttachment, IMMediaType } from './types';
 
 // ==================== 常量 ====================

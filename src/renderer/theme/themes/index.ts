@@ -1,19 +1,18 @@
-import type { ThemeDefinition } from './types';
-
-import { classicLight } from './classic-light';
 import { classicDark }  from './classic-dark';
+import { classicLight } from './classic-light';
+import { cyber } from './cyber';
 import { dawn } from './dawn';
 import { daylight } from './daylight';
-import { paper } from './paper';
-import { sakura } from './sakura';
-import { midnight } from './midnight';
-import { ocean } from './ocean';
 import { emerald } from './emerald';
-import { rose } from './rose';
+import { midnight } from './midnight';
 import { mocha } from './mocha';
-import { sunset } from './sunset';
 import { nord } from './nord';
-import { cyber } from './cyber';
+import { ocean } from './ocean';
+import { paper } from './paper';
+import { rose } from './rose';
+import { sakura } from './sakura';
+import { sunset } from './sunset';
+import type { ThemeDefinition } from './types';
 
 /** All built-in themes. First entry is the default. */
 export const allThemes: ThemeDefinition[] = [

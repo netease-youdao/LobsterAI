@@ -8,7 +8,7 @@
  * Electron main process.  Any change to logger.ts constants or regexes must be
  * reflected here.
  */
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mirrors from logger.ts

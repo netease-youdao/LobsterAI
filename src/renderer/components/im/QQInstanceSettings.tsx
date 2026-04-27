@@ -3,13 +3,14 @@
  * Configuration form for a single QQ bot instance in multi-instance mode
  */
 
-import React, { useState } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { SignalIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import TrashIcon from '../icons/TrashIcon';
-import type { QQInstanceConfig, QQInstanceStatus, QQOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
-import { i18nService } from '../../services/i18n';
 import { PlatformRegistry } from '@shared/platform';
+import React, { useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { IMConnectivityTestResult,QQInstanceConfig, QQInstanceStatus, QQOpenClawConfig } from '../../types/im';
+import TrashIcon from '../icons/TrashIcon';
 
 interface QQInstanceSettingsProps {
   instance: QQInstanceConfig;

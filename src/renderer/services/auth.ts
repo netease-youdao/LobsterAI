@@ -1,7 +1,7 @@
 import { store } from '../store';
-import { setAuthLoading, setLoggedIn, setLoggedOut, updateQuota, setProfileSummary } from '../store/slices/authSlice';
-import { setServerModels, clearServerModels } from '../store/slices/modelSlice';
+import { setAuthLoading, setLoggedIn, setLoggedOut, setProfileSummary,updateQuota } from '../store/slices/authSlice';
 import type { Model } from '../store/slices/modelSlice';
+import { clearServerModels,setServerModels } from '../store/slices/modelSlice';
 
 class AuthService {
   private unsubCallback: (() => void) | null = null;

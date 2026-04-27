@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import FolderPlusIcon from '../icons/FolderPlusIcon';
-import ClockIcon from '../icons/ClockIcon';
-import ChevronRightIcon from '../icons/ChevronRightIcon';
-import FolderIcon from '../icons/FolderIcon';
-import { i18nService } from '../../services/i18n';
+import React, { useCallback,useEffect, useRef, useState } from 'react';
+
 import { coworkService } from '../../services/cowork';
+import { i18nService } from '../../services/i18n';
 import { getCompactFolderName } from '../../utils/path';
+import ChevronRightIcon from '../icons/ChevronRightIcon';
+import ClockIcon from '../icons/ClockIcon';
+import FolderIcon from '../icons/FolderIcon';
+import FolderPlusIcon from '../icons/FolderPlusIcon';
 
 // Custom tooltip for folder paths
 interface PathTooltipProps {

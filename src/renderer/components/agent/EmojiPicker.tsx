@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect,useRef, useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
 
 interface EmojiCategory {

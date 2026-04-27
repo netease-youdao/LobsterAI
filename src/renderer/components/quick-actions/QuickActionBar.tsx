@@ -1,10 +1,11 @@
 import React from 'react';
+
 import type { LocalizedQuickAction } from '../../types/quickAction';
-import PresentationChartBarIcon from '../icons/PresentationChartBarIcon';
-import GlobeAltIcon from '../icons/GlobeAltIcon';
-import DevicePhoneMobileIcon from '../icons/DevicePhoneMobileIcon';
-import ChartBarIcon from '../icons/ChartBarIcon';
 import AcademicCapIcon from '../icons/AcademicCapIcon';
+import ChartBarIcon from '../icons/ChartBarIcon';
+import DevicePhoneMobileIcon from '../icons/DevicePhoneMobileIcon';
+import GlobeAltIcon from '../icons/GlobeAltIcon';
+import PresentationChartBarIcon from '../icons/PresentationChartBarIcon';
 
 interface QuickActionBarProps {
   actions: LocalizedQuickAction[];

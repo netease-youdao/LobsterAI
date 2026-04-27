@@ -1,9 +1,10 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
+import {
+BindingKind, DeliveryChannel, DeliveryMode,   OriginKind, SessionTarget,
+} from '../constants';
 import { makeModel } from '../fixtures';
 import { CoworkTaskPolicy } from './coworkPolicy';
-import {
-  OriginKind, BindingKind, DeliveryMode, DeliveryChannel, SessionTarget,
-} from '../constants';
 
 test('CoworkPolicy.getCreateDefaults: with cowork origin -> sessionTarget main + channel last', () => {
   const policy = new CoworkTaskPolicy();

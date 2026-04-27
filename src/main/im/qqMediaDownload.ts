@@ -2,9 +2,10 @@
  * QQ Media Download Utilities
  * QQ 媒体下载工具函数（接收端）
  */
+import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { app } from 'electron';
+
 import { fetchWithSystemProxy } from './http';
 import type { IMMediaType } from './types';
 

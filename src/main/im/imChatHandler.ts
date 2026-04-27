@@ -4,11 +4,12 @@
  */
 
 import axios from 'axios';
+
+import { buildIMMediaInstruction } from './imMediaInstruction';
 import {
   IMMessage,
   IMSettings,
 } from './types';
-import { buildIMMediaInstruction } from './imMediaInstruction';
 
 // LLM Configuration interface (mirrors app_config structure)
 interface LLMConfig {

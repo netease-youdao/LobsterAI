@@ -1,8 +1,9 @@
-import { test, expect, describe } from 'vitest';
+import { describe,expect, test } from 'vitest';
+
 import {
-  ProviderName,
-  OpenClawProviderId,
   OpenClawApi,
+  OpenClawProviderId,
+  ProviderName,
 } from '../../shared/providers';
 
 const providerApiKeyEnvVar = (providerName: string): string => {

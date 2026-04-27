@@ -1,8 +1,8 @@
 import type {
   DeliveryMode,
   SessionTarget,
-  WakeMode,
   TaskStatus,
+  WakeMode,
 } from './constants';
 
 export interface ScheduleAt {
