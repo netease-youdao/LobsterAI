@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 // @ts-ignore
 import remarkGfm from 'remark-gfm';
@@ -8,21 +8,10 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import 'katex/contrib/mhchem';
-// @ts-ignore
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-// @ts-ignore
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-// @ts-ignore
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../services/i18n';
+import CodeBlock from './CodeBlock';
 
-const CODE_BLOCK_LINE_LIMIT = 200;
-const CODE_BLOCK_CHAR_LIMIT = 20000;
-const SYNTAX_HIGHLIGHTER_STYLE = {
-  margin: 0,
-  borderRadius: 0,
-};
 const SAFE_URL_PROTOCOLS = new Set(['http', 'https', 'mailto', 'tel', 'file']);
 
 const encodeFileUrl = (url: string): string => {
@@ -176,147 +165,8 @@ const openExternalViaAnchorFallback = (url: string): void => {
   document.body.removeChild(anchor);
 };
 
-function useIsDark() {
-  const [isDark, setIsDark] = useState(() =>
-    document.documentElement.classList.contains('dark')
-  );
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setIsDark(document.documentElement.classList.contains('dark'));
-    });
-    observer.observe(document.documentElement, { attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
-  return isDark;
-}
-
 const dispatchAppToast = (message: string): void => {
   window.dispatchEvent(new CustomEvent('app:showToast', { detail: message }));
-};
-
-const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
-  const normalizedClassName = Array.isArray(className)
-    ? className.join(' ')
-    : className || '';
-  const match = /language-([\w-]+)/.exec(normalizedClassName);
-  const hasPosition = node?.position?.start?.line != null && node?.position?.end?.line != null;
-  const isInline = typeof props.inline === 'boolean'
-    ? props.inline
-    : hasPosition
-      ? node.position.start.line === node.position.end.line
-      : !match;
-  const codeText = Array.isArray(children) ? children.join('') : String(children);
-  const trimmedCodeText = codeText.replace(/\n$/, '');
-  const shouldHighlight = !isInline && match
-    && trimmedCodeText.length <= CODE_BLOCK_CHAR_LIMIT
-    && trimmedCodeText.split('\n').length <= CODE_BLOCK_LINE_LIMIT;
-  const [isCopied, setIsCopied] = useState(false);
-  const copyTimeoutRef = useRef<number | null>(null);
-  const isDark = useIsDark();
-  const highlighterStyle = isDark ? oneDark : {
-    ...oneLight,
-    'pre[class*="language-"]': { ...(oneLight as Record<string, React.CSSProperties>)['pre[class*="language-"]'], background: '#f0f2f5' },
-    'code[class*="language-"]': { ...(oneLight as Record<string, React.CSSProperties>)['code[class*="language-"]'], background: '#f0f2f5' },
-  };
-
-  useEffect(() => () => {
-    if (copyTimeoutRef.current != null) {
-      window.clearTimeout(copyTimeoutRef.current);
-    }
-  }, []);
-
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(trimmedCodeText);
-      setIsCopied(true);
-      if (copyTimeoutRef.current != null) {
-        window.clearTimeout(copyTimeoutRef.current);
-      }
-      copyTimeoutRef.current = window.setTimeout(() => setIsCopied(false), 1500);
-    } catch (error) {
-      console.error('Failed to copy code block: ', error);
-    }
-  }, [trimmedCodeText]);
-
-  if (!isInline) {
-    // Simple code block without language - minimal styling
-    if (!match) {
-      return (
-        <div className="my-2 relative group">
-          <div className="overflow-x-auto rounded-lg dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="absolute top-2 right-2 z-10 p-2 rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors opacity-0 group-hover:opacity-100 transform-gpu"
-              title={i18nService.t('copyToClipboard')}
-              aria-label={i18nService.t('copyToClipboard')}
-            >
-              {isCopied ? (
-                <CheckIcon className="h-5 w-5 text-green-500" />
-              ) : (
-                <ClipboardDocumentIcon className="h-5 w-5" />
-              )}
-            </button>
-            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
-              {trimmedCodeText}
-            </code>
-          </div>
-        </div>
-      );
-    }
-
-    // Code block with language - show header with language name
-    return (
-      <div className="my-3 rounded-xl overflow-hidden border border-border relative shadow-subtle">
-        <div className="bg-surface-raised px-4 py-2 text-xs text-secondary font-medium flex items-center justify-between">
-          <span>{match[1]}</span>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="p-2 rounded-md hover:bg-surface-raised transition-colors transform-gpu"
-            title={i18nService.t('copyToClipboard')}
-            aria-label={i18nService.t('copyToClipboard')}
-          >
-            {isCopied ? (
-              <CheckIcon className="h-5 w-5 text-green-500" />
-            ) : (
-              <ClipboardDocumentIcon className="h-5 w-5" />
-            )}
-          </button>
-        </div>
-        {shouldHighlight ? (
-          <SyntaxHighlighter
-            style={highlighterStyle}
-            language={match[1]}
-            PreTag="div"
-            customStyle={{ ...SYNTAX_HIGHLIGHTER_STYLE, background: isDark ? '#282c34' : '#f0f2f5' }}
-          >
-            {trimmedCodeText}
-          </SyntaxHighlighter>
-        ) : (
-          <div className="m-0 overflow-x-auto dark:bg-[#282c34] bg-[#f0f2f5] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono dark:text-gray-100 text-gray-800 whitespace-pre">
-              {trimmedCodeText}
-            </code>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const inlineClassName = [
-    'inline bg-transparent px-0.5 text-[0.92em] font-mono font-medium text-foreground',
-    normalizedClassName,
-  ].filter(Boolean).join(' ');
-
-  return (
-    <code
-      className={inlineClassName}
-      {...props}
-    >
-      {children}
-    </code>
-  );
 };
 
 const safeDecodeURIComponent = (value: string): string => {

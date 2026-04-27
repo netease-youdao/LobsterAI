@@ -31,6 +31,18 @@ pre {
   overflow-x: auto !important;
 }
 
+/* CodeMirror: reset global pre/code overrides inside CM editor */
+.cm-editor pre {
+  border-radius: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background-color: transparent !important;
+}
+
+.cm-editor code {
+  font-family: inherit;
+}
+
 code {
   font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace;
 }
