@@ -1,74 +1,84 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { RootState, store } from './store';
-import Settings, { type SettingsOpenOptions } from './components/Settings';
-import Sidebar from './components/Sidebar';
-import Toast from './components/Toast';
-import WindowTitleBar from './components/window/WindowTitleBar';
-import { CoworkView } from './components/cowork';
-import { SkillsView } from './components/skills';
-import { ScheduledTasksView } from './components/scheduledTasks';
-import { McpView } from './components/mcp';
+import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
+import { useDispatch,useSelector } from 'react-redux';
+
+import {
+  APP_UPDATE_HEARTBEAT_INTERVAL_MS,
+  APP_UPDATE_POLL_INTERVAL_MS,
+  type AppUpdateInfo,
+  type AppUpdateRuntimeState,
+  AppUpdateStatus,
+} from '../shared/appUpdate/constants';
 import AgentsView from './components/agent/AgentsView';
+import { CoworkView } from './components/cowork';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
-import { configService } from './services/config';
-import { apiService } from './services/api';
-import { themeService } from './services/theme';
-import { coworkService } from './services/cowork';
-import { authService } from './services/auth';
-import { scheduledTaskService } from './services/scheduledTask';
-import {
-  checkForAppUpdate,
-  type AppUpdateInfo,
-  type AppUpdateDownloadProgress,
-  UPDATE_POLL_INTERVAL_MS,
-  UPDATE_HEARTBEAT_INTERVAL_MS,
-} from './services/appUpdate';
-import { defaultConfig, getProviderDisplayName } from './config';
-import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
-import { clearSelection } from './store/slices/quickActionSlice';
-import { setDraftPrompt } from './store/slices/coworkSlice';
-import type { ApiConfig } from './services/api';
-import type { CoworkPermissionResult } from './types/cowork';
-import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
-import { i18nService } from './services/i18n';
-import { matchesShortcut } from './services/shortcuts';
+import { McpView } from './components/mcp';
+import PrivacyDialog from './components/PrivacyDialog';
+import { ScheduledTasksView } from './components/scheduledTasks';
+import Settings, { type SettingsOpenOptions } from './components/Settings';
+import Sidebar from './components/Sidebar';
+import { SkillsView } from './components/skills';
+import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
-import PrivacyDialog from './components/PrivacyDialog';
+import WelcomeDialog from './components/WelcomeDialog';
+import WindowTitleBar from './components/window/WindowTitleBar';
+import { defaultConfig, getProviderDisplayName } from './config';
+import type { ApiConfig } from './services/api';
+import { apiService } from './services/api';
+import { authService } from './services/auth';
+import { configService } from './services/config';
+import { coworkService } from './services/cowork';
+import { i18nService } from './services/i18n';
+import { scheduledTaskService } from './services/scheduledTask';
+import { matchesShortcut } from './services/shortcuts';
+import { themeService } from './services/theme';
+import { RootState, store } from './store';
+import {
+  selectCurrentSessionId,
+  selectFirstPendingPermission,
+} from './store/selectors/coworkSelectors';
+import { setDraftPrompt } from './store/slices/coworkSlice';
+import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
+import { clearSelection } from './store/slices/quickActionSlice';
+import type { CoworkPermissionResult } from './types/cowork';
 
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<
-    'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'
-  >('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState>({
+    status: AppUpdateStatus.Idle,
+    source: null,
+    info: null,
+    progress: null,
+    readyFilePath: null,
+    readyFileHash: null,
+    errorMessage: null,
+  });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const [updateModalState, setUpdateModalState] = useState<
-    'info' | 'downloading' | 'installing' | 'error'
-  >('info');
-  const [downloadProgress, setDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
-  const [updateError, setUpdateError] = useState<string | null>(null);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [showWelcome, setShowWelcome] = useState(false);
   const [enterpriseConfig, setEnterpriseConfig] = useState<{
     ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
     disableUpdate?: boolean;
   } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
+  const previousUpdateStatusRef = useRef<AppUpdateRuntimeState['status']>(AppUpdateStatus.Idle);
+  const shouldInstallReadyUpdateRef = useRef(false);
   const dispatch = useDispatch();
   const selectedModel = useSelector((state: RootState) => state.model.selectedModel);
-  const currentSessionId = useSelector((state: RootState) => state.cowork.currentSessionId);
-  const pendingPermissions = useSelector((state: RootState) => state.cowork.pendingPermissions);
-  const pendingPermission = pendingPermissions[0] ?? null;
+  const currentSessionId = useSelector(selectCurrentSessionId);
+  const pendingPermission = useSelector(selectFirstPendingPermission);
+  const authUser = useSelector((state: RootState) => state.auth.user);
   const isWindows = window.electron.platform === 'win32';
 
   const waitWithTimeout = useCallback(
@@ -79,18 +89,18 @@ const App: React.FC = () => {
         }, timeoutMs);
 
         promise.then(
-          value => {
+          (value) => {
             window.clearTimeout(timer);
             resolve(value);
           },
-          error => {
+          (error) => {
             window.clearTimeout(timer);
             reject(error);
-          },
+          }
         );
       });
     },
-    [],
+    []
   );
 
   // 初始化应用
@@ -135,27 +145,19 @@ const App: React.FC = () => {
         apiService.setConfig(apiConfig);
 
         // 从 providers 配置中加载可用模型列表到 Redux
-        const providerModels: {
-          id: string;
-          name: string;
-          provider?: string;
-          providerKey?: string;
-          supportsImage?: boolean;
-        }[] = [];
+        const providerModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
         if (config.providers) {
           Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
             if (providerConfig.enabled && providerConfig.models) {
-              providerConfig.models.forEach(
-                (model: { id: string; name: string; supportsImage?: boolean }) => {
-                  providerModels.push({
-                    id: model.id,
-                    name: model.name,
-                    provider: getProviderDisplayName(providerName, providerConfig),
-                    providerKey: providerName,
-                    supportsImage: model.supportsImage ?? false,
-                  });
-                },
-              );
+              providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
+                providerModels.push({
+                  id: model.id,
+                  name: model.name,
+                  provider: getProviderDisplayName(providerName, providerConfig),
+                  providerKey: providerName,
+                  supportsImage: model.supportsImage ?? false,
+                });
+              });
             }
           });
         }
@@ -171,13 +173,10 @@ const App: React.FC = () => {
           // Search all available models (including server models loaded by authService)
           // so that a previously selected server model is correctly restored.
           const allModels = store.getState().model.availableModels;
-          const preferredModel =
-            allModels.find(
-              model =>
-                model.id === config.model.defaultModel &&
-                (!config.model.defaultModelProvider ||
-                  model.providerKey === config.model.defaultModelProvider),
-            ) ?? allModels[0];
+          const preferredModel = allModels.find(
+            model => model.id === config.model.defaultModel
+              && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
+          ) ?? allModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
 
@@ -188,12 +187,12 @@ const App: React.FC = () => {
         setIsInitialized(true);
         console.info('[App] initializeApp: shell ready');
 
+
         // 初始化定时任务服务，但不阻塞首屏
-        void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch(
-          error => {
-            console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
-          },
-        );
+        void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
+          console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
+        });
+
       } catch (error) {
         console.error('Failed to initialize app:', error);
         setInitError(i18nService.t('initializationError'));
@@ -206,7 +205,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {
-      forceLanguageRefresh(prev => prev + 1);
+      forceLanguageRefresh((prev) => prev + 1);
     });
     return () => {
       unsubscribe();
@@ -260,8 +259,8 @@ const App: React.FC = () => {
     if (!isInitialized || !selectedModel?.id) return;
     const config = configService.getConfig();
     if (
-      config.model.defaultModel === selectedModel.id &&
-      (config.model.defaultModelProvider ?? '') === (selectedModel.providerKey ?? '')
+      config.model.defaultModel === selectedModel.id
+      && (config.model.defaultModelProvider ?? '') === (selectedModel.providerKey ?? '')
     ) {
       return;
     }
@@ -303,20 +302,19 @@ const App: React.FC = () => {
   }, []);
 
   const handleToggleSidebar = useCallback(() => {
-    setIsSidebarCollapsed(prev => !prev);
+    setIsSidebarCollapsed((prev) => !prev);
   }, []);
 
   const handleNewChat = useCallback(() => {
-    const shouldClearInput = mainView === 'cowork' || !!currentSessionId;
+    // Only clear when already on home (no session) — preserve __home__ draft when returning from a session
+    const shouldClearInput = mainView === 'cowork' && !currentSessionId;
     coworkService.clearSession();
     dispatch(clearSelection());
     setMainView('cowork');
     window.setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent('cowork:focus-input', {
-          detail: { clear: shouldClearInput },
-        }),
-      );
+      window.dispatchEvent(new CustomEvent('cowork:focus-input', {
+        detail: { clear: shouldClearInput },
+      }));
     }, 0);
   }, [dispatch, mainView, currentSessionId]);
 
@@ -338,46 +336,100 @@ const App: React.FC = () => {
     }, 2200);
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+
+    const loadInitialUpdateState = async () => {
+      try {
+        const state = await window.electron.appUpdate.getState();
+        if (mounted) {
+          setAppUpdateState(state);
+          previousUpdateStatusRef.current = state.status;
+        }
+      } catch (error) {
+        console.error('[App] failed to load initial app update state:', error);
+      }
+    };
+
+    void loadInitialUpdateState();
+
+    const unsubscribe = window.electron.appUpdate.onStateChanged((state) => {
+      const previousStatus = previousUpdateStatusRef.current;
+      previousUpdateStatusRef.current = state.status;
+      setAppUpdateState(state);
+
+      if (state.status === AppUpdateStatus.Ready && previousStatus !== AppUpdateStatus.Ready) {
+        if (shouldInstallReadyUpdateRef.current && state.readyFilePath) {
+          shouldInstallReadyUpdateRef.current = false;
+          void window.electron.appUpdate.installReady().then((installResult) => {
+            if (!installResult.success) {
+              showToast(installResult.error || i18nService.t('updateInstallFailed'));
+            }
+          });
+        }
+      }
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
+
   const handleShowLogin = useCallback(() => {
     showToast(i18nService.t('featureInDevelopment'));
   }, [showToast]);
 
   const runUpdateCheck = useCallback(async () => {
     try {
-      const currentVersion = await window.electron.appInfo.getVersion();
-      const nextUpdate = await checkForAppUpdate(currentVersion);
-      setUpdateInfo(nextUpdate);
-      if (!nextUpdate) {
-        setShowUpdateModal(false);
+      const result = await window.electron.appUpdate.checkNow({ userId: authUser?.yid });
+      setAppUpdateState(result.state);
+      if (!result.success) {
+        console.error('[App] app update check failed:', result.error);
       }
     } catch (error) {
       console.error('Failed to check app update:', error);
-      setUpdateInfo(null);
-      setShowUpdateModal(false);
     }
-  }, []);
+  }, [authUser]);
+
+  const updateInfo = appUpdateState.info;
 
   const handleOpenUpdateModal = useCallback(() => {
     if (!updateInfo) return;
-    setUpdateModalState('info');
-    setUpdateError(null);
-    setDownloadProgress(null);
     setShowUpdateModal(true);
   }, [updateInfo]);
 
-  const handleUpdateFound = useCallback((info: AppUpdateInfo) => {
-    setUpdateInfo(info);
-    setUpdateModalState('info');
-    setUpdateError(null);
-    setDownloadProgress(null);
+  const handleUpdateFound = useCallback((_info: AppUpdateInfo) => {
     setShowUpdateModal(true);
   }, []);
 
   const handleConfirmUpdate = useCallback(async () => {
     if (!updateInfo) return;
 
-    // If the URL is a fallback page (not a direct file download), open in browser
+    if (appUpdateState.readyFilePath) {
+      shouldInstallReadyUpdateRef.current = false;
+      const installResult = await window.electron.appUpdate.installReady();
+      if (!installResult.success) {
+        showToast(installResult.error || i18nService.t('updateInstallFailed'));
+      }
+      return;
+    }
+
+    if (appUpdateState.status === AppUpdateStatus.Error || appUpdateState.status === AppUpdateStatus.Available) {
+      const isManualUrl = updateInfo.url.includes('#') || updateInfo.url.endsWith('/download-list');
+      if (!isManualUrl) {
+        shouldInstallReadyUpdateRef.current = appUpdateState.status === AppUpdateStatus.Available;
+        const retryResult = await window.electron.appUpdate.retryDownload();
+        if (!retryResult.success) {
+          shouldInstallReadyUpdateRef.current = false;
+          showToast(i18nService.t('updateDownloadFailed'));
+        }
+        return;
+      }
+    }
+
     if (updateInfo.url.includes('#') || updateInfo.url.endsWith('/download-list')) {
+      shouldInstallReadyUpdateRef.current = false;
       setShowUpdateModal(false);
       try {
         const result = await window.electron.shell.openExternal(updateInfo.url);
@@ -390,64 +442,29 @@ const App: React.FC = () => {
       }
       return;
     }
-
-    setUpdateModalState('downloading');
-    setDownloadProgress(null);
-    setUpdateError(null);
-
-    const unsubscribe = window.electron.appUpdate.onDownloadProgress(progress => {
-      setDownloadProgress(progress);
-    });
-
-    try {
-      const downloadResult = await window.electron.appUpdate.download(updateInfo.url);
-      unsubscribe();
-
-      if (!downloadResult.success) {
-        // If user cancelled, handleCancelDownload already set the state — don't overwrite
-        if (downloadResult.error === 'Download cancelled') {
-          return;
-        }
-        setUpdateModalState('error');
-        setUpdateError(downloadResult.error || i18nService.t('updateDownloadFailed'));
-        return;
-      }
-
-      setUpdateModalState('installing');
-      const installResult = await window.electron.appUpdate.install(downloadResult.filePath!);
-
-      if (!installResult.success) {
-        setUpdateModalState('error');
-        setUpdateError(installResult.error || i18nService.t('updateInstallFailed'));
-      }
-      // If successful, app will quit and relaunch
-    } catch (error) {
-      unsubscribe();
-      const msg = error instanceof Error ? error.message : '';
-      // If user cancelled, handleCancelDownload already set the state — don't overwrite
-      if (msg === 'Download cancelled') {
-        return;
-      }
-      setUpdateModalState('error');
-      setUpdateError(msg || i18nService.t('updateDownloadFailed'));
-    }
-  }, [updateInfo, showToast]);
+  }, [appUpdateState.readyFilePath, appUpdateState.status, showToast, updateInfo]);
 
   const handleCancelDownload = useCallback(async () => {
+    shouldInstallReadyUpdateRef.current = false;
     await window.electron.appUpdate.cancelDownload();
-    setUpdateModalState('info');
-    setDownloadProgress(null);
   }, []);
 
-  const handleRetryUpdate = useCallback(() => {
-    setUpdateModalState('info');
-    setUpdateError(null);
-    setDownloadProgress(null);
-  }, []);
+  const handleRetryUpdate = useCallback(async () => {
+    if (!updateInfo) return;
+    if (updateInfo.url.includes('#') || updateInfo.url.endsWith('/download-list')) {
+      shouldInstallReadyUpdateRef.current = false;
+      setShowUpdateModal(false);
+      await window.electron.shell.openExternal(updateInfo.url);
+      return;
+    }
+    shouldInstallReadyUpdateRef.current = false;
+    await window.electron.appUpdate.retryDownload();
+  }, [updateInfo]);
 
   const handlePrivacyAccept = useCallback(async () => {
     await window.electron.store.set('privacy_agreed', true);
     setPrivacyAgreed(true);
+    setShowWelcome(true);
   }, []);
 
   const handlePrivacyReject = useCallback(() => {
@@ -455,13 +472,20 @@ const App: React.FC = () => {
     window.electron.window.close();
   }, []);
 
-  const handlePermissionResponse = useCallback(
-    async (result: CoworkPermissionResult) => {
-      if (!pendingPermission) return;
-      await coworkService.respondToPermission(pendingPermission.requestId, result);
-    },
-    [pendingPermission],
-  );
+  const handleWelcomeClose = useCallback(() => setShowWelcome(false), []);
+  const handleWelcomeLogin = useCallback(async () => {
+    setShowWelcome(false);
+    await authService.login();
+  }, []);
+  const handleWelcomeCustomModel = useCallback(() => {
+    setShowWelcome(false);
+    handleShowSettings({ initialTab: 'model' });
+  }, [handleShowSettings]);
+
+  const handlePermissionResponse = useCallback(async (result: CoworkPermissionResult) => {
+    if (!pendingPermission) return;
+    await coworkService.respondToPermission(pendingPermission.requestId, result);
+  }, [pendingPermission]);
 
   const handleCloseSettings = () => {
     setShowSettings(false);
@@ -472,26 +496,18 @@ const App: React.FC = () => {
     });
 
     if (config.providers) {
-      const allModels: {
-        id: string;
-        name: string;
-        provider?: string;
-        providerKey?: string;
-        supportsImage?: boolean;
-      }[] = [];
+      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
       Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
         if (providerConfig.enabled && providerConfig.models) {
-          providerConfig.models.forEach(
-            (model: { id: string; name: string; supportsImage?: boolean }) => {
-              allModels.push({
-                id: model.id,
-                name: model.name,
-                provider: getProviderDisplayName(providerName, providerConfig),
-                providerKey: providerName,
-                supportsImage: model.supportsImage ?? false,
-              });
-            },
-          );
+          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
+            allModels.push({
+              id: model.id,
+              name: model.name,
+              provider: getProviderDisplayName(providerName, providerConfig),
+              providerKey: providerName,
+              supportsImage: model.supportsImage ?? false,
+            });
+          });
         }
       });
       if (allModels.length > 0) {
@@ -599,26 +615,27 @@ const App: React.FC = () => {
     let cancelled = false;
     let lastCheckTime = 0;
 
-    const maybeCheck = async () => {
+    const maybeCheck = async (reason: 'startup' | 'heartbeat' | 'visibility') => {
       if (cancelled) return;
       const now = Date.now();
-      if (lastCheckTime > 0 && now - lastCheckTime < UPDATE_POLL_INTERVAL_MS) return;
+      if (lastCheckTime > 0 && now - lastCheckTime < APP_UPDATE_POLL_INTERVAL_MS) return;
       lastCheckTime = now;
+      console.log(`[App] auto update check triggered, reason=${reason}, at=${new Date(now).toISOString()}`);
       await runUpdateCheck();
     };
 
     // 启动时立即检查
-    void maybeCheck();
+    void maybeCheck('startup');
 
     // 心跳：每 30 分钟检测是否距上次检查已超过 12 小时
     const timer = window.setInterval(() => {
-      void maybeCheck();
-    }, UPDATE_HEARTBEAT_INTERVAL_MS);
+      void maybeCheck('heartbeat');
+    }, APP_UPDATE_HEARTBEAT_INTERVAL_MS);
 
     // 窗口恢复可见时检测（覆盖休眠唤醒场景）
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void maybeCheck();
+        void maybeCheck('visibility');
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -652,13 +669,24 @@ const App: React.FC = () => {
 
     // 其他情况使用原有的权限模态框
     return (
-      <CoworkPermissionModal permission={pendingPermission} onRespond={handlePermissionResponse} />
+      <CoworkPermissionModal
+        permission={pendingPermission}
+        onRespond={handlePermissionResponse}
+      />
     );
   }, [pendingPermission, handlePermissionResponse]);
 
-  const isOverlayActive = showSettings || showUpdateModal || pendingPermissions.length > 0;
-  const updateBadge = updateInfo ? (
-    <AppUpdateBadge latestVersion={updateInfo.latestVersion} onClick={handleOpenUpdateModal} />
+  const isOverlayActive = showSettings || showUpdateModal || pendingPermission !== null;
+  const shouldShowUpdateBadge =
+    updateInfo &&
+    appUpdateState.status !== AppUpdateStatus.Checking &&
+    appUpdateState.status !== AppUpdateStatus.Downloading;
+  const updateBadge = shouldShowUpdateBadge ? (
+    <AppUpdateBadge
+      latestVersion={updateInfo.latestVersion}
+      status={appUpdateState.status}
+      onClick={handleOpenUpdateModal}
+    />
   ) : null;
   const windowsStandaloneTitleBar = isWindows ? (
     <div className="draggable relative h-9 shrink-0 bg-surface-raised">
@@ -718,7 +746,9 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
-      {toastMessage && <Toast message={toastMessage} onClose={() => setToastMessage(null)} />}
+      {toastMessage && (
+        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
+      )}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar
           onShowLogin={handleShowLogin}
@@ -771,7 +801,7 @@ const App: React.FC = () => {
               />
             ) : (
               <CoworkView
-                onRequestAppSettings={handleShowSettings}
+                onRequestAppSettings={privacyAgreed === true && !showWelcome ? handleShowSettings : undefined}
                 onShowSkills={handleShowSkills}
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
@@ -795,29 +825,33 @@ const App: React.FC = () => {
       )}
       {showUpdateModal && updateInfo && (
         <AppUpdateModal
-          updateInfo={updateInfo}
+          updateState={appUpdateState}
           onCancel={() => {
-            if (updateModalState === 'info' || updateModalState === 'error') {
+            if (appUpdateState.status !== AppUpdateStatus.Downloading && appUpdateState.status !== AppUpdateStatus.Installing) {
               setShowUpdateModal(false);
-              setUpdateModalState('info');
-              setUpdateError(null);
-              setDownloadProgress(null);
             }
           }}
           onConfirm={handleConfirmUpdate}
-          modalState={updateModalState}
-          downloadProgress={downloadProgress}
-          errorMessage={updateError}
           onCancelDownload={handleCancelDownload}
           onRetry={handleRetryUpdate}
         />
       )}
       {permissionModal}
       {privacyAgreed === false && (
-        <PrivacyDialog onAccept={handlePrivacyAccept} onReject={handlePrivacyReject} />
+        <PrivacyDialog
+          onAccept={handlePrivacyAccept}
+          onReject={handlePrivacyReject}
+        />
+      )}
+      {showWelcome && (
+        <WelcomeDialog
+          onLogin={handleWelcomeLogin}
+          onCustomModel={handleWelcomeCustomModel}
+          onClose={handleWelcomeClose}
+        />
       )}
     </div>
   );
 };
 
-export default App;
+export default App; 

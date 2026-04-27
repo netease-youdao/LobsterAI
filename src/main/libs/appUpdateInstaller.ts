@@ -5,6 +5,8 @@ import path from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 
+import { type AppUpdateSource } from '../../shared/appUpdate/constants';
+
 export interface AppUpdateDownloadProgress {
   received: number;
   total: number | undefined;
@@ -49,6 +51,7 @@ const DOWNLOAD_INACTIVITY_TIMEOUT_MS = 60_000;
 
 export async function downloadUpdate(
   url: string,
+  source: AppUpdateSource,
   onProgress: (progress: AppUpdateDownloadProgress) => void,
 ): Promise<string> {
   if (activeDownloadController) {
@@ -66,10 +69,10 @@ export async function downloadUpdate(
   }
 
   const ext = path.extname(parsedUrl.pathname) || (process.platform === 'darwin' ? '.dmg' : '.exe');
-  const tempDir = app.getPath('temp');
+  const updateDir = path.join(app.getPath('userData'), 'updates');
   const ts = Date.now();
-  const downloadPath = path.join(tempDir, `lobsterai-update-${ts}${ext}.download`);
-  const finalPath = path.join(tempDir, `lobsterai-update-${ts}${ext}`);
+  const downloadPath = path.join(updateDir, `lobsterai-update-${source}-${ts}${ext}.download`);
+  const finalPath = path.join(updateDir, `lobsterai-update-${source}-${ts}${ext}`);
 
   console.log(`[AppUpdate] Temp path: ${downloadPath}`);
   console.log(`[AppUpdate] Final path: ${finalPath}`);
@@ -132,7 +135,7 @@ export async function downloadUpdate(
     // Emit initial progress
     emitProgress();
 
-    await fs.promises.mkdir(path.dirname(downloadPath), { recursive: true });
+    await fs.promises.mkdir(updateDir, { recursive: true });
     writeStream = fs.createWriteStream(downloadPath);
 
     const nodeStream = Readable.fromWeb(response.body as any);

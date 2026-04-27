@@ -1,0 +1,111 @@
+diff --git a/src/config/io.ts b/src/config/io.ts
+index 165a6b33d9..3f3795f694 100644
+--- a/src/config/io.ts
++++ b/src/config/io.ts
+@@ -4,7 +4,6 @@ import os from "node:os";
+ import path from "node:path";
+ import JSON5 from "json5";
+ import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+-import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
+ import { loadDotEnv } from "../infra/dotenv.js";
+ import { formatErrorMessage } from "../infra/errors.js";
+ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+@@ -14,10 +13,6 @@ import {
+   shouldDeferShellEnvFallback,
+   shouldEnableShellEnvFallback,
+ } from "../infra/shell-env.js";
+-import {
+-  collectRelevantDoctorPluginIds,
+-  listPluginDoctorLegacyConfigRules,
+-} from "../plugins/doctor-contract-registry.js";
+ import { sanitizeTerminalText } from "../terminal/safe-text.js";
+ import { isRecord } from "../utils.js";
+ import { VERSION } from "../version.js";
+@@ -60,7 +55,6 @@ import {
+   resolveWriteEnvSnapshotForPath,
+   unsetPathForWrite,
+ } from "./io.write-prepare.js";
+-import { findLegacyConfigIssues } from "./legacy.js";
+ import {
+   asResolvedSourceConfig,
+   asRuntimeConfig,
+@@ -958,22 +952,16 @@ function resolveConfigForRead(
+
+ function resolveLegacyConfigForRead(
+   resolvedConfigRaw: unknown,
+-  sourceRaw: unknown,
++  _sourceRaw: unknown,
+ ): LegacyMigrationResolution {
+-  const pluginIds = collectRelevantDoctorPluginIds(resolvedConfigRaw);
+-  const sourceLegacyIssues = findLegacyConfigIssues(
+-    resolvedConfigRaw,
+-    sourceRaw,
+-    listPluginDoctorLegacyConfigRules({ pluginIds }),
++  // LobsterAI patch: config is machine-generated on every startup; skip
++  // legacy config checks and migrations (~6s on cold start: JITI × channel/
++  // setup plugins).  Return empty issue list and pass config through as-is.
++  const _t0LegacyCheck = Date.now();
++  process.stderr.write(
++    `[cfg-diag] resolveLegacyConfigForRead: skipped, ${Date.now() - _t0LegacyCheck}ms\n`,
+   );
+-  if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
+-    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+-  }
+-  const compat = applyRuntimeLegacyConfigMigrations(resolvedConfigRaw);
+-  return {
+-    effectiveConfigRaw: compat.next ?? resolvedConfigRaw,
+-    sourceLegacyIssues,
+-  };
++  return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues: [] };
+ }
+
+ type ReadConfigFileSnapshotInternalResult = {
+diff --git a/src/config/validation.ts b/src/config/validation.ts
+index 5535380402..f12ea4b817 100644
+--- a/src/config/validation.ts
++++ b/src/config/validation.ts
+@@ -7,10 +7,6 @@ import {
+   resolveEffectivePluginActivationState,
+   resolveMemorySlotDecision,
+ } from "../plugins/config-state.js";
+-import {
+-  collectRelevantDoctorPluginIds,
+-  listPluginDoctorLegacyConfigRules,
+-} from "../plugins/doctor-contract-registry.js";
+ import {
+   loadPluginManifestRegistry,
+   resolveManifestContractPluginIds,
+@@ -32,7 +28,6 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
+ import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
+ import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
+ import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
+-import { findLegacyConfigIssues } from "./legacy.js";
+ import { materializeRuntimeConfig } from "./materialize.js";
+ import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+ import { coerceSecretRef } from "./types.secrets.js";
+@@ -459,20 +454,12 @@ export function validateConfigObjectRaw(
+   raw: unknown,
+ ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+   const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
+-  const legacyIssues = findLegacyConfigIssues(
+-    raw,
+-    raw,
+-    listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
++  // LobsterAI patch: config is machine-generated on every startup; skip
++  // findLegacyConfigIssues (~2-4s on cold start: JITI × bundled channel entries).
++  const _t0LegacyCheck = Date.now();
++  process.stderr.write(
++    `[cfg-diag2] validateConfigObjectRaw.findLegacyConfigIssues: skipped, ${Date.now() - _t0LegacyCheck}ms\n`,
+   );
+-  if (legacyIssues.length > 0) {
+-    return {
+-      ok: false,
+-      issues: legacyIssues.map((iss) => ({
+-        path: iss.path,
+-        message: iss.message,
+-      })),
+-    };
+-  }
+   const validated = OpenClawSchema.safeParse(raw);
+   if (!validated.success) {
+     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));

@@ -221,13 +221,15 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     }
   });
 
-  ipcMain.handle(ScheduledTaskIpc.ListChannelConversations, async (_event, channel: string, accountId?: string) => {
+  ipcMain.handle(
+    ScheduledTaskIpc.ListChannelConversations,
+    async (_event, channel: string, accountId?: string, filterAccountId?: string) => {
     try {
       const platform = PlatformRegistry.platformOfChannel(channel);
       if (!platform) return { success: true, conversations: [] };
       const imStore = getIMGatewayManager()?.getIMStore();
       if (!imStore) return { success: true, conversations: [] };
-      const mappings = imStore.listSessionMappings(platform, accountId);
+      const mappings = imStore.listSessionMappings(platform, filterAccountId ?? accountId);
       const conversations = mappings.map((m) => ({
         conversationId: m.imConversationId,
         platform: m.platform,
@@ -238,5 +240,6 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to list conversations' };
     }
-  });
+    },
+  );
 }

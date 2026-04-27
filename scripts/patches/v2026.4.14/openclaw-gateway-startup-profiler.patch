@@ -1,0 +1,194 @@
+diff --git a/src/cli/gateway-cli/run.ts b/src/cli/gateway-cli/run.ts
+index 8497d2d85a..a81a862537 100644
+--- a/src/cli/gateway-cli/run.ts
++++ b/src/cli/gateway-cli/run.ts
+@@ -287,10 +287,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
+   // The heaviest part of gateway startup is loading the server module tree
+   // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
+   // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
++  const _moduleLoadT0 = performance.now();
+   const { startGatewayServer } = await withProgress(
+     { label: "Loading gateway modules…", indeterminate: true },
+     async () => import("../../gateway/server.js"),
+   );
++  const _moduleLoadMs = performance.now() - _moduleLoadT0;
++  gatewayLog.info(`[startup-profiler] module-loading: ${_moduleLoadMs.toFixed(0)}ms`);
+ 
+   setConsoleTimestampPrefix(true);
+ 
+@@ -299,7 +302,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
+   }
+ 
+   gatewayLog.info("loading configuration…");
++  const _cfgT0 = performance.now();
+   const cfg = loadConfig();
++  const _cfgMs = performance.now() - _cfgT0;
++  gatewayLog.info(`[startup-profiler] load-config: ${_cfgMs.toFixed(0)}ms`);
+   maybeLogPendingControlUiBuild(cfg);
+   const portOverride = parsePort(opts.port);
+   if (opts.port !== undefined && portOverride === null) {
+diff --git a/src/gateway/server.impl.ts b/src/gateway/server.impl.ts
+index 6e8fc9fe19..8b5675a0b5 100644
+--- a/src/gateway/server.impl.ts
++++ b/src/gateway/server.impl.ts
+@@ -221,10 +221,26 @@ export async function startGatewayServer(
+     description: "raw stream log path override",
+   });
+ 
++  // ── LobsterAI patch: startup profiler ──
++  // Measures wall-clock time of each initialisation phase and prints a
++  // summary table.  Remove this patch when no longer needed.
++  const _profT0 = performance.now();
++  const _profPhases: Array<{ name: string; ms: number }> = [];
++  let _profCur: { name: string; t: number } | null = null;
++  const _profMark = (name: string) => { _profCur = { name, t: performance.now() }; };
++  const _profMeasure = () => {
++    if (_profCur) {
++      _profPhases.push({ name: _profCur.name, ms: performance.now() - _profCur.t });
++      _profCur = null;
++    }
++  };
++
++  _profMark("loadConfigSnapshot");
+   const configSnapshot = await loadGatewayStartupConfigSnapshot({
+     minimalTestGateway,
+     log,
+   });
++  _profMeasure();
+ 
+   const emitSecretsStateEvent = (
+     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
+@@ -244,12 +260,14 @@ export async function startGatewayServer(
+   let cfgAtStart: OpenClawConfig;
+   let startupInternalWriteHash: string | null = null;
+   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
++  _profMark("authBootstrap");
+   const authBootstrap = await prepareGatewayStartupConfig({
+     configSnapshot,
+     authOverride: opts.auth,
+     tailscaleOverride: opts.tailscale,
+     activateRuntimeSecrets,
+   });
++  _profMeasure();
+   cfgAtStart = authBootstrap.cfg;
+   if (authBootstrap.generatedToken) {
+     if (authBootstrap.persistedGeneratedToken) {
+@@ -288,12 +306,14 @@ export async function startGatewayServer(
+     const startupSnapshot = await readConfigFileSnapshot();
+     startupInternalWriteHash = startupSnapshot.hash ?? null;
+   }
++  _profMark("pluginBootstrap");
+   const pluginBootstrap = await prepareGatewayPluginBootstrap({
+     cfgAtStart,
+     startupRuntimeConfig,
+     minimalTestGateway,
+     log,
+   });
++  _profMeasure();
+   const {
+     gatewayPluginConfigAtStart,
+     defaultWorkspaceDir,
+@@ -302,6 +322,7 @@ export async function startGatewayServer(
+     baseMethods,
+   } = pluginBootstrap;
+   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
++  _profMark("runtimeConfigResolve");
+   const channelLogs = Object.fromEntries(
+     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
+   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
+@@ -395,6 +416,7 @@ export async function startGatewayServer(
+   let runtimeState: GatewayServerLiveState | null = null;
+   let canvasHostServer: CanvasHostServer | null = null;
+   const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
++  _profMeasure();
+   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
+     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
+   }
+@@ -414,6 +436,7 @@ export async function startGatewayServer(
+     startedAt: serverStartedAt,
+   });
+   log.info("starting HTTP server...");
++  _profMark("createRuntimeState");
+   const {
+     canvasHost,
+     releasePluginRouteRegistry,
+@@ -464,6 +487,7 @@ export async function startGatewayServer(
+     logPlugins,
+     getReadiness,
+   });
++  _profMeasure();
+   const {
+     nodeRegistry,
+     nodePresenceTimers,
+@@ -545,6 +569,7 @@ export async function startGatewayServer(
+   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
+     channelManager;
+   try {
++    _profMark("earlyRuntime");
+     const earlyRuntime = await startGatewayEarlyRuntime({
+       minimalTestGateway,
+       cfgAtStart,
+@@ -587,6 +612,7 @@ export async function startGatewayServer(
+       runtimeState.dedupeCleanup = earlyRuntime.maintenance.dedupeCleanup;
+       runtimeState.mediaCleanup = earlyRuntime.maintenance.mediaCleanup;
+     }
++    _profMeasure();
+ 
+     Object.assign(
+       runtimeState,
+@@ -624,6 +650,7 @@ export async function startGatewayServer(
+       clients,
+     });
+ 
++    _profMark("requestContextAndWsHandlers");
+     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
+ 
+     const unavailableGatewayMethods = new Set<string>(
+@@ -730,6 +757,8 @@ export async function startGatewayServer(
+       broadcast,
+       context: gatewayRequestContext,
+     });
++    _profMeasure();
++    _profMark("postAttachRuntime");
+     ({
+       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
+       tailscaleCleanup: runtimeState.tailscaleCleanup,
+@@ -758,6 +787,7 @@ export async function startGatewayServer(
+       logChannels,
+       unavailableGatewayMethods,
+     }));
++    _profMeasure();
+ 
+     // Keep scheduled work inert until post-attach sidecars finish.
+     const activated = activateGatewayScheduledServices({
+@@ -769,6 +799,30 @@ export async function startGatewayServer(
+     });
+     runtimeState.heartbeatRunner = activated.heartbeatRunner;
+ 
++    // ── Print startup profiler summary ──
++    if (_profPhases.length > 0) {
++      const totalMs = performance.now() - _profT0;
++      const lines: string[] = [
++        "",
++        "=".repeat(70),
++        "  OPENCLAW GATEWAY STARTUP PROFILE",
++        "=".repeat(70),
++      ];
++      for (const { name, ms } of _profPhases) {
++        const pct = totalMs > 0 ? (ms / totalMs) * 100 : 0;
++        const bar = "#".repeat(Math.max(1, Math.round(pct / 2)));
++        lines.push(
++          `  ${name.padEnd(38)} ${ms.toFixed(0).padStart(7)}ms  ${pct.toFixed(1).padStart(5)}%  ${bar}`,
++        );
++      }
++      lines.push("-".repeat(70));
++      lines.push(`  ${"TOTAL".padEnd(38)} ${totalMs.toFixed(0).padStart(7)}ms`);
++      lines.push("=".repeat(70));
++      lines.push("");
++      process.stderr.write(lines.join("\n") + "\n");
++      log.info(`[startup-profiler] gateway server ready in ${totalMs.toFixed(0)}ms`);
++    }
++
+     runtimeState.configReloader = startManagedGatewayConfigReloader({
+       minimalTestGateway,
+       initialConfig: cfgAtStart,

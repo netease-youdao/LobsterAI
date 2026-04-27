@@ -21,7 +21,7 @@ const runtimeDir = process.argv[2]
   ? path.resolve(process.argv[2])
   : path.join(rootDir, 'vendor', 'openclaw-runtime', 'current');
 
-const extensionsDir = path.join(runtimeDir, 'extensions');
+const extensionsDir = path.join(runtimeDir, 'third-party-extensions');
 
 if (!fs.existsSync(extensionsDir)) {
   console.log('[precompile-extensions] No extensions directory found, skipping.');

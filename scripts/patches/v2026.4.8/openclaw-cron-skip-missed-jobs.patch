@@ -1,0 +1,294 @@
+diff --git a/src/config/types.cron.ts b/src/config/types.cron.ts
+index 3d6b8d2..df53573 100644
+--- a/src/config/types.cron.ts
++++ b/src/config/types.cron.ts
+@@ -27,6 +27,8 @@ export type CronFailureDestinationConfig = {
+ 
+ export type CronConfig = {
+   enabled?: boolean;
++  /** Skip startup catch-up for cron jobs that became due while the gateway was offline. */
++  skipMissedJobs?: boolean;
+   store?: string;
+   maxConcurrentRuns?: number;
+   /** Override default retry policy for one-shot jobs on transient errors. */
+diff --git a/src/config/zod-schema.ts b/src/config/zod-schema.ts
+index 96e5320..ccbdcc9 100644
+--- a/src/config/zod-schema.ts
++++ b/src/config/zod-schema.ts
+@@ -523,6 +523,7 @@ export const OpenClawSchema = z
+     cron: z
+       .object({
+         enabled: z.boolean().optional(),
++        skipMissedJobs: z.boolean().optional(),
+         store: z.string().optional(),
+         maxConcurrentRuns: z.number().int().positive().optional(),
+         retry: z
+diff --git a/src/config/schema.labels.ts b/src/config/schema.labels.ts
+index cc676f8..0c87326 100644
+--- a/src/config/schema.labels.ts
++++ b/src/config/schema.labels.ts
+@@ -627,6 +627,7 @@ export const FIELD_LABELS: Record<string, string> = {
+   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
+   cron: "Cron",
+   "cron.enabled": "Cron Enabled",
++  "cron.skipMissedJobs": "Cron Skip Missed Jobs",
+   "cron.store": "Cron Store Path",
+   "cron.maxConcurrentRuns": "Cron Max Concurrent Runs",
+   "cron.retry": "Cron Retry Policy",
+diff --git a/src/config/schema.help.ts b/src/config/schema.help.ts
+index 2d17925..b527b7e 100644
+--- a/src/config/schema.help.ts
++++ b/src/config/schema.help.ts
+@@ -1292,6 +1292,8 @@ export const FIELD_HELP: Record<string, string> = {
+   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
+   "cron.enabled":
+     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
++  "cron.skipMissedJobs":
++    "Skips startup catch-up for cron jobs that became due while the gateway was offline. Enable this when you want cron to resume from the next scheduled time after restart instead of replaying missed runs.",
+   "cron.store":
+     "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
+   "cron.maxConcurrentRuns":
+diff --git a/src/config/schema.help.quality.test.ts b/src/config/schema.help.quality.test.ts
+index e271d8b..0cc8c31 100644
+--- a/src/config/schema.help.quality.test.ts
++++ b/src/config/schema.help.quality.test.ts
+@@ -120,6 +120,7 @@ const TARGET_KEYS = [
+   "gateway.controlUi.dangerouslyDisableDeviceAuth",
+   "cron",
+   "cron.enabled",
++  "cron.skipMissedJobs",
+   "cron.store",
+   "cron.maxConcurrentRuns",
+   "cron.retry",
+diff --git a/src/config/schema.base.generated.ts b/src/config/schema.base.generated.ts
+index c98f955..f1140e4 100644
+--- a/src/config/schema.base.generated.ts
++++ b/src/config/schema.base.generated.ts
+@@ -19282,6 +19282,12 @@ export const CONFIG_SCHEMA_BASE_GENERATED = {
+             title: "Cron Enabled",
+             description:
+               "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
++          },
++          skipMissedJobs: {
++            type: "boolean",
++            title: "Cron Skip Missed Jobs",
++            description:
++              "Skips startup catch-up for cron jobs that became due while the gateway was offline. Enable this when you want cron to resume from the next scheduled time after restart instead of replaying missed runs.",
+           },
+           store: {
+             type: "string",
+@@ -25644,6 +25650,11 @@ export const CONFIG_FIELD_METADATA_GENERATED = {
+       help: "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
+       tags: ["automation"],
+     },
++    "cron.skipMissedJobs": {
++      label: "Cron Skip Missed Jobs",
++      help: "Skips startup catch-up for cron jobs that became due while the gateway was offline. Enable this when you want cron to resume from the next scheduled time after restart instead of replaying missed runs.",
++      tags: ["reliability", "automation"],
++    },
+     "cron.store": {
+       label: "Cron Store Path",
+       help: "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
+diff --git a/src/config/zod-schema.cron-retention.test.ts b/src/config/zod-schema.cron-retention.test.ts
+index 02e21b1..e9aaf45 100644
+--- a/src/config/zod-schema.cron-retention.test.ts
++++ b/src/config/zod-schema.cron-retention.test.ts
+@@ -6,6 +6,7 @@ describe("OpenClawSchema cron retention and run-log validation", () => {
+     expect(() =>
+       OpenClawSchema.parse({
+         cron: {
++          skipMissedJobs: true,
+           sessionRetention: "1h30m",
+           runLog: {
+             maxBytes: "5mb",
+@@ -16,6 +17,19 @@ describe("OpenClawSchema cron retention and run-log validation", () => {
+     ).not.toThrow();
+   });
+ 
++  it("accepts cron.skipMissedJobs", () => {
++    expect(() =>
++      OpenClawSchema.parse({
++        cron: {
++          skipMissedJobs: true,
++          runLog: {
++            keepLines: 2500,
++          },
++        },
++      }),
++    ).not.toThrow();
++  });
++
+   it("rejects invalid cron.sessionRetention", () => {
+     expect(() =>
+       OpenClawSchema.parse({
+diff --git a/src/cron/service/timer.ts b/src/cron/service/timer.ts
+index a6537dd..87e2588 100644
+--- a/src/cron/service/timer.ts
++++ b/src/cron/service/timer.ts
+@@ -958,7 +958,14 @@ async function planStartupCatchup(
+     0,
+     state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
+   );
+   return locked(state, async () => {
++    if (state.deps.cronConfig?.skipMissedJobs === true) {
++      state.deps.log.info(
++        { skipMissedJobs: true },
++        "cron: skipping missed jobs after restart",
++      );
++      return { candidates: [], deferredJobIds: [] };
++    }
+     await ensureLoaded(state, { skipRecompute: true });
+     if (!state.store) {
+       return { candidates: [], deferredJobIds: [] };
+diff --git a/src/cron/service.restart-catchup.test.ts b/src/cron/service.restart-catchup.test.ts
+index 13b98a0..f9f1f56 100644
+--- a/src/cron/service.restart-catchup.test.ts
++++ b/src/cron/service.restart-catchup.test.ts
+@@ -1,6 +1,7 @@
+ import fs from "node:fs/promises";
+ import path from "node:path";
+ import { describe, expect, it, vi } from "vitest";
++import type { CronConfig } from "../config/types.cron.js";
+ import { CronService } from "./service.js";
+ import { setupCronServiceSuite } from "./service.test-harness.js";
+ import { createCronServiceState } from "./service/state.js";
+@@ -21,6 +22,7 @@ describe("CronService restart catch-up", () => {
+     storePath: string;
+     enqueueSystemEvent: ReturnType<typeof vi.fn>;
+     requestHeartbeatNow: ReturnType<typeof vi.fn>;
++    cronConfig?: CronConfig;
+   }) {
+     return new CronService({
+       storePath: params.storePath,
+@@ -28,6 +30,7 @@ describe("CronService restart catch-up", () => {
+       log: noopLogger,
+       enqueueSystemEvent: params.enqueueSystemEvent as never,
+       requestHeartbeatNow: params.requestHeartbeatNow as never,
++      cronConfig: params.cronConfig,
+       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+     });
+   }
+@@ -53,7 +56,9 @@ describe("CronService restart catch-up", () => {
+       cron: CronService;
+       enqueueSystemEvent: ReturnType<typeof vi.fn>;
+       requestHeartbeatNow: ReturnType<typeof vi.fn>;
++      cronConfig?: CronConfig;
+     }) => Promise<void>,
++    opts?: { cronConfig?: CronConfig },
+   ) {
+     const store = await makeStorePath();
+     const enqueueSystemEvent = vi.fn();
+@@ -65,6 +70,7 @@ describe("CronService restart catch-up", () => {
+       storePath: store.storePath,
+       enqueueSystemEvent,
+       requestHeartbeatNow,
++      cronConfig: opts?.cronConfig,
+     });
+ 
+     try {
+@@ -194,6 +200,43 @@ describe("CronService restart catch-up", () => {
+     );
+   });
+ 
++  it("skips missed recurring jobs on startup when cron.skipMissedJobs is enabled", async () => {
++    const dueAt = Date.parse("2025-12-13T15:00:00.000Z");
++    const lastRunAt = Date.parse("2025-12-12T15:00:00.000Z");
++
++    await withRestartedCron(
++      [
++        {
++          id: "restart-skip-missed-job",
++          name: "daily digest",
++          enabled: true,
++          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
++          updatedAtMs: Date.parse("2025-12-12T15:00:00.000Z"),
++          schedule: { kind: "cron", expr: "0 15 * * *", tz: "UTC" },
++          sessionTarget: "main",
++          wakeMode: "next-heartbeat",
++          payload: { kind: "systemEvent", text: "digest now" },
++          state: {
++            nextRunAtMs: dueAt,
++            lastRunAtMs: lastRunAt,
++            lastStatus: "ok",
++          },
++        },
++      ],
++      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
++        expect(enqueueSystemEvent).not.toHaveBeenCalled();
++        expect(requestHeartbeatNow).not.toHaveBeenCalled();
++
++        const listedJobs = await cron.list({ includeDisabled: true });
++        const updated = listedJobs.find((job) => job.id === "restart-skip-missed-job");
++        expect(updated?.state.lastRunAtMs).toBe(lastRunAt);
++        expect(updated?.state.lastStatus).toBe("ok");
++        expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
++      },
++      { cronConfig: { skipMissedJobs: true } },
++    );
++  });
++
+   it("does not replay interrupted one-shot jobs on startup", async () => {
+     const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
+     const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");
+diff --git a/docs/automation/cron-jobs.md b/docs/automation/cron-jobs.md
+index 0bdbd31..5526932 100644
+--- a/docs/automation/cron-jobs.md
++++ b/docs/automation/cron-jobs.md
+@@ -341,6 +341,7 @@ no explicit per-job fallback list no longer falls through to the agent
+ {
+   cron: {
+     enabled: true,
++    skipMissedJobs: false,
+     store: "~/.openclaw/cron/jobs.json",
+     maxConcurrentRuns: 1,
+     retry: {
+@@ -360,6 +361,8 @@ no explicit per-job fallback list no longer falls through to the agent
+ 
+ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
+ 
++Skip startup catch-up: set `cron.skipMissedJobs: true` to resume from the next scheduled time after a restart without replaying missed runs.
++
+ **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.
+ 
+ **Recurring retry**: exponential backoff (30s to 60m) between retries. Backoff resets after the next successful run.
+diff --git a/docs/gateway/configuration.md b/docs/gateway/configuration.md
+index 649a084..45b6e31 100644
+--- a/docs/gateway/configuration.md
++++ b/docs/gateway/configuration.md
+@@ -391,6 +391,7 @@
+     {
+       cron: {
+         enabled: true,
++        skipMissedJobs: false,
+         maxConcurrentRuns: 2,
+         sessionRetention: "24h",
+         runLog: {
+@@ -401,6 +402,7 @@
+     }
+     ```
+ 
++    - `skipMissedJobs`: skip startup catch-up for cron jobs that became due while the gateway was offline.
+     - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
+     - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
+diff --git a/docs/gateway/configuration-reference.md b/docs/gateway/configuration-reference.md
+index e20ee78..7ca6e52 100644
+--- a/docs/gateway/configuration-reference.md
++++ b/docs/gateway/configuration-reference.md
+@@ -3542,6 +3542,7 @@
+ {
+   cron: {
+     enabled: true,
++    skipMissedJobs: false,
+     maxConcurrentRuns: 2,
+     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
+     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
+@@ -3554,7 +3555,8 @@
+   },
+ }
+ ```
+ 
++- `skipMissedJobs`: when `true`, skip startup catch-up and resume from the next scheduled run after restart instead of replaying missed jobs.
+ - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+ - `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
+ - `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.

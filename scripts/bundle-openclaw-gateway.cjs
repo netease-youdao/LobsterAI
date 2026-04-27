@@ -93,6 +93,7 @@ esbuild
   .build({
     entryPoints: [entryPath],
     bundle: true,
+    minify: true,
     platform: 'node',
     format: 'esm',
     outfile: bundleOutPath,

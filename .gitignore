@@ -51,3 +51,4 @@ sandbox/
 **/**/post-commit
 openspec/
 .superpowers/
+.diagram/

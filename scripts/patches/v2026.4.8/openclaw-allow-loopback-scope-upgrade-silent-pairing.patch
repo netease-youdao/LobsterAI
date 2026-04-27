@@ -1,0 +1,17 @@
+--- a/src/gateway/server/ws-connection/message-handler.ts
++++ b/src/gateway/server/ws-connection/message-handler.ts
+@@ -893,7 +893,13 @@
+               ...clientPairingMetadata,
+               ...(bootstrapPairingRoles ? { roles: bootstrapPairingRoles } : {}),
+               silent:
+-                reason === "scope-upgrade"
++                // LobsterAI patch: allow silent scope-upgrade for non-browser
++                // loopback connections (internal tool-bind clients like cron).
++                // PR #54694 blocked ALL silent scope-upgrades to fix a Control UI
++                // escalation vulnerability (#50640), but that also broke internal
++                // loopback tool calls that need operator.admin.  Only force
++                // interactive approval when the request has a browser origin.
++                reason === "scope-upgrade" && hasBrowserOriginHeader
+                   ? false
+                   : allowSilentLocalPairing || allowSilentBootstrapPairing,
+             });

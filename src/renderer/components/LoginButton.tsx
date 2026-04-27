@@ -259,7 +259,7 @@ const LoginButton: React.FC = () => {
       <button
         type="button"
         onClick={handleClick}
-        className="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors cursor-pointer"
+        className="w-full inline-flex items-center justify-start gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors cursor-pointer"
       >
         {isLoggedIn ? (
           <>

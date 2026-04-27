@@ -1,0 +1,218 @@
+diff --git a/src/agents/pi-embedded-runner/deepseek-stream-wrappers.ts b/src/agents/pi-embedded-runner/deepseek-stream-wrappers.ts
+new file mode 100644
+index 0000000000..2e2c2f7a1b
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/deepseek-stream-wrappers.ts
+@@ -0,0 +1,74 @@
++import type { StreamFn } from "@mariozechner/pi-agent-core";
++import { streamSimple } from "@mariozechner/pi-ai";
++import type { ThinkLevel } from "../../auto-reply/thinking.js";
++
++type DeepSeekThinkingType = "enabled" | "disabled";
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return !!value && typeof value === "object" && !Array.isArray(value);
++}
++
++function isDeepSeekV4ModelId(modelId: unknown): boolean {
++  return typeof modelId === "string" && /^deepseek-v4(?:[-_.]|$)/i.test(modelId.trim());
++}
++
++function resolveDeepSeekThinkingType(thinkingLevel?: ThinkLevel): DeepSeekThinkingType | undefined {
++  if (!thinkingLevel) {
++    return undefined;
++  }
++  return thinkingLevel === "off" ? "disabled" : "enabled";
++}
++
++function isDeepSeekV4Model(model: {
++  provider?: unknown;
++  id?: unknown;
++}): boolean {
++  return (
++    model.provider === "deepseek" &&
++    isDeepSeekV4ModelId(model.id)
++  );
++}
++
++/**
++ * DeepSeek V4 defaults to thinking mode. In tool-use turns, DeepSeek requires
++ * the previous assistant `reasoning_content` to be replayed. OpenClaw's default
++ * think level is `off`, so make that intent explicit for DeepSeek V4 instead of
++ * letting the provider enter thinking mode implicitly and then reject tool
++ * continuations that do not carry reasoning_content.
++ */
++export function createDeepSeekThinkingModeWrapper(
++  baseStreamFn: StreamFn | undefined,
++  thinkingLevel?: ThinkLevel,
++): StreamFn {
++  const underlying = baseStreamFn ?? streamSimple;
++  const thinkingType = resolveDeepSeekThinkingType(thinkingLevel);
++
++  return (model, context, options) => {
++    if (!thinkingType || !isDeepSeekV4Model(model)) {
++      return underlying(model, context, options);
++    }
++
++    const originalOnPayload = options?.onPayload;
++    return underlying(model, context, {
++      ...options,
++      onPayload: (payload) => {
++        if (isRecord(payload)) {
++          const hasExplicitThinking = Object.hasOwn(payload, "thinking");
++          if (!hasExplicitThinking || payload.thinking === undefined) {
++            payload.thinking = { type: thinkingType };
++          }
++
++          if (payload.thinking && isRecord(payload.thinking)) {
++            const type = payload.thinking.type;
++            if (type === "disabled") {
++              delete payload.reasoning;
++              delete payload.reasoning_effort;
++              delete payload.reasoningEffort;
++            }
++          }
++        }
++        return originalOnPayload?.(payload, model);
++      },
++    });
++  };
++}
+diff --git a/src/agents/pi-embedded-runner/extra-params.ts b/src/agents/pi-embedded-runner/extra-params.ts
+index 610b69d834..8d8f3c1a55 100644
+--- a/src/agents/pi-embedded-runner/extra-params.ts
++++ b/src/agents/pi-embedded-runner/extra-params.ts
+@@ -9,6 +9,7 @@ import {
+   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
+ } from "../../plugins/provider-runtime.js";
++import { createDeepSeekThinkingModeWrapper } from "./deepseek-stream-wrappers.js";
+ import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
+ import { log } from "./logger.js";
+ import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
+@@ -412,7 +413,15 @@ function applyPostPluginStreamWrappers(
+   // visible reply path because it does not emit native Anthropic thinking
+   // blocks. Disable thinking unless an earlier wrapper already set it.
+   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+ 
++  // DeepSeek V4 defaults to thinking mode. Respect the OpenClaw thinking-level
++  // intent explicitly so tool-use continuations do not fail DeepSeek's
++  // reasoning_content replay validation when the user selected thinking=off.
++  ctx.agent.streamFn = createDeepSeekThinkingModeWrapper(
++    ctx.agent.streamFn,
++    ctx.thinkingLevel,
++  );
++
+   const rawParallelToolCalls = resolveAliasedParamValue(
+     [ctx.resolvedExtraParams, ctx.override],
+     "parallel_tool_calls",
+diff --git a/src/agents/pi-embedded-runner-extraparams.test.ts b/src/agents/pi-embedded-runner-extraparams.test.ts
+index 9d2dfe0e1a..08e52f2d15 100644
+--- a/src/agents/pi-embedded-runner-extraparams.test.ts
++++ b/src/agents/pi-embedded-runner-extraparams.test.ts
+@@ -878,6 +878,105 @@ describe("applyExtraParamsToAgent", () => {
+     expect(payloads[0]?.thinking).toBe("off");
+   });
+ 
++  it("disables DeepSeek V4 thinking when the OpenClaw thinking level is off", () => {
++    const payloads: Record<string, unknown>[] = [];
++    const baseStreamFn: StreamFn = (_model, _context, options) => {
++      const payload: Record<string, unknown> = {};
++      options?.onPayload?.(payload, _model);
++      payloads.push(payload);
++      return {} as ReturnType<StreamFn>;
++    };
++    const agent = { streamFn: baseStreamFn };
++
++    applyExtraParamsToAgent(
++      agent,
++      undefined,
++      "deepseek",
++      "deepseek-v4-flash",
++      undefined,
++      "off",
++    );
++
++    const model = {
++      api: "openai-completions",
++      provider: "deepseek",
++      id: "deepseek-v4-flash",
++    } as Model<"openai-completions">;
++    const context: Context = { messages: [] };
++    void agent.streamFn?.(model, context, {});
++
++    expect(payloads).toHaveLength(1);
++    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
++  });
++
++  it("enables DeepSeek V4 thinking when the OpenClaw thinking level is enabled", () => {
++    const payloads: Record<string, unknown>[] = [];
++    const baseStreamFn: StreamFn = (_model, _context, options) => {
++      const payload: Record<string, unknown> = {};
++      options?.onPayload?.(payload, _model);
++      payloads.push(payload);
++      return {} as ReturnType<StreamFn>;
++    };
++    const agent = { streamFn: baseStreamFn };
++
++    applyExtraParamsToAgent(
++      agent,
++      undefined,
++      "deepseek",
++      "deepseek-v4-pro",
++      undefined,
++      "medium",
++    );
++
++    const model = {
++      api: "openai-completions",
++      provider: "deepseek",
++      id: "deepseek-v4-pro",
++    } as Model<"openai-completions">;
++    const context: Context = { messages: [] };
++    void agent.streamFn?.(model, context, {});
++
++    expect(payloads).toHaveLength(1);
++    expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
++  });
++
++  it("does not override explicit DeepSeek V4 thinking payloads", () => {
++    const payloads: Record<string, unknown>[] = [];
++    const baseStreamFn: StreamFn = (_model, _context, options) => {
++      const payload: Record<string, unknown> = {
++        thinking: { type: "enabled" },
++        reasoning_effort: "high",
++      };
++      options?.onPayload?.(payload, _model);
++      payloads.push(payload);
++      return {} as ReturnType<StreamFn>;
++    };
++    const agent = { streamFn: baseStreamFn };
++
++    applyExtraParamsToAgent(
++      agent,
++      undefined,
++      "deepseek",
++      "deepseek-v4-flash",
++      undefined,
++      "off",
++    );
++
++    const model = {
++      api: "openai-completions",
++      provider: "deepseek",
++      id: "deepseek-v4-flash",
++    } as Model<"openai-completions">;
++    const context: Context = { messages: [] };
++    void agent.streamFn?.(model, context, {});
++
++    expect(payloads).toHaveLength(1);
++    expect(payloads[0]).toEqual({
++      thinking: { type: "enabled" },
++      reasoning_effort: "high",
++    });
++  });
++
+   it("keeps anthropic tool payloads native for Kimi", () => {
+     const payloads: Record<string, unknown>[] = [];
+     const baseStreamFn: StreamFn = (_model, _context, options) => {

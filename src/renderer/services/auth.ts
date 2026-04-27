@@ -62,7 +62,7 @@ class AuthService {
   }
 
   /**
-   * Fetch login URL from overmind, fallback to server base + /login.
+   * Fetch login URL from overmind, fallback to Portal login page.
    */
   private async fetchLoginUrl(): Promise<string> {
     const { getLoginOvermindUrl } = await import('./endpoints');
@@ -82,8 +82,9 @@ class AuthService {
     } catch (e) {
       console.error('[Auth] Failed to fetch login URL from overmind:', e);
     }
-    // Fallback: let main process use its server base URL
-    return '';
+    // Fallback: use Portal login page directly
+    const { getPortalLoginUrl } = await import('./endpoints');
+    return getPortalLoginUrl();
   }
 
   /**

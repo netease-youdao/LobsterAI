@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import http from 'http';
 import { session } from 'electron';
 import {
@@ -128,8 +129,50 @@ function sanitizeToolsForGemini(
 
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
+let proxyAuthToken: string | null = null;
 let upstreamConfig: OpenAICompatUpstreamConfig | null = null;
 let lastProxyError: string | null = null;
+
+// ── DNS Rebinding protection: Host header validation ──
+
+const ALLOWED_PROXY_HOSTS = new Set([
+  '127.0.0.1',
+  'localhost',
+  '[::1]',
+  '::1',
+]);
+
+/**
+ * Validate that the request Host header refers to a loopback address.
+ * DNS Rebinding attacks send requests with the attacker's domain in the
+ * Host header — rejecting those blocks the entire attack class.
+ *
+ * Requests without a Host header (e.g. HTTP/1.0 clients, non-browser
+ * callers) are allowed because browsers always include the header.
+ */
+export function isAllowedProxyHost(req: http.IncomingMessage): boolean {
+  const hostHeader = req.headers.host;
+  if (!hostHeader) {
+    return true;
+  }
+
+  let hostName: string;
+  if (hostHeader.startsWith('[')) {
+    // IPv6 bracket notation: [::1]:12345
+    const bracketEnd = hostHeader.indexOf(']');
+    hostName = bracketEnd >= 0
+      ? hostHeader.slice(0, bracketEnd + 1)
+      : hostHeader;
+  } else {
+    // IPv4 or hostname: 127.0.0.1:12345 or localhost:12345
+    const colonIndex = hostHeader.lastIndexOf(':');
+    hostName = colonIndex >= 0
+      ? hostHeader.slice(0, colonIndex)
+      : hostHeader;
+  }
+
+  return ALLOWED_PROXY_HOSTS.has(hostName);
+}
 /**
  * Per-provider token refreshers.  When the proxy receives a 401/403 from an
  * upstream, it looks up the refresher for the current provider and retries once
@@ -2222,17 +2265,35 @@ async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
 ): Promise<void> {
+  // DNS Rebinding protection: reject requests with non-loopback Host header
+  if (!isAllowedProxyHost(req)) {
+    console.warn(`[CoworkProxy] Rejected request with disallowed Host header: ${req.headers.host}`);
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('Forbidden');
+    return;
+  }
+
   const method = (req.method || 'GET').toUpperCase();
   const url = new URL(req.url || '/', `http://${LOCAL_HOST}`);
 
   if (method === 'GET' && url.pathname === '/healthz') {
-    writeJSON(res, 200, {
-      ok: true,
-      running: Boolean(proxyServer),
-      hasUpstream: Boolean(upstreamConfig),
-      lastError: lastProxyError,
-    });
+    writeJSON(res, 200, { ok: true, status: 'live' });
     return;
+  }
+
+  // Token authentication: all endpoints except /healthz require a valid Bearer token
+  if (proxyAuthToken) {
+    const authHeader = req.headers.authorization || '';
+    const bearerToken = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : '';
+    if (bearerToken !== proxyAuthToken) {
+      writeJSON(res, 401, createAnthropicErrorBody(
+        'Unauthorized: invalid or missing proxy token',
+        'authentication_error'
+      ));
+      return;
+    }
   }
 
   console.log(`[CoworkProxy] ${method} ${url.pathname}`);
@@ -2776,6 +2837,8 @@ export async function startCoworkOpenAICompatProxy(): Promise<void> {
     return;
   }
 
+  proxyAuthToken = crypto.randomBytes(24).toString('hex');
+
   await new Promise<void>((resolve, reject) => {
     const server = http.createServer((req, res) => {
       void handleRequest(req, res).catch((error) => {
@@ -2800,7 +2863,7 @@ export async function startCoworkOpenAICompatProxy(): Promise<void> {
         reject(new Error('Failed to bind OpenAI compatibility proxy port'));
         return;
       }
-
+      console.log(`[CoworkProxy] Proxy server started on port ${addr.port}`);
       proxyServer = server;
       proxyPort = addr.port;
       lastProxyError = null;
@@ -2817,6 +2880,7 @@ export async function stopCoworkOpenAICompatProxy(): Promise<void> {
   const server = proxyServer;
   proxyServer = null;
   proxyPort = null;
+  proxyAuthToken = null;
 
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
@@ -2848,6 +2912,10 @@ export function getCoworkOpenAICompatProxyBaseURL(target: OpenAICompatProxyTarge
   }
   const host = target === 'sandbox' ? SANDBOX_HOST : LOCAL_HOST;
   return `http://${host}:${proxyPort}`;
+}
+
+export function getCoworkOpenAICompatProxyToken(): string | null {
+  return proxyAuthToken;
 }
 
 export function getCoworkOpenAICompatProxyStatus(): OpenAICompatProxyStatus {

@@ -65,7 +65,7 @@ Uses strict process isolation with IPC communication.
 **Main Process** (`src/main/main.ts`):
 - Window lifecycle management
 - SQLite storage via `better-sqlite3` (`src/main/sqliteStore.ts`)
-- Agent engine routing (`src/main/libs/agentEngine/coworkEngineRouter.ts`) - dispatches to `claudeRuntimeAdapter.ts` (built-in) or `openclawRuntimeAdapter.ts` (OpenClaw)
+- Agent engine routing (`src/main/libs/agentEngine/coworkEngineRouter.ts`) - dispatches to `openclawRuntimeAdapter.ts` (OpenClaw)
 - IM gateways (`src/main/im/`) - WeChat, WeCom, DingTalk, Feishu, QQ, Telegram, Discord, NetEase IM, NetEase Bee, POPO
 - Skill management (`src/main/skillManager.ts`)
 - IPC handlers for store, cowork, and API operations (40+ channels)
@@ -90,15 +90,10 @@ src/main/
 ├── im/                  # IM gateway integrations (WeChat/WeCom/DingTalk/Feishu/QQ/Telegram/Discord/POPO)
 └── libs/
     ├── agentEngine/
-    │   ├── coworkEngineRouter.ts    # Routes to built-in or OpenClaw runtime
-    │   ├── claudeRuntimeAdapter.ts  # Built-in Claude Agent SDK adapter
+    │   ├── coworkEngineRouter.ts    # Routes to OpenClaw runtime
     │   └── openclawRuntimeAdapter.ts # OpenClaw gateway adapter
-    ├── coworkRunner.ts          # Claude Agent SDK execution engine
-    ├── claudeSdk.ts             # SDK loader utilities
     ├── openclawEngineManager.ts # OpenClaw runtime lifecycle (install/start/status)
     ├── openclawConfigSync.ts    # Syncs cowork config → OpenClaw config files
-    ├── coworkMemoryExtractor.ts # Extracts memory changes from conversations
-    └── coworkMemoryJudge.ts     # Validates memory candidates with scoring/LLM
 
 src/renderer/
 ├── types/cowork.ts      # Cowork type definitions
@@ -140,18 +135,16 @@ The Cowork feature provides AI-assisted coding sessions:
 - `auto` - Automatically choose based on context
 - `local` - Run tools directly on the local machine
 
-**Agent Engines** (configured via `agentEngine` in cowork config):
-- `openclaw` - **Primary engine**. OpenClaw gateway (`openclawRuntimeAdapter.ts`); requires the bundled OpenClaw runtime to be running. Engine lifecycle managed by `OpenClawEngineManager` with states: `not_installed → ready → starting → running | error`
-- `yd_cowork` - **Deprecated**. Legacy built-in adapter wrapping the Claude Agent SDK (`claudeRuntimeAdapter.ts`). Code still present but no longer the recommended engine.
+**Agent Engine** (configured via `agentEngine` in cowork config):
+- `openclaw` - OpenClaw gateway (`openclawRuntimeAdapter.ts`); requires the bundled OpenClaw runtime to be running. Engine lifecycle managed by `OpenClawEngineManager` with states: `not_installed → ready → starting → running | error`
 
-Both engines expose identical stream events through `CoworkEngineRouter`, so the renderer is engine-agnostic. Engine-specific IPC: `openclaw:engine:*` channels manage runtime lifecycle separately from `cowork:*` session channels.
+The `CoworkEngineRouter` exposes stream events to the renderer, which is engine-agnostic. Engine-specific IPC: `openclaw:engine:*` channels manage runtime lifecycle separately from `cowork:*` session channels.
 
 **Memory System**: File-based persistent memory stored in the OpenClaw working directory:
 - `MEMORY.md` - Durable facts, preferences, and decisions; loaded automatically at every session start.
 - `memory/YYYY-MM-DD.md` - Daily notes for recent context.
 - `USER.md` / `SOUL.md` - User profile and agent personality files read at session startup.
 - Writes happen via the agent's `write` tool when the user issues an explicit "remember" instruction or the agent self-records important findings. No background extraction or confidence scoring.
-- `coworkMemoryExtractor.ts` / `coworkMemoryJudge.ts` - Legacy extraction pipeline used only by the deprecated built-in engine; not active when OpenClaw is the primary engine.
 - GUI in Settings panel allows manual add/edit/delete of `MEMORY.md` entries.
 
 **Stream Events** (IPC from main to renderer):
@@ -219,7 +212,6 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 ### Key Dependencies
 
 - OpenClaw (bundled runtime under `Resources/cfmind`) - Primary agent engine for cowork sessions
-- `@anthropic-ai/claude-agent-sdk` - Legacy built-in engine dependency (deprecated, code still present)
 - `better-sqlite3` - SQLite database for persistence
 - `react-markdown`, `remark-gfm`, `rehype-katex` - Markdown rendering with math support
 - `mermaid` - Diagram rendering
