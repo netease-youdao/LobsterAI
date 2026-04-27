@@ -24,6 +24,8 @@ export interface AppConfig {
   language: 'zh' | 'en';
   // 是否使用系统代理
   useSystemProxy: boolean;
+  // 是否启用 SQLite 自动备份与恢复
+  sqliteAutoBackupEnabled?: boolean;
   // 语言初始化标记 (用于判断是否是首次启动)
   language_initialized?: boolean;
   // 应用配置
@@ -77,6 +79,7 @@ export const defaultConfig: AppConfig = {
   theme: 'system',
   language: 'zh',
   useSystemProxy: false,
+  sqliteAutoBackupEnabled: false,
   app: {
     port: 3000,
     isDevelopment: process.env.NODE_ENV === 'development',
@@ -99,6 +102,8 @@ export const CONFIG_KEYS = {
   SKILLS: 'skills',
 };
 
+// 模型提供商分类
+export const EN_PRIORITY_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
 // Provider lists derived from ProviderRegistry — single source of truth
 export const CHINA_PROVIDERS = [...ProviderRegistry.idsByRegion('china')] as const;
 export const GLOBAL_PROVIDERS = ProviderRegistry.idsByRegion('global');
@@ -137,5 +142,7 @@ export const getProviderDisplayName = (
       : '';
     return name || getCustomProviderDefaultName(providerKey);
   }
+  const def = ProviderRegistry.get(providerKey);
+  if (def) return def.label;
   return providerKey.charAt(0).toUpperCase() + providerKey.slice(1);
 };

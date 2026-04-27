@@ -8,6 +8,7 @@ test('defaults hidden OpenClaw session policy to thirty days', () => {
   expect(state.config.openClawSessionPolicy).toEqual({
     keepAlive: '30d',
   });
+  expect(state.config.skipMissedJobs).toBe(true);
 });
 
 test('setConfig preserves loaded OpenClaw session policy', () => {
@@ -22,6 +23,13 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
     skipMissedJobs: false,
+    embeddingEnabled: false,
+    embeddingProvider: 'openai',
+    embeddingModel: '',
+    embeddingLocalModelPath: '',
+    embeddingVectorWeight: 0.7,
+    embeddingRemoteBaseUrl: '',
+    embeddingRemoteApiKey: '',
     openClawSessionPolicy: {
       keepAlive: '365d',
     },

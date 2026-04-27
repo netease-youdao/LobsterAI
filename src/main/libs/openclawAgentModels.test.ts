@@ -118,6 +118,36 @@ describe('buildManagedAgentEntries', () => {
       model: { primary: 'anthropic/claude-sonnet-4' },
     });
   });
+
+  test('sets explicit workspace for non-main agents when stateDir is provided', () => {
+    const result = buildManagedAgentEntries({
+      agents: [
+        {
+          id: 'crab-boss',
+          name: 'CrabBoss',
+          description: '',
+          systemPrompt: '',
+          identity: '',
+          model: 'openai/gpt-4o',
+          icon: '🦀',
+          skillIds: [],
+          enabled: true,
+          isDefault: false,
+          source: 'custom',
+          presetId: '',
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ],
+      fallbackPrimaryModel: 'anthropic/claude-sonnet-4',
+      stateDir: '/mock/state',
+    });
+
+    expect(result[0]).toMatchObject({
+      id: 'crab-boss',
+      workspace: expect.stringContaining('workspace-crab-boss'),
+    });
+  });
 });
 
 describe('parsePrimaryModelRef', () => {

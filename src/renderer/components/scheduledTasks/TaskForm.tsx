@@ -73,6 +73,25 @@ function isIMChannel(channel: string): boolean {
   return PlatformRegistry.isIMChannel(channel);
 }
 
+function conversationOptionMatchesValue(
+  channel: string,
+  optionConversationId: string,
+  selectedValue: string,
+): boolean {
+  const optionId = optionConversationId.trim();
+  const value = selectedValue.trim();
+  if (!optionId || !value) return false;
+  if (optionId === value) return true;
+
+  const platform = PlatformRegistry.platformOfChannel(channel);
+  if (platform === 'nim') {
+    if (optionId.endsWith(`:${value}`)) return true;
+    if (optionId.endsWith(`|${value}`)) return true;
+  }
+
+  return false;
+}
+
 function createFormState(task?: ScheduledTask): FormState {
   if (!task) return { ...DEFAULT_FORM_STATE, ...nowDefaults() };
 
@@ -185,8 +204,15 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
     }
 
     let cancelled = false;
+    const selectedChannelOption = channelOptions.find(
+      (option) => option.value === form.notifyChannel && option.accountId === form.notifyAccountId,
+    );
     setConversationsLoading(true);
-    void scheduledTaskService.listChannelConversations(form.notifyChannel, form.notifyAccountId).then((result) => {
+    void scheduledTaskService.listChannelConversations(
+      form.notifyChannel,
+      form.notifyAccountId,
+      selectedChannelOption?.filterAccountId ?? form.notifyAccountId,
+    ).then((result) => {
       if (cancelled) return;
       setConversations(result);
       setConversationsLoading(false);
@@ -200,7 +226,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.notifyChannel, form.notifyAccountId]);
+  }, [form.notifyChannel, form.notifyAccountId, channelOptions]);
 
   const updateForm = (patch: Partial<FormState>) => {
     setForm((current) => ({ ...current, ...patch }));
@@ -548,6 +574,13 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
 
   const renderNotifyRow = () => {
     const selectedLogo = getChannelLogo(form.notifyChannel);
+    const selectedConversation = conversations.find(
+      (conv) => conversationOptionMatchesValue(form.notifyChannel, conv.conversationId, form.notifyTo),
+    );
+    const selectedConversationLabel = selectedConversation
+      ? selectedConversation.conversationId
+      : form.notifyTo;
+
     return (
       <div>
         <label className={labelClass}>{i18nService.t('scheduledTasksFormNotifyChannel')}</label>
@@ -636,7 +669,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
                 <span className="truncate text-sm">
                   {conversationsLoading
                     ? i18nService.t('scheduledTasksFormNotifyConversationLoading')
-                    : form.notifyTo || i18nService.t('scheduledTasksFormNotifyConversationNone')}
+                    : selectedConversationLabel || i18nService.t('scheduledTasksFormNotifyConversationNone')}
                 </span>
                 <svg className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${convDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -649,15 +682,22 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDi
                       {i18nService.t('scheduledTasksFormNotifyConversationNone')}
                     </div>
                   ) : (
-                    conversations.map((conv) => (
+                    conversations.map((conv) => {
+                      const isActive = conversationOptionMatchesValue(
+                        form.notifyChannel,
+                        conv.conversationId,
+                        form.notifyTo,
+                      );
+                      return (
                       <div
                         key={conv.conversationId}
-                        className={`px-3 py-2 text-sm cursor-pointer hover:bg-surface-raised transition-colors truncate ${form.notifyTo === conv.conversationId ? 'bg-surface-raised text-foreground' : 'text-foreground'}`}
+                        className={`px-3 py-2 text-sm cursor-pointer hover:bg-surface-raised transition-colors truncate ${isActive ? 'bg-surface-raised text-foreground' : 'text-foreground'}`}
                         onClick={() => { updateForm({ notifyTo: conv.conversationId }); setConvDropdownOpen(false); }}
                       >
                         {conv.conversationId}
                       </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               )}

@@ -1,4 +1,4 @@
-import { ArrowPathIcon } from '@heroicons/react/20/solid';
+import { ArrowPathIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import {
   ArrowDownTrayIcon,
   CheckCircleIcon,
@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
+import type { SkillSecurityReport as SkillSecurityReportData } from '../../../main/libs/skillSecurity/skillSecurityTypes';
 import { i18nService } from '../../services/i18n';
 import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -80,7 +81,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [skillPendingDelete, setSkillPendingDelete] = useState<Skill | null>(null);
   const [isDeletingSkill, setIsDeletingSkill] = useState(false);
-  const [securityReport, setSecurityReport] = useState<any>(null);
+  const [securityReport, setSecurityReport] = useState<SkillSecurityReportData | null>(null);
   const [pendingInstallId, setPendingInstallId] = useState<string | null>(null);
   const [isConfirmingInstall, setIsConfirmingInstall] = useState(false);
   const [upgradeState, setUpgradeState] = useState<{
@@ -189,7 +190,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   }, [selectedSkill, selectedMarketplaceSkill]);
 
   const filteredSkills = useMemo(() => {
-    const query = skillSearchQuery.toLowerCase();
+    const query = skillSearchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
     return skills.filter(skill => {
       const matchesSearch = skill.name.toLowerCase().includes(query)
         || skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description).toLowerCase().includes(query);
@@ -198,7 +199,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   }, [skills, skillSearchQuery]);
 
   const filteredMarketplaceSkills = useMemo(() => {
-    const query = skillSearchQuery.toLowerCase();
+    const query = skillSearchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
     let results = marketplaceSkills;
     if (query) {
       results = results.filter(skill => {
@@ -551,8 +552,17 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             placeholder={i18nService.t('searchSkills')}
             value={skillSearchQuery}
             onChange={(e) => setSkillSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+            className="w-full pl-9 pr-8 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
           />
+          {skillSearchQuery && (
+            <button
+              type="button"
+              onClick={() => setSkillSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-secondary hover:text-primary transition-colors"
+            >
+              <XCircleIconSolid className="h-4 w-4" />
+            </button>
+          )}
         </div>
         <div className="relative">
           <button
@@ -733,7 +743,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                     className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
                       readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
                     } ${
-                      skill.enabled ? 'bg-primary' : 'bg-border'
+                      skill.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
                     }`}
                     onClick={(e) => { e.stopPropagation(); if (!readOnly) handleToggleSkill(skill.id); }}
                   >
@@ -1110,7 +1120,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
                   readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
                 } ${
-                  selectedSkill.enabled ? 'bg-primary' : 'bg-border'
+                  selectedSkill.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
                 }`}
                 onClick={() => {
                   if (readOnly) return;

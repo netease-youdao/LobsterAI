@@ -1,15 +1,19 @@
-import { test, expect } from 'vitest';
+import { expect,test } from 'vitest';
+
 import {
+  isReminderSystemTurn,
   looksLikeIMScheduledTaskCandidate,
   normalizeDetectedScheduledTaskRequest,
-  isReminderSystemTurn,
 } from './imScheduledTaskHandler';
 
 test('normalizes model-detected IM reminder requests into direct cron.add inputs', () => {
+  const scheduleAtInput = '2026-03-15T16:30:00+08:00';
+  const runAt = new Date(scheduleAtInput);
+  const expectedClock = '16:30';
   const parsed = normalizeDetectedScheduledTaskRequest(
     {
       shouldCreateTask: true,
-      scheduleAt: '2026-03-15T16:30:00+08:00',
+      scheduleAt: scheduleAtInput,
       reminderBody: '喝饮料',
       taskName: '喝饮料提醒',
     },
@@ -23,8 +27,9 @@ test('normalizes model-detected IM reminder requests into direct cron.add inputs
   expect(parsed!.taskName).toBe('喝饮料提醒');
   expect(parsed!.payloadText).toBe('⏰ 提醒：喝饮料');
   expect(parsed!.delayLabel).toBe('2分钟后');
-  expect(parsed!.scheduleAt).toBe('2026-03-15T16:30:00+08:00');
-  expect(parsed!.confirmationText).toMatch(/2分钟后（16:30）会提醒你喝饮料/u);
+  expect(parsed!.runAt.toISOString()).toBe(runAt.toISOString());
+  expect(new Date(parsed!.scheduleAt).toISOString()).toBe(runAt.toISOString());
+  expect(parsed!.confirmationText).toMatch(new RegExp(`2分钟后（${expectedClock}）会提醒你喝饮料`, 'u'));
 });
 
 test('only uses heuristic as a cheap reminder candidate prefilter', () => {

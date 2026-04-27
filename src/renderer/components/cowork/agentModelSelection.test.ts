@@ -24,6 +24,20 @@ describe('resolveAgentModelSelection', () => {
     expect(result.hasInvalidExplicitModel).toBe(false);
   });
 
+  test('prefers explicit session model override over agent model', () => {
+    const result = resolveAgentModelSelection({
+      sessionModel: 'openai/gpt-4o',
+      agentModel: 'anthropic/claude-sonnet-4',
+      availableModels: models,
+      fallbackModel: models[0],
+      engine: 'openclaw',
+    });
+
+    expect(result.selectedModel?.id).toBe('gpt-4o');
+    expect(result.usesFallback).toBe(false);
+    expect(result.hasInvalidExplicitModel).toBe(false);
+  });
+
   test('falls back to the global model in openclaw when agent model is empty', () => {
     const result = resolveAgentModelSelection({
       agentModel: '',
@@ -37,15 +51,15 @@ describe('resolveAgentModelSelection', () => {
     expect(result.hasInvalidExplicitModel).toBe(false);
   });
 
-  test('uses fallback model outside openclaw without marking fallback mode', () => {
+  test('preserves explicit model resolution for the only supported engine', () => {
     const result = resolveAgentModelSelection({
       agentModel: 'anthropic/claude-sonnet-4',
       availableModels: models,
       fallbackModel: models[0],
-      engine: 'yd_cowork',
+      engine: 'openclaw',
     });
 
-    expect(result.selectedModel?.id).toBe('gpt-4o');
+    expect(result.selectedModel?.id).toBe('claude-sonnet-4');
     expect(result.usesFallback).toBe(false);
     expect(result.hasInvalidExplicitModel).toBe(false);
   });

@@ -53,6 +53,15 @@ test('infer: telegram channel key -> im origin + im_session binding', () => {
 
 test('infer: dingtalk connector channel key -> im origin', () => {
   const result = inferOriginAndBinding(
+    makeTask({ sessionKey: 'agent:main:openai-user:dingtalk-connector:acct1:user:peer1' })
+  );
+  expect(result.origin.kind).toBe(OriginKind.IM);
+  expect((result.origin as any).platform).toBe('dingtalk');
+  expect(result.binding.kind).toBe(BindingKind.IMSession);
+});
+
+test('infer: legacy dingtalk channel key remains readable', () => {
+  const result = inferOriginAndBinding(
     makeTask({ sessionKey: 'agent:main:openai-user:dingtalk:acct1:user:peer1' })
   );
   expect(result.origin.kind).toBe(OriginKind.IM);

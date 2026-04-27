@@ -62,6 +62,18 @@ if (patchFiles.length === 0) {
 
 console.log(`[apply-openclaw-patches] Applying patches for openclaw ${openclawVersion} (${patchFiles.length} file(s))`);
 
+// Reset openclaw source to a clean tag state before applying patches.
+// This removes stale patches left by a different LobsterAI branch that may have
+// applied different patches for the same openclaw version.
+try {
+  execFileSync('git', ['reset', 'HEAD', '.'], { cwd: openclawSrc, stdio: 'pipe' });
+  execFileSync('git', ['checkout', '.'], { cwd: openclawSrc, stdio: 'pipe' });
+  execFileSync('git', ['clean', '-fd'], { cwd: openclawSrc, stdio: 'pipe' });
+  console.log('[apply-openclaw-patches] Reset openclaw source to clean state before patching.');
+} catch (err) {
+  console.warn(`[apply-openclaw-patches] Warning: failed to reset openclaw source: ${err.message}`);
+}
+
 let applied = 0;
 let skipped = 0;
 

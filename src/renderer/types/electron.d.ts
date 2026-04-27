@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { OpenClawSessionPatch } from '../../common/openclawSession';
+import type { AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -24,6 +26,7 @@ interface CoworkSession {
   pinned: boolean;
   cwd: string;
   systemPrompt: string;
+  modelOverride: string;
   executionMode: 'auto' | 'local' | 'sandbox';
   activeSkillIds: string[];
   agentId: string;
@@ -54,13 +57,20 @@ interface CoworkConfig {
   workingDirectory: string;
   systemPrompt: string;
   executionMode: 'auto' | 'local' | 'sandbox';
-  agentEngine: 'openclaw' | 'yd_cowork';
+  agentEngine: 'openclaw';
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
   memoryGuardLevel: 'strict' | 'standard' | 'relaxed';
   memoryUserMemoriesMaxItems: number;
   skipMissedJobs: boolean;
+  embeddingEnabled: boolean;
+  embeddingProvider: string;
+  embeddingModel: string;
+  embeddingLocalModelPath: string;
+  embeddingVectorWeight: number;
+  embeddingRemoteBaseUrl: string;
+  embeddingRemoteApiKey: string;
   openClawSessionPolicy: OpenClawSessionPolicyConfig;
 }
 
@@ -76,6 +86,13 @@ type CoworkConfigUpdate = Partial<
     | 'memoryGuardLevel'
     | 'memoryUserMemoriesMaxItems'
     | 'skipMissedJobs'
+    | 'embeddingEnabled'
+    | 'embeddingProvider'
+    | 'embeddingModel'
+    | 'embeddingLocalModelPath'
+    | 'embeddingVectorWeight'
+    | 'embeddingRemoteBaseUrl'
+    | 'embeddingRemoteApiKey'
   >
 >;
 
@@ -126,13 +143,6 @@ interface OpenClawEngineStatus {
 
 interface OpenClawSessionPolicyConfig {
   keepAlive: '1d' | '7d' | '30d' | '365d';
-}
-
-interface AppUpdateDownloadProgress {
-  received: number;
-  total: number | undefined;
-  percent: number | undefined;
-  speed: number | undefined;
 }
 
 interface WindowState {
@@ -295,6 +305,7 @@ interface IElectronAPI {
       skillId: string,
       config: Record<string, string>,
     ) => Promise<{ success: boolean; result?: EmailConnectivityTestResult; error?: string }>;
+    fetchMarketplace: () => Promise<{ success: boolean; data?: string; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {
@@ -406,6 +417,12 @@ interface IElectronAPI {
       set: (
         config: OpenClawSessionPolicyConfig,
       ) => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
+    };
+    session: {
+      patch: (options: {
+        sessionId: string;
+        patch: OpenClawSessionPatch;
+      }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     };
   };
   ipcRenderer: {
@@ -553,6 +570,11 @@ interface IElectronAPI {
     readFileAsDataUrl: (
       filePath: string,
     ) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
+    showMessageBox: (options: {
+      message: string;
+      type?: 'none' | 'info' | 'error' | 'question' | 'warning';
+      title?: string;
+    }) => Promise<{ response: number }>;
   };
   shell: {
     openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -572,10 +594,12 @@ interface IElectronAPI {
     getSystemLocale: () => Promise<string>;
   };
   appUpdate: {
-    download: (url: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
-    cancelDownload: () => Promise<{ success: boolean }>;
-    install: (filePath: string) => Promise<{ success: boolean; error?: string }>;
-    onDownloadProgress: (callback: (data: AppUpdateDownloadProgress) => void) => () => void;
+    getState: () => Promise<AppUpdateRuntimeState>;
+    checkNow: (options?: { manual?: boolean; userId?: string | null }) => Promise<AppUpdateCheckResult>;
+    retryDownload: () => Promise<{ success: boolean; state: AppUpdateRuntimeState }>;
+    cancelDownload: () => Promise<{ success: boolean; state: AppUpdateRuntimeState }>;
+    installReady: () => Promise<{ success: boolean; state: AppUpdateRuntimeState; error?: string }>;
+    onStateChanged: (callback: (data: AppUpdateRuntimeState) => void) => () => void;
   };
   log: {
     getPath: () => Promise<string>;
@@ -620,6 +644,23 @@ interface IElectronAPI {
     weixinQrLoginWait: (
       accountId?: string,
     ) => Promise<{ success: boolean; connected: boolean; message: string; accountId?: string }>;
+
+    // POPO QR login
+    popoQrLoginStart: () => Promise<{
+      success: boolean;
+      qrUrl?: string;
+      taskToken?: string;
+      timeoutMs?: number;
+      message?: string;
+    }>;
+    popoQrLoginPoll: (taskToken: string) => Promise<{
+      success: boolean;
+      appKey?: string;
+      appSecret?: string;
+      aesKey?: string;
+      message: string;
+    }>;
+
     listPairingRequests: (platform: string) => Promise<{
       success: boolean;
       requests: Array<{
@@ -639,6 +680,33 @@ interface IElectronAPI {
     rejectPairingRequest: (
       platform: string,
       code: string,
+    ) => Promise<{ success: boolean; error?: string }>;
+    nimQrLoginStart: () => Promise<{
+      uuid: string;
+      qrValue: string;
+      expiresIn: number;
+      pollInterval: number;
+      credentialKind: 'split';
+      rawData: Record<string, unknown> | null;
+    }>;
+    nimQrLoginPoll: (uuid: string) => Promise<{
+      status: 'pending' | 'success' | 'failed';
+      credentials?: {
+        appKey: string;
+        account: string;
+        token: string;
+      };
+      errorCode?: string;
+      error?: string;
+    }>;
+    addNimInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: NimInstanceConfig; error?: string }>;
+    deleteNimInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
+    setNimInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addQQInstance: (
       name: string,
@@ -663,6 +731,42 @@ interface IElectronAPI {
     ) => Promise<{ success: boolean; instance?: DingTalkInstanceConfig; error?: string }>;
     deleteDingTalkInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
     setDingTalkInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addEmailInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: EmailInstanceConfig; error?: string }>;
+    deleteEmailInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
+    setEmailInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addWecomInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: WecomInstanceConfig; error?: string }>;
+    deleteWecomInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
+    setWecomInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addTelegramInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: TelegramInstanceConfig; error?: string }>;
+    deleteTelegramInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
+    setTelegramInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addDiscordInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: DiscordInstanceConfig; error?: string }>;
+    deleteDiscordInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
+    setDiscordInstanceConfig: (
       instanceId: string,
       config: any,
       options?: { syncGateway?: boolean },
@@ -761,6 +865,7 @@ interface IElectronAPI {
     listChannelConversations?: (
       channel: string,
       accountId?: string,
+      filterAccountId?: string,
     ) => Promise<{
       success: boolean;
       conversations?: import('../../scheduledTask/types').ScheduledTaskConversationOption[];
@@ -821,7 +926,7 @@ interface IElectronAPI {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
     exchange: (code: string) => Promise<{
       success: boolean;
-      user?: { userId: string; phone: string; nickname: string; avatarUrl: string };
+      user?: import('../store/slices/authSlice').UserProfile;
       quota?: {
         planName: string;
         subscriptionStatus: string;
@@ -833,7 +938,7 @@ interface IElectronAPI {
     }>;
     getUser: () => Promise<{
       success: boolean;
-      user?: { userId: string; phone: string; nickname: string; avatarUrl: string };
+      user?: import('../store/slices/authSlice').UserProfile;
       quota?: {
         planName: string;
         subscriptionStatus: string;
@@ -882,6 +987,26 @@ interface IElectronAPI {
       }>;
     };
   };
+  dingtalk: {
+    install: {
+      qrcode: () => Promise<{
+        url: string;
+        deviceCode: string;
+        interval: number;
+        expireIn: number;
+      }>;
+      poll: (deviceCode: string) => Promise<{
+        done: boolean;
+        clientId?: string;
+        clientSecret?: string;
+        error?: string;
+      }>;
+      verify: (clientId: string, clientSecret: string) => Promise<{
+        success: boolean;
+        error?: string;
+      }>;
+    };
+  };
   githubCopilot: {
     requestDeviceCode: () => Promise<{
       userCode: string;
@@ -914,17 +1039,59 @@ interface IElectronAPI {
 }
 
 // IM Gateway types
+interface EmailInstanceConfig {
+  instanceId: string;
+  instanceName: string;
+  enabled: boolean;
+  transport: 'imap' | 'ws';
+  email: string;
+  password?: string;
+  apiKey?: string;
+  agentId: string;
+  imapHost?: string;
+  imapPort?: number;
+  smtpHost?: string;
+  smtpPort?: number;
+  allowFrom?: string[];
+  replyMode?: 'immediate' | 'accumulated' | 'complete';
+  replyTo?: 'sender' | 'all';
+  a2aEnabled?: boolean;
+  a2aAgentDomains?: string[];
+  a2aMaxPingPongTurns?: number;
+}
+
+interface EmailMultiInstanceConfig {
+  instances: EmailInstanceConfig[];
+}
+
+interface EmailInstanceStatus {
+  instanceId: string;
+  instanceName: string;
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  email: string | null;
+  transport: 'imap' | 'ws' | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
+interface EmailMultiInstanceStatus {
+  instances: EmailInstanceStatus[];
+}
+
 interface IMGatewayConfig {
   dingtalk: DingTalkMultiInstanceConfig;
   feishu: FeishuMultiInstanceConfig;
-  telegram: TelegramOpenClawConfig;
+  telegram: TelegramMultiInstanceConfig;
   qq: QQMultiInstanceConfig;
-  discord: DiscordOpenClawConfig;
-  nim: NimConfig;
+  discord: DiscordMultiInstanceConfig;
+  nim: NimMultiInstanceConfig;
   'netease-bee': NeteaseBeeChanConfig;
-  wecom: WecomConfig;
+  wecom: WecomMultiInstanceConfig;
   popo: PopoOpenClawConfig;
   weixin: WeixinOpenClawConfig;
+  email: EmailMultiInstanceConfig;
   settings: IMSettings;
 }
 
@@ -1041,6 +1208,24 @@ interface TelegramOpenClawConfig {
   debug: boolean;
 }
 
+interface TelegramInstanceConfig extends TelegramOpenClawConfig {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface TelegramInstanceStatus extends TelegramGatewayStatus {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface TelegramMultiInstanceConfig {
+  instances: TelegramInstanceConfig[];
+}
+
+interface TelegramMultiInstanceStatus {
+  instances: TelegramInstanceStatus[];
+}
+
 interface DiscordOpenClawGuildConfig {
   requireMention?: boolean;
   allowFrom?: string[];
@@ -1081,17 +1266,36 @@ interface NimAdvancedConfig {
   mediaMaxMb?: number;
   textChunkLimit?: number;
   debug?: boolean;
+  legacyLogin?: boolean;
+  weblbsUrl?: string;
+  link_web?: string;
+  nos_uploader?: string;
+  nos_downloader_v2?: string;
+  nosSsl?: boolean;
+  nos_accelerate?: string;
+  nos_accelerate_host?: string;
 }
 
-interface NimConfig {
+interface NimOpenClawConfig {
   enabled: boolean;
+  nimToken?: string;
   appKey: string;
   account: string;
   token: string;
+  antispamEnabled?: boolean;
   p2p?: NimP2pConfig;
   team?: NimTeamConfig;
   qchat?: NimQChatConfig;
   advanced?: NimAdvancedConfig;
+}
+
+interface NimInstanceConfig extends NimOpenClawConfig {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface NimMultiInstanceConfig {
+  instances: NimInstanceConfig[];
 }
 
 interface NeteaseBeeChanConfig {
@@ -1145,6 +1349,24 @@ interface WecomConfig {
   debug: boolean;
 }
 
+interface WecomInstanceConfig extends WecomConfig {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface WecomMultiInstanceConfig {
+  instances: WecomInstanceConfig[];
+}
+
+interface WecomInstanceStatus extends WecomGatewayStatus {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface WecomMultiInstanceStatus {
+  instances: WecomInstanceStatus[];
+}
+
 interface PopoOpenClawConfig {
   enabled: boolean;
   connectionMode: 'websocket' | 'webhook';
@@ -1183,13 +1405,23 @@ interface IMGatewayStatus {
   dingtalk: DingTalkMultiInstanceStatus;
   feishu: FeishuMultiInstanceStatus;
   qq: QQMultiInstanceStatus;
-  telegram: TelegramGatewayStatus;
-  discord: DiscordGatewayStatus;
-  nim: NimGatewayStatus;
+  telegram: TelegramMultiInstanceStatus;
+  discord: DiscordMultiInstanceStatus;
+  nim: NimMultiInstanceStatus;
   'netease-bee': NeteaseBeeChanGatewayStatus;
-  wecom: WecomGatewayStatus;
+  wecom: WecomMultiInstanceStatus;
   popo: PopoGatewayStatus;
   weixin: WeixinGatewayStatus;
+  email: EmailMultiInstanceStatus;
+}
+
+interface NimInstanceStatus extends NimGatewayStatus {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface NimMultiInstanceStatus {
+  instances: NimInstanceStatus[];
 }
 
 type IMConnectivityVerdict = 'pass' | 'warn' | 'fail';
@@ -1259,6 +1491,24 @@ interface DiscordGatewayStatus {
   botUsername: string | null;
   lastInboundAt: number | null;
   lastOutboundAt: number | null;
+}
+
+interface DiscordInstanceConfig extends DiscordOpenClawConfig {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface DiscordInstanceStatus extends DiscordGatewayStatus {
+  instanceId: string;
+  instanceName: string;
+}
+
+interface DiscordMultiInstanceConfig {
+  instances: DiscordInstanceConfig[];
+}
+
+interface DiscordMultiInstanceStatus {
+  instances: DiscordInstanceStatus[];
 }
 
 interface NimGatewayStatus {

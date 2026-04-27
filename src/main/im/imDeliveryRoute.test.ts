@@ -91,3 +91,14 @@ test('delivery route extraction ignores incomplete session rows and non-dingtalk
     accountId: 'default',
   })).toBe(null);
 });
+
+test('legacy dingtalk route is still accepted for send params', () => {
+  expect(buildDingTalkSendParamsFromRoute({
+    channel: 'dingtalk',
+    to: 'user:legacy-user',
+    accountId: 'acct-1',
+  })).toEqual({
+    target: 'user:legacy-user',
+    accountId: 'acct-1',
+  });
+});

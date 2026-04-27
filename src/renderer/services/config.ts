@@ -81,7 +81,7 @@ const migrateCustomProviders = (config: AppConfig): AppConfig => {
   if ('custom' in providers && !isCustomProvider('custom')) {
     const legacyCustom = providers['custom'];
     if (legacyCustom) {
-      const updatedProviders = { ...providers } as Record<string, any>;
+      const updatedProviders = { ...providers } as Record<string, unknown>;
       updatedProviders['custom_0'] = { ...legacyCustom };
       delete updatedProviders['custom'];
       return {
@@ -108,6 +108,19 @@ const REMOVED_PROVIDER_MODELS: Record<string, string[]> = {
 // so the models follow normal user-editable behavior (same as other models).
 // position: 'start' inserts at the beginning, 'end' appends at the end.
 const ADDED_PROVIDER_MODELS: Record<string, { models: Array<{ id: string; name: string; supportsImage?: boolean }>; position: 'start' | 'end' }> = {
+  deepseek: {
+    models: [
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false },
+    ],
+    position: 'start',
+  },
+  moonshot: {
+    models: [
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true },
+    ],
+    position: 'start',
+  },
   minimax: {
     models: [
       { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
@@ -140,7 +153,7 @@ class ConfigService {
                 providerKey,
                 (() => {
                   const mergedProvider = {
-                    ...(defaultConfig.providers as Record<string, any>)?.[providerKey],
+                    ...((defaultConfig.providers as Record<string, unknown>)?.[providerKey] as Record<string, unknown> ?? {}),
                     ...providerConfig,
                   };
                   // Filter out removed models

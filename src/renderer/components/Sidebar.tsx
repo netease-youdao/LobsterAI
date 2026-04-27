@@ -1,23 +1,27 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import Modal from './common/Modal';
+import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import React, { useCallback,useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { selectCoworkSessions, selectCurrentSessionId } from '../store/selectors/coworkSelectors';
-import { RootState } from '../store';
+
 import { agentService } from '../services/agent';
 import { coworkService } from '../services/cowork';
 import { i18nService } from '../services/i18n';
-import CoworkSessionList from './cowork/CoworkSessionList';
+import { RootState } from '../store';
+import {
+  selectCoworkSessions,
+  selectCurrentSessionId,
+} from '../store/selectors/coworkSelectors';
+import Modal from './common/Modal';
 import CoworkSearchModal from './cowork/CoworkSearchModal';
-import LoginButton from './LoginButton';
+import CoworkSessionList from './cowork/CoworkSessionList';
+import ClockIcon from './icons/ClockIcon';
 import ComposeIcon from './icons/ComposeIcon';
 import ConnectorIcon from './icons/ConnectorIcon';
-import SearchIcon from './icons/SearchIcon';
-import ClockIcon from './icons/ClockIcon';
 import PuzzleIcon from './icons/PuzzleIcon';
+import SearchIcon from './icons/SearchIcon';
 import SidebarToggleIcon from './icons/SidebarToggleIcon';
 import TrashIcon from './icons/TrashIcon';
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import UserGroupIcon from './icons/UserGroupIcon';
+import LoginButton from './LoginButton';
 
 interface SidebarProps {
   onShowSettings: () => void;
@@ -341,15 +345,14 @@ const Sidebar: React.FC<SidebarProps> = ({
       ) : (
         <div className="px-3 pb-3 pt-1 flex items-center gap-1">
           {!hideLogin && (
-            <>
+            <div className="flex-1 min-w-0">
               <LoginButton />
-              <div className="flex-1" />
-            </>
+            </div>
           )}
           <button
             type="button"
             onClick={() => onShowSettings()}
-            className="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors"
+            className={`inline-flex items-center justify-start gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-secondary hover:text-foreground hover:bg-surface-raised transition-colors ${hideLogin ? 'w-full' : 'shrink-0'}`}
             aria-label={i18nService.t('settings')}
           >
             <svg

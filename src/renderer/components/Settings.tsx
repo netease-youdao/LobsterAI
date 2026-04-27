@@ -1,20 +1,21 @@
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowTopRightOnSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, KeyIcon, ShieldCheckIcon,SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowTopRightOnSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, KeyIcon, ShieldCheckIcon, SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+
+import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import { ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import { type AppConfig, defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, getVisibleProviders, isCustomProvider } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import { getProviderIcon } from '../providers/uiRegistry';
 import { apiService } from '../services/api';
-import type { AppUpdateInfo } from '../services/appUpdate';
-import { checkForAppUpdate } from '../services/appUpdate';
 import { configService } from '../services/config';
 import { coworkService } from '../services/cowork';
 import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPassword, PasswordEncryptedPayload } from '../services/encryption';
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { themeService } from '../services/theme';
+import type { RootState } from '../store';
 import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
@@ -22,9 +23,11 @@ import type {
   CoworkMemoryStats,
   CoworkUserMemoryEntry,
   OpenClawEngineStatus,
-  OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValue,
+  OpenClawSessionKeepAlive,
 } from '../types/cowork';
+import { OpenClawSessionKeepAlive as OpenClawSessionKeepAliveValues } from '../types/cowork';
 import Modal from './common/Modal';
+import EmbeddingSettingsSection from './cowork/EmbeddingSettingsSection';
 import ErrorMessage from './ErrorMessage';
 import BrainIcon from './icons/BrainIcon';
 import PencilIcon from './icons/PencilIcon';
@@ -119,9 +122,10 @@ interface ProvidersImportPayload {
   providers?: Record<string, ProvidersImportEntry>;
 }
 
-const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'github-copilot';
+
+const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'lm-studio' && provider !== 'github-copilot';
 const hasProviderAuthConfigured = (provider: ProviderType, config: ProviderConfig): boolean => {
-  if (provider === 'ollama') {
+  if (provider === 'ollama' || provider === 'lm-studio') {
     return true;
   }
 
@@ -216,7 +220,7 @@ const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' 
   if (provider === 'openai' || provider === 'stepfun') {
     return 'openai';
   }
-  if (provider === 'youdaozhiyun' || provider === 'github-copilot') {
+  if (provider === 'youdaozhiyun' || provider === 'github-copilot' || provider === 'qianfan') {
     return 'openai';
   }
   // Moonshot /anthropic endpoint does not fully implement the Anthropic Messages
@@ -239,6 +243,25 @@ const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 
 const shouldShowApiFormatSelector = (provider: string): boolean => (
   getFixedApiFormatForProvider(provider) === null
 );
+const getUpdateCheckStatusFromRuntimeStatus = (
+  state: AppUpdateRuntimeState,
+): 'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready' => {
+  if (state.source !== AppUpdateSource.Manual) {
+    return 'idle';
+  }
+  switch (state.status) {
+    case AppUpdateStatus.Checking:
+      return 'checking';
+    case AppUpdateStatus.Downloading:
+      return 'downloading';
+    case AppUpdateStatus.Ready:
+      return 'ready';
+    case AppUpdateStatus.Error:
+      return 'error';
+    default:
+      return 'idle';
+  }
+};
 const getProviderDefaultBaseUrl = (
   provider: ProviderType,
   apiFormat: 'anthropic' | 'openai' | 'gemini'
@@ -526,6 +549,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
+  const [sqliteAutoBackupEnabled, setSqliteAutoBackupEnabled] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [preventSleep, setPreventSleepState] = useState(false);
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
@@ -605,7 +629,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [testMode, setTestMode] = useState(false);
   const [logoClickCount, setLogoClickCount] = useState(0);
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
-  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error'>('idle');
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready'>('idle');
+  const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState | null>(null);
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -614,6 +639,43 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   useEffect(() => {
     setShowApiKey(false);
   }, [activeProvider]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const syncUpdateStatus = async () => {
+      try {
+        const state = await window.electron.appUpdate.getState();
+        if (!mounted) {
+          return;
+        }
+        setAppUpdateState(state);
+        setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
+      } catch (error) {
+        console.error('Failed to load app update state in settings:', error);
+      }
+    };
+
+    void syncUpdateStatus();
+
+    const unsubscribe = window.electron.appUpdate.onStateChanged((state) => {
+      if (
+        updateCheckTimerRef.current != null &&
+        state.source === AppUpdateSource.Manual &&
+        state.status !== AppUpdateStatus.Idle
+      ) {
+        window.clearTimeout(updateCheckTimerRef.current);
+        updateCheckTimerRef.current = null;
+      }
+      setAppUpdateState(state);
+      setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
 
   const handleCopyContactEmail = useCallback(async () => {
     const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
@@ -629,15 +691,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
   }, []);
 
+  const authUser = useSelector((state: RootState) => state.auth.user);
+
   const handleCheckUpdate = useCallback(async () => {
     if (updateCheckStatus === 'checking' || !appVersion) return;
     setUpdateCheckStatus('checking');
     try {
-      const info = await checkForAppUpdate(appVersion, true);
-      if (info) {
-        setUpdateCheckStatus('idle');
-        onUpdateFound?.(info);
-      } else {
+      const result = await window.electron.appUpdate.checkNow({ manual: true, userId: authUser?.yid });
+      if (!result.success) {
+        throw new Error(result.error || 'Update check failed');
+      }
+
+      if (!result.updateFound) {
         setUpdateCheckStatus('upToDate');
         if (updateCheckTimerRef.current != null) {
           window.clearTimeout(updateCheckTimerRef.current);
@@ -646,6 +711,19 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           setUpdateCheckStatus('idle');
           updateCheckTimerRef.current = null;
         }, 3000);
+        return;
+      }
+
+      if (result.state.status === AppUpdateStatus.Ready) {
+        setUpdateCheckStatus('ready');
+      } else if (result.state.status === AppUpdateStatus.Downloading) {
+        setUpdateCheckStatus('downloading');
+      } else {
+        setUpdateCheckStatus('idle');
+      }
+
+      if (result.state.info) {
+        onUpdateFound?.(result.state.info);
       }
     } catch {
       setUpdateCheckStatus('error');
@@ -657,7 +735,23 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         updateCheckTimerRef.current = null;
       }, 3000);
     }
-  }, [appVersion, updateCheckStatus, onUpdateFound]);
+  }, [appVersion, authUser, updateCheckStatus, onUpdateFound]);
+
+  const updateButtonLabel = useMemo(() => {
+    if (
+      updateCheckStatus === 'downloading' &&
+      appUpdateState?.progress?.percent != null &&
+      Number.isFinite(appUpdateState.progress.percent)
+    ) {
+      return `${i18nService.t('updateDownloadingBackground')} ${Math.round(appUpdateState.progress.percent * 100)}%`;
+    }
+    if (updateCheckStatus === 'checking') return i18nService.t('updateChecking');
+    if (updateCheckStatus === 'downloading') return i18nService.t('updateDownloadingBackground');
+    if (updateCheckStatus === 'ready') return i18nService.t('updateReadyTitle');
+    if (updateCheckStatus === 'upToDate') return i18nService.t('updateUpToDate');
+    if (updateCheckStatus === 'error') return i18nService.t('updateCheckFailed');
+    return i18nService.t('checkForUpdate');
+  }, [appUpdateState?.progress?.percent, updateCheckStatus]);
 
   const handleOpenUserManual = useCallback(() => {
     void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
@@ -711,9 +805,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
-  const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? false);
-  const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAliveValue>(
-    coworkConfig.openClawSessionPolicy?.keepAlive ?? '30d',
+  const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
+  const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
+  const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
+  const [embeddingModel, setEmbeddingModel] = useState<string>(coworkConfig.embeddingModel ?? '');
+  const [embeddingLocalModelPath, setEmbeddingLocalModelPath] = useState<string>(coworkConfig.embeddingLocalModelPath ?? '');
+  const [embeddingVectorWeight, setEmbeddingVectorWeight] = useState<number>(coworkConfig.embeddingVectorWeight ?? 0.7);
+  const [embeddingRemoteBaseUrl, setEmbeddingRemoteBaseUrl] = useState<string>(coworkConfig.embeddingRemoteBaseUrl ?? '');
+  const [embeddingRemoteApiKey, setEmbeddingRemoteApiKey] = useState<string>(coworkConfig.embeddingRemoteApiKey ?? '');
+  const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
+    coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
   );
   const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
   const [coworkMemoryStats, setCoworkMemoryStats] = useState<CoworkMemoryStats | null>(null);
@@ -732,14 +833,28 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
-    setSkipMissedJobs(coworkConfig.skipMissedJobs ?? false);
-    setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive ?? '30d');
+    setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
+    setEmbeddingEnabled(coworkConfig.embeddingEnabled ?? false);
+    setEmbeddingProvider(coworkConfig.embeddingProvider ?? 'openai');
+    setEmbeddingModel(coworkConfig.embeddingModel ?? '');
+    setEmbeddingLocalModelPath(coworkConfig.embeddingLocalModelPath ?? '');
+    setEmbeddingVectorWeight(coworkConfig.embeddingVectorWeight ?? 0.7);
+    setEmbeddingRemoteBaseUrl(coworkConfig.embeddingRemoteBaseUrl ?? '');
+    setEmbeddingRemoteApiKey(coworkConfig.embeddingRemoteApiKey ?? '');
+    setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   }, [
     coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
-    coworkConfig.skipMissedJobs,
     coworkConfig.openClawSessionPolicy?.keepAlive,
+    coworkConfig.skipMissedJobs,
+    coworkConfig.embeddingEnabled,
+    coworkConfig.embeddingProvider,
+    coworkConfig.embeddingModel,
+    coworkConfig.embeddingLocalModelPath,
+    coworkConfig.embeddingVectorWeight,
+    coworkConfig.embeddingRemoteBaseUrl,
+    coworkConfig.embeddingRemoteApiKey,
   ]);
 
   useEffect(() => () => {
@@ -777,6 +892,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       setTheme(config.theme);
       setLanguage(config.language);
       setUseSystemProxy(config.useSystemProxy ?? false);
+      setSqliteAutoBackupEnabled(config.sqliteAutoBackupEnabled === true);
       const savedTestMode = config.app?.testMode ?? false;
       setTestMode(savedTestMode);
       if (savedTestMode) setTestModeUnlocked(true);
@@ -927,6 +1043,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             ...prev,
             ollama: {
               ...prev.ollama,
+              enabled: true,
+              apiKey: config.api.key,
+              baseUrl: config.api.baseUrl
+            }
+          }));
+        } else if (normalizedApiBaseUrl.includes('lm-studio') || normalizedApiBaseUrl.includes(':1234')) {
+          setActiveProvider('lm-studio');
+          setProviders(prev => ({
+            ...prev,
+            'lm-studio': {
+              ...prev['lm-studio'],
               enabled: true,
               apiKey: config.api.key,
               baseUrl: config.api.baseUrl
@@ -1360,8 +1487,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
-    || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? false)
-    || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive ?? '30d');
+    || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
+    || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays)
+    || embeddingEnabled !== (coworkConfig.embeddingEnabled ?? false)
+    || embeddingProvider !== (coworkConfig.embeddingProvider ?? 'openai')
+    || embeddingModel !== (coworkConfig.embeddingModel ?? '')
+    || embeddingLocalModelPath !== (coworkConfig.embeddingLocalModelPath ?? '')
+    || embeddingVectorWeight !== (coworkConfig.embeddingVectorWeight ?? 0.7)
+    || embeddingRemoteBaseUrl !== (coworkConfig.embeddingRemoteBaseUrl ?? '')
+    || embeddingRemoteApiKey !== (coworkConfig.embeddingRemoteApiKey ?? '');
   const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
   const openClawProgressPercent = useMemo(() => {
@@ -1665,6 +1799,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         theme,
         language,
         useSystemProxy,
+        sqliteAutoBackupEnabled,
         shortcuts,
         app: {
           ...configService.getConfig().app,
@@ -1681,6 +1816,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       // Set API with the primary provider - handle Qwen OAuth
       let apiKeyToUse = primaryProvider.apiKey;
       let baseUrlToUse = primaryProvider.baseUrl;
+
 
       apiService.setConfig({
         apiKey: apiKeyToUse,
@@ -1710,6 +1846,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
           skipMissedJobs,
+          embeddingEnabled,
+          embeddingProvider,
+          embeddingModel,
+          embeddingLocalModelPath,
+          embeddingVectorWeight,
+          embeddingRemoteBaseUrl,
+          embeddingRemoteApiKey,
         });
         if (!updated) {
           throw new Error(i18nService.t('coworkConfigSaveFailed'));
@@ -1737,7 +1880,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       // Sync IM gateway config (regenerate openclaw.json and restart gateway if running).
       // This is done on every save regardless of activeTab, because the user may have
       // edited IM config then switched tabs before clicking Save.
-      await imService.saveAndSyncConfig();
+      const syncSucceeded = await imService.saveAndSyncConfig();
+      if (!syncSucceeded) {
+        throw new Error(i18nService.t('settingsSavedButOpenClawSyncFailed'));
+      }
 
       didSaveRef.current = true;
       onClose();
@@ -1834,10 +1980,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const handleSaveNewModel = () => {
     const modelId = newModelId.trim();
 
-    if (activeProvider === 'ollama') {
-      // For Ollama, only the model name (stored as modelId) is required
+    if (activeProvider === 'ollama' || activeProvider === 'lm-studio') {
+      // For Ollama/LM Studio, only the model name (stored as modelId) is required
       if (!modelId) {
-        setModelFormError(i18nService.t('ollamaModelNameRequired'));
+        setModelFormError(i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNameRequired' : 'ollamaModelNameRequired'));
         return;
       }
     } else {
@@ -1849,7 +1995,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
 
     // For Ollama, auto-fill display name from modelId if not provided
-    const modelName = activeProvider === 'ollama'
+    const modelName = activeProvider === 'ollama' || activeProvider === 'lm-studio'
       ? (newModelName.trim() && newModelName.trim() !== modelId ? newModelName.trim() : modelId)
       : newModelName.trim();
 
@@ -1930,6 +2076,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setTestResult(null);
 
     const hasValidAuth = providerConfig.apiKey;
+
 
     if (providerRequiresApiKey(testingProvider) && !hasValidAuth) {
       showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
@@ -2149,34 +2296,40 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
     try {
       const raw = await file.text();
+      console.log(`[Settings] importing providers from file: ${file.name}, size: ${file.size}`);
       let payload: ProvidersImportPayload;
       try {
         payload = JSON.parse(raw) as ProvidersImportPayload;
       } catch {
+        console.warn('[Settings] import failed: invalid JSON in file');
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
 
       if (!payload || payload.type !== EXPORT_FORMAT_TYPE || !payload.providers) {
+        console.warn(`[Settings] import failed: invalid format, type=${payload?.type}, hasProviders=${!!payload?.providers}`);
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
 
       // Check if it's version 2 (password-based encryption)
       if (payload.version === 2 && payload.encryption?.keySource === 'password') {
+        console.log('[Settings] import: detected v2 password-based encryption');
         await processImportPayloadWithPassword(payload);
         return;
       }
 
       // Version 1 (legacy local-store key) - try to decrypt with local key
       if (payload.version === 1) {
+        console.log('[Settings] import: detected v1 local-key encryption');
         await processImportPayloadWithLocalKey(payload);
         return;
       }
 
+      console.warn(`[Settings] import failed: unsupported version=${payload.version}`);
       setError(i18nService.t('invalidProvidersFile'));
     } catch (err) {
-      console.error('Failed to import providers:', err);
+      console.error('[Settings] import failed:', err);
       setError(i18nService.t('importProvidersFailed'));
     }
   };
@@ -2184,6 +2337,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const processImportPayloadWithLocalKey = async (payload: ProvidersImportPayload) => {
     setIsImportingProviders(true);
     try {
+      const fileKeys = Object.keys(payload.providers ?? {});
+      console.log(`[Settings] v1 import: processing ${fileKeys.length} providers from file`);
       const providerUpdates: Partial<ProvidersConfig> = {};
       let hadDecryptFailure = false;
       for (const providerKey of providerKeys) {
@@ -2198,32 +2353,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         } else if (providerData.apiKey && typeof providerData.apiKey === 'object') {
           try {
             apiKey = await decryptSecret(providerData.apiKey as EncryptedPayload);
+            console.log(`[Settings] v1 import: decrypted key for ${providerKey}`);
           } catch (error) {
             hadDecryptFailure = true;
-            console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
+            console.warn(`[Settings] v1 import: failed to decrypt key for ${providerKey}`, error);
           }
         } else if (typeof providerData.apiKeyEncrypted === 'string' && typeof providerData.apiKeyIv === 'string') {
           try {
             apiKey = await decryptSecret({ encrypted: providerData.apiKeyEncrypted, iv: providerData.apiKeyIv });
+            console.log(`[Settings] v1 import: decrypted key for ${providerKey}`);
           } catch (error) {
             hadDecryptFailure = true;
-            console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
+            console.warn(`[Settings] v1 import: failed to decrypt key for ${providerKey}`, error);
           }
         }
 
         const models = normalizeModels(providerData.models);
+        const existing = providers[providerKey];
 
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : existing?.enabled ?? false,
+          apiKey: apiKey ?? existing?.apiKey ?? '',
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : existing?.baseUrl ?? '',
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existing?.apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existing as ProviderConfig)?.codingPlanEnabled,
+          models: models ?? existing?.models,
         };
       }
 
       if (Object.keys(providerUpdates).length === 0) {
+        console.warn(`[Settings] v1 import failed: no matching providers found, file keys: ${fileKeys.join(', ')}`);
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
@@ -2240,11 +2399,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       });
       setIsTestResultModalOpen(false);
       setTestResult(null);
+      console.log(`[Settings] v1 import complete: updated ${Object.keys(providerUpdates).length} providers`);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
       }
     } catch (err) {
-      console.error('Failed to import providers:', err);
+      console.error('[Settings] v1 import failed:', err);
       const isDecryptError = err instanceof Error
         && (err.message === 'Invalid encrypted payload' || err.name === 'OperationError');
       const message = isDecryptError
@@ -2264,6 +2424,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setIsImportingProviders(true);
 
     try {
+      const fileKeys = Object.keys(payload.providers);
+      console.log(`[Settings] v2 import: processing ${fileKeys.length} providers from file`);
       const providerUpdates: Partial<ProvidersConfig> = {};
       let hadDecryptFailure = false;
 
@@ -2282,26 +2444,29 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             // Version 2 password-based encryption
             try {
               apiKey = await decryptWithPassword(apiKeyObj, DEFAULT_EXPORT_PASSWORD);
+              console.log(`[Settings] v2 import: decrypted key for ${providerKey}`);
             } catch (error) {
               hadDecryptFailure = true;
-              console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
+              console.warn(`[Settings] v2 import: failed to decrypt key for ${providerKey}`, error);
             }
           }
         }
 
         const models = normalizeModels(providerData.models);
+        const existing = providers[providerKey];
 
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : existing?.enabled ?? false,
+          apiKey: apiKey ?? existing?.apiKey ?? '',
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : existing?.baseUrl ?? '',
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existing?.apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existing as ProviderConfig)?.codingPlanEnabled,
+          models: models ?? existing?.models,
         };
       }
 
       if (Object.keys(providerUpdates).length === 0) {
+        console.warn(`[Settings] v2 import failed: no matching providers found, file keys: ${fileKeys.join(', ')}`);
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
@@ -2313,6 +2478,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
       if (!anyKeyDecrypted && hadDecryptFailure) {
         // All decryptions failed - likely wrong password
+        console.warn('[Settings] v2 import failed: all key decryptions failed, likely wrong password');
         setError(i18nService.t('decryptProvidersFailed'));
         return;
       }
@@ -2329,11 +2495,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       });
       setIsTestResultModalOpen(false);
       setTestResult(null);
+      console.log(`[Settings] v2 import complete: updated ${Object.keys(providerUpdates).length} providers`);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
       }
     } catch (err) {
-      console.error('Failed to import providers:', err);
+      console.error('[Settings] v2 import failed:', err);
       const isDecryptError = err instanceof Error
         && (err.message === 'Invalid encrypted payload' || err.name === 'OperationError');
       const message = isDecryptError
@@ -2528,6 +2695,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               </label>
             </div>
 
+            <div>
+              <h4 className="text-sm font-medium text-foreground mb-3">
+                {i18nService.t('sqliteAutoBackupEnabled')}
+              </h4>
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-sm text-secondary">
+                  {i18nService.t('sqliteAutoBackupEnabledDescription')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={sqliteAutoBackupEnabled}
+                  onClick={() => {
+                    setSqliteAutoBackupEnabled((prev) => !prev);
+                  }}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    sqliteAutoBackupEnabled
+                      ? 'bg-primary'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      sqliteAutoBackupEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+
             {/* Skip Missed Jobs Section */}
             <div>
               <h4 className="text-sm font-medium text-foreground mb-3">
@@ -2707,7 +2904,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                         <rect x="32" y="34" width="40" height="4" rx="2" fill={c1} opacity="0.6" />
                       </svg>
                       <span className="text-[10px] font-medium truncate w-full text-center" style={{ color: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-text-primary)' }}>
-                        {t.meta.name}
+                        {i18nService.t('theme-name-' + t.meta.id) || t.meta.name}
                       </span>
                     </button>
                   );
@@ -2876,6 +3073,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 )}
               </div>
             </div>
+
+            {/* Section 3: Embedding / Vector Memory Search */}
+            <EmbeddingSettingsSection
+              embeddingEnabled={embeddingEnabled}
+              embeddingProvider={embeddingProvider}
+              embeddingModel={embeddingModel}
+              embeddingVectorWeight={embeddingVectorWeight}
+              embeddingRemoteBaseUrl={embeddingRemoteBaseUrl}
+              embeddingRemoteApiKey={embeddingRemoteApiKey}
+              onEmbeddingEnabledChange={setEmbeddingEnabled}
+              onEmbeddingProviderChange={setEmbeddingProvider}
+              onEmbeddingModelChange={setEmbeddingModel}
+              onEmbeddingVectorWeightChange={setEmbeddingVectorWeight}
+              onEmbeddingRemoteBaseUrlChange={setEmbeddingRemoteBaseUrl}
+              onEmbeddingRemoteApiKeyChange={setEmbeddingRemoteApiKey}
+            />
 
           </div>
         );
@@ -3963,17 +4176,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   {!enterpriseConfig?.disableUpdate && (
                   <button
                     type="button"
-                    disabled={updateCheckStatus === 'checking'}
+                    disabled={updateCheckStatus === 'checking' || updateCheckStatus === 'downloading'}
                     onClick={(e) => {
                       e.stopPropagation();
                       void handleCheckUpdate();
                     }}
                     className="text-xs px-2 py-0.5 rounded-md border border-border text-secondary hover:text-primary dark:hover:text-primary hover:border-primary dark:hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {updateCheckStatus === 'checking' && i18nService.t('updateChecking')}
-                    {updateCheckStatus === 'upToDate' && i18nService.t('updateUpToDate')}
-                    {updateCheckStatus === 'error' && i18nService.t('updateCheckFailed')}
-                    {updateCheckStatus === 'idle' && i18nService.t('checkForUpdate')}
+                    {updateButtonLabel}
                   </button>
                   )}
                   {enterpriseConfig?.disableUpdate && (
@@ -4307,11 +4517,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 )}
 
                 <div className="space-y-3">
-                  {activeProvider === 'ollama' ? (
+                  {(activeProvider === 'ollama' || activeProvider === 'lm-studio') ? (
                     <>
                       <div>
                         <label className="block text-xs font-medium text-secondary mb-1">
-                          {i18nService.t('ollamaModelName')}
+                          {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelName' : 'ollamaModelName')}
                         </label>
                         <input
                           autoFocus
@@ -4327,15 +4537,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                             }
                           }}
                           className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
-                          placeholder={i18nService.t('ollamaModelNamePlaceholder')}
+                          placeholder={i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNamePlaceholder' : 'ollamaModelNamePlaceholder')}
                         />
                         <p className="mt-1 text-[11px] text-muted">
-                          {i18nService.t('ollamaModelNameHint')}
+                          {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioModelNameHint' : 'ollamaModelNameHint')}
                         </p>
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-secondary mb-1">
-                          {i18nService.t('ollamaDisplayName')}
+                          {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayName' : 'ollamaDisplayName')}
                         </label>
                         <input
                           type="text"
@@ -4347,10 +4557,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                             }
                           }}
                           className="block w-full rounded-xl bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-xs"
-                          placeholder={i18nService.t('ollamaDisplayNamePlaceholder')}
+                          placeholder={i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayNamePlaceholder' : 'ollamaDisplayNamePlaceholder')}
                         />
                         <p className="mt-1 text-[11px] text-muted">
-                          {i18nService.t('ollamaDisplayNameHint')}
+                          {i18nService.t(activeProvider === 'lm-studio' ? 'lmStudioDisplayNameHint' : 'ollamaDisplayNameHint')}
                         </p>
                       </div>
                     </>

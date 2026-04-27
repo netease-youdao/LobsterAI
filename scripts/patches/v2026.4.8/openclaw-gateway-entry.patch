@@ -1,0 +1,142 @@
+diff --git a/src/cli/gateway-cli/run.ts b/src/cli/gateway-cli/run.ts
+index e0a86561be..5389dbc79e 100644
+--- a/src/cli/gateway-cli/run.ts
++++ b/src/cli/gateway-cli/run.ts
+@@ -46,7 +46,7 @@ import {
+   toOptionString,
+ } from "./shared.js";
+ 
+-type GatewayRunOpts = {
++export type GatewayRunOpts = {
+   port?: unknown;
+   bind?: unknown;
+   token?: unknown;
+@@ -240,7 +240,7 @@ function isHealthyGatewayLockError(err: unknown): boolean {
+   );
+ }
+ 
+-async function runGatewayCommand(opts: GatewayRunOpts) {
++export async function runGatewayCommand(opts: GatewayRunOpts) {
+   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
+   const devMode = Boolean(opts.dev) || isDevProfile;
+   if (opts.reset && !devMode) {
+@@ -279,10 +279,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
+   // The heaviest part of gateway startup is loading the server module tree
+   // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
+   // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
++  gatewayLog.info("loading gateway modules…");
++  const _t0ModuleLoad = Date.now();
+   const { startGatewayServer } = await withProgress(
+     { label: "Loading gateway modules…", indeterminate: true },
+     async () => import("../../gateway/server.js"),
+   );
++  gatewayLog.info(`gateway modules loaded (${Date.now() - _t0ModuleLoad}ms)`);
+ 
+   setConsoleTimestampPrefix(true);
+ 
+diff --git a/src/gateway-entry.ts b/src/gateway-entry.ts
+new file mode 100644
+index 0000000000..1ff9af6f3f
+--- /dev/null
++++ b/src/gateway-entry.ts
+@@ -0,0 +1,86 @@
++/**
++ * Embedded gateway entry point — skips full CLI infrastructure.
++ *
++ * When loaded inside Electron's utilityProcess (or via a CJS launcher on
++ * Windows), the standard entry.ts path pulls in the entire Commander CLI
++ * module graph (~1100 files), which takes 80-100s to resolve on Windows/NTFS.
++ * This dedicated entry imports only the gateway-run codepath, cutting startup
++ * to ~15-20s (LobsterAI patch; see openclaw/openclaw#65444, #61278).
++ */
++import { fileURLToPath } from "node:url";
++import process from "node:process";
++import { formatUncaughtError } from "./infra/errors.js";
++import { normalizeEnv } from "./infra/env.js";
++import { loadDotEnv } from "./infra/dotenv.js";
++import { assertSupportedRuntime } from "./infra/runtime-guard.js";
++import { enableConsoleCapture } from "./logging/console.js";
++import { isMainModule } from "./infra/is-main.js";
++import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
++
++const ENTRY_WRAPPER_PAIRS = [
++  { wrapperBasename: "openclaw.mjs", entryBasename: "gateway-entry.js" },
++  { wrapperBasename: "gateway-bundle.mjs", entryBasename: "gateway-entry.js" },
++] as const;
++
++if (
++  !isMainModule({
++    currentFile: fileURLToPath(import.meta.url),
++    wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
++  })
++) {
++  // Imported as a dependency — skip all entry-point side effects.
++} else {
++  process.title = "openclaw";
++  normalizeEnv();
++  loadDotEnv({ quiet: true });
++  assertSupportedRuntime();
++  enableConsoleCapture();
++  installUnhandledRejectionHandler();
++
++  process.on("uncaughtException", (error) => {
++    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
++    process.exit(1);
++  });
++
++  // Parse minimal gateway CLI args directly — skip Commander's ~1100-module
++  // overhead.  Only the flags that LobsterAI (and standard gateway deployments)
++  // actually pass are handled here.
++  const argv = process.argv.slice(2);
++  // Strip "gateway" and "run" subcommand tokens if present.
++  for (const token of ["gateway", "run"]) {
++    const idx = argv.indexOf(token);
++    if (idx !== -1) argv.splice(idx, 1);
++  }
++
++  function extractOpt(name: string): string | undefined {
++    const i = argv.indexOf(name);
++    if (i === -1 || i + 1 >= argv.length) return undefined;
++    return argv.splice(i, 2)[1];
++  }
++
++  const opts = {
++    bind: extractOpt("--bind"),
++    port: extractOpt("--port"),
++    token: extractOpt("--token"),
++    auth: extractOpt("--auth"),
++    password: extractOpt("--password"),
++    verbose: argv.includes("--verbose"),
++    allowUnconfigured: argv.includes("--allow-unconfigured"),
++    force: argv.includes("--force"),
++    dev: argv.includes("--dev"),
++  };
++
++  // Use process.nextTick to defer past any ESM loader re-entrancy lock
++  // (relevant when this file is require()'d from a CJS launcher).
++  process.nextTick(() => {
++    import("./cli/gateway-cli/run.js")
++      .then(({ runGatewayCommand }) => runGatewayCommand(opts))
++      .catch((error) => {
++        console.error(
++          "[openclaw] Failed to start gateway:",
++          error instanceof Error ? (error.stack ?? error.message) : error,
++        );
++        process.exit(1);
++      });
++  });
++}
+diff --git a/tsdown.config.ts b/tsdown.config.ts
+index 870b735b0a..815fc740db 100644
+--- a/tsdown.config.ts
++++ b/tsdown.config.ts
+@@ -120,6 +120,9 @@ function buildCoreDistEntries(): Record<string, string> {
+   return {
+     index: "src/index.ts",
+     entry: "src/entry.ts",
++    // Dedicated gateway entry — skips Commander CLI module graph (~1100 files)
++    // to cut Windows/NTFS startup from 80-100s to ~15-20s (LobsterAI patch).
++    "gateway-entry": "src/gateway-entry.ts",
+     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
+     "cli/daemon-cli": "src/cli/daemon-cli.ts",
+     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt

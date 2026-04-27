@@ -1,4 +1,5 @@
 import { classifyErrorKey } from '../../common/coworkErrorClassify';
+import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import { store } from '../store';
 import {
   addMessage,
@@ -161,13 +162,24 @@ class CoworkService {
     });
     this.streamListenerCleanups.push(errorCleanup);
 
-    // Sessions changed listener (new channel sessions discovered by polling)
+    // Sessions changed listener (new channel sessions discovered by polling,
+    // or reconcileWithHistory replaced messages for a channel session)
     const sessionsChangedCleanup = cowork.onSessionsChanged(() => {
       const beforeState = store.getState().cowork;
       console.log('[CoworkService] onSessionsChanged: received IPC event, before sessions:', beforeState.sessions.length, 'sessionIds:', beforeState.sessions.map(s => s.id).slice(0, 5));
       void this.loadSessions().then(() => {
         const state = store.getState().cowork;
         console.log('[CoworkService] onSessionsChanged: loadSessions complete, total sessions:', state.sessions.length, 'sessionIds:', state.sessions.map(s => s.id).slice(0, 5));
+
+        // Reload the active session's full message list so that messages
+        // replaced by reconcileWithHistory (bulk SQLite replace) are reflected
+        // in the conversation view, not just the sidebar.  Without this,
+        // user messages synced from gateway history would only appear after
+        // the user manually re-enters the conversation.
+        const currentId = state.currentSessionId;
+        if (currentId) {
+          void this.loadSession(currentId);
+        }
       }).catch((err) => {
         console.error('[CoworkService] onSessionsChanged: loadSessions FAILED:', err);
       });
@@ -218,6 +230,7 @@ class CoworkService {
       window.electron?.cowork?.getConfig(),
       window.electron?.openclaw?.sessionPolicy?.get?.(),
     ]);
+
     if (coworkResult?.success && coworkResult.config) {
       store.dispatch(setConfig({
         ...coworkResult.config,
@@ -491,6 +504,24 @@ class CoworkService {
     }
 
     console.error('Failed to load session:', result.error);
+    return null;
+  }
+
+  async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<CoworkSession | null> {
+    const sessionApi = window.electron?.openclaw?.session;
+    if (!sessionApi?.patch) {
+      console.error('OpenClaw session patch API not available');
+      return null;
+    }
+
+    const result = await sessionApi.patch({ sessionId, patch });
+    if (result.success && result.session) {
+      store.dispatch(setCurrentSession(result.session));
+      store.dispatch(setStreaming(result.session.status === 'running'));
+      return result.session;
+    }
+
+    console.error('Failed to patch session:', result.error);
     return null;
   }
 

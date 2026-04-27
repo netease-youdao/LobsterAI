@@ -9,7 +9,7 @@ function syncLocalOpenClawExtensions(runtimeRoot) {
   const targetRoot = runtimeRoot
     ? path.resolve(runtimeRoot)
     : path.join(rootDir, 'vendor', 'openclaw-runtime', 'current');
-  const targetExtensionsDir = path.join(targetRoot, 'extensions');
+  const targetExtensionsDir = path.join(targetRoot, 'third-party-extensions');
 
   if (!fs.existsSync(sourceDir)) {
     return { sourceDir, targetRoot, copied: [] };
@@ -42,7 +42,7 @@ function main() {
       return;
     }
     console.log(
-      `[sync-local-openclaw-extensions] Synced ${result.copied.join(', ')} -> ${path.join(result.targetRoot, 'extensions')}`,
+      `[sync-local-openclaw-extensions] Synced ${result.copied.join(', ')} -> ${path.join(result.targetRoot, 'third-party-extensions')}`,
     );
   } catch (error) {
     console.error(

@@ -10,7 +10,7 @@ import { imService } from '../../services/im';
 import { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import type { Agent } from '../../types/agent';
-import type { DingTalkInstanceConfig, DingTalkInstanceStatus, FeishuInstanceConfig, FeishuInstanceStatus, IMGatewayConfig, IMGatewayStatus, QQInstanceConfig, QQInstanceStatus } from '../../types/im';
+import type { DingTalkInstanceConfig, DingTalkInstanceStatus, DiscordInstanceConfig, DiscordInstanceStatus, FeishuInstanceConfig, FeishuInstanceStatus, IMGatewayConfig, IMGatewayStatus, NimInstanceConfig, NimInstanceStatus, QQInstanceConfig, QQInstanceStatus, TelegramInstanceConfig, TelegramInstanceStatus, WecomInstanceConfig, WecomInstanceStatus } from '../../types/im';
 import { resolveOpenClawModelRef, toOpenClawModelRef } from '../../utils/openclawModelRef';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
@@ -20,11 +20,11 @@ import AgentSkillSelector from './AgentSkillSelector';
 import EmojiPicker from './EmojiPicker';
 
 type SettingsTab = 'basic' | 'skills' | 'im';
-type MultiInstancePlatform = 'dingtalk' | 'feishu' | 'qq';
-type MultiInstanceConfig = DingTalkInstanceConfig | FeishuInstanceConfig | QQInstanceConfig;
-type MultiInstanceStatus = DingTalkInstanceStatus | FeishuInstanceStatus | QQInstanceStatus;
+type MultiInstancePlatform = 'dingtalk' | 'feishu' | 'qq' | 'wecom' | 'nim' | 'telegram' | 'discord';
+type MultiInstanceConfig = DingTalkInstanceConfig | FeishuInstanceConfig | QQInstanceConfig | WecomInstanceConfig | NimInstanceConfig | TelegramInstanceConfig | DiscordInstanceConfig;
+type MultiInstanceStatus = DingTalkInstanceStatus | FeishuInstanceStatus | QQInstanceStatus | WecomInstanceStatus | NimInstanceStatus | TelegramInstanceStatus | DiscordInstanceStatus;
 
-const MULTI_INSTANCE_PLATFORMS: MultiInstancePlatform[] = ['dingtalk', 'feishu', 'qq'];
+const MULTI_INSTANCE_PLATFORMS: MultiInstancePlatform[] = ['dingtalk', 'feishu', 'qq', 'wecom', 'nim', 'telegram', 'discord'];
 
 const isMultiInstancePlatform = (platform: Platform): platform is MultiInstancePlatform =>
   MULTI_INSTANCE_PLATFORMS.includes(platform as MultiInstancePlatform);
@@ -223,7 +223,13 @@ const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ agentId, onClos
     if (isMultiInstancePlatform(platform)) {
       return getConnectedInstances(platform).length > 0;
     }
-    return 'enabled' in imConfig[platform] && imConfig[platform].enabled === true;
+    // email is a multi-instance platform
+    if (platform === 'email') {
+      return imConfig.email.instances.length > 0;
+    }
+    const cfg = imConfig[platform as keyof typeof imConfig];
+    if (!cfg || typeof cfg !== 'object') return false;
+    return 'enabled' in cfg && (cfg as { enabled: boolean }).enabled === true;
   };
 
   /** Resolve agent name by id */

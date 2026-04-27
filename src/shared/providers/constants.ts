@@ -32,11 +32,13 @@ export const ProviderName = {
   Minimax: 'minimax',
   Youdaozhiyun: 'youdaozhiyun',
   Qwen: 'qwen',
+  Qianfan: 'qianfan',
   Xiaomi: 'xiaomi',
   StepFun: 'stepfun',
   Volcengine: 'volcengine',
   OpenRouter: 'openrouter',
   Ollama: 'ollama',
+  LmStudio: 'lm-studio',
   Custom: 'custom',
   LobsteraiServer: 'lobsterai-server',
   Copilot: 'github-copilot',
@@ -52,6 +54,7 @@ export const OpenClawProviderId = {
   Anthropic: 'anthropic',
   OpenAI: 'openai',
   DeepSeek: 'deepseek',
+  Qianfan: 'qianfan',
   Qwen: 'qwen-portal', // OpenClaw normalizes 'qwen' → 'qwen-portal'; use canonical ID to avoid config diff loop
   Zai: 'zai', // OpenClaw official provider ID for Zhipu/GLM
   Volcengine: 'volcengine',
@@ -63,6 +66,7 @@ export const OpenClawProviderId = {
   Copilot: 'github-copilot',
   LobsteraiCopilot: 'lobsterai-copilot',
   Ollama: 'ollama',
+  LmStudio: 'lm-studio',
   Lobster: 'lobster',
 } as const;
 export type OpenClawProviderId = typeof OpenClawProviderId[keyof typeof OpenClawProviderId];
@@ -187,7 +191,11 @@ const PROVIDER_DEFINITIONS = [
     },
     region: 'china',
     enPriority: 0,
-    defaultModels: [{ id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }],
+    defaultModels: [
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false },
+      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+    ],
   },
   {
     id: ProviderName.Moonshot,
@@ -212,7 +220,10 @@ const PROVIDER_DEFINITIONS = [
     },
     region: 'china',
     enPriority: 0,
-    defaultModels: [{ id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true }],
+    defaultModels: [
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true },
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true },
+    ],
     codingPlanModels: [{ id: 'kimi-for-coding', name: 'Kimi K2.5', supportsImage: true }],
   },
   {
@@ -334,6 +345,23 @@ const PROVIDER_DEFINITIONS = [
     ],
   },
   {
+    id: ProviderName.Qianfan,
+    label: 'Qianfan',
+    apiKeyUrl: 'https://console.bce.baidu.com/qianfan/ais/console/apiKey',
+    openClawProviderId: OpenClawProviderId.Qianfan,
+    defaultBaseUrl: 'https://qianfan.baidubce.com/v2',
+    defaultApiFormat: ApiFormat.OpenAI,
+    codingPlanSupported: false,
+    region: 'china',
+    enPriority: 0,
+    defaultModels: [
+      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', supportsImage: false },
+      { id: 'deepseek-r1', name: 'DeepSeek R1', supportsImage: false },
+      { id: 'ernie-4.5-8k', name: 'ERNIE 4.5 8K', supportsImage: false },
+      { id: 'ernie-4.5-turbo-8k', name: 'ERNIE 4.5 Turbo', supportsImage: false },
+    ],
+  },
+  {
     id: ProviderName.StepFun,
     label: 'StepFun',
     website: 'https://platform.stepfun.com',
@@ -382,11 +410,27 @@ const PROVIDER_DEFINITIONS = [
       { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false },
     ],
   },
+  {
+    id: ProviderName.LmStudio,
+    label: 'LM Studio',
+    website: 'https://lmstudio.ai',
+    openClawProviderId: OpenClawProviderId.LmStudio,
+    defaultBaseUrl: 'http://localhost:1234/v1',
+    defaultApiFormat: ApiFormat.OpenAI,
+    codingPlanSupported: false,
+    switchableBaseUrls: {
+      anthropic: 'http://localhost:1234',
+      openai: 'http://localhost:1234/v1',
+    },
+    region: 'china',
+    enPriority: 0,
+    defaultModels: [],
+  },
   // ── Global ──
   {
     id: ProviderName.Copilot,
     label: 'GitHub Copilot',
-    openClawProviderId: OpenClawProviderId.Copilot,
+    openClawProviderId: OpenClawProviderId.LobsteraiCopilot,
     defaultBaseUrl: 'https://api.individual.githubcopilot.com',
     defaultApiFormat: ApiFormat.OpenAI,
     codingPlanSupported: false,
@@ -596,12 +640,17 @@ class ProviderRegistryImpl {
     const orderedProviders = [...priority, ...china, ...global];
     const unique = [...new Set(orderedProviders)];
 
-    // Move ollama to the end (custom providers are appended dynamically by Settings)
+    // Move local providers (ollama, lm-studio) to the end
     const ollamaIdx = unique.indexOf(ProviderName.Ollama);
     if (ollamaIdx !== -1) {
       unique.splice(ollamaIdx, 1);
     }
+    const lmStudioIdx = unique.indexOf(ProviderName.LmStudio);
+    if (lmStudioIdx !== -1) {
+      unique.splice(lmStudioIdx, 1);
+    }
     unique.push(ProviderName.Ollama);
+    unique.push(ProviderName.LmStudio);
     return unique;
   }
 }

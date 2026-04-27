@@ -4,7 +4,7 @@
  * Supports unified and split (side-by-side) view modes.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useMemo,useState } from 'react';
 
 type DiffLineType = 'added' | 'removed' | 'context';
 
@@ -336,34 +336,37 @@ export function extractDiffFromToolInput(
   if (!toolName || !toolInput) return null;
   const normalized = toolName.toLowerCase().replace(/[\s_]+/g, '');
 
-  if (normalized === 'edit' || normalized === 'editfile') {
-    const filePath = extractString(toolInput, ['file_path', 'path', 'filePath', 'target_file', 'targetFile']);
-    const oldStr = extractString(toolInput, ['old_str', 'old_string', 'old_text', 'oldStr', 'oldText', 'search']);
-    const newStr = extractString(toolInput, ['new_str', 'new_string', 'new_text', 'newStr', 'newText', 'replace']);
+  const EDIT_OLD_KEYS = ['old_str', 'old_string', 'old_text', 'oldStr', 'oldText', 'search'];
+  const EDIT_NEW_KEYS = ['new_str', 'new_string', 'new_text', 'newStr', 'newText', 'replace'];
+  const FILE_PATH_KEYS = ['file_path', 'path', 'filePath', 'target_file', 'targetFile'];
 
+  if (normalized === 'edit' || normalized === 'editfile' || normalized === 'multiedit') {
+    const filePath = extractString(toolInput, FILE_PATH_KEYS);
+
+    // Try top-level old/new fields first (single-edit format)
+    const oldStr = extractString(toolInput, EDIT_OLD_KEYS);
+    const newStr = extractString(toolInput, EDIT_NEW_KEYS);
     if (oldStr !== null && newStr !== null) {
       return [{ filePath: filePath ?? undefined, oldStr, newStr }];
     }
-    return null;
-  }
 
-  if (normalized === 'multiedit') {
-    const filePath = extractString(toolInput, ['file_path', 'path', 'filePath', 'target_file', 'targetFile']);
+    // Try edits array format: { edits: [{ oldText, newText }, ...] }
     const edits = toolInput.edits ?? toolInput.changes ?? toolInput.operations;
     if (Array.isArray(edits)) {
       const diffs: DiffData[] = [];
       for (const edit of edits) {
         if (edit && typeof edit === 'object') {
           const rec = edit as Record<string, unknown>;
-          const oldStr = extractString(rec, ['old_str', 'old_string', 'old_text', 'oldStr', 'search']);
-          const newStr = extractString(rec, ['new_str', 'new_string', 'new_text', 'newStr', 'replace']);
-          if (oldStr !== null && newStr !== null) {
-            diffs.push({ filePath: filePath ?? undefined, oldStr, newStr });
+          const eOld = extractString(rec, EDIT_OLD_KEYS);
+          const eNew = extractString(rec, EDIT_NEW_KEYS);
+          if (eOld !== null && eNew !== null) {
+            diffs.push({ filePath: filePath ?? undefined, oldStr: eOld, newStr: eNew });
           }
         }
       }
       return diffs.length > 0 ? diffs : null;
     }
+
     return null;
   }
 

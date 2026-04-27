@@ -1,0 +1,56 @@
+diff --git a/src/plugins/sdk-alias.ts b/src/plugins/sdk-alias.ts
+index a210b2168c..3b30a88699 100644
+--- a/src/plugins/sdk-alias.ts
++++ b/src/plugins/sdk-alias.ts
+@@ -360,6 +360,34 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
+   return null;
+ }
+ 
++// Pre-normalized alias map cache. pathe's normalizeAliases() uses
++// Symbol.for("pathe:normalizedAlias") to skip its O(n²) sort+resolve loop.
++// By pre-sorting and marking alias maps here, we avoid ~9s of redundant work
++// when createJiti() is called hundreds of times with identical alias content.
++const NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
++const preNormalizedAliasCache = new Map<string, Record<string, string>>();
++
++function preNormalizeAliasMap(raw: Record<string, string>): Record<string, string> {
++  // Sort by descending path depth — matches pathe's _compareAliases(a, b)
++  const sorted = Object.entries(raw).sort(
++    ([a], [b]) => b.split("/").length - a.split("/").length,
++  );
++  const cacheKey = JSON.stringify(sorted);
++  const cached = preNormalizedAliasCache.get(cacheKey);
++  if (cached) {
++    return cached;
++  }
++  const result = Object.fromEntries(sorted);
++  // Mark as already normalized so pathe's normalizeAliases() returns immediately.
++  // Safe because our alias values are absolute paths — no transitive aliases to resolve.
++  Object.defineProperty(result, NORMALIZED_ALIAS_SYMBOL, {
++    value: true,
++    enumerable: false,
++  });
++  preNormalizedAliasCache.set(cacheKey, result);
++  return result;
++}
++
+ export function buildPluginLoaderAliasMap(
+   modulePath: string,
+   argv1: string | undefined = STARTUP_ARGV1,
+@@ -375,7 +403,7 @@ export function buildPluginLoaderAliasMap(
+     pluginSdkResolution,
+   });
+   const extensionApiAlias = resolveExtensionApiAlias({ modulePath, pluginSdkResolution });
+-  return {
++  const raw = {
+     ...(extensionApiAlias
+       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
+       : {}),
+@@ -393,6 +421,7 @@ export function buildPluginLoaderAliasMap(
+       ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
+     ),
+   };
++  return preNormalizeAliasMap(raw);
+ }
+ 
+ export function resolvePluginRuntimeModulePath(

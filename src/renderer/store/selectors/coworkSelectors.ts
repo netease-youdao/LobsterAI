@@ -1,4 +1,5 @@
 import { createSelector } from '@reduxjs/toolkit';
+
 import type { RootState } from '../index';
 
 // --- Primitive (identity) selectors ---
@@ -27,7 +28,7 @@ export const selectAgentEngine = createSelector(
 
 export const selectIsOpenClawEngine = createSelector(
   selectAgentEngine,
-  (engine) => engine !== 'yd_cowork',
+  (engine) => engine === 'openclaw',
 );
 
 export const selectCurrentMessages = createSelector(

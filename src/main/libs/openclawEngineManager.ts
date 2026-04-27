@@ -1,14 +1,16 @@
-import { app, utilityProcess, type UtilityProcess } from 'electron';
-import { spawn, type ChildProcess } from 'child_process';
+import { type ChildProcess,spawn } from 'child_process';
 import crypto from 'crypto';
+import { app, type UtilityProcess,utilityProcess } from 'electron';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
+import os from 'os';
 import path from 'path';
-import { getElectronNodeRuntimePath, ensureElectronNodeShim, getSkillsRoot } from './coworkUtil';
-import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
+
+import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
+import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
-import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
+import { isSystemProxyEnabled, resolveSystemProxyUrlForTargets } from './systemProxy';
 
 type GatewayProcess = UtilityProcess | ChildProcess;
 
@@ -51,10 +53,6 @@ type RuntimeMetadata = {
   root: string | null;
   version: string | null;
   expectedPathHint: string;
-};
-
-const sleep = async (ms: number): Promise<void> => {
-  await new Promise((resolve) => setTimeout(resolve, ms));
 };
 
 const parseJsonFile = <T>(filePath: string): T | null => {
@@ -160,6 +158,7 @@ export class OpenClawEngineManager extends EventEmitter {
   private gatewayPort: number | null = null;
   private startGatewayPromise: Promise<OpenClawEngineStatus> | null = null;
   private secretEnvVars: Record<string, string> = {};
+  private gatewaySpawnedAt: number | null = null;
 
   constructor() {
     super();
@@ -254,6 +253,38 @@ export class OpenClawEngineManager extends EventEmitter {
     return this.configPath;
   }
 
+  getGatewayLogPath(): string {
+    return this.gatewayLogPath;
+  }
+
+  /**
+   * Resolve the directory where the OpenClaw gateway writes its daily rolling
+   * logs (openclaw-YYYY-MM-DD.log).  Returns null when no candidate exists.
+   */
+  getOpenClawDailyLogDir(): string | null {
+    if (process.platform === 'win32') {
+      const runtime = this.resolveRuntimeMetadata();
+      if (runtime.root) {
+        const drive = path.parse(runtime.root).root;
+        const preferred = path.join(drive, 'tmp', 'openclaw');
+        if (fs.existsSync(preferred)) return preferred;
+      }
+      const fallback = path.join(os.tmpdir(), 'openclaw');
+      return fs.existsSync(fallback) ? fallback : null;
+    }
+
+    // macOS / Linux
+    if (fs.existsSync('/tmp/openclaw')) return '/tmp/openclaw';
+    try {
+      const uid = process.getuid?.();
+      if (uid != null) {
+        const fallback = path.join(os.tmpdir(), `openclaw-${uid}`);
+        if (fs.existsSync(fallback)) return fallback;
+      }
+    } catch { /* getuid unavailable */ }
+    return null;
+  }
+
   getGatewayConnectionInfo(): OpenClawGatewayConnectionInfo {
     const runtime = this.resolveRuntimeMetadata();
     const port = this.gatewayPort ?? this.readGatewayPort();
@@ -286,6 +317,25 @@ export class OpenClawEngineManager extends EventEmitter {
     const localExtensionSync = syncLocalOpenClawExtensionsIntoRuntime(runtime.root);
     if (localExtensionSync.copied.length > 0) {
       console.log(`[OpenClaw] synced local extensions: ${localExtensionSync.copied.join(', ')}`);
+    }
+
+    // Clean up third-party plugins that may linger in dist/extensions/ after an
+    // overlay upgrade from a version that placed them there.
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8'));
+      const thirdPartyIds: string[] = (pkg.openclaw?.plugins ?? [])
+        .map((p: { id?: string }) => p.id)
+        .filter((id: unknown): id is string => typeof id === 'string');
+      const localIds = listLocalOpenClawExtensionIds();
+      // Include renamed plugin ids so their old dirs get cleaned up
+      const renamedIds = ['feishu-openclaw-plugin'];
+      const allNonBundledIds = [...new Set([...thirdPartyIds, ...localIds, ...renamedIds])];
+      const cleaned = cleanupStaleThirdPartyPluginsFromBundledDir(runtime.root, allNonBundledIds);
+      if (cleaned.length > 0) {
+        console.log(`[OpenClaw] cleaned stale plugins from bundled scan dirs: ${cleaned.join(', ')}`);
+      }
+    } catch {
+      // Best-effort cleanup; don't block startup.
     }
 
     if (this.status.phase === 'running') {
@@ -398,14 +448,27 @@ export class OpenClawEngineManager extends EventEmitter {
       ...process.env,
       SKILLS_ROOT: skillsRoot,
       LOBSTERAI_SKILLS_ROOT: skillsRoot,
-      OPENCLAW_HOME: runtime.root,
+      OPENCLAW_HOME: this.baseDir,
       OPENCLAW_STATE_DIR: this.stateDir,
       OPENCLAW_CONFIG_PATH: this.configPath,
       OPENCLAW_GATEWAY_TOKEN: token,
       OPENCLAW_GATEWAY_PORT: String(port),
       OPENCLAW_NO_RESPAWN: '1',
       OPENCLAW_ENGINE_VERSION: runtime.version || DEFAULT_OPENCLAW_VERSION,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(runtime.root, 'extensions'),
+      // Point to dist/extensions for runtime-bundled plugins that satisfy the
+      // bundled-channel-entry contract.  Third-party plugins (in extensions/)
+      // are discovered separately via plugins.load.paths in openclaw.json.
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(runtime.root, 'dist', 'extensions'),
+      // Disable model-pricing bootstrap to avoid startup delays.  The gateway
+      // fetches https://openrouter.ai on startup which times out (15s) in
+      // regions with slow external API access.  See openclaw/openclaw#60116.
+      // Requires the v2026.4.5 source patch (scripts/patches/v2026.4.5/).
+      OPENCLAW_SKIP_MODEL_PRICING: '1',
+      // Disable Bonjour/mDNS LAN discovery advertising.  LobsterAI is a
+      // desktop app with a loopback-only gateway — LAN service broadcast is
+      // unnecessary and its watchdog can flood stderr with re-advertise
+      // warnings on Windows.  See openclaw/openclaw#33609, #63153.
+      OPENCLAW_DISABLE_BONJOUR: '1',
       // Enable debug-level logging so gateway emits phase-level detail during startup.
       OPENCLAW_LOG_LEVEL: 'debug',
       // Enable V8 compile cache for both CJS and ESM modules.
@@ -453,13 +516,13 @@ export class OpenClawEngineManager extends EventEmitter {
     }
 
     if (isSystemProxyEnabled()) {
-      const proxyUrl = await resolveSystemProxyUrl('https://openrouter.ai');
+      const { proxyUrl, targetUrl } = await resolveSystemProxyUrlForTargets();
       if (proxyUrl) {
         env.http_proxy = proxyUrl;
         env.https_proxy = proxyUrl;
         env.HTTP_PROXY = proxyUrl;
         env.HTTPS_PROXY = proxyUrl;
-        console.log('[OpenClaw] Injected system proxy for gateway:', proxyUrl);
+        console.log(`[OpenClaw] Injected system proxy for gateway via ${targetUrl}:`, proxyUrl);
       }
     }
 
@@ -496,6 +559,7 @@ export class OpenClawEngineManager extends EventEmitter {
     console.log(`[OpenClaw] startGateway: gateway process created (${elapsed()}), platform=${process.platform}`);
 
     this.gatewayProcess = child;
+    this.gatewaySpawnedAt = Date.now();
     this.attachGatewayProcessLogs(child);
     this.attachGatewayExitHandlers(child);
 
@@ -574,7 +638,13 @@ export class OpenClawEngineManager extends EventEmitter {
           path.join(process.cwd(), 'vendor', 'openclaw-runtime', 'current'),
         ];
 
-    const runtimeRoot = findPath(candidateRoots);
+    // Resolve symlinks so the gateway doesn't refuse to traverse them
+    // (e.g. vendor/openclaw-runtime/current -> win-x64).
+    const runtimeRoot = (() => {
+      const found = findPath(candidateRoots);
+      if (!found) return null;
+      try { return fs.realpathSync(found); } catch { return found; }
+    })();
     const expectedPathHint = app.isPackaged
       ? path.join(process.resourcesPath, 'cfmind')
       : path.join(app.getAppPath(), 'vendor', 'openclaw-runtime', 'current');
@@ -933,10 +1003,10 @@ export class OpenClawEngineManager extends EventEmitter {
       `}\n` +
       `const _keepAlive = setInterval(() => {}, 30000);\n` +
       `const bundleUrl = pathToFileURL(bundlePath).href;\n` +
+      `try { const _sz = fs.statSync(bundlePath).size; _log('bundle size=' + (_sz / 1024 / 1024).toFixed(1) + 'MB'); } catch (_) {}\n` +
       `_log('loading bundle (' + _elapsed() + ')');\n` +
       `import(bundleUrl).then(() => {\n` +
       `  _log('import ok (' + _elapsed() + ')');\n` +
-      `  try { require('node:module').flushCompileCache(); } catch (_) {}\n` +
       `}).catch((err) => {\n` +
       `  _log('import failed (' + _elapsed() + '): ' + (err.stack || err));\n` +
       `  process.exit(1);\n` +
@@ -981,6 +1051,18 @@ export class OpenClawEngineManager extends EventEmitter {
   }
 
   private findGatewayClientEntryFromDistRoot(distRoot: string): string | null {
+    // v2026.4.5+: GatewayClient is exported via the plugin-sdk public subpath
+    // (openclaw/plugin-sdk/gateway-runtime). The class is no longer in a
+    // standalone client-*.js chunk — it was merged into a shared chunk with
+    // minified export names (e.g. `n, r, t`), which breaks duck-type detection
+    // in loadGatewayClientCtor(). The plugin-sdk barrel re-exports the named
+    // `GatewayClient` symbol, so we prefer this stable entry point.
+    const pluginSdkGatewayRuntime = path.join(distRoot, 'plugin-sdk', 'gateway-runtime.js');
+    if (fs.existsSync(pluginSdkGatewayRuntime)) {
+      return pluginSdkGatewayRuntime;
+    }
+
+    // Pre-v2026.4.5: GatewayClient lived in a dedicated file under dist/.
     const gatewayClient = path.join(distRoot, 'gateway', 'client.js');
     if (fs.existsSync(gatewayClient)) {
       return gatewayClient;
@@ -991,6 +1073,9 @@ export class OpenClawEngineManager extends EventEmitter {
       return directClient;
     }
 
+    // Last resort: match any client-*.js file in dist root. Note that since
+    // v2026.4.5 this may resolve to an unrelated RPC utilities chunk, so this
+    // fallback is only meaningful for older versions.
     try {
       if (!fs.existsSync(distRoot) || !fs.statSync(distRoot).isDirectory()) {
         return null;
@@ -1273,14 +1358,27 @@ export class OpenClawEngineManager extends EventEmitter {
       });
     };
 
+    // Log elapsed time when gateway emits key startup milestones.
+    // This fills the observability gap between "import ok" and "[gateway] ready".
+    const logStartupMilestone = (text: string) => {
+      if (!this.gatewaySpawnedAt) return;
+      if (/\[gateway\]/.test(text)) {
+        const elapsed = Date.now() - this.gatewaySpawnedAt;
+        const summary = text.replace(/\n+$/g, '').split('\n')[0].trim();
+        console.log(`[OpenClaw] startup milestone (${elapsed}ms since spawn): ${summary}`);
+      }
+    };
+
     child.stdout?.on('data', (chunk) => {
       appendLog(chunk, 'stdout');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
+      logStartupMilestone(text);
       console.log(`[OpenClaw stdout] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
     child.stderr?.on('data', (chunk) => {
       appendLog(chunk, 'stderr');
       const text = typeof chunk === 'string' ? chunk : chunk.toString();
+      logStartupMilestone(text);
       console.error(`[OpenClaw stderr] ${OpenClawEngineManager.rewriteUtcTimestamps(text)}`);
     });
   }

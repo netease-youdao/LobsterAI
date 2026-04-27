@@ -1,5 +1,4 @@
 import { Skill, MarketplaceSkill, MarketTag, LocalSkillInfo, LocalizedText } from '../types/skill';
-import { getSkillStoreUrl } from './endpoints';
 import { i18nService } from './i18n';
 
 export function resolveLocalizedText(text: string | LocalizedText): string {
@@ -226,11 +225,11 @@ class SkillService {
   }
   async fetchMarketplaceSkills(): Promise<{ skills: MarketplaceSkill[]; tags: MarketTag[] }> {
     try {
-      const response = await fetch(getSkillStoreUrl());
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      const result = await window.electron.skills.fetchMarketplace();
+      if (!result.success || !result.data) {
+        throw new Error(result.error || 'Failed to fetch');
       }
-      const json = await response.json();
+      const json = JSON.parse(result.data);
       const value = json?.data?.value;
       // Store local skill descriptions for i18n lookup
       const localSkills: LocalSkillInfo[] = Array.isArray(value?.localSkill) ? value.localSkill : [];

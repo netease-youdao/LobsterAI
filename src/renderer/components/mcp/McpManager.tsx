@@ -1,19 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import SearchIcon from '../icons/SearchIcon';
-import TrashIcon from '../icons/TrashIcon';
-import PencilIcon from '../icons/PencilIcon';
-import ConnectorIcon from '../icons/ConnectorIcon';
+
+import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
+
+import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
-import { setMcpServers } from '../../store/slices/mcpSlice';
 import { RootState } from '../../store';
-import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo } from '../../types/mcp';
-import { mcpRegistry, mcpCategories } from '../../data/mcpRegistry';
-import ErrorMessage from '../ErrorMessage';
-import Tooltip from '../ui/Tooltip';
-import McpServerFormModal from './McpServerFormModal';
+import { setMcpServers } from '../../store/slices/mcpSlice';
+import { McpMarketplaceCategoryInfo,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../../types/mcp';
 import Modal from '../common/Modal';
+import ErrorMessage from '../ErrorMessage';
+import ConnectorIcon from '../icons/ConnectorIcon';
+import PencilIcon from '../icons/PencilIcon';
+import SearchIcon from '../icons/SearchIcon';
+import TrashIcon from '../icons/TrashIcon';
+import McpServerFormModal from './McpServerFormModal';
 
 const TRANSPORT_BADGE_COLORS: Record<string, string> = {
   stdio: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
@@ -22,6 +24,52 @@ const TRANSPORT_BADGE_COLORS: Record<string, string> = {
 };
 
 type McpTab = 'installed' | 'marketplace' | 'custom';
+
+/**
+ * Text with line-clamp-2 that shows a popover above the text when truncated.
+ */
+const ClampedText: React.FC<{ text: string; className?: string }> = ({ text, className = '' }) => {
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const [isClamped, setIsClamped] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const checkClamp = useCallback(() => {
+    const el = textRef.current;
+    if (el) setIsClamped(el.scrollHeight > el.clientHeight + 1);
+  }, []);
+
+  useEffect(() => {
+    checkClamp();
+    window.addEventListener('resize', checkClamp);
+    return () => window.removeEventListener('resize', checkClamp);
+  }, [text, checkClamp]);
+
+  const handleEnter = () => {
+    if (!isClamped) return;
+    timerRef.current = setTimeout(() => setShowFull(true), 400);
+  };
+
+  const handleLeave = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    setShowFull(false);
+  };
+
+  return (
+    <div className="relative" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
+      <p ref={textRef} className={`line-clamp-2 ${className}`}>{text}</p>
+      {showFull && (
+        <div className="absolute bottom-full left-0 right-0 mb-1 z-50
+          rounded-lg px-3 py-2 text-xs leading-relaxed
+          bg-surface-raised text-foreground
+          shadow-xl border border-border"
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const McpManager: React.FC = () => {
   const dispatch = useDispatch();
@@ -84,12 +132,12 @@ const McpManager: React.FC = () => {
     return ids;
   }, [servers]);
 
-  const getRegistryEntryDescription = (entry: McpRegistryEntry): string => {
+  const getRegistryEntryDescription = useCallback((entry: McpRegistryEntry): string => {
     const remoteDescription = currentLanguage === 'zh' ? entry.description_zh : entry.description_en;
     if (remoteDescription) return remoteDescription;
     if (entry.descriptionKey) return i18nService.t(entry.descriptionKey);
     return '';
-  };
+  }, [currentLanguage]);
 
   const getStdioCommandSummary = (command?: string, args?: string[]): string => {
     if (!command) return '';
@@ -97,7 +145,7 @@ const McpManager: React.FC = () => {
     return `${command} ${args[args.length - 1]}`;
   };
 
-  const getRegistryEntryForServer = (server: McpServerConfig): McpRegistryEntry | undefined => {
+  const getRegistryEntryForServer = useCallback((server: McpServerConfig): McpRegistryEntry | undefined => {
     if (server.registryId) {
       return dynamicRegistry.find(entry => entry.id === server.registryId);
     }
@@ -107,7 +155,7 @@ const McpManager: React.FC = () => {
       && entry.transportType === server.transportType
       && entry.command === server.command
     ));
-  };
+  }, [dynamicRegistry]);
 
   const getTransportSummary = (server: McpServerConfig): string => {
     if (server.transportType === 'stdio') {
@@ -121,7 +169,7 @@ const McpManager: React.FC = () => {
     return server.url || '';
   };
 
-  const getInstalledDescription = (server: McpServerConfig): string => {
+  const getInstalledDescription = useCallback((server: McpServerConfig): string => {
     const persistedDescription = server.description?.trim();
     if (persistedDescription) return persistedDescription;
     const registryEntry = getRegistryEntryForServer(server);
@@ -130,20 +178,20 @@ const McpManager: React.FC = () => {
       if (registryDescription) return registryDescription;
     }
     return getTransportSummary(server);
-  };
+  }, [getRegistryEntryDescription, getRegistryEntryForServer]);
 
   const filteredInstalled = useMemo(() => {
-    const query = searchQuery.toLowerCase();
+    const query = searchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
     if (!query) return servers;
     return servers.filter(server =>
       server.name.toLowerCase().includes(query)
       || getInstalledDescription(server).toLowerCase().includes(query)
     );
-  }, [servers, searchQuery, dynamicRegistry, currentLanguage]);
+  }, [servers, searchQuery, getInstalledDescription]);
 
   const filteredCustom = useMemo(() => {
     const custom = servers.filter(s => !s.isBuiltIn);
-    const query = searchQuery.toLowerCase();
+    const query = searchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
     if (!query) return custom;
     return custom.filter(s =>
       s.name.toLowerCase().includes(query)
@@ -152,7 +200,7 @@ const McpManager: React.FC = () => {
   }, [servers, searchQuery]);
 
   const filteredMarketplace = useMemo(() => {
-    const query = searchQuery.toLowerCase();
+    const query = searchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
     let entries = [...dynamicRegistry];
     if (query) {
       entries = entries.filter(e =>
@@ -164,7 +212,7 @@ const McpManager: React.FC = () => {
       entries = entries.filter(e => e.category === activeCategory);
     }
     return entries;
-  }, [searchQuery, activeCategory, dynamicRegistry, currentLanguage]);
+  }, [searchQuery, activeCategory, dynamicRegistry, getRegistryEntryDescription]);
 
   const handleToggleEnabled = async (serverId: string) => {
     const targetServer = servers.find(s => s.id === serverId);
@@ -372,8 +420,17 @@ const McpManager: React.FC = () => {
               placeholder={i18nService.t('searchMcpServers')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full pl-9 pr-8 py-2 text-sm rounded-xl bg-surface text-foreground placeholder-secondary border border-border focus:outline-none focus:ring-2 focus:ring-primary"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-secondary hover:text-primary transition-colors"
+              >
+                <XCircleIconSolid className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -474,7 +531,7 @@ const McpManager: React.FC = () => {
                       </button>
                       <div
                         className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
-                          server.enabled ? 'bg-primary' : 'bg-border'
+                          server.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
                         }`}
                         onClick={() => handleToggleEnabled(server.id)}
                       >
@@ -487,37 +544,28 @@ const McpManager: React.FC = () => {
                     </div>
                   </div>
 
-                  <Tooltip
-                    content={installedDescription}
-                    position="bottom"
-                    maxWidth="360px"
-                    className="block w-full"
-                  >
-                    <p className="text-xs text-secondary line-clamp-2 mb-2">
-                      {installedDescription}
-                    </p>
-                  </Tooltip>
+                  <ClampedText text={installedDescription} className="text-xs text-secondary mb-2" />
 
-                  <div className="flex items-center gap-2 text-[10px] text-secondary">
-                    <span className={`px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
+                  <div className="flex items-center gap-2 text-[10px] text-secondary min-w-0">
+                    <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
                       {server.transportType}
                     </span>
                     {server.transportType === 'stdio' && server.command && (
                       <>
-                        <span>·</span>
-                        <span className="truncate">{getStdioCommandSummary(server.command, server.args)}</span>
+                        <span className="shrink-0">·</span>
+                        <span className="truncate min-w-0">{getStdioCommandSummary(server.command, server.args)}</span>
                       </>
                     )}
                     {(server.transportType === 'sse' || server.transportType === 'http') && server.url && (
                       <>
-                        <span>·</span>
-                        <span className="truncate">{server.url}</span>
+                        <span className="shrink-0">·</span>
+                        <span className="truncate min-w-0">{server.url}</span>
                       </>
                     )}
                     {registryEntry?.requiredEnvKeys && registryEntry.requiredEnvKeys.length > 0 && (
                       <>
-                        <span>·</span>
-                        <span className="text-amber-500 dark:text-amber-400">
+                        <span className="shrink-0">·</span>
+                        <span className="shrink-0 text-amber-500 dark:text-amber-400">
                           {registryEntry.requiredEnvKeys.length} key{registryEntry.requiredEnvKeys.length > 1 ? 's' : ''}
                         </span>
                       </>
@@ -570,20 +618,18 @@ const McpManager: React.FC = () => {
                     </div>
                   </div>
 
-                  <p className="text-xs text-secondary line-clamp-2 mb-2">
-                    {getRegistryEntryDescription(entry)}
-                  </p>
+                  <ClampedText text={getRegistryEntryDescription(entry)} className="text-xs text-secondary mb-2" />
 
-                  <div className="flex items-center gap-2 text-[10px] text-secondary">
-                    <span className={`px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[entry.transportType] || ''}`}>
+                  <div className="flex items-center gap-2 text-[10px] text-secondary min-w-0">
+                    <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[entry.transportType] || ''}`}>
                       {entry.transportType}
                     </span>
-                    <span>·</span>
-                    <span className="truncate">{getStdioCommandSummary(entry.command, entry.defaultArgs)}</span>
+                    <span className="shrink-0">·</span>
+                    <span className="truncate min-w-0">{getStdioCommandSummary(entry.command, entry.defaultArgs)}</span>
                     {entry.requiredEnvKeys && entry.requiredEnvKeys.length > 0 && (
                       <>
-                        <span>·</span>
-                        <span className="text-amber-500 dark:text-amber-400">
+                        <span className="shrink-0">·</span>
+                        <span className="shrink-0 text-amber-500 dark:text-amber-400">
                           {entry.requiredEnvKeys.length} key{entry.requiredEnvKeys.length > 1 ? 's' : ''}
                         </span>
                       </>
@@ -642,7 +688,7 @@ const McpManager: React.FC = () => {
                       </button>
                       <div
                         className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
-                          server.enabled ? 'bg-primary' : 'bg-border'
+                          server.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
                         }`}
                         onClick={() => handleToggleEnabled(server.id)}
                       >
@@ -655,31 +701,22 @@ const McpManager: React.FC = () => {
                     </div>
                   </div>
 
-                  <Tooltip
-                    content={server.description || getTransportSummary(server)}
-                    position="bottom"
-                    maxWidth="360px"
-                    className="block w-full"
-                  >
-                    <p className="text-xs text-secondary line-clamp-2 mb-2">
-                      {server.description || getTransportSummary(server)}
-                    </p>
-                  </Tooltip>
+                  <ClampedText text={server.description || getTransportSummary(server)} className="text-xs text-secondary mb-2" />
 
-                  <div className="flex items-center gap-2 text-[10px] text-secondary">
-                    <span className={`px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
+                  <div className="flex items-center gap-2 text-[10px] text-secondary min-w-0">
+                    <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
                       {server.transportType}
                     </span>
                     {server.transportType === 'stdio' && server.command && (
                       <>
-                        <span>·</span>
-                        <span className="truncate">{server.command}</span>
+                        <span className="shrink-0">·</span>
+                        <span className="truncate min-w-0">{server.command}</span>
                       </>
                     )}
                     {(server.transportType === 'sse' || server.transportType === 'http') && server.url && (
                       <>
-                        <span>·</span>
-                        <span className="truncate">{server.url}</span>
+                        <span className="shrink-0">·</span>
+                        <span className="truncate min-w-0">{server.url}</span>
                       </>
                     )}
                   </div>

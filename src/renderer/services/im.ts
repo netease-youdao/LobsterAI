@@ -3,38 +3,63 @@
  * IPC wrapper for IM gateway operations
  */
 
-import { store } from '../store';
-import { PlatformRegistry } from '@shared/platform';
 import type { Platform } from '@shared/platform';
+import { PlatformRegistry } from '@shared/platform';
+
+import { store } from '../store';
 import {
-  setConfig,
-  setStatus,
-  setLoading,
-  setError,
-  addQQInstance,
-  removeQQInstance,
-  setQQInstanceConfig,
-  addFeishuInstance,
-  removeFeishuInstance,
-  setFeishuInstanceConfig,
   addDingTalkInstance,
+  addDiscordInstance,
+  addEmailInstance,
+  addFeishuInstance,
+  addNimInstance,
+  addQQInstance,
+  addTelegramInstance,
+  addWecomInstance,
   removeDingTalkInstance,
+  removeDiscordInstance,
+  removeEmailInstance,
+  removeFeishuInstance,
+  removeNimInstance,
+  removeQQInstance,
+  removeTelegramInstance,
+  removeWecomInstance,
+  setConfig,
   setDingTalkInstanceConfig,
+  setDiscordInstanceConfig,
+  setEmailInstanceConfig,
+  setError,
+  setFeishuInstanceConfig,
+  setLoading,
+  setNimInstanceConfig,
+  setQQInstanceConfig,
+  setStatus,
+  setTelegramInstanceConfig,
+  setWecomInstanceConfig,
 } from '../store/slices/imSlice';
 import type {
-  IMGatewayConfig,
-  IMGatewayStatus,
-  IMConfigResult,
-  IMStatusResult,
-  IMGatewayResult,
-  IMConnectivityTestResult,
-  IMConnectivityTestResponse,
-  QQOpenClawConfig,
-  QQInstanceConfig,
-  FeishuOpenClawConfig,
-  FeishuInstanceConfig,
-  DingTalkOpenClawConfig,
   DingTalkInstanceConfig,
+  DingTalkOpenClawConfig,
+  DiscordInstanceConfig,
+  DiscordOpenClawConfig,
+  EmailInstanceConfig,
+  FeishuInstanceConfig,
+  FeishuOpenClawConfig,
+  IMConfigResult,
+  IMConnectivityTestResponse,
+  IMConnectivityTestResult,
+  IMGatewayConfig,
+  IMGatewayResult,
+  IMGatewayStatus,
+  IMStatusResult,
+  NimInstanceConfig,
+  NimOpenClawConfig,
+  QQInstanceConfig,
+  QQOpenClawConfig,
+  TelegramInstanceConfig,
+  TelegramOpenClawConfig,
+  WecomInstanceConfig,
+  WecomOpenClawConfig,
 } from '../types/im';
 
 class IMService {
@@ -272,7 +297,7 @@ class IMService {
     const status = this.getStatus();
     return PlatformRegistry.platforms.some(p => {
       const s = status[p];
-      if (p === 'qq' || p === 'feishu' || p === 'dingtalk') {
+      if (p === 'qq' || p === 'feishu' || p === 'dingtalk' || p === 'wecom' || p === 'nim' || p === 'discord') {
         return (s as any)?.instances?.some((i: any) => i.connected);
       }
       return (s as any)?.connected;
@@ -375,6 +400,73 @@ class IMService {
       return false;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update DingTalk instance config';
+      store.dispatch(setError(message));
+      return false;
+    } finally {
+      store.dispatch(setLoading(false));
+    }
+  }
+
+  // ==================== QQ Multi-Instance Operations ====================
+
+  async addNimInstance(name: string): Promise<NimInstanceConfig | null> {
+    try {
+      const result = await window.electron.im.addNimInstance(name);
+      if (result.success && result.instance) {
+        store.dispatch(addNimInstance(result.instance));
+        return result.instance;
+      }
+      console.error('[IM Service] Failed to add NIM instance:', result.error);
+      return null;
+    } catch (error) {
+      console.error('[IM Service] Failed to add NIM instance:', error);
+      return null;
+    }
+  }
+
+  async deleteNimInstance(instanceId: string): Promise<boolean> {
+    try {
+      const result = await window.electron.im.deleteNimInstance(instanceId);
+      if (result.success) {
+        store.dispatch(removeNimInstance(instanceId));
+        return true;
+      }
+      console.error('[IM Service] Failed to delete NIM instance:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to delete NIM instance:', error);
+      return false;
+    }
+  }
+
+  async persistNimInstanceConfig(instanceId: string, config: Partial<NimOpenClawConfig>): Promise<boolean> {
+    try {
+      const result = await window.electron.im.setNimInstanceConfig(instanceId, config, { syncGateway: false });
+      if (result.success) {
+        store.dispatch(setNimInstanceConfig({ instanceId, config }));
+        return true;
+      }
+      console.error('[IM Service] Failed to persist NIM instance config:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to persist NIM instance config:', error);
+      return false;
+    }
+  }
+
+  async updateNimInstanceConfig(instanceId: string, config: Partial<NimOpenClawConfig>): Promise<boolean> {
+    try {
+      store.dispatch(setLoading(true));
+      const result = await window.electron.im.setNimInstanceConfig(instanceId, config, { syncGateway: true });
+      if (result.success) {
+        await this.loadConfig();
+        await this.loadStatus();
+        return true;
+      }
+      store.dispatch(setError(result.error || 'Failed to update NIM instance config'));
+      return false;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update NIM instance config';
       store.dispatch(setError(message));
       return false;
     } finally {
@@ -509,6 +601,282 @@ class IMService {
       return false;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update Feishu instance config';
+      store.dispatch(setError(message));
+      return false;
+    } finally {
+      store.dispatch(setLoading(false));
+    }
+  }
+
+  // ==================== Email Multi-Instance Operations ====================
+
+  async addEmailInstance(name: string): Promise<EmailInstanceConfig | null> {
+    try {
+      const result = await window.electron.im.addEmailInstance(name);
+      if (result.success && result.instance) {
+        store.dispatch(addEmailInstance(result.instance));
+        return result.instance;
+      }
+      console.error('[IM Service] Failed to add email instance:', result.error);
+      return null;
+    } catch (error) {
+      console.error('[IM Service] Failed to add email instance:', error);
+      return null;
+    }
+  }
+
+  async deleteEmailInstance(instanceId: string): Promise<boolean> {
+    try {
+      const result = await window.electron.im.deleteEmailInstance(instanceId);
+      if (result.success) {
+        store.dispatch(removeEmailInstance(instanceId));
+        return true;
+      }
+      console.error('[IM Service] Failed to delete email instance:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to delete email instance:', error);
+      return false;
+    }
+  }
+
+  async persistEmailInstanceConfig(instanceId: string, config: Partial<EmailInstanceConfig>): Promise<boolean> {
+    try {
+      const result: IMGatewayResult = await window.electron.im.setEmailInstanceConfig(
+        instanceId,
+        config,
+        { syncGateway: false },
+      );
+      if (result.success) {
+        store.dispatch(setEmailInstanceConfig({ instanceId, config }));
+        return true;
+      }
+      console.error('[IM Service] Failed to persist email instance config:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to persist email instance config:', error);
+      return false;
+    }
+  }
+
+  async updateEmailInstanceConfig(instanceId: string, config: Partial<EmailInstanceConfig>): Promise<boolean> {
+    try {
+      store.dispatch(setLoading(true));
+      const result: IMGatewayResult = await window.electron.im.setEmailInstanceConfig(
+        instanceId,
+        config,
+        { syncGateway: true },
+      );
+      if (result.success) {
+        await this.loadConfig();
+        await this.loadStatus();
+        return true;
+      }
+      store.dispatch(setError(result.error || 'Failed to update email instance config'));
+      return false;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update email instance config';
+      store.dispatch(setError(message));
+      return false;
+    } finally {
+      store.dispatch(setLoading(false));
+    }
+  }
+
+  // ==================== WeCom Multi-Instance Operations ====================
+
+  async addWecomInstance(name: string): Promise<WecomInstanceConfig | null> {
+    try {
+      const result = await window.electron.im.addWecomInstance(name);
+      if (result.success && result.instance) {
+        store.dispatch(addWecomInstance(result.instance));
+        return result.instance;
+      }
+      console.error('[IM Service] Failed to add WeCom instance:', result.error);
+      return null;
+    } catch (error) {
+      console.error('[IM Service] Failed to add WeCom instance:', error);
+      return null;
+    }
+  }
+
+  async deleteWecomInstance(instanceId: string): Promise<boolean> {
+    try {
+      const result = await window.electron.im.deleteWecomInstance(instanceId);
+      if (result.success) {
+        store.dispatch(removeWecomInstance(instanceId));
+        return true;
+      }
+      console.error('[IM Service] Failed to delete WeCom instance:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to delete WeCom instance:', error);
+      return false;
+    }
+  }
+
+  async persistWecomInstanceConfig(instanceId: string, config: Partial<WecomOpenClawConfig>): Promise<boolean> {
+    try {
+      const result = await window.electron.im.setWecomInstanceConfig(instanceId, config, { syncGateway: false });
+      if (result.success) {
+        store.dispatch(setWecomInstanceConfig({ instanceId, config }));
+        return true;
+      }
+      console.error('[IM Service] Failed to persist WeCom instance config:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to persist WeCom instance config:', error);
+      return false;
+    }
+  }
+
+  async updateWecomInstanceConfig(instanceId: string, config: Partial<WecomOpenClawConfig>): Promise<boolean> {
+    try {
+      store.dispatch(setLoading(true));
+      const result = await window.electron.im.setWecomInstanceConfig(instanceId, config, { syncGateway: true });
+      if (result.success) {
+        await this.loadConfig();
+        await this.loadStatus();
+        return true;
+      }
+      store.dispatch(setError(result.error || 'Failed to update WeCom instance config'));
+      return false;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update WeCom instance config';
+      store.dispatch(setError(message));
+      return false;
+    } finally {
+      store.dispatch(setLoading(false));
+    }
+  }
+
+  // ==================== Telegram Multi-Instance Operations ====================
+
+  async addTelegramInstance(name: string): Promise<TelegramInstanceConfig | null> {
+    try {
+      const result = await window.electron.im.addTelegramInstance(name);
+      if (result.success && result.instance) {
+        store.dispatch(addTelegramInstance(result.instance));
+        return result.instance;
+      }
+      console.error('[IM Service] Failed to add Telegram instance:', result.error);
+      return null;
+    } catch (error) {
+      console.error('[IM Service] Failed to add Telegram instance:', error);
+      return null;
+    }
+  }
+
+  async deleteTelegramInstance(instanceId: string): Promise<boolean> {
+    try {
+      const result = await window.electron.im.deleteTelegramInstance(instanceId);
+      if (result.success) {
+        store.dispatch(removeTelegramInstance(instanceId));
+        return true;
+      }
+      console.error('[IM Service] Failed to delete Telegram instance:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to delete Telegram instance:', error);
+      return false;
+    }
+  }
+
+  async persistTelegramInstanceConfig(instanceId: string, config: Partial<TelegramOpenClawConfig>): Promise<boolean> {
+    try {
+      const result = await window.electron.im.setTelegramInstanceConfig(instanceId, config, { syncGateway: false });
+      if (result.success) {
+        store.dispatch(setTelegramInstanceConfig({ instanceId, config }));
+        return true;
+      }
+      console.error('[IM Service] Failed to persist Telegram instance config:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to persist Telegram instance config:', error);
+      return false;
+    }
+  }
+
+  async updateTelegramInstanceConfig(instanceId: string, config: Partial<TelegramOpenClawConfig>): Promise<boolean> {
+    try {
+      store.dispatch(setLoading(true));
+      const result = await window.electron.im.setTelegramInstanceConfig(instanceId, config, { syncGateway: true });
+      if (result.success) {
+        await this.loadConfig();
+        await this.loadStatus();
+        return true;
+      }
+      store.dispatch(setError(result.error || 'Failed to update Telegram instance config'));
+      return false;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update Telegram instance config';
+      store.dispatch(setError(message));
+      return false;
+    } finally {
+      store.dispatch(setLoading(false));
+    }
+  }
+
+  // ==================== Discord Multi-Instance Operations ====================
+
+  async addDiscordInstance(name: string): Promise<DiscordInstanceConfig | null> {
+    try {
+      const result = await window.electron.im.addDiscordInstance(name);
+      if (result.success && result.instance) {
+        store.dispatch(addDiscordInstance(result.instance));
+        return result.instance;
+      }
+      console.error('[IM Service] Failed to add Discord instance:', result.error);
+      return null;
+    } catch (error) {
+      console.error('[IM Service] Failed to add Discord instance:', error);
+      return null;
+    }
+  }
+
+  async deleteDiscordInstance(instanceId: string): Promise<boolean> {
+    try {
+      const result = await window.electron.im.deleteDiscordInstance(instanceId);
+      if (result.success) {
+        store.dispatch(removeDiscordInstance(instanceId));
+        return true;
+      }
+      console.error('[IM Service] Failed to delete Discord instance:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to delete Discord instance:', error);
+      return false;
+    }
+  }
+
+  async persistDiscordInstanceConfig(instanceId: string, config: Partial<DiscordOpenClawConfig>): Promise<boolean> {
+    try {
+      const result = await window.electron.im.setDiscordInstanceConfig(instanceId, config, { syncGateway: false });
+      if (result.success) {
+        store.dispatch(setDiscordInstanceConfig({ instanceId, config }));
+        return true;
+      }
+      console.error('[IM Service] Failed to persist Discord instance config:', result.error);
+      return false;
+    } catch (error) {
+      console.error('[IM Service] Failed to persist Discord instance config:', error);
+      return false;
+    }
+  }
+
+  async updateDiscordInstanceConfig(instanceId: string, config: Partial<DiscordOpenClawConfig>): Promise<boolean> {
+    try {
+      store.dispatch(setLoading(true));
+      const result = await window.electron.im.setDiscordInstanceConfig(instanceId, config, { syncGateway: true });
+      if (result.success) {
+        await this.loadConfig();
+        await this.loadStatus();
+        return true;
+      }
+      store.dispatch(setError(result.error || 'Failed to update Discord instance config'));
+      return false;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update Discord instance config';
       store.dispatch(setError(message));
       return false;
     } finally {

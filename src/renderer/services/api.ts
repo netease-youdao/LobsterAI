@@ -242,7 +242,7 @@ class ApiService {
   }
 
   private providerRequiresApiKey(provider: string): boolean {
-    return provider !== 'ollama' && provider !== 'github-copilot';
+    return provider !== 'ollama' && provider !== 'lm-studio' && provider !== 'github-copilot';
   }
 
   // 检测当前选择的模型属于哪个 provider
@@ -251,7 +251,7 @@ class ApiService {
     if (
       normalizedHint
       && (
-        ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'github-copilot', 'ollama'].includes(normalizedHint)
+        ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'youdaozhiyun', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'stepfun', 'volcengine', 'github-copilot', 'ollama', 'lm-studio'].includes(normalizedHint)
         || normalizedHint.startsWith('custom_')
       )
     ) {

@@ -4,39 +4,44 @@
  * and Telegram, Discord, QQ, WeCom, Weixin, POPO, NeteaseBee via OpenClaw
  */
 
+import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import * as path from 'path';
+
+import { classifyErrorKey } from '../../common/coworkErrorClassify';
+import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
-import { NimGateway } from './nimGateway';
+import type { CoworkRuntime } from '../libs/agentEngine/types';
+import { fetchJsonWithTimeout } from './http';
 import { IMChatHandler } from './imChatHandler';
 import { IMCoworkHandler } from './imCoworkHandler';
-import { IMStore } from './imStore';
+import {
+  buildDingTalkSendParamsFromRoute,
+  buildDingTalkSessionKeyCandidates,
+  type OpenClawDeliveryRoute,
+  resolveManagedSessionDeliveryRoute,
+  resolveOpenClawDeliveryRouteForSessionKeys,
+} from './imDeliveryRoute';
 import type {
   IMScheduledTaskCreationResult,
   ParsedIMScheduledTaskRequest,
 } from './imScheduledTaskHandler';
 import { createIMScheduledTaskRequestDetector } from './imScheduledTaskHandler';
+import { IMStore } from './imStore';
+import { NimGateway } from './nimGateway';
 import {
-  buildDingTalkSessionKeyCandidates,
-  buildDingTalkSendParamsFromRoute,
-  type OpenClawDeliveryRoute,
-  resolveManagedSessionDeliveryRoute,
-  resolveOpenClawDeliveryRouteForSessionKeys,
-} from './imDeliveryRoute';
-import { fetchJsonWithTimeout } from './http';
-import {
-  IMGatewayConfig,
-  IMGatewayStatus,
-  Platform,
-  IMMessage,
   IMConnectivityCheck,
   IMConnectivityTestResult,
   IMConnectivityVerdict,
+  IMGatewayConfig,
+  IMGatewayStatus,
+  IMMessage,
+  NimInstanceConfig,
+  Platform,
 } from './types';
-import Database from 'better-sqlite3';
-import type { CoworkRuntime } from '../libs/agentEngine/types';
-import type { CoworkStore } from '../coworkStore';
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
+
+const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
+
 const CONNECTIVITY_TIMEOUT_MS = 10_000;
 const INBOUND_ACTIVITY_WARN_AFTER_MS = 2 * 60 * 1000;
 
@@ -395,26 +400,32 @@ export class IMGatewayManager extends EventEmitter {
   // ==================== Status ====================
   getStatus(): IMGatewayStatus {
     const config = this.getConfig();
-    // Telegram runs via OpenClaw; reflect enabled+configured state as connected
-    const tgConfig = config.telegram;
+    // Telegram runs via OpenClaw; reflect enabled+configured state per instance
     const telegramStatus = {
-      connected: Boolean(tgConfig?.enabled && tgConfig.botToken),
-      startedAt: null as number | null,
-      lastError: null as string | null,
-      botUsername: null as string | null,
-      lastInboundAt: null as number | null,
-      lastOutboundAt: null as number | null,
+      instances: (config.telegram?.instances || []).map(inst => ({
+        instanceId: inst.instanceId,
+        instanceName: inst.instanceName,
+        connected: Boolean(inst.enabled && inst.botToken),
+        startedAt: null as number | null,
+        lastError: null as string | null,
+        botUsername: null as string | null,
+        lastInboundAt: null as number | null,
+        lastOutboundAt: null as number | null,
+      })),
     };
-    // Discord runs via OpenClaw; reflect enabled+configured state as connected
-    const dcConfig = config.discord;
+    // Discord runs via OpenClaw; reflect enabled+configured state per instance
     const discordStatus = {
-      connected: Boolean(dcConfig?.enabled && dcConfig.botToken),
-      starting: false,
-      startedAt: null as number | null,
-      lastError: null as string | null,
-      botUsername: null as string | null,
-      lastInboundAt: null as number | null,
-      lastOutboundAt: null as number | null,
+      instances: (config.discord?.instances || []).map(inst => ({
+        instanceId: inst.instanceId,
+        instanceName: inst.instanceName,
+        connected: Boolean(inst.enabled && inst.botToken),
+        starting: false,
+        startedAt: null as number | null,
+        lastError: null as string | null,
+        botUsername: null as string | null,
+        lastInboundAt: null as number | null,
+        lastOutboundAt: null as number | null,
+      })),
     };
     // DingTalk runs via OpenClaw; reflect enabled+configured state per instance
     const dingtalkStatus = {
@@ -457,17 +468,18 @@ export class IMGatewayManager extends EventEmitter {
         })),
       },
       discord: discordStatus,
-      nim: (() => {
-        const nmConfig = config.nim;
-        return {
-          connected: Boolean(nmConfig?.enabled && nmConfig.appKey && nmConfig.account && nmConfig.token),
+      nim: {
+        instances: (config.nim?.instances || []).map(inst => ({
+          instanceId: inst.instanceId,
+          instanceName: inst.instanceName,
+          connected: Boolean(inst.enabled && ((inst.nimToken && inst.nimToken.trim()) || (inst.appKey && inst.account && inst.token))),
           startedAt: null as number | null,
           lastError: null as string | null,
-          botAccount: nmConfig?.account || null,
+          botAccount: inst.account || null,
           lastInboundAt: null as number | null,
           lastOutboundAt: null as number | null,
-        };
-      })(),
+        })),
+      },
       'netease-bee': (() => {
         const beeConfig = config['netease-bee'];
         return {
@@ -480,15 +492,19 @@ export class IMGatewayManager extends EventEmitter {
         };
       })(),
       wecom: {
-        connected: Boolean(config.wecom?.enabled && config.wecom.botId && config.wecom.secret),
-        startedAt: null as number | null,
-        lastError: null as string | null,
-        botId: config.wecom?.botId || null,
-        lastInboundAt: null as number | null,
-        lastOutboundAt: null as number | null,
+        instances: (config.wecom?.instances || []).map(inst => ({
+          instanceId: inst.instanceId,
+          instanceName: inst.instanceName,
+          connected: Boolean(inst.enabled && inst.botId && inst.secret),
+          startedAt: null as number | null,
+          lastError: null as string | null,
+          botId: inst.botId || null,
+          lastInboundAt: null as number | null,
+          lastOutboundAt: null as number | null,
+        })),
       },
       weixin: {
-        connected: Boolean(config.weixin?.enabled && config.weixin?.accountId),
+        connected: Boolean(config.weixin?.enabled),
         startedAt: null as number | null,
         lastError: null as string | null,
         lastInboundAt: null as number | null,
@@ -500,6 +516,19 @@ export class IMGatewayManager extends EventEmitter {
         lastError: null as string | null,
         lastInboundAt: null as number | null,
         lastOutboundAt: null as number | null,
+      },
+      email: {
+        instances: (config.email?.instances || []).map(inst => ({
+          instanceId: inst.instanceId,
+          instanceName: inst.instanceName,
+          connected: Boolean(inst.enabled && inst.email),
+          startedAt: null as number | null,
+          lastError: null as string | null,
+          email: inst.email || null,
+          transport: inst.transport || null,
+          lastInboundAt: null as number | null,
+          lastOutboundAt: null as number | null,
+        })),
       },
     };
   }
@@ -566,6 +595,11 @@ export class IMGatewayManager extends EventEmitter {
       };
     }
 
+    // Email connectivity test (IMAP login or WS API key validation)
+    if (platform === 'email') {
+      return this.testEmailConnectivity(configOverride);
+    }
+
     const config = this.buildMergedConfig(configOverride);
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
@@ -626,6 +660,8 @@ export class IMGatewayManager extends EventEmitter {
       enabled = config.feishu?.instances?.some(i => i.enabled) ?? false;
     } else if (p === 'dingtalk') {
       enabled = config.dingtalk?.instances?.some(i => i.enabled) ?? false;
+    } else if (p === 'wecom') {
+      enabled = config.wecom?.instances?.some(i => i.enabled) ?? false;
     } else {
       enabled = Boolean((config[platform] as { enabled?: boolean })?.enabled);
     }
@@ -881,17 +917,20 @@ export class IMGatewayManager extends EventEmitter {
     if (feishuInstances.some(i => i.enabled && i.appId && i.appSecret)) {
       openClawPlatformsToStart.push('feishu');
     }
-    if (config.telegram?.enabled && config.telegram.botToken) {
+    const telegramInstances = config.telegram?.instances || [];
+    if (telegramInstances.some(i => i.enabled && i.botToken)) {
       openClawPlatformsToStart.push('telegram');
     }
-    if (config.discord.enabled && config.discord.botToken) {
+    const discordInstances = config.discord?.instances || [];
+    if (discordInstances.some(i => i.enabled && i.botToken)) {
       openClawPlatformsToStart.push('discord');
     }
     const qqInstances = config.qq?.instances || [];
     if (qqInstances.some(i => i.enabled && i.appId && i.appSecret)) {
       openClawPlatformsToStart.push('qq');
     }
-    if (config.wecom?.enabled && config.wecom?.botId && config.wecom?.secret) {
+    const wecomInstances = config.wecom?.instances || [];
+    if (wecomInstances.some(i => i.enabled && i.botId && i.secret)) {
       openClawPlatformsToStart.push('wecom');
     }
     if (config.weixin?.enabled) {
@@ -900,7 +939,8 @@ export class IMGatewayManager extends EventEmitter {
     if (config.popo?.enabled && config.popo?.appKey && config.popo?.appSecret && config.popo?.aesKey && (config.popo.connectionMode === 'websocket' || config.popo.token)) {
       openClawPlatformsToStart.push('popo');
     }
-    if (config.nim?.enabled && config.nim.appKey && config.nim.account && config.nim.token) {
+    const nimInstances = config.nim?.instances || [];
+    if (nimInstances.some(i => i.enabled && ((i.nimToken && i.nimToken.trim()) || (i.appKey && i.account && i.token)))) {
       openClawPlatformsToStart.push('nim');
     }
     if (config['netease-bee']?.enabled && config['netease-bee']?.clientId && config['netease-bee']?.secret) {
@@ -940,19 +980,22 @@ export class IMGatewayManager extends EventEmitter {
       return feishuInstances.some(i => i.enabled && i.appId && i.appSecret);
     }
     if (platform === 'telegram') {
-      // Telegram runs via OpenClaw; consider it connected when enabled and configured
+      // Telegram runs via OpenClaw; consider it connected when any instance is enabled and configured
       const config = this.getConfig();
-      return Boolean(config.telegram?.enabled && config.telegram.botToken);
+      const telegramInstances = config.telegram?.instances || [];
+      return telegramInstances.some(i => i.enabled && i.botToken);
     }
     if (platform === 'discord') {
-      // Discord runs via OpenClaw; consider it connected when enabled and configured
+      // Discord runs via OpenClaw; consider it connected when any instance is enabled and configured
       const config = this.getConfig();
-      return Boolean(config.discord?.enabled && config.discord.botToken);
+      const discordInstances = config.discord?.instances || [];
+      return discordInstances.some(i => i.enabled && i.botToken);
     }
     if (platform === 'nim') {
       // NIM runs via OpenClaw; consider it connected when enabled and configured
       const config = this.getConfig();
-      return Boolean(config.nim?.enabled && config.nim.appKey && config.nim.account && config.nim.token);
+      const nimInstances = config.nim?.instances || [];
+      return nimInstances.some(i => i.enabled && ((i.nimToken && i.nimToken.trim()) || (i.appKey && i.account && i.token)));
     }
     if (platform === 'netease-bee') {
       // netease-bee runs via OpenClaw; status comes from OpenClaw
@@ -966,13 +1009,14 @@ export class IMGatewayManager extends EventEmitter {
       return qqInstances.some(i => i.enabled && i.appId && i.appSecret);
     }
     if (platform === 'wecom') {
-      // WeCom runs via OpenClaw; consider it connected when enabled and configured
+      // WeCom runs via OpenClaw; consider it connected when any instance is enabled and configured
       const config = this.getConfig();
-      return Boolean(config.wecom?.enabled && config.wecom.botId && config.wecom.secret);
+      const wecomInstances = config.wecom?.instances || [];
+      return wecomInstances.some(i => i.enabled && i.botId && i.secret);
     }
     if (platform === 'weixin') {
       const config = this.getConfig();
-      return Boolean(config.weixin?.enabled && config.weixin?.accountId);
+      return Boolean(config.weixin?.enabled);
     }
     if (platform === 'popo') {
       // POPO runs via OpenClaw; consider it connected when enabled and configured
@@ -1055,10 +1099,11 @@ export class IMGatewayManager extends EventEmitter {
     const testedAt = Date.now();
     const platform: Platform = 'telegram';
 
-    // Resolve the Telegram config (now TelegramOpenClawConfig type)
+    // Resolve the Telegram config — pick first enabled instance with a botToken
     const mergedConfig = this.buildMergedConfig(configOverride);
-    const tgConfig = mergedConfig.telegram;
-    const botToken = tgConfig?.botToken || '';
+    const instances = mergedConfig.telegram?.instances || [];
+    const tgInstance = instances.find(i => i.enabled && i.botToken) || instances[0];
+    const botToken = tgInstance?.botToken || '';
 
     // Check 1: Bot token present
     if (!botToken) {
@@ -1131,7 +1176,8 @@ export class IMGatewayManager extends EventEmitter {
     const platform: Platform = 'discord';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
-    const dcConfig = mergedConfig.discord;
+    const discordInstances = mergedConfig.discord?.instances || [];
+    const dcConfig = discordInstances.find(i => i.enabled) || discordInstances[0];
     const botToken = dcConfig?.botToken || '';
 
     // Check 1: Bot token present
@@ -1370,7 +1416,8 @@ export class IMGatewayManager extends EventEmitter {
     const platform: Platform = 'wecom';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
-    const wcConfig = mergedConfig.wecom;
+    const wecomInstances = mergedConfig.wecom?.instances || [];
+    const wcConfig = wecomInstances.find(i => i.enabled) || wecomInstances[0];
 
     // Check 1: Credentials present
     if (!wcConfig?.botId || !wcConfig?.secret) {
@@ -1497,7 +1544,7 @@ export class IMGatewayManager extends EventEmitter {
         'web.login.wait',
         { timeoutMs: 480000, ...(accountId ? { accountId } : {}) },
       );
-      console.log('[IMGatewayManager] Weixin QR login wait result:', result.message, 'connected:', result.connected);
+      console.log('[IMGatewayManager] Weixin QR login wait result:', JSON.stringify({ connected: result.connected, message: result.message, accountId: result.accountId }));
       if (result.connected) {
         // Sync config and restart gateway so the weixin channel starts with
         // the newly saved account credentials. The gateway's web.login.wait
@@ -1513,6 +1560,89 @@ export class IMGatewayManager extends EventEmitter {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // POPO QR code login (direct HTTP polling, no OpenClaw gateway RPC)
+  // ---------------------------------------------------------------------------
+
+  private static readonly POPO_QRCODE_BASE_URL =
+    'https://f2e.popo.netease.com/polymers/lobster-bot-h5/?pp_htb=1&pp_back_type=cross&taskToken=';
+  private static readonly POPO_POLLING_API =
+    'https://open.popo.netease.com/open-apis/no-auth/openclaw/v1/polling';
+  private static readonly POPO_COMPLETE_API =
+    'https://open.popo.netease.com/open-apis/no-auth/openclaw/v1/completed';
+  private static readonly POPO_POLLING_INTERVAL_MS = 5_000;
+  private static readonly POPO_POLLING_TIMEOUT_MS = 10 * 60_000;
+
+  /**
+   * Start POPO QR code login: generate a taskToken and return the QR URL.
+   */
+  popoQrLoginStart(): { qrUrl: string; taskToken: string; timeoutMs: number } {
+    const { randomUUID } = require('crypto') as typeof import('crypto');
+    const taskToken = randomUUID();
+    const timeout = Date.now() + IMGatewayManager.POPO_POLLING_TIMEOUT_MS;
+    const qrUrl = `${IMGatewayManager.POPO_QRCODE_BASE_URL}${taskToken}&timeout=${timeout}`;
+    console.log('[IMGatewayManager] POPO QR login started, taskToken:', taskToken);
+    return { qrUrl, taskToken, timeoutMs: IMGatewayManager.POPO_POLLING_TIMEOUT_MS };
+  }
+
+  /**
+   * Poll POPO backend for QR scan result. Blocks until credentials are returned or timeout.
+   * Returns { success, appKey, appSecret, aesKey } on success.
+   */
+  async popoQrLoginPoll(taskToken: string): Promise<{
+    success: boolean;
+    appKey?: string;
+    appSecret?: string;
+    aesKey?: string;
+    message: string;
+  }> {
+    const deadline = Date.now() + IMGatewayManager.POPO_POLLING_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      try {
+        const url = `${IMGatewayManager.POPO_POLLING_API}?taskToken=${taskToken}`;
+        const resp = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(8_000),
+        });
+        if (resp.ok) {
+          const data = await resp.json() as {
+            data?: { status?: string; result?: { appKey?: string; appSecret?: string; aesKey?: string } };
+          };
+          if (data?.data?.status === 'CREATED' && data.data.result) {
+            const { appKey, appSecret, aesKey } = data.data.result;
+            if (appKey && appSecret && aesKey) {
+              console.log('[IMGatewayManager] POPO QR login got credentials');
+              // Notify server that setup is complete (best-effort)
+              void this.popoQrNotifyComplete(taskToken);
+              return { success: true, appKey, appSecret, aesKey, message: 'POPO 机器人绑定成功！' };
+            }
+          }
+        }
+      } catch {
+        // Ignore individual poll errors, keep trying
+      }
+      await new Promise(r => setTimeout(r, IMGatewayManager.POPO_POLLING_INTERVAL_MS));
+    }
+
+    console.warn('[IMGatewayManager] POPO QR login poll timed out');
+    return { success: false, message: '扫码超时，请重试。' };
+  }
+
+  private async popoQrNotifyComplete(taskToken: string): Promise<void> {
+    try {
+      const url = `${IMGatewayManager.POPO_COMPLETE_API}?taskToken=${taskToken}`;
+      await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch {
+      console.warn('[IMGatewayManager] POPO QR notify complete failed (non-critical)');
+    }
+  }
+
   private async testNimOpenClawConnectivity(
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult> {
@@ -1521,13 +1651,17 @@ export class IMGatewayManager extends EventEmitter {
     const platform: Platform = 'nim';
 
     const mergedConfig = this.buildMergedConfig(configOverride);
-    const nimConfig = mergedConfig.nim;
+    const nimConfig = (mergedConfig.nim?.instances || []).find((inst) =>
+      Boolean((inst.nimToken && inst.nimToken.trim()) || inst.enabled || inst.appKey || inst.account || inst.token)
+    );
 
-    if (!nimConfig?.appKey || !nimConfig?.account || !nimConfig?.token) {
+    if (!nimConfig || (!nimConfig.nimToken && (!nimConfig.appKey || !nimConfig.account || !nimConfig.token))) {
       const missing: string[] = [];
-      if (!nimConfig?.appKey) missing.push('appKey');
-      if (!nimConfig?.account) missing.push('account');
-      if (!nimConfig?.token) missing.push('token');
+      if (!nimConfig?.nimToken) {
+        if (!nimConfig?.appKey) missing.push('appKey');
+        if (!nimConfig?.account) missing.push('account');
+        if (!nimConfig?.token) missing.push('token');
+      }
       checks.push({
         code: 'missing_credentials',
         level: 'fail',
@@ -1715,11 +1849,11 @@ export class IMGatewayManager extends EventEmitter {
       dingtalk: configOverride.dingtalk || current.dingtalk,
       feishu: configOverride.feishu || current.feishu,
       qq: configOverride.qq || current.qq,
-      telegram: { ...current.telegram, ...(configOverride.telegram || {}) },
-      discord: { ...current.discord, ...(configOverride.discord || {}) },
+      telegram: configOverride.telegram || current.telegram,
+      discord: configOverride.discord || current.discord,
       nim: { ...current.nim, ...(configOverride.nim || {}) },
       'netease-bee': { ...current['netease-bee'], ...(configOverride['netease-bee'] || {}) },
-      wecom: { ...current.wecom, ...(configOverride.wecom || {}) },
+      wecom: configOverride.wecom || current.wecom,
       weixin: { ...current.weixin, ...(configOverride.weixin || {}) },
       popo: { ...current.popo, ...(configOverride.popo || {}) },
       settings: { ...current.settings, ...(configOverride.settings || {}) },
@@ -1746,13 +1880,21 @@ export class IMGatewayManager extends EventEmitter {
       return fields;
     }
     if (platform === 'telegram') {
-      return config.telegram.botToken ? [] : ['botToken'];
+      const telegramInstances = config.telegram?.instances || [];
+      const tgInst = telegramInstances.find(i => i.enabled);
+      if (!tgInst) return ['botToken'];
+      return tgInst.botToken ? [] : ['botToken'];
     }
     if (platform === 'nim') {
+      const nimInstances = config.nim?.instances || [];
+      const nimInst = nimInstances.find(i => i.enabled);
+      if (!nimInst) return ['appKey', 'account', 'token'];
       const fields: string[] = [];
-      if (!config.nim.appKey) fields.push('appKey');
-      if (!config.nim.account) fields.push('account');
-      if (!config.nim.token) fields.push('token');
+      if (!nimInst.nimToken) {
+        if (!nimInst.appKey) fields.push('appKey');
+        if (!nimInst.account) fields.push('account');
+        if (!nimInst.token) fields.push('token');
+      }
       return fields;
     }
     if (platform === 'netease-bee') {
@@ -1771,9 +1913,12 @@ export class IMGatewayManager extends EventEmitter {
       return fields;
     }
     if (platform === 'wecom') {
+      const wecomInstances = config.wecom?.instances || [];
+      const wcInst = wecomInstances.find(i => i.enabled);
+      if (!wcInst) return ['botId', 'secret'];
       const fields: string[] = [];
-      if (!config.wecom?.botId) fields.push('botId');
-      if (!config.wecom?.secret) fields.push('secret');
+      if (!wcInst.botId) fields.push('botId');
+      if (!wcInst.secret) fields.push('secret');
       return fields;
     }
     if (platform === 'weixin') {
@@ -1788,7 +1933,9 @@ export class IMGatewayManager extends EventEmitter {
       if (!config.popo?.aesKey) fields.push('aesKey');
       return fields;
     }
-    return config.discord.botToken ? [] : ['botToken'];
+    const discordInstances = config.discord?.instances || [];
+    const dcInst = discordInstances.find(i => i.enabled);
+    return dcInst?.botToken ? [] : ['botToken'];
   }
 
   private async runAuthProbe(platform: Platform, config: IMGatewayConfig): Promise<string> {
@@ -1832,11 +1979,11 @@ export class IMGatewayManager extends EventEmitter {
     }
 
     if (platform === 'nim') {
-      const { appKey, account, token } = config.nim;
-      if (!appKey || !account || !token) {
+      const nimInst = (config.nim?.instances || []).find(i => i.enabled && ((i.nimToken && i.nimToken.trim()) || (i.appKey && i.account && i.token)));
+      if (!nimInst) {
         throw new Error(t('imConfigIncomplete'));
       }
-      return t('imNimConfigReady', { account });
+      return t('imNimConfigReady', { account: nimInst.account });
     }
 
     if (platform === 'netease-bee') {
@@ -1850,11 +1997,12 @@ export class IMGatewayManager extends EventEmitter {
     }
 
     if (platform === 'wecom') {
-      const { botId, secret } = config.wecom;
-      if (!botId || !secret) {
+      const wecomInstances = config.wecom?.instances || [];
+      const wcInst = wecomInstances.find(i => i.enabled && i.botId && i.secret);
+      if (!wcInst) {
         throw new Error(t('imConfigIncomplete'));
       }
-      return t('imWecomConfigReadyOpenClaw', { botId });
+      return t('imWecomConfigReadyOpenClaw', { botId: wcInst.botId });
 
     }
 
@@ -2153,7 +2301,7 @@ export class IMGatewayManager extends EventEmitter {
     return {
       coworkSessionId: normalizedCoworkSessionId,
       candidateSessionKeys,
-      dingtalkSessionKeys: this.collectSessionKeysByChannel(sessions, 'dingtalk'),
+      dingtalkSessionKeys: this.collectSessionKeysByChannel(sessions, DINGTALK_OPENCLAW_CHANNEL),
       resolved: resolveOpenClawDeliveryRouteForSessionKeys(candidateSessionKeys, sessions)
         ?? resolveManagedSessionDeliveryRoute(normalizedCoworkSessionId, sessions),
     };
@@ -2280,7 +2428,7 @@ export class IMGatewayManager extends EventEmitter {
       return {
         sessionKey,
         route: {
-          channel: 'dingtalk',
+          channel: DINGTALK_OPENCLAW_CHANNEL,
           to,
           ...(accountId ? { accountId } : {}),
         },
@@ -2341,53 +2489,53 @@ export class IMGatewayManager extends EventEmitter {
       return startedAt ? Date.parse(startedAt) : null;
     }
     if (platform === 'dingtalk') return status.dingtalk.instances?.[0]?.startedAt ?? null;
-    if (platform === 'telegram') return status.telegram.startedAt;
-    if (platform === 'nim') return status.nim.startedAt;
+    if (platform === 'telegram') return status.telegram.instances?.[0]?.startedAt ?? null;
+    if (platform === 'nim') return status.nim.instances?.[0]?.startedAt ?? null;
     if (platform === 'netease-bee') return status['netease-bee'].startedAt;
     if (platform === 'qq') return status.qq.instances?.[0]?.startedAt ?? null;
-    if (platform === 'wecom') return status.wecom.startedAt;
+    if (platform === 'wecom') return status.wecom.instances?.[0]?.startedAt ?? null;
     if (platform === 'weixin') return status.weixin.startedAt;
     if (platform === 'popo') return status.popo.startedAt;
-    return status.discord.startedAt;
+    return status.discord.instances?.[0]?.startedAt ?? null;
   }
 
   private getLastInboundAt(platform: Platform, status: IMGatewayStatus): number | null {
     if (platform === 'dingtalk') return status.dingtalk.instances?.[0]?.lastInboundAt ?? null;
     if (platform === 'feishu') return status.feishu.instances?.[0]?.lastInboundAt ?? null;
-    if (platform === 'telegram') return status.telegram.lastInboundAt;
-    if (platform === 'nim') return status.nim.lastInboundAt;
+    if (platform === 'telegram') return status.telegram.instances?.[0]?.lastInboundAt ?? null;
+    if (platform === 'nim') return status.nim.instances?.[0]?.lastInboundAt ?? null;
     if (platform === 'netease-bee') return status['netease-bee'].lastInboundAt;
     if (platform === 'qq') return status.qq.instances?.[0]?.lastInboundAt ?? null;
-    if (platform === 'wecom') return status.wecom.lastInboundAt;
+    if (platform === 'wecom') return status.wecom.instances?.[0]?.lastInboundAt ?? null;
     if (platform === 'weixin') return status.weixin.lastInboundAt;
     if (platform === 'popo') return status.popo.lastInboundAt;
-    return status.discord.lastInboundAt;
+    return status.discord.instances?.[0]?.lastInboundAt ?? null;
   }
 
   private getLastOutboundAt(platform: Platform, status: IMGatewayStatus): number | null {
     if (platform === 'dingtalk') return status.dingtalk.instances?.[0]?.lastOutboundAt ?? null;
     if (platform === 'feishu') return status.feishu.instances?.[0]?.lastOutboundAt ?? null;
-    if (platform === 'telegram') return status.telegram.lastOutboundAt;
-    if (platform === 'nim') return status.nim.lastOutboundAt;
+    if (platform === 'telegram') return status.telegram.instances?.[0]?.lastOutboundAt ?? null;
+    if (platform === 'nim') return status.nim.instances?.[0]?.lastOutboundAt ?? null;
     if (platform === 'netease-bee') return status['netease-bee'].lastOutboundAt;
     if (platform === 'qq') return status.qq.instances?.[0]?.lastOutboundAt ?? null;
-    if (platform === 'wecom') return status.wecom.lastOutboundAt;
+    if (platform === 'wecom') return status.wecom.instances?.[0]?.lastOutboundAt ?? null;
     if (platform === 'weixin') return status.weixin.lastOutboundAt;
     if (platform === 'popo') return status.popo.lastOutboundAt;
-    return status.discord.lastOutboundAt;
+    return status.discord.instances?.[0]?.lastOutboundAt ?? null;
   }
 
   private getLastError(platform: Platform, status: IMGatewayStatus): string | null {
     if (platform === 'dingtalk') return status.dingtalk.instances?.[0]?.lastError ?? null;
     if (platform === 'feishu') return status.feishu.instances?.[0]?.error ?? null;
-    if (platform === 'telegram') return status.telegram.lastError;
-    if (platform === 'nim') return status.nim.lastError;
+    if (platform === 'telegram') return status.telegram.instances?.[0]?.lastError ?? null;
+    if (platform === 'nim') return status.nim.instances?.[0]?.lastError ?? null;
     if (platform === 'netease-bee') return status['netease-bee'].lastError;
     if (platform === 'qq') return status.qq.instances?.[0]?.lastError ?? null;
-    if (platform === 'wecom') return status.wecom.lastError;
+    if (platform === 'wecom') return status.wecom.instances?.[0]?.lastError ?? null;
     if (platform === 'weixin') return status.weixin.lastError;
     if (platform === 'popo') return status.popo.lastError;
-    return status.discord.lastError;
+    return status.discord.instances?.[0]?.lastError ?? null;
   }
 
   // ==================== Feishu Bot Install Helpers ====================
@@ -2474,6 +2622,124 @@ export class IMGatewayManager extends EventEmitter {
     }
   }
 
+  // ==================== DingTalk Bot Install Helpers ====================
+
+  private static readonly DINGTALK_REGISTRATION_BASE_URL = 'https://oapi.dingtalk.com';
+  private static readonly DINGTALK_REGISTRATION_SOURCE = 'DING_DWS_CLAW';
+
+  /**
+   * Start the DingTalk Device Flow onboarding: init + begin.
+   * Returns data needed to render a QR code in the UI.
+   */
+  async startDingTalkInstallQrcode(): Promise<{
+    url: string;
+    deviceCode: string;
+    interval: number;
+    expireIn: number;
+  }> {
+    const baseUrl = IMGatewayManager.DINGTALK_REGISTRATION_BASE_URL;
+    const source = IMGatewayManager.DINGTALK_REGISTRATION_SOURCE;
+
+    // Step 1: init — obtain nonce
+    const initResp = await fetch(`${baseUrl}/app/registration/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source }),
+    });
+    const initData = await initResp.json() as { errcode: number; errmsg?: string; nonce?: string };
+    if (initData.errcode !== 0 || !initData.nonce) {
+      throw new Error(initData.errmsg || 'DingTalk registration init failed');
+    }
+
+    // Step 2: begin — obtain device_code + QR url
+    const beginResp = await fetch(`${baseUrl}/app/registration/begin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nonce: initData.nonce }),
+    });
+    const beginData = await beginResp.json() as {
+      errcode: number;
+      errmsg?: string;
+      device_code?: string;
+      verification_uri_complete?: string;
+      interval?: number;
+      expires_in?: number;
+    };
+    if (beginData.errcode !== 0 || !beginData.device_code || !beginData.verification_uri_complete) {
+      throw new Error(beginData.errmsg || 'DingTalk registration begin failed');
+    }
+
+    return {
+      url: beginData.verification_uri_complete,
+      deviceCode: beginData.device_code,
+      interval: beginData.interval ?? 5,
+      expireIn: beginData.expires_in ?? 600,
+    };
+  }
+
+  /**
+   * Poll DingTalk Device Flow for the result of a QR code scan.
+   */
+  async pollDingTalkInstall(deviceCode: string): Promise<{
+    done: boolean;
+    clientId?: string;
+    clientSecret?: string;
+    error?: string;
+  }> {
+    const baseUrl = IMGatewayManager.DINGTALK_REGISTRATION_BASE_URL;
+    const pollResp = await fetch(`${baseUrl}/app/registration/poll`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_code: deviceCode }),
+    });
+    const pollData = await pollResp.json() as {
+      errcode: number;
+      errmsg?: string;
+      status?: string;
+      client_id?: string;
+      client_secret?: string;
+      fail_reason?: string;
+    };
+    if (pollData.errcode !== 0) {
+      return { done: false, error: pollData.errmsg || 'poll error' };
+    }
+    const status = (pollData.status ?? '').toUpperCase();
+    if (status === 'SUCCESS' && pollData.client_id && pollData.client_secret) {
+      return { done: true, clientId: pollData.client_id, clientSecret: pollData.client_secret };
+    }
+    if (status === 'FAIL') {
+      return { done: false, error: pollData.fail_reason || 'authorization failed' };
+    }
+    if (status === 'EXPIRED') {
+      return { done: false, error: 'authorization expired' };
+    }
+    // WAITING or other — keep polling
+    return { done: false };
+  }
+
+  /**
+   * Validate existing DingTalk app credentials (Client ID + Client Secret).
+   */
+  async verifyDingTalkCredentials(clientId: string, clientSecret: string): Promise<{
+    success: boolean;
+    error?: string;
+  }> {
+    try {
+      const resp = await fetch('https://api.dingtalk.com/v1.0/oauth2/accessToken', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appKey: clientId, appSecret: clientSecret }),
+      });
+      const data = await resp.json() as { accessToken?: string; code?: string; message?: string };
+      if (data.accessToken) {
+        return { success: true };
+      }
+      return { success: false, error: data.message || t('dingtalkVerifyCredentialsFailed') };
+    } catch (err: unknown) {
+      return { success: false, error: (err instanceof Error ? err.message : undefined) || t('dingtalkVerifyFailed') };
+    }
+  }
+
   private calculateVerdict(checks: IMConnectivityCheck[]): IMConnectivityVerdict {
     if (checks.some((check) => check.level === 'fail')) {
       return 'fail';
@@ -2482,5 +2748,197 @@ export class IMGatewayManager extends EventEmitter {
       return 'warn';
     }
     return 'pass';
+  }
+
+  private async testEmailConnectivity(
+    configOverride?: Partial<IMGatewayConfig>,
+  ): Promise<IMConnectivityTestResult> {
+    const checks: IMConnectivityCheck[] = [];
+    const testedAt = Date.now();
+    const platform: Platform = 'email';
+
+    const mergedConfig = this.buildMergedConfig(configOverride);
+    const emailInstances = mergedConfig.email?.instances || [];
+    const inst = emailInstances.find(i => i.enabled) || emailInstances[0];
+
+    if (!inst) {
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: t('imMissingCredentials', { fields: 'email' }),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    if (!inst.email) {
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: t('imMissingCredentials', { fields: 'email address' }),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    if (inst.transport === 'imap') {
+      // IMAP mode: test IMAP login via raw TLS socket
+      const missing: string[] = [];
+      if (!inst.password) missing.push('password');
+      if (!inst.imapHost) missing.push('IMAP host');
+      if (missing.length > 0) {
+        checks.push({
+          code: 'missing_credentials',
+          level: 'fail',
+          message: t('imMissingCredentials', { fields: missing.join(', ') }),
+        });
+        return { platform, testedAt, verdict: 'fail', checks };
+      }
+
+      try {
+        const tls = await import('tls');
+        await new Promise<void>((resolve, reject) => {
+          let greeted = false;
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (!settled) {
+              settled = true;
+              socket.destroy();
+              reject(new Error(t('imAuthProbeTimeout')));
+            }
+          }, CONNECTIVITY_TIMEOUT_MS);
+
+          const socket = tls.connect({
+            host: inst.imapHost,
+            port: inst.imapPort || 993,
+            rejectUnauthorized: true,
+          });
+
+          let buffer = '';
+          socket.on('data', (data: Buffer) => {
+            buffer += data.toString();
+            const lines = buffer.split('\r\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (!line) continue;
+
+              // Wait for server greeting before sending LOGIN
+              if (!greeted && line.startsWith('* OK')) {
+                greeted = true;
+                const tag = 'A001';
+                const loginCmd = `${tag} LOGIN "${inst.email}" "${inst.password}"\r\n`;
+                socket.write(loginCmd);
+                continue;
+              }
+
+              // Check LOGIN response
+              if (greeted && line.startsWith('A001')) {
+                clearTimeout(timer);
+                socket.destroy();
+                if (!settled) {
+                  settled = true;
+                  if (line.includes('OK')) {
+                    resolve();
+                  } else {
+                    reject(new Error(line.replace(/^A001\s*/, '')));
+                  }
+                }
+                return;
+              }
+            }
+          });
+
+          socket.on('error', (err: Error) => {
+            clearTimeout(timer);
+            if (!settled) { settled = true; reject(err); }
+          });
+          socket.on('close', () => {
+            clearTimeout(timer);
+            if (!settled) { settled = true; reject(new Error('Connection closed')); }
+          });
+        });
+        checks.push({
+          code: 'auth_check',
+          level: 'pass',
+          message: t('imEmailImapAuthPassed'),
+        });
+      } catch (error: any) {
+        checks.push({
+          code: 'auth_check',
+          level: 'fail',
+          message: `${t('imEmailImapAuthFailed')}: ${error.message}`,
+          suggestion: t('imAuthFailedSuggestion'),
+        });
+        return { platform, testedAt, verdict: 'fail', checks };
+      }
+    } else if (inst.transport === 'ws') {
+      // WS mode: validate API Key by exchanging for IM token
+      if (!inst.apiKey) {
+        checks.push({
+          code: 'missing_credentials',
+          level: 'fail',
+          message: t('imMissingCredentials', { fields: 'API Key' }),
+        });
+        return { platform, testedAt, verdict: 'fail', checks };
+      }
+
+      try {
+        const result = await this.withTimeout(
+          fetchJsonWithTimeout<{ success?: boolean; message?: string; code?: number }>(
+            'https://claw.163.com/claw-api-gateway/open/v1/mail/auth/im-token',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${inst.apiKey}`,
+              },
+              body: JSON.stringify({ uid: inst.email }),
+            },
+            CONNECTIVITY_TIMEOUT_MS,
+          ),
+          CONNECTIVITY_TIMEOUT_MS,
+          t('imAuthProbeTimeout'),
+        );
+        if (!result.success) {
+          throw new Error(result.message || `API returned code ${result.code}`);
+        }
+        checks.push({
+          code: 'auth_check',
+          level: 'pass',
+          message: t('imEmailWsAuthPassed'),
+        });
+      } catch (error: any) {
+        checks.push({
+          code: 'auth_check',
+          level: 'fail',
+          message: `${t('imAuthFailed', { error: error.message })}`,
+          suggestion: t('imAuthFailedSuggestion'),
+        });
+        return { platform, testedAt, verdict: 'fail', checks };
+      }
+    }
+
+    // Gateway running status
+    const status = this.getStatus();
+    const emailStatus = status.email?.instances?.find(
+      (s: { instanceId: string }) => s.instanceId === inst.instanceId,
+    );
+    const connected = emailStatus?.connected ?? false;
+
+    if (inst.enabled && !connected) {
+      checks.push({
+        code: 'gateway_running',
+        level: 'warn',
+        message: t('imChannelEnabledNotConnected'),
+        suggestion: t('imChannelEnabledNotConnectedSuggestion'),
+      });
+    } else {
+      checks.push({
+        code: 'gateway_running',
+        level: connected ? 'pass' : 'info',
+        message: connected ? t('imChannelRunning') : t('imChannelNotEnabled'),
+      });
+    }
+
+    return { platform, testedAt, verdict: this.calculateVerdict(checks), checks };
   }
 }

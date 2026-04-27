@@ -7,12 +7,17 @@ import { buildOpenClawLocalTimeContextPrompt } from '../libs/openclawLocalTimeCo
 import { IMChatHandler } from './imChatHandler';
 import type { IMMediaAttachment, IMMessage } from './types';
 
-function parseClockFromIsoWithOffset(value: string): string | null {
-  const match = value.match(/T(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(?:[zZ]|[+-]\d{2}:\d{2})$/u);
-  if (!match) {
-    return null;
-  }
-  return `${match[1]}:${match[2]}`;
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function formatLocalClock(date: Date): string {
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function extractClockFromIsoWithOffset(value: string): string | null {
+  const match = value.match(/T(\d{2}:\d{2})(?::\d{2})?(?:[zZ]|[+-]\d{2}:\d{2})$/u);
+  return match?.[1] ?? null;
 }
 
 function normalizeReminderBody(value: string): string {
@@ -49,12 +54,9 @@ function buildSystemEventText(body: string): string {
   return `⏰ 提醒：${body}`;
 }
 
-function formatConfirmationText(delayLabel: string, scheduleAt: string, body: string): string {
-  const localClock = parseClockFromIsoWithOffset(scheduleAt);
-  if (!localClock) {
-    return `好的，已设置好提醒！${delayLabel}会提醒你${body}。`;
-  }
-  return `好的，已设置好提醒！${delayLabel}（${localClock}）会提醒你${body}。`;
+function formatConfirmationText(delayLabel: string, scheduleAt: string, runAt: Date, body: string): string {
+  const clockText = extractClockFromIsoWithOffset(scheduleAt) ?? formatLocalClock(runAt);
+  return `好的，已设置好提醒！${delayLabel}（${clockText}）会提醒你${body}。`;
 }
 
 const SCHEDULED_TASK_CANDIDATE_RE =
@@ -206,7 +208,7 @@ export function normalizeDetectedScheduledTaskRequest(
     scheduleAt,
     taskName,
     payloadText,
-    confirmationText: formatConfirmationText(delayLabel, scheduleAt, reminderBody),
+    confirmationText: formatConfirmationText(delayLabel, scheduleAt, runAt, reminderBody),
   };
 }
 

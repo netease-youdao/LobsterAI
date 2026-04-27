@@ -1,4 +1,4 @@
-import { test, expect, vi } from 'vitest';
+import { expect, test, vi } from 'vitest';
 
 vi.mock('electron', () => ({
   app: {
@@ -23,6 +23,7 @@ function createReconcileStore(messages: Array<Record<string, unknown>>) {
     pinned: false,
     cwd: '',
     systemPrompt: '',
+    modelOverride: '',
     executionMode: 'local',
     activeSkillIds: [],
     messages: [...messages],
@@ -126,8 +127,42 @@ test('reconcileWithHistory: missing assistant message — triggers replace', asy
   ]);
 });
 
-test('reconcileWithHistory: duplicate messages locally — skips replace to preserve local history', async () => {
-  const { session, store, getReplaceCallCount } = createReconcileStore([
+test('reconcileWithHistory: filters heartbeat prompt and ack entries', async () => {
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: 'Hello' },
+        {
+          role: 'user',
+          content: `Read HEARTBEAT.md if it exists.
+When reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md.
+Do not infer or repeat old tasks from prior chats.
+If nothing needs attention, reply HEARTBEAT_OK.`,
+        },
+        { role: 'assistant', content: 'HEARTBEAT_OK' },
+        { role: 'assistant', content: 'Real answer' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(1);
+  expect(getLastReplaceArgs()?.authoritative).toEqual([
+    { role: 'user', text: 'Hello' },
+    { role: 'assistant', text: 'Real answer' },
+  ]);
+});
+
+test('reconcileWithHistory: duplicate messages locally — triggers replace', async () => {
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
     { id: 'msg-2', type: 'assistant', content: 'Hi there', timestamp: 2, metadata: {} },
     { id: 'msg-3', type: 'assistant', content: 'Hi there', timestamp: 3, metadata: {} }, // duplicate
@@ -147,9 +182,10 @@ test('reconcileWithHistory: duplicate messages locally — skips replace to pres
 
   await adapter.reconcileWithHistory(session.id, 'managed:session-1');
 
-  // Gateway has fewer entries than local — skip replace to avoid data loss
-  expect(getReplaceCallCount()).toBe(0);
-  expect(session.messages.length).toBe(3);
+  // Gateway is authoritative — replaces to fix duplicates
+  expect(getReplaceCallCount()).toBe(1);
+  const args = getLastReplaceArgs()!;
+  expect(args.authoritative.length).toBe(2);
 });
 
 test('reconcileWithHistory: content mismatch — triggers replace', async () => {
@@ -202,7 +238,7 @@ test('reconcileWithHistory: preserves tool messages', async () => {
   expect(getReplaceCallCount()).toBe(0);
 });
 
-test('reconcileWithHistory: gateway has fewer entries — skips replace to preserve local history', async () => {
+test('reconcileWithHistory: gateway returns tail subset — preserves older local messages', async () => {
   const { session, store, getReplaceCallCount } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
     { id: 'msg-2', type: 'assistant', content: 'Hi there', timestamp: 2, metadata: {} },
@@ -294,6 +330,167 @@ test('reconcileWithHistory: gateway error — does not crash', async () => {
   expect(getReplaceCallCount()).toBe(0);
 });
 
+test('reconcileWithHistory: tail content mismatch — replaces only tail, preserves prefix', async () => {
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'First question', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'First answer', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'user', content: 'Second question', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: 'Streaming partial...', timestamp: 4, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: 'Second question' },
+        { role: 'assistant', content: 'Full complete answer from gateway.' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(1);
+  const args = getLastReplaceArgs()!;
+  // Prefix [First question, First answer] preserved + auth [Second question, Full complete answer]
+  expect(args.authoritative.length).toBe(4);
+  expect((args.authoritative[0] as Record<string, unknown>).text).toBe('First question');
+  expect((args.authoritative[1] as Record<string, unknown>).text).toBe('First answer');
+  expect((args.authoritative[2] as Record<string, unknown>).text).toBe('Second question');
+  expect((args.authoritative[3] as Record<string, unknown>).text).toBe('Full complete answer from gateway.');
+});
+
+test('reconcileWithHistory: long conversation — preserves prefix, replaces tail', async () => {
+  // Simulate a long conversation: 10 local turns, gateway returns last 3 turns
+  const localMessages = [];
+  for (let i = 1; i <= 10; i++) {
+    localMessages.push(
+      { id: `msg-u${i}`, type: 'user', content: `Question ${i}`, timestamp: i * 2 - 1, metadata: {} },
+      { id: `msg-a${i}`, type: 'assistant', content: `Answer ${i}`, timestamp: i * 2, metadata: {} },
+    );
+  }
+
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore(localMessages);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: 'Question 8' },
+        { role: 'assistant', content: 'Answer 8' },
+        { role: 'user', content: 'Question 9' },
+        { role: 'assistant', content: 'Answer 9' },
+        { role: 'user', content: 'Question 10' },
+        { role: 'assistant', content: 'Answer 10 updated' }, // updated content
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(1);
+  const args = getLastReplaceArgs()!;
+  // 7 preserved turns (14 entries) + 3 auth turns (6 entries) = 20 total
+  expect(args.authoritative.length).toBe(20);
+  // First preserved entry
+  expect((args.authoritative[0] as Record<string, unknown>).text).toBe('Question 1');
+  // Last preserved entry
+  expect((args.authoritative[13] as Record<string, unknown>).text).toBe('Answer 7');
+  // Last entry from gateway
+  expect((args.authoritative[19] as Record<string, unknown>).text).toBe('Answer 10 updated');
+});
+
+test('reconcileWithHistory: no overlap — full replace for dashboard consistency', async () => {
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'Old message 1', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'Old reply 1', timestamp: 2, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: 'Completely new message' },
+        { role: 'assistant', content: 'Completely new reply' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  // No overlap: full replace to match dashboard
+  expect(getReplaceCallCount()).toBe(1);
+  const args = getLastReplaceArgs()!;
+  expect(args.authoritative.length).toBe(2);
+  expect((args.authoritative[0] as Record<string, unknown>).text).toBe('Completely new message');
+});
+
+test('reconcileWithHistory: identical user messages — aligns to latest match', async () => {
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'Hi (first)', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'user', content: 'Hello', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: 'Hi (second)', timestamp: 4, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: 'Hi (second)' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  // Tail matches (user anchor aligns to latest "Hello") — no replace needed
+  expect(getReplaceCallCount()).toBe(0);
+  expect(session.messages.length).toBe(4);
+});
+
+test('reconcileWithHistory: new messages arrived — preserves old and adds new', async () => {
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'Question 1', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'Answer 1', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'user', content: 'Question 2', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: 'Answer 2', timestamp: 4, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: 'Question 2' },
+        { role: 'assistant', content: 'Answer 2' },
+        { role: 'user', content: 'Question 3' },
+        { role: 'assistant', content: 'Answer 3' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(1);
+  const args = getLastReplaceArgs()!;
+  // Preserved [Q1, A1] + auth [Q2, A2, Q3, A3] = 6
+  expect(args.authoritative.length).toBe(6);
+  expect((args.authoritative[0] as Record<string, unknown>).text).toBe('Question 1');
+  expect((args.authoritative[1] as Record<string, unknown>).text).toBe('Answer 1');
+  expect((args.authoritative[5] as Record<string, unknown>).text).toBe('Answer 3');
+});
+
 // ==================== History tests ====================
 
 function createHistoryStore(messages: Array<Record<string, unknown>>) {
@@ -327,6 +524,21 @@ function createHistoryStore(messages: Array<Record<string, unknown>>) {
         };
         session.messages.push(created);
         return created;
+      },
+      replaceConversationMessages: (sessionId: string, authoritative: Array<{ role: string; text: string }>) => {
+        expect(sessionId).toBe(session.id);
+        session.messages = session.messages.filter(
+          (message) => message.type !== 'user' && message.type !== 'assistant',
+        );
+        for (const entry of authoritative) {
+          session.messages.push({
+            id: `msg-${nextId++}`,
+            type: entry.role,
+            content: entry.text,
+            metadata: { isStreaming: false, isFinal: true },
+            timestamp: nextId,
+          });
+        }
       },
       updateSession: () => {},
     },
@@ -396,6 +608,45 @@ test('prefetchChannelUserMessages also consumes existing reminder history backlo
   });
 
   expect(getSystemMessages(session).length).toBe(0);
+});
+
+test('syncSystemMessagesFromHistory skips pure heartbeat ack system messages', () => {
+  const { session, store } = createHistoryStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const historyMessages = [
+    { role: 'system', content: 'HEARTBEAT_OK' },
+    { role: 'system', content: 'Reminder fired' },
+  ];
+
+  adapter.syncSystemMessagesFromHistory(session.id, historyMessages, {
+    previousCountKnown: false,
+    previousCount: 0,
+  });
+
+  expect(getSystemMessages(session).map((message) => message.content)).toEqual(['Reminder fired']);
+});
+
+test('collectChannelHistoryEntries skips heartbeat prompt and ack messages', () => {
+  const { store } = createHistoryStore([]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+
+  const entries = adapter.collectChannelHistoryEntries([
+    { role: 'user', content: 'regular user' },
+    {
+      role: 'user',
+      content: `Read HEARTBEAT.md if it exists.
+When reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md.
+Do not infer or repeat old tasks from prior chats.
+If nothing needs attention, reply HEARTBEAT_OK.`,
+    },
+    { role: 'assistant', content: 'HEARTBEAT_OK' },
+    { role: 'assistant', content: 'regular assistant' },
+  ]);
+
+  expect(entries).toEqual([
+    { role: 'user', text: 'regular user' },
+    { role: 'assistant', text: 'regular assistant' },
+  ]);
 });
 
 test('getSessionKeysForSession prefers channel keys before managed fallback', () => {
