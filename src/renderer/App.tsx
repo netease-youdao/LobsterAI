@@ -572,6 +572,24 @@ const App: React.FC = () => {
     return () => window.removeEventListener('app:showToast', handler);
   }, [showToast]);
 
+  // Listen for ask-ai events: close settings, navigate to cowork, pre-fill input
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail;
+      setShowSettings(false);
+      setMainView('cowork');
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent('cowork:focus-input', {
+            detail: { text },
+          }),
+        );
+      }, 50);
+    };
+    window.addEventListener('app:ask-ai', handler);
+    return () => window.removeEventListener('app:ask-ai', handler);
+  }, []);
+
   // 监听托盘菜单打开设置的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on('app:openSettings', () => {

@@ -231,9 +231,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   useEffect(() => {
     const handleFocusInput = (event: Event) => {
-      const detail = (event as CustomEvent<{ clear?: boolean }>).detail;
+      const detail = (event as CustomEvent<{ clear?: boolean; text?: string }>).detail;
       const shouldClear = detail?.clear ?? true;
-      if (shouldClear) {
+      if (detail?.text !== undefined) {
+        setValue(detail.text);
+        dispatch(clearDraftAttachments(draftKey));
+        setImageVisionHint(false);
+      } else if (shouldClear) {
         setValue('');
         dispatch(clearDraftAttachments(draftKey));
         setImageVisionHint(false);
