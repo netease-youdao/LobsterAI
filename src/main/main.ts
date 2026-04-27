@@ -85,6 +85,7 @@ import {
   setSystemProxyEnabled,
 } from './libs/systemProxy';
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
+import { redactHeadersForLog, sanitizeUrlForLog } from './logSanitize';
 import type { McpServerFormData } from './mcpStore';
 import { McpStore } from './mcpStore';
 import { OpenClawSessionIpc } from './openclawSession/constants';
@@ -1953,11 +1954,10 @@ if (!gotTheLock) {
     handleDeepLink(url);
   });
 
-  app.on('second-instance', (_event, commandLine, workingDirectory) => {
-    console.debug('[Main] second-instance event', { commandLine, workingDirectory });
-
+  app.on('second-instance', (_event, commandLine, _workingDirectory) => {
     // Check for deep link in command line args (Windows/Linux)
     const deepLink = commandLine.find(arg => arg.startsWith('lobsterai://'));
+    console.debug(`[Main] second-instance event received hasDeepLink=${Boolean(deepLink)}`);
     if (deepLink) {
       handleDeepLink(deepLink);
     }
@@ -2279,7 +2279,10 @@ if (!gotTheLock) {
         return { success: false, error: body.message || 'Exchange failed' };
       }
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
-      console.log('[Auth] exchange user data:', JSON.stringify(body.data.user));
+      const exchangedUserId = (body.data.user && typeof body.data.user === 'object'
+        ? (body.data.user as Record<string, unknown>).id ?? (body.data.user as Record<string, unknown>).userId
+        : undefined);
+      console.log(`[Auth] auth code exchanged successfully for user ${exchangedUserId ?? '<unknown>'}`);
       return { success: true, user: body.data.user, quota: normalizeQuota(body.data.quota) };
     } catch (error) {
       console.error('[Auth] exchange failed:', error);
@@ -2306,7 +2309,10 @@ if (!gotTheLock) {
           quota = normalizeQuota(quotaBody.data);
         }
       }
-      console.log('[Auth] getUser profile data:', JSON.stringify(profileBody.data));
+      const profileUserId = (profileBody.data && typeof profileBody.data === 'object'
+        ? (profileBody.data as Record<string, unknown>).id ?? (profileBody.data as Record<string, unknown>).userId
+        : undefined);
+      console.debug(`[Auth] fetched profile for user ${profileUserId ?? '<unknown>'}`);
       return { success: true, user: profileBody.data, quota };
     } catch {
       return { success: false };
@@ -4882,7 +4888,10 @@ if (!gotTheLock) {
     headers: Record<string, string>;
     body?: string;
   }) => {
-    console.log(`[api:fetch] ${options.method} ${options.url}, headers: ${JSON.stringify(options.headers)}, body: ${options.body}`);
+    const sanitizedUrl = sanitizeUrlForLog(options.url);
+    console.debug(
+      `[api:fetch] ${options.method} ${sanitizedUrl} headers=${JSON.stringify(redactHeadersForLog(options.headers))}`,
+    );
 
     const doFetch = async (headers: Record<string, string>) => {
       const response = await session.defaultSession.fetch(options.url, {
@@ -4913,7 +4922,8 @@ if (!gotTheLock) {
 
     try {
       let result = await doFetch(options.headers);
-      console.log(`[api:fetch] ${options.method} ${options.url} -> ${result.status} ${result.statusText}`, typeof result.data === 'object' ? JSON.stringify(result.data) : result.data);
+      const logFn = result.ok ? console.debug : console.warn;
+      logFn(`[api:fetch] ${options.method} ${sanitizedUrl} -> ${result.status} ${result.statusText}`);
 
       // Auto-retry once for Copilot 401/403
       if (!result.ok && (result.status === 401 || result.status === 403) && isCopilotUrl(options.url)) {
@@ -4927,7 +4937,7 @@ if (!gotTheLock) {
 
       return result;
     } catch (error) {
-      console.error(`[api:fetch] ${options.method} ${options.url} -> ERROR:`, error instanceof Error ? error.message : error);
+      console.error(`[api:fetch] ${options.method} ${sanitizedUrl} request failed:`, error instanceof Error ? error.message : error);
       return {
         ok: false,
         status: 0,

@@ -2,9 +2,10 @@
  * QQ Media Download Utilities
  * QQ 媒体下载工具函数（接收端）
  */
+import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { app } from 'electron';
+
 import { fetchWithSystemProxy } from './http';
 import type { IMMediaType } from './types';
 
@@ -119,22 +120,18 @@ export async function downloadQQAttachment(
 ): Promise<{ localPath: string; fileSize: number; mimeType: string } | null> {
   try {
     const mimeType = inferMimeType(type, fileName);
-    console.log(`[QQ Media] 下载附件:`, JSON.stringify({
-      type,
-      mimeType,
-      fileName,
-    }));
+    console.debug(`[QQMedia] downloading ${type} attachment (mime=${mimeType})`);
 
     const response = await fetchWithSystemProxy(url);
     if (!response.ok) {
-      console.error(`[QQ Media] 下载失败: HTTP ${response.status}`);
+      console.error(`[QQMedia] download failed with status ${response.status}`);
       return null;
     }
 
     const buffer = Buffer.from(await response.arrayBuffer());
 
     if (buffer.length > MAX_FILE_SIZE) {
-      console.warn(`[QQ Media] 文件过大: ${(buffer.length / 1024 / 1024).toFixed(1)}MB (限制: 25MB)`);
+      console.warn(`[QQMedia] attachment too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB (limit 25MB)`);
       return null;
     }
 
@@ -151,7 +148,7 @@ export async function downloadQQAttachment(
 
     fs.writeFileSync(localPath, buffer);
 
-    console.log(`[QQ Media] 下载成功: ${localFileName} (${(buffer.length / 1024).toFixed(1)} KB)`);
+    console.log(`[QQMedia] saved attachment ${localFileName} (${(buffer.length / 1024).toFixed(1)} KB)`);
 
     return {
       localPath,
@@ -159,7 +156,7 @@ export async function downloadQQAttachment(
       mimeType,
     };
   } catch (error: any) {
-    console.error(`[QQ Media] 下载失败: ${error.message}`);
+    console.error('[QQMedia] download failed:', error?.message ?? error);
     return null;
   }
 }
@@ -190,14 +187,14 @@ export function cleanupOldQQMediaFiles(maxAgeDays: number = 7): void {
           cleanedCount++;
         }
       } catch (err: any) {
-        console.warn(`[QQ Media] 清理文件失败 ${file}: ${err.message}`);
+        console.warn(`[QQMedia] failed to clean file ${file}:`, err?.message ?? err);
       }
     }
 
     if (cleanedCount > 0) {
-      console.log(`[QQ Media] 清理了 ${cleanedCount} 个过期文件`);
+      console.log(`[QQMedia] cleaned up ${cleanedCount} expired file(s)`);
     }
   } catch (error: any) {
-    console.warn(`[QQ Media] 清理错误: ${error.message}`);
+    console.warn('[QQMedia] cleanup failed:', error?.message ?? error);
   }
 }
