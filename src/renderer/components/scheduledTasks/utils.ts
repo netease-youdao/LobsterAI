@@ -67,7 +67,7 @@ function parseField(field: string): ParsedField | null {
 function parseCommaSeparated(field: string): number[] | null {
   if (!/^\d+(,\d+)*$/.test(field)) return null;
   const values = field.split(',').map(Number);
-  if (values.some((v) => Number.isNaN(v))) return null;
+  if (values.some(v => Number.isNaN(v))) return null;
   return [...values].sort((a, b) => a - b);
 }
 
@@ -90,19 +90,37 @@ function formatCronExpr(schedule: ScheduleCron): string {
   if (!min || !hour || !dom || !mon) return fallbackCron(schedule);
 
   // --- Every N minutes: */n * * * * ---
-  if (min.type === 'step' && hour.type === 'any' && dom.type === 'any' && mon.type === 'any' && dow?.type === 'any') {
+  if (
+    min.type === 'step' &&
+    hour.type === 'any' &&
+    dom.type === 'any' &&
+    mon.type === 'any' &&
+    dow?.type === 'any'
+  ) {
     if (min.step === 1) return i18nService.t('scheduledTasksCronEveryMinute');
     return tpl(i18nService.t('scheduledTasksCronEveryNMinutes'), { n: String(min.step) });
   }
 
   // --- Every N hours: fixed-min */n * * * ---
-  if (min.type === 'value' && hour.type === 'step' && dom.type === 'any' && mon.type === 'any' && dow?.type === 'any') {
+  if (
+    min.type === 'value' &&
+    hour.type === 'step' &&
+    dom.type === 'any' &&
+    mon.type === 'any' &&
+    dow?.type === 'any'
+  ) {
     if (hour.step === 1) return i18nService.t('scheduledTasksCronEveryHour');
     return tpl(i18nService.t('scheduledTasksCronEveryNHours'), { n: String(hour.step) });
   }
 
   // --- Every hour at fixed minute: M * * * * (e.g. 25 * * * *) ---
-  if (min.type === 'value' && hour.type === 'any' && dom.type === 'any' && mon.type === 'any' && dow?.type === 'any') {
+  if (
+    min.type === 'value' &&
+    hour.type === 'any' &&
+    dom.type === 'any' &&
+    mon.type === 'any' &&
+    dow?.type === 'any'
+  ) {
     return tpl(i18nService.t('scheduledTasksCronEveryHourAtMinute'), { min: pad2(min.value) });
   }
 
@@ -129,7 +147,10 @@ function formatCronExpr(schedule: ScheduleCron): string {
         });
       }
       // Weekends 0,6 or 6-0
-      if (dow.type === 'range' && ((dow.from === 6 && dow.to === 0) || (dow.from === 0 && dow.to === 6))) {
+      if (
+        dow.type === 'range' &&
+        ((dow.from === 6 && dow.to === 0) || (dow.from === 0 && dow.to === 6))
+      ) {
         return tpl(i18nService.t('scheduledTasksCronAtTime'), {
           schedule: i18nService.t('scheduledTasksCronWeekends'),
           time,
@@ -155,7 +176,7 @@ function formatCronExpr(schedule: ScheduleCron): string {
     } else {
       // Comma-separated weekdays: M H * * 1,3,5
       const days = parseCommaSeparated(dowRaw);
-      if (days && days.length > 0 && days.every((d) => d >= 0 && d <= 6)) {
+      if (days && days.length > 0 && days.every(d => d >= 0 && d <= 6)) {
         if (days.join(',') === '1,2,3,4,5') {
           return tpl(i18nService.t('scheduledTasksCronAtTime'), {
             schedule: i18nService.t('scheduledTasksCronWeekdays'),
@@ -163,10 +184,9 @@ function formatCronExpr(schedule: ScheduleCron): string {
           });
         }
         const separator = i18nService.getLanguage() === 'zh' ? '、' : ', ';
-        const sortedDays = i18nService.getLanguage() === 'zh'
-          ? [...days].sort((a, b) => ((a || 7) - (b || 7)))
-          : days;
-        const dayNames = sortedDays.map((d) => i18nService.t(WEEKDAY_KEYS[d]));
+        const sortedDays =
+          i18nService.getLanguage() === 'zh' ? [...days].sort((a, b) => (a || 7) - (b || 7)) : days;
+        const dayNames = sortedDays.map(d => i18nService.t(WEEKDAY_KEYS[d]));
         return tpl(i18nService.t('scheduledTasksCronAtTime'), {
           schedule: `${i18nService.t('scheduledTasksCronEveryWeek')}${dayNames.join(separator)}`,
           time,
@@ -243,13 +263,41 @@ export function formatDuration(ms: number | null): string {
   return `${Math.round(ms / 60_000)}m`;
 }
 
+/**
+ * Format a future timestamp as a relative "time until" string.
+ * e.g. "5 分钟后" / "2 小时后" / "3 天后" (zh) or "in 5 min" / "in 2 h" / "in 3 d" (en)
+ * Returns null if nextRunAtMs is null or in the past.
+ */
+export function formatNextRunRelative(nextRunAtMs: number | null): string | null {
+  if (nextRunAtMs === null) return null;
+  const diffMs = nextRunAtMs - Date.now();
+  if (diffMs <= 0) return null;
+
+  const lang = i18nService.getLanguage();
+  const isChinese = lang === 'zh';
+
+  const minutes = Math.round(diffMs / 60_000);
+  const hours = Math.round(diffMs / 3_600_000);
+  const days = Math.round(diffMs / 86_400_000);
+
+  if (diffMs < 60_000) {
+    return isChinese ? '不到 1 分钟后' : 'in < 1 min';
+  }
+  if (diffMs < 3_600_000) {
+    return isChinese ? `${minutes} 分钟后` : `in ${minutes} min`;
+  }
+  if (diffMs < 86_400_000) {
+    return isChinese ? `${hours} 小时后` : `in ${hours} h`;
+  }
+  return isChinese ? `${days} 天后` : `in ${days} d`;
+}
+
 export function formatPayloadLabel(payload: ScheduledTaskPayload): string {
   if (payload.kind === 'systemEvent') {
     return `${i18nService.t('scheduledTasksFormPayloadKindSystemEvent')} · ${payload.text}`;
   }
-  const timeoutLabel = typeof payload.timeoutSeconds === 'number'
-    ? ` · ${payload.timeoutSeconds}s`
-    : '';
+  const timeoutLabel =
+    typeof payload.timeoutSeconds === 'number' ? ` · ${payload.timeoutSeconds}s` : '';
   return `${i18nService.t('scheduledTasksFormPayloadKindAgentTurn')} · ${payload.message}${timeoutLabel}`;
 }
 
@@ -287,7 +335,7 @@ export function formatDeliveryLabel(delivery: ScheduledTaskDelivery): string {
   return `${i18nService.t('scheduledTasksFormDeliveryModeAnnounce')} · ${channelName}${toLabel}`;
 }
 
-export type PlanType = 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'advanced';
+export type PlanType = 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'cron' | 'advanced';
 
 export interface PlanInfo {
   planType: PlanType;
@@ -300,6 +348,8 @@ export interface PlanInfo {
   year: number;
   month: number;
   day: number;
+  cronExpr?: string;
+  cronTz?: string;
 }
 
 const DEFAULT_PLAN_INFO: PlanInfo = {
@@ -371,14 +421,21 @@ export function scheduleToPlanInfo(schedule: Schedule): PlanInfo {
   }
 
   // Weekly: M H * * DOW (single value)
-  if (dom && dom.type === 'any' && dow && dow.type === 'value' && dow.value >= 0 && dow.value <= 6) {
+  if (
+    dom &&
+    dom.type === 'any' &&
+    dow &&
+    dow.type === 'value' &&
+    dow.value >= 0 &&
+    dow.value <= 6
+  ) {
     return { ...base, planType: 'weekly', weekday: dow.value, weekdays: [dow.value] };
   }
 
   // Weekly: M H * * DOW,DOW,... (comma-separated)
   if (dom && dom.type === 'any' && dow === null) {
     const days = parseCommaSeparated(dowRaw);
-    if (days && days.length > 0 && days.every((d) => d >= 0 && d <= 6)) {
+    if (days && days.length > 0 && days.every(d => d >= 0 && d <= 6)) {
       return { ...base, planType: 'weekly', weekday: days[0], weekdays: days };
     }
   }
@@ -388,7 +445,7 @@ export function scheduleToPlanInfo(schedule: Schedule): PlanInfo {
     return { ...base, planType: 'monthly', monthDay: dom.value };
   }
 
-  return { ...DEFAULT_PLAN_INFO, planType: 'advanced' };
+  return { ...DEFAULT_PLAN_INFO, planType: 'cron', cronExpr: schedule.expr, cronTz: schedule.tz };
 }
 
 export function getTaskPromptText(task: ScheduledTask): string {

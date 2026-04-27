@@ -7,7 +7,12 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
-import { formatScheduleLabel, getStatusLabelKey, getStatusTone } from './utils';
+import {
+  formatNextRunRelative,
+  formatScheduleLabel,
+  getStatusLabelKey,
+  getStatusTone,
+} from './utils';
 
 interface TaskListItemProps {
   task: ScheduledTask;
@@ -44,21 +49,24 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
           {task.name}
         </div>
         {task.description && (
-          <div className="text-xs truncate text-secondary">
-            {task.description}
-          </div>
+          <div className="text-xs truncate text-secondary">{task.description}</div>
         )}
       </div>
 
-      <div className="text-sm text-secondary truncate">
-        {formatScheduleLabel(task.schedule)}
+      <div className="min-w-0">
+        <div className="text-sm truncate text-secondary">{formatScheduleLabel(task.schedule)}</div>
+        {task.enabled && task.state.nextRunAtMs !== null && (
+          <div className="text-xs truncate text-secondary/60 mt-0.5">
+            {formatNextRunRelative(task.state.nextRunAtMs)}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-2">
         <span className={`text-xs font-medium ${statusTone}`}>{statusLabel}</span>
         <button
           type="button"
-          onClick={(event) => {
+          onClick={event => {
             event.stopPropagation();
             void scheduledTaskService.toggleTask(task.id, !task.enabled);
           }}
@@ -78,9 +86,9 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
         <div className="relative" ref={menuRef}>
           <button
             type="button"
-            onClick={(event) => {
+            onClick={event => {
               event.stopPropagation();
-              setShowMenu((value) => !value);
+              setShowMenu(value => !value);
             }}
             className="p-1.5 rounded-md text-secondary hover:bg-surface-raised transition-colors"
           >
@@ -90,7 +98,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
             <div className="absolute right-0 top-full mt-1 w-32 rounded-lg shadow-lg bg-surface border border-border z-50 py-1">
               <button
                 type="button"
-                onClick={(event) => {
+                onClick={event => {
                   event.stopPropagation();
                   setShowMenu(false);
                   void scheduledTaskService.runManually(task.id);
@@ -102,7 +110,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
               </button>
               <button
                 type="button"
-                onClick={(event) => {
+                onClick={event => {
                   event.stopPropagation();
                   setShowMenu(false);
                   dispatch(selectTask(task.id));
@@ -114,7 +122,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
               </button>
               <button
                 type="button"
-                onClick={(event) => {
+                onClick={event => {
                   event.stopPropagation();
                   setShowMenu(false);
                   onRequestDelete(task.id, task.name);
@@ -142,9 +150,7 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="text-secondary">
-          {i18nService.t('loading')}
-        </div>
+        <div className="text-secondary">{i18nService.t('loading')}</div>
       </div>
     );
   }
@@ -179,7 +185,7 @@ const TaskList: React.FC<TaskListProps> = ({ onRequestDelete }) => {
           {i18nService.t('scheduledTasksListColMore')}
         </div>
       </div>
-      {tasks.map((task) => (
+      {tasks.map(task => (
         <TaskListItem key={task.id} task={task} onRequestDelete={onRequestDelete} />
       ))}
     </div>
