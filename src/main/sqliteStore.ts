@@ -190,11 +190,25 @@ export class SqliteStore {
       );
     `);
 
+    // Create bookmarks table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS bookmarks (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        message_type TEXT NOT NULL CHECK(message_type IN ('user', 'assistant')),
+        content TEXT NOT NULL,
+        session_title TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(session_id, message_id)
+      );
+    `);
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists
       const columns = this.db.pragma('table_info(cowork_sessions)') as Array<{ name: string }>;
-      const colNames = columns.map((c) => c.name);
+      const colNames = columns.map(c => c.name);
 
       if (!colNames.includes('execution_mode')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN execution_mode TEXT;');

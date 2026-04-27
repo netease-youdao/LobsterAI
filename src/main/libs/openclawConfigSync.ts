@@ -266,15 +266,16 @@ const resolveSkillCreationPath = (): string => {
   return compacted.replace(/\\/g, '/');
 };
 
-const buildManagedSkillCreationPrompt = (skillsDirPath: string): string => [
-  '## Skill Creation',
-  '',
-  'When the user asks you to create a new skill, you MUST place it under the LobsterAI skills directory:',
-  '',
-  `  ${skillsDirPath}/<skill-name>/SKILL.md`,
-  '',
-  'Do NOT create skills under the workspace `skills/` subdirectory.',
-].join('\n');
+const buildManagedSkillCreationPrompt = (skillsDirPath: string): string =>
+  [
+    '## Skill Creation',
+    '',
+    'When the user asks you to create a new skill, you MUST place it under the LobsterAI skills directory:',
+    '',
+    `  ${skillsDirPath}/<skill-name>/SKILL.md`,
+    '',
+    'Do NOT create skills under the workspace `skills/` subdirectory.',
+  ].join('\n');
 
 const MANAGED_MEMORY_POLICY_PROMPT = [
   '## Memory Policy',
@@ -721,9 +722,10 @@ export const buildProviderSelection = (options: {
 
   const providerModelName = resolveModelDisplayName(sessionModelId, options.modelName);
   const modelInput: string[] = options.supportsImage ? ['text', 'image'] : ['text'];
-  const auth = options.providerName === ProviderName.Minimax && options.authType === 'oauth'
-    ? AuthType.OAuth
-    : AuthType.ApiKey;
+  const auth =
+    options.providerName === ProviderName.Minimax && options.authType === 'oauth'
+      ? AuthType.OAuth
+      : AuthType.ApiKey;
 
   // reasoning：descriptor 动态计算 > modelDefaults 静态值
   const reasoning = descriptor.resolveModelReasoning
@@ -1218,6 +1220,7 @@ export class OpenClawConfigSync {
         const qqbotPluginEnabled = qqInstances.some(i => i.enabled && i.appId);
 
 
+
         const pluginEntries: Record<string, unknown> = {
           // Preserve ALL existing plugin entries so runtime auto-injected
           // plugins (moonshot, minimax, volcengine, browser, etc.) survive
@@ -1282,7 +1285,7 @@ export class OpenClawConfigSync {
               },
             }
           : {};
-      })())
+      })()),
     };
 
     // Sync MCP Bridge config into the plugin's own config section
@@ -1907,7 +1910,9 @@ export class OpenClawConfigSync {
     // never changes env vars and avoids gateway process restarts.
     const allApiKeys = resolveAllProviderApiKeys();
     for (const [envSuffix, apiKey] of Object.entries(allApiKeys)) {
-      console.info(`[OpenClawConfigSync] set secret env var LOBSTER_APIKEY_${envSuffix} for provider ${envSuffix}`);
+      console.info(
+        `[OpenClawConfigSync] set secret env var LOBSTER_APIKEY_${envSuffix} for provider ${envSuffix}`,
+      );
       env[`LOBSTER_APIKEY_${envSuffix}`] = apiKey;
     }
     // Legacy fallback: keep LOBSTER_PROVIDER_API_KEY set to a stable value so stale

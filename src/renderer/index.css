@@ -42,7 +42,8 @@ table {
   width: 100%;
 }
 
-th, td {
+th,
+td {
   border-color: var(--lobster-border);
   padding: 0.5em;
 }
@@ -69,7 +70,9 @@ blockquote {
 }
 
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto,
+    sans-serif;
   line-height: 1.6;
   font-weight: 400;
 
@@ -81,7 +84,10 @@ blockquote {
 
 /* Theme colors are driven by CSS variables from themes.css.
  * color-scheme is set by the [data-theme] selectors. */
-body, #root, .App, main {
+body,
+#root,
+.App,
+main {
   background-color: var(--lobster-background);
   color: var(--lobster-foreground);
 }
@@ -210,7 +216,7 @@ select::-ms-expand {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
   animation: shimmer 1.5s infinite;
 }
 
@@ -220,7 +226,7 @@ select::-ms-expand {
   height: 2px;
   overflow: hidden;
   border-radius: 1px;
-  background: rgba(59,130,246,0.1);
+  background: rgba(59, 130, 246, 0.1);
 }
 .streaming-bar::before {
   content: '';
@@ -230,7 +236,12 @@ select::-ms-expand {
   height: 100%;
   width: 40%;
   border-radius: 1px;
-  background: linear-gradient(90deg, rgba(59,130,246,0.3) 0%, rgba(59,130,246,0.8) 50%, rgba(59,130,246,0.3) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(59, 130, 246, 0.3) 0%,
+    rgba(59, 130, 246, 0.8) 50%,
+    rgba(59, 130, 246, 0.3) 100%
+  );
   animation: streaming-slide 1.5s ease-in-out infinite;
 }
 /* Streaming bar glow uses primary color */
@@ -238,6 +249,23 @@ select::-ms-expand {
   box-shadow: 0 0 6px var(--lobster-primary-muted);
 }
 @keyframes streaming-slide {
-  0% { left: -40%; }
-  100% { left: 100%; }
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* Bookmark flash animation for jump-to-message */
+@keyframes bookmarkFlash {
+  0% {
+    background-color: rgba(250, 204, 21, 0.3);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.bookmark-flash {
+  animation: bookmarkFlash 1.5s ease-out;
 }

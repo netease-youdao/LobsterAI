@@ -40,7 +40,7 @@ export interface CoworkMessageMetadata {
   isStreaming?: boolean;
   isFinal?: boolean;
   isThinking?: boolean;
-  skillIds?: string[];  // Skills used for this message
+  skillIds?: string[]; // Skills used for this message
   [key: string]: unknown;
 }
 
@@ -247,4 +247,14 @@ export interface CoworkStreamEvent {
     error?: string;
     claudeSessionId?: string;
   };
+}
+
+export interface Bookmark {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  messageType: 'user' | 'assistant';
+  content: string;
+  sessionTitle: string;
+  createdAt: number;
 }

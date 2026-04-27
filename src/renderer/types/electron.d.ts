@@ -74,25 +74,27 @@ interface CoworkConfig {
   openClawSessionPolicy: OpenClawSessionPolicyConfig;
 }
 
-type CoworkConfigUpdate = Partial<Pick<
-  CoworkConfig,
-  | 'workingDirectory'
-  | 'executionMode'
-  | 'agentEngine'
-  | 'memoryEnabled'
-  | 'memoryImplicitUpdateEnabled'
-  | 'memoryLlmJudgeEnabled'
-  | 'memoryGuardLevel'
-  | 'memoryUserMemoriesMaxItems'
-  | 'skipMissedJobs'
-  | 'embeddingEnabled'
-  | 'embeddingProvider'
-  | 'embeddingModel'
-  | 'embeddingLocalModelPath'
-  | 'embeddingVectorWeight'
-  | 'embeddingRemoteBaseUrl'
-  | 'embeddingRemoteApiKey'
->>;
+type CoworkConfigUpdate = Partial<
+  Pick<
+    CoworkConfig,
+    | 'workingDirectory'
+    | 'executionMode'
+    | 'agentEngine'
+    | 'memoryEnabled'
+    | 'memoryImplicitUpdateEnabled'
+    | 'memoryLlmJudgeEnabled'
+    | 'memoryGuardLevel'
+    | 'memoryUserMemoriesMaxItems'
+    | 'skipMissedJobs'
+    | 'embeddingEnabled'
+    | 'embeddingProvider'
+    | 'embeddingModel'
+    | 'embeddingLocalModelPath'
+    | 'embeddingVectorWeight'
+    | 'embeddingRemoteBaseUrl'
+    | 'embeddingRemoteApiKey'
+  >
+>;
 
 interface CoworkUserMemoryEntry {
   id: string;
@@ -264,29 +266,69 @@ interface IElectronAPI {
   };
   skills: {
     list: () => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
-    setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
+    setEnabled: (options: {
+      id: string;
+      enabled: boolean;
+    }) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
     delete: (id: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
-    download: (source: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string; auditReport?: any; pendingInstallId?: string }>;
-    upgrade: (skillId: string, downloadUrl: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string; auditReport?: any; pendingInstallId?: string }>;
-    confirmInstall: (pendingId: string, action: string) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
+    download: (source: string) => Promise<{
+      success: boolean;
+      skills?: Skill[];
+      error?: string;
+      auditReport?: any;
+      pendingInstallId?: string;
+    }>;
+    upgrade: (
+      skillId: string,
+      downloadUrl: string,
+    ) => Promise<{
+      success: boolean;
+      skills?: Skill[];
+      error?: string;
+      auditReport?: any;
+      pendingInstallId?: string;
+    }>;
+    confirmInstall: (
+      pendingId: string,
+      action: string,
+    ) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
     getRoot: () => Promise<{ success: boolean; path?: string; error?: string }>;
     autoRoutingPrompt: () => Promise<{ success: boolean; prompt?: string | null; error?: string }>;
-    getConfig: (skillId: string) => Promise<{ success: boolean; config?: Record<string, string>; error?: string }>;
-    setConfig: (skillId: string, config: Record<string, string>) => Promise<{ success: boolean; error?: string }>;
+    getConfig: (
+      skillId: string,
+    ) => Promise<{ success: boolean; config?: Record<string, string>; error?: string }>;
+    setConfig: (
+      skillId: string,
+      config: Record<string, string>,
+    ) => Promise<{ success: boolean; error?: string }>;
     testEmailConnectivity: (
       skillId: string,
-      config: Record<string, string>
+      config: Record<string, string>,
     ) => Promise<{ success: boolean; result?: EmailConnectivityTestResult; error?: string }>;
     fetchMarketplace: () => Promise<{ success: boolean; data?: string; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {
     list: () => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
-    create: (data: any) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
-    update: (id: string, data: any) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
-    delete: (id: string) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
-    setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
-    fetchMarketplace: () => Promise<{ success: boolean; data?: McpMarketplaceData; error?: string }>;
+    create: (
+      data: any,
+    ) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    update: (
+      id: string,
+      data: any,
+    ) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    delete: (
+      id: string,
+    ) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    setEnabled: (options: {
+      id: string;
+      enabled: boolean;
+    }) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
+    fetchMarketplace: () => Promise<{
+      success: boolean;
+      data?: McpMarketplaceData;
+      error?: string;
+    }>;
     refreshBridge: () => Promise<{ success: boolean; tools: number; error?: string }>;
     onBridgeSyncStart: (callback: () => void) => () => void;
     onBridgeSyncDone: (callback: (data: { tools: number; error?: string }) => void) => () => void;
@@ -294,8 +336,31 @@ interface IElectronAPI {
   agents: {
     list: () => Promise<Agent[]>;
     get: (id: string) => Promise<Agent | null>;
-    create: (request: { id?: string; name: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; source?: string; presetId?: string }) => Promise<Agent>;
-    update: (id: string, updates: { name?: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; enabled?: boolean }) => Promise<Agent>;
+    create: (request: {
+      id?: string;
+      name: string;
+      description?: string;
+      systemPrompt?: string;
+      identity?: string;
+      model?: string;
+      icon?: string;
+      skillIds?: string[];
+      source?: string;
+      presetId?: string;
+    }) => Promise<Agent>;
+    update: (
+      id: string,
+      updates: {
+        name?: string;
+        description?: string;
+        systemPrompt?: string;
+        identity?: string;
+        model?: string;
+        icon?: string;
+        skillIds?: string[];
+        enabled?: boolean;
+      },
+    ) => Promise<Agent>;
     delete: (id: string) => Promise<void>;
     presets: () => Promise<PresetAgent[]>;
     addPreset: (presetId: string) => Promise<Agent>;
@@ -321,7 +386,9 @@ interface IElectronAPI {
     onStreamAbort: (requestId: string, callback: () => void) => () => void;
   };
   getApiConfig: () => Promise<CoworkApiConfig | null>;
-  checkApiConfig: (options?: { probeModel?: boolean }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
+  checkApiConfig: (options?: {
+    probeModel?: boolean;
+  }) => Promise<{ hasConfig: boolean; config: CoworkApiConfig | null; error?: string }>;
   saveApiConfig: (config: CoworkApiConfig) => Promise<{ success: boolean; error?: string }>;
   generateSessionTitle: (userInput: string | null) => Promise<string>;
   getRecentCwds: (limit?: number) => Promise<string[]>;
@@ -329,13 +396,27 @@ interface IElectronAPI {
     engine: {
       getStatus: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
       install: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
-      retryInstall: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
-      restartGateway: () => Promise<{ success: boolean; status?: OpenClawEngineStatus; error?: string }>;
+      retryInstall: () => Promise<{
+        success: boolean;
+        status?: OpenClawEngineStatus;
+        error?: string;
+      }>;
+      restartGateway: () => Promise<{
+        success: boolean;
+        status?: OpenClawEngineStatus;
+        error?: string;
+      }>;
       onProgress: (callback: (status: OpenClawEngineStatus) => void) => () => void;
     };
     sessionPolicy: {
-      get: () => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
-      set: (config: OpenClawSessionPolicyConfig) => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
+      get: () => Promise<{
+        success: boolean;
+        config?: OpenClawSessionPolicyConfig;
+        error?: string;
+      }>;
+      set: (
+        config: OpenClawSessionPolicyConfig,
+      ) => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
     };
     session: {
       patch: (options: {
@@ -357,23 +438,67 @@ interface IElectronAPI {
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; agentId?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
-    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
+    startSession: (options: {
+      prompt: string;
+      cwd?: string;
+      systemPrompt?: string;
+      title?: string;
+      activeSkillIds?: string[];
+      agentId?: string;
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    }) => Promise<{
+      success: boolean;
+      session?: CoworkSession;
+      error?: string;
+      code?: string;
+      engineStatus?: OpenClawEngineStatus;
+    }>;
+    continueSession: (options: {
+      sessionId: string;
+      prompt: string;
+      systemPrompt?: string;
+      activeSkillIds?: string[];
+      imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+    }) => Promise<{
+      success: boolean;
+      session?: CoworkSession;
+      error?: string;
+      code?: string;
+      engineStatus?: OpenClawEngineStatus;
+    }>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
-    setSessionPinned: (options: { sessionId: string; pinned: boolean }) => Promise<{ success: boolean; error?: string }>;
-    renameSession: (options: { sessionId: string; title: string }) => Promise<{ success: boolean; error?: string }>;
-    getSession: (sessionId: string) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
-    remoteManaged: (sessionId: string) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
-    listSessions: (agentId?: string) => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
+    setSessionPinned: (options: {
+      sessionId: string;
+      pinned: boolean;
+    }) => Promise<{ success: boolean; error?: string }>;
+    renameSession: (options: {
+      sessionId: string;
+      title: string;
+    }) => Promise<{ success: boolean; error?: string }>;
+    getSession: (
+      sessionId: string,
+    ) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
+    remoteManaged: (
+      sessionId: string,
+    ) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
+    listSessions: (
+      agentId?: string,
+    ) => Promise<{ success: boolean; sessions?: CoworkSessionSummary[]; error?: string }>;
     exportResultImage: (options: {
       rect: { x: number; y: number; width: number; height: number };
       defaultFileName?: string;
     }) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
     captureImageChunk: (options: {
       rect: { x: number; y: number; width: number; height: number };
-    }) => Promise<{ success: boolean; width?: number; height?: number; pngBase64?: string; error?: string }>;
+    }) => Promise<{
+      success: boolean;
+      width?: number;
+      height?: number;
+      pngBase64?: string;
+      error?: string;
+    }>;
     saveResultImage: (options: {
       pngBase64: string;
       defaultFileName?: string;
@@ -383,7 +508,10 @@ interface IElectronAPI {
       defaultFileName?: string;
       fileExtension?: string;
     }) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
-    respondToPermission: (options: { requestId: string; result: CoworkPermissionResult }) => Promise<{ success: boolean; error?: string }>;
+    respondToPermission: (options: {
+      requestId: string;
+      result: CoworkPermissionResult;
+    }) => Promise<{ success: boolean; error?: string }>;
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
     setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
     listMemoryEntries: (input: {
@@ -400,23 +528,53 @@ interface IElectronAPI {
     }) => Promise<{ success: boolean; entry?: CoworkUserMemoryEntry; error?: string }>;
     deleteMemoryEntry: (input: { id: string }) => Promise<{ success: boolean; error?: string }>;
     getMemoryStats: () => Promise<{ success: boolean; stats?: CoworkMemoryStats; error?: string }>;
-    readBootstrapFile: (filename: string) => Promise<{ success: boolean; content: string; error?: string }>;
-    writeBootstrapFile: (filename: string, content: string) => Promise<{ success: boolean; error?: string }>;
-    onStreamMessage: (callback: (data: { sessionId: string; message: CoworkMessage }) => void) => () => void;
-    onStreamMessageUpdate: (callback: (data: { sessionId: string; messageId: string; content: string }) => void) => () => void;
-    onStreamPermission: (callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void) => () => void;
+    readBootstrapFile: (
+      filename: string,
+    ) => Promise<{ success: boolean; content: string; error?: string }>;
+    writeBootstrapFile: (
+      filename: string,
+      content: string,
+    ) => Promise<{ success: boolean; error?: string }>;
+    onStreamMessage: (
+      callback: (data: { sessionId: string; message: CoworkMessage }) => void,
+    ) => () => void;
+    onStreamMessageUpdate: (
+      callback: (data: { sessionId: string; messageId: string; content: string }) => void,
+    ) => () => void;
+    onStreamPermission: (
+      callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void,
+    ) => () => void;
     onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => () => void;
-    onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => () => void;
+    onStreamComplete: (
+      callback: (data: { sessionId: string; claudeSessionId: string | null }) => void,
+    ) => () => void;
     onStreamError: (callback: (data: { sessionId: string; error: string }) => void) => () => void;
     onSessionsChanged: (callback: () => void) => () => void;
   };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;
-    selectFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<{ success: boolean; path: string | null }>;
-    selectFiles: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<{ success: boolean; paths: string[] }>;
-    saveInlineFile: (options: { dataBase64: string; fileName?: string; mimeType?: string; cwd?: string }) => Promise<{ success: boolean; path: string | null; error?: string }>;
-    readFileAsDataUrl: (filePath: string) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
-    showMessageBox: (options: { message: string; type?: 'none' | 'info' | 'error' | 'question' | 'warning'; title?: string }) => Promise<{ response: number }>;
+    selectFile: (options?: {
+      title?: string;
+      filters?: { name: string; extensions: string[] }[];
+    }) => Promise<{ success: boolean; path: string | null }>;
+    selectFiles: (options?: {
+      title?: string;
+      filters?: { name: string; extensions: string[] }[];
+    }) => Promise<{ success: boolean; paths: string[] }>;
+    saveInlineFile: (options: {
+      dataBase64: string;
+      fileName?: string;
+      mimeType?: string;
+      cwd?: string;
+    }) => Promise<{ success: boolean; path: string | null; error?: string }>;
+    readFileAsDataUrl: (
+      filePath: string,
+    ) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
+    showMessageBox: (options: {
+      message: string;
+      type?: 'none' | 'info' | 'error' | 'question' | 'warning';
+      title?: string;
+    }) => Promise<{ response: number }>;
   };
   shell: {
     openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -456,32 +614,73 @@ interface IElectronAPI {
   };
   im: {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
-    setConfig: (config: Partial<IMGatewayConfig>, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
+    setConfig: (
+      config: Partial<IMGatewayConfig>,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
     syncConfig: () => Promise<{ success: boolean; error?: string }>;
     startGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
     stopGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
     testGateway: (
       platform: Platform,
-      configOverride?: Partial<IMGatewayConfig>
+      configOverride?: Partial<IMGatewayConfig>,
     ) => Promise<{ success: boolean; result?: IMConnectivityTestResult; error?: string }>;
     getStatus: () => Promise<{ success: boolean; status?: IMGatewayStatus; error?: string }>;
     getLocalIp: () => Promise<string>;
-    getOpenClawConfigSchema: () => Promise<{ success: boolean; result?: { schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> }; error?: string }>;
-    weixinQrLoginStart: () => Promise<{ success: boolean; qrDataUrl?: string; message: string; sessionKey?: string }>;
-    weixinQrLoginWait: (accountId?: string) => Promise<{ success: boolean; connected: boolean; message: string; accountId?: string }>;
+    getOpenClawConfigSchema: () => Promise<{
+      success: boolean;
+      result?: {
+        schema: Record<string, unknown>;
+        uiHints: Record<string, Record<string, unknown>>;
+      };
+      error?: string;
+    }>;
+    weixinQrLoginStart: () => Promise<{
+      success: boolean;
+      qrDataUrl?: string;
+      message: string;
+      sessionKey?: string;
+    }>;
+    weixinQrLoginWait: (
+      accountId?: string,
+    ) => Promise<{ success: boolean; connected: boolean; message: string; accountId?: string }>;
 
     // POPO QR login
-    popoQrLoginStart: () => Promise<{ success: boolean; qrUrl?: string; taskToken?: string; timeoutMs?: number; message?: string }>;
-    popoQrLoginPoll: (taskToken: string) => Promise<{ success: boolean; appKey?: string; appSecret?: string; aesKey?: string; message: string }>;
+    popoQrLoginStart: () => Promise<{
+      success: boolean;
+      qrUrl?: string;
+      taskToken?: string;
+      timeoutMs?: number;
+      message?: string;
+    }>;
+    popoQrLoginPoll: (taskToken: string) => Promise<{
+      success: boolean;
+      appKey?: string;
+      appSecret?: string;
+      aesKey?: string;
+      message: string;
+    }>;
 
     listPairingRequests: (platform: string) => Promise<{
       success: boolean;
-      requests: Array<{ id: string; code: string; createdAt: string; lastSeenAt: string; meta?: Record<string, string> }>;
+      requests: Array<{
+        id: string;
+        code: string;
+        createdAt: string;
+        lastSeenAt: string;
+        meta?: Record<string, string>;
+      }>;
       allowFrom: string[];
       error?: string;
     }>;
-    approvePairingCode: (platform: string, code: string) => Promise<{ success: boolean; error?: string }>;
-    rejectPairingRequest: (platform: string, code: string) => Promise<{ success: boolean; error?: string }>;
+    approvePairingCode: (
+      platform: string,
+      code: string,
+    ) => Promise<{ success: boolean; error?: string }>;
+    rejectPairingRequest: (
+      platform: string,
+      code: string,
+    ) => Promise<{ success: boolean; error?: string }>;
     nimQrLoginStart: () => Promise<{
       uuid: string;
       qrValue: string;
@@ -500,45 +699,159 @@ interface IElectronAPI {
       errorCode?: string;
       error?: string;
     }>;
-    addNimInstance: (name: string) => Promise<{ success: boolean; instance?: NimInstanceConfig; error?: string }>;
+    addNimInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: NimInstanceConfig; error?: string }>;
     deleteNimInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setNimInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addQQInstance: (name: string) => Promise<{ success: boolean; instance?: QQInstanceConfig; error?: string }>;
+    setNimInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addQQInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: QQInstanceConfig; error?: string }>;
     deleteQQInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setQQInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addFeishuInstance: (name: string) => Promise<{ success: boolean; instance?: FeishuInstanceConfig; error?: string }>;
+    setQQInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addFeishuInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: FeishuInstanceConfig; error?: string }>;
     deleteFeishuInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setFeishuInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addDingTalkInstance: (name: string) => Promise<{ success: boolean; instance?: DingTalkInstanceConfig; error?: string }>;
+    setFeishuInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addDingTalkInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: DingTalkInstanceConfig; error?: string }>;
     deleteDingTalkInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setDingTalkInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addEmailInstance: (name: string) => Promise<{ success: boolean; instance?: EmailInstanceConfig; error?: string }>;
+    setDingTalkInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addEmailInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: EmailInstanceConfig; error?: string }>;
     deleteEmailInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setEmailInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addWecomInstance: (name: string) => Promise<{ success: boolean; instance?: WecomInstanceConfig; error?: string }>;
+    setEmailInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addWecomInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: WecomInstanceConfig; error?: string }>;
     deleteWecomInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setWecomInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addTelegramInstance: (name: string) => Promise<{ success: boolean; instance?: TelegramInstanceConfig; error?: string }>;
+    setWecomInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addTelegramInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: TelegramInstanceConfig; error?: string }>;
     deleteTelegramInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setTelegramInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addDiscordInstance: (name: string) => Promise<{ success: boolean; instance?: DiscordInstanceConfig; error?: string }>;
+    setTelegramInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
+    addDiscordInstance: (
+      name: string,
+    ) => Promise<{ success: boolean; instance?: DiscordInstanceConfig; error?: string }>;
     deleteDiscordInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setDiscordInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
+    setDiscordInstanceConfig: (
+      instanceId: string,
+      config: any,
+      options?: { syncGateway?: boolean },
+    ) => Promise<{ success: boolean; error?: string }>;
     onStatusChange: (callback: (status: IMGatewayStatus) => void) => () => void;
     onMessageReceived: (callback: (message: IMMessage) => void) => () => void;
   };
+  bookmark: {
+    add: (params: {
+      sessionId: string;
+      messageId: string;
+      messageType: string;
+      content: string;
+      sessionTitle: string;
+    }) => Promise<{ success: boolean; bookmark?: import('./cowork').Bookmark; error?: string }>;
+    remove: (bookmarkId: string) => Promise<{ success: boolean; error?: string }>;
+    list: () => Promise<{
+      success: boolean;
+      bookmarks?: import('./cowork').Bookmark[];
+      error?: string;
+    }>;
+    isBookmarked: (
+      sessionId: string,
+      messageId: string,
+    ) => Promise<{
+      success: boolean;
+      bookmarked?: boolean;
+      bookmarkId?: string;
+      error?: string;
+    }>;
+  };
   scheduledTasks: {
-    list: () => Promise<{ success: boolean; tasks?: import('../../scheduledTask/types').ScheduledTask[]; error?: string }>;
-    get: (id: string) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; error?: string }>;
-    create: (input: import('../../scheduledTask/types').ScheduledTaskInput) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; error?: string }>;
-    update: (id: string, input: Partial<import('../../scheduledTask/types').ScheduledTaskInput>) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; error?: string }>;
+    list: () => Promise<{
+      success: boolean;
+      tasks?: import('../../scheduledTask/types').ScheduledTask[];
+      error?: string;
+    }>;
+    get: (id: string) => Promise<{
+      success: boolean;
+      task?: import('../../scheduledTask/types').ScheduledTask;
+      error?: string;
+    }>;
+    create: (input: import('../../scheduledTask/types').ScheduledTaskInput) => Promise<{
+      success: boolean;
+      task?: import('../../scheduledTask/types').ScheduledTask;
+      error?: string;
+    }>;
+    update: (
+      id: string,
+      input: Partial<import('../../scheduledTask/types').ScheduledTaskInput>,
+    ) => Promise<{
+      success: boolean;
+      task?: import('../../scheduledTask/types').ScheduledTask;
+      error?: string;
+    }>;
     delete: (id: string) => Promise<{ success: boolean; error?: string }>;
-    toggle: (id: string, enabled: boolean) => Promise<{ success: boolean; task?: import('../../scheduledTask/types').ScheduledTask; warning?: string; error?: string }>;
+    toggle: (
+      id: string,
+      enabled: boolean,
+    ) => Promise<{
+      success: boolean;
+      task?: import('../../scheduledTask/types').ScheduledTask;
+      warning?: string;
+      error?: string;
+    }>;
     runManually: (id: string) => Promise<{ success: boolean; error?: string }>;
     stop: (id: string) => Promise<{ success: boolean; error?: string }>;
-    listRuns: (taskId: string, limit?: number, offset?: number) => Promise<{ success: boolean; runs?: import('../../scheduledTask/types').ScheduledTaskRun[]; error?: string }>;
+    listRuns: (
+      taskId: string,
+      limit?: number,
+      offset?: number,
+    ) => Promise<{
+      success: boolean;
+      runs?: import('../../scheduledTask/types').ScheduledTaskRun[];
+      error?: string;
+    }>;
     countRuns: (taskId: string) => Promise<{ success: boolean; count?: number; error?: string }>;
-    listAllRuns: (limit?: number, offset?: number) => Promise<{ success: boolean; runs?: import('../../scheduledTask/types').ScheduledTaskRunWithName[]; error?: string }>;
+    listAllRuns: (
+      limit?: number,
+      offset?: number,
+    ) => Promise<{
+      success: boolean;
+      runs?: import('../../scheduledTask/types').ScheduledTaskRunWithName[];
+      error?: string;
+    }>;
     resolveSession: (sessionKey: string) => Promise<{
       success: boolean;
       session?: import('./cowork').CoworkSession | null;
@@ -549,43 +862,101 @@ interface IElectronAPI {
       channels?: import('../../scheduledTask/types').ScheduledTaskChannelOption[];
       error?: string;
     }>;
-    listChannelConversations?: (channel: string, accountId?: string, filterAccountId?: string) => Promise<{
+    listChannelConversations?: (
+      channel: string,
+      accountId?: string,
+      filterAccountId?: string,
+    ) => Promise<{
       success: boolean;
       conversations?: import('../../scheduledTask/types').ScheduledTaskConversationOption[];
       error?: string;
     }>;
-    onStatusUpdate: (callback: (data: import('../../scheduledTask/types').ScheduledTaskStatusEvent) => void) => () => void;
-    onRunUpdate: (callback: (data: import('../../scheduledTask/types').ScheduledTaskRunEvent) => void) => () => void;
+    onStatusUpdate: (
+      callback: (data: import('../../scheduledTask/types').ScheduledTaskStatusEvent) => void,
+    ) => () => void;
+    onRunUpdate: (
+      callback: (data: import('../../scheduledTask/types').ScheduledTaskRunEvent) => void,
+    ) => () => void;
     onRefresh: (callback: () => void) => () => void;
   };
   permissions: {
-    checkCalendar: () => Promise<{ success: boolean; status?: string; error?: string; autoRequested?: boolean }>;
-    requestCalendar: () => Promise<{ success: boolean; granted?: boolean; status?: string; error?: string }>;
+    checkCalendar: () => Promise<{
+      success: boolean;
+      status?: string;
+      error?: string;
+      autoRequested?: boolean;
+    }>;
+    requestCalendar: () => Promise<{
+      success: boolean;
+      granted?: boolean;
+      status?: string;
+      error?: string;
+    }>;
   };
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
-    exchange: (code: string) => Promise<{ success: boolean; user?: any; quota?: any; error?: string }>;
+    exchange: (
+      code: string,
+    ) => Promise<{ success: boolean; user?: any; quota?: any; error?: string }>;
     getUser: () => Promise<{ success: boolean; user?: any; quota?: any }>;
     getQuota: () => Promise<{ success: boolean; quota?: any }>;
     logout: () => Promise<{ success: boolean }>;
     refreshToken: () => Promise<{ success: boolean; accessToken?: string }>;
     getAccessToken: () => Promise<string | null>;
-    getModels: () => Promise<{ success: boolean; models?: Array<{ modelId: string; modelName: string; provider: string; apiFormat: string }> }>;
+    getModels: () => Promise<{
+      success: boolean;
+      models?: Array<{ modelId: string; modelName: string; provider: string; apiFormat: string }>;
+    }>;
     getProfileSummary: () => Promise<{ success: boolean; data?: ProfileSummaryData }>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;
-  }
+  };
   enterprise: {
-    getConfig: () => Promise<{ ui?: Record<string, 'hide' | 'disable' | 'readonly'>; disableUpdate?: boolean; version: string; name: string } | null>;
+    getConfig: () => Promise<{
+      ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
+      disableUpdate?: boolean;
+      version: string;
+      name: string;
+    } | null>;
   };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;
   };
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
-    exchange: (code: string) => Promise<{ success: boolean; user?: import('../store/slices/authSlice').UserProfile; quota?: { planName: string; subscriptionStatus: string; creditsLimit: number; creditsUsed: number; creditsRemaining: number }; error?: string }>;
-    getUser: () => Promise<{ success: boolean; user?: import('../store/slices/authSlice').UserProfile; quota?: { planName: string; subscriptionStatus: string; creditsLimit: number; creditsUsed: number; creditsRemaining: number } }>;
-    getQuota: () => Promise<{ success: boolean; quota?: { planName: string; subscriptionStatus: string; creditsLimit: number; creditsUsed: number; creditsRemaining: number } }>;
+    exchange: (code: string) => Promise<{
+      success: boolean;
+      user?: import('../store/slices/authSlice').UserProfile;
+      quota?: {
+        planName: string;
+        subscriptionStatus: string;
+        creditsLimit: number;
+        creditsUsed: number;
+        creditsRemaining: number;
+      };
+      error?: string;
+    }>;
+    getUser: () => Promise<{
+      success: boolean;
+      user?: import('../store/slices/authSlice').UserProfile;
+      quota?: {
+        planName: string;
+        subscriptionStatus: string;
+        creditsLimit: number;
+        creditsUsed: number;
+        creditsRemaining: number;
+      };
+    }>;
+    getQuota: () => Promise<{
+      success: boolean;
+      quota?: {
+        planName: string;
+        subscriptionStatus: string;
+        creditsLimit: number;
+        creditsUsed: number;
+        creditsRemaining: number;
+      };
+    }>;
     logout: () => Promise<{ success: boolean }>;
     refreshToken: () => Promise<{ success: boolean; accessToken?: string }>;
     getAccessToken: () => Promise<string | null>;
@@ -607,7 +978,10 @@ interface IElectronAPI {
         domain?: string;
         error?: string;
       }>;
-      verify: (appId: string, appSecret: string) => Promise<{
+      verify: (
+        appId: string,
+        appSecret: string,
+      ) => Promise<{
         success: boolean;
         error?: string;
       }>;
@@ -641,7 +1015,11 @@ interface IElectronAPI {
       interval: number;
       expiresIn: number;
     }>;
-    pollForToken: (deviceCode: string, interval: number, expiresIn: number) => Promise<{
+    pollForToken: (
+      deviceCode: string,
+      interval: number,
+      expiresIn: number,
+    ) => Promise<{
       success: boolean;
       token?: string;
       githubUser?: string;
@@ -1201,4 +1579,4 @@ declare global {
   }
 }
 
-export {}; 
+export {};

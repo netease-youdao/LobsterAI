@@ -1433,6 +1433,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     taskFormLeave: '离开',
     taskFormStay: '继续编辑',
 
+    bookmarks: '收藏',
+    bookmarkAdd: '收藏',
+    bookmarkRemove: '取消收藏',
+    bookmarkAdded: '已收藏',
+    bookmarkRemoved: '已取消收藏',
+    noBookmarks: '暂无收藏，在对话中点击 ☆ 收藏消息',
+    jumpToMessage: '跳转到会话',
+    sessionDeleted: '会话已删除',
+    aiReply: 'AI 回复',
+    userMessage: '用户消息',
+    removeBookmark: '移除收藏',
+
     email: '龙虾邮箱',
     // Email Channel
     channelPrefixEmail: '邮件',
@@ -3022,6 +3034,18 @@ const translations: Record<LanguageType, Record<string, string>> = {
     taskFormLeaveConfirm: 'Your changes will be lost if you leave. Are you sure you want to leave?',
     taskFormLeave: 'Leave',
     taskFormStay: 'Keep Editing',
+
+    bookmarks: 'Bookmarks',
+    bookmarkAdd: 'Bookmark',
+    bookmarkRemove: 'Remove bookmark',
+    bookmarkAdded: 'Bookmarked',
+    bookmarkRemoved: 'Removed from bookmarks',
+    noBookmarks: 'No bookmarks yet. Click ☆ on any message to save it.',
+    jumpToMessage: 'Jump to message',
+    sessionDeleted: 'Session deleted',
+    aiReply: 'AI reply',
+    userMessage: 'User message',
+    removeBookmark: 'Remove bookmark',
 
     email: 'clawEmail',
     // Email Channel

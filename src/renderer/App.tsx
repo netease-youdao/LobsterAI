@@ -40,6 +40,8 @@ import {
   selectCurrentSessionId,
   selectFirstPendingPermission,
 } from './store/selectors/coworkSelectors';
+import BookmarksView from './components/BookmarksView';
+import { bookmarkService } from './services/bookmark';
 import { setDraftPrompt } from './store/slices/coworkSlice';
 import { setAvailableModels, setSelectedModel } from './store/slices/modelSlice';
 import { clearSelection } from './store/slices/quickActionSlice';
@@ -48,12 +50,18 @@ import type { CoworkPermissionResult } from './types/cowork';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'>('cowork');
+  const [mainView, setMainView] = useState<
+    'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents' | 'bookmarks'
+  >('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [, forceLanguageRefresh] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [pendingScrollTarget, setPendingScrollTarget] = useState<{
+    sessionId: string;
+    messageId: string;
+  } | null>(null);
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState>({
     status: AppUpdateStatus.Idle,
     source: null,
@@ -89,18 +97,18 @@ const App: React.FC = () => {
         }, timeoutMs);
 
         promise.then(
-          (value) => {
+          value => {
             window.clearTimeout(timer);
             resolve(value);
           },
-          (error) => {
+          error => {
             window.clearTimeout(timer);
             reject(error);
-          }
+          },
         );
       });
     },
-    []
+    [],
   );
 
   // 初始化应用
@@ -145,19 +153,27 @@ const App: React.FC = () => {
         apiService.setConfig(apiConfig);
 
         // 从 providers 配置中加载可用模型列表到 Redux
-        const providerModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
+        const providerModels: {
+          id: string;
+          name: string;
+          provider?: string;
+          providerKey?: string;
+          supportsImage?: boolean;
+        }[] = [];
         if (config.providers) {
           Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
             if (providerConfig.enabled && providerConfig.models) {
-              providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-                providerModels.push({
-                  id: model.id,
-                  name: model.name,
-                  provider: getProviderDisplayName(providerName, providerConfig),
-                  providerKey: providerName,
-                  supportsImage: model.supportsImage ?? false,
-                });
-              });
+              providerConfig.models.forEach(
+                (model: { id: string; name: string; supportsImage?: boolean }) => {
+                  providerModels.push({
+                    id: model.id,
+                    name: model.name,
+                    provider: getProviderDisplayName(providerName, providerConfig),
+                    providerKey: providerName,
+                    supportsImage: model.supportsImage ?? false,
+                  });
+                },
+              );
             }
           });
         }
@@ -173,10 +189,13 @@ const App: React.FC = () => {
           // Search all available models (including server models loaded by authService)
           // so that a previously selected server model is correctly restored.
           const allModels = store.getState().model.availableModels;
-          const preferredModel = allModels.find(
-            model => model.id === config.model.defaultModel
-              && (!config.model.defaultModelProvider || model.providerKey === config.model.defaultModelProvider)
-          ) ?? allModels[0];
+          const preferredModel =
+            allModels.find(
+              model =>
+                model.id === config.model.defaultModel &&
+                (!config.model.defaultModelProvider ||
+                  model.providerKey === config.model.defaultModelProvider),
+            ) ?? allModels[0];
           dispatch(setSelectedModel(preferredModel));
         }
 
@@ -187,12 +206,17 @@ const App: React.FC = () => {
         setIsInitialized(true);
         console.info('[App] initializeApp: shell ready');
 
-
         // 初始化定时任务服务，但不阻塞首屏
-        void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
-          console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
-        });
+        void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch(
+          error => {
+            console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
+          },
+        );
 
+        // 初始化收藏服务，但不阻塞首屏
+        void bookmarkService.init().catch(error => {
+          console.error('[App] initializeApp: bookmarkService.init failed:', error);
+        });
       } catch (error) {
         console.error('Failed to initialize app:', error);
         setInitError(i18nService.t('initializationError'));
@@ -205,7 +229,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const unsubscribe = i18nService.subscribe(() => {
-      forceLanguageRefresh((prev) => prev + 1);
+      forceLanguageRefresh(prev => prev + 1);
     });
     return () => {
       unsubscribe();
@@ -259,8 +283,8 @@ const App: React.FC = () => {
     if (!isInitialized || !selectedModel?.id) return;
     const config = configService.getConfig();
     if (
-      config.model.defaultModel === selectedModel.id
-      && (config.model.defaultModelProvider ?? '') === (selectedModel.providerKey ?? '')
+      config.model.defaultModel === selectedModel.id &&
+      (config.model.defaultModelProvider ?? '') === (selectedModel.providerKey ?? '')
     ) {
       return;
     }
@@ -301,8 +325,18 @@ const App: React.FC = () => {
     setMainView('agents');
   }, []);
 
+  const handleShowBookmarks = useCallback(() => {
+    setMainView('bookmarks');
+  }, []);
+
+  const handleJumpToMessage = useCallback((sessionId: string, messageId: string) => {
+    setPendingScrollTarget({ sessionId, messageId });
+    coworkService.loadSession(sessionId);
+    setMainView('cowork');
+  }, []);
+
   const handleToggleSidebar = useCallback(() => {
-    setIsSidebarCollapsed((prev) => !prev);
+    setIsSidebarCollapsed(prev => !prev);
   }, []);
 
   const handleNewChat = useCallback(() => {
@@ -312,9 +346,11 @@ const App: React.FC = () => {
     dispatch(clearSelection());
     setMainView('cowork');
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('cowork:focus-input', {
-        detail: { clear: shouldClearInput },
-      }));
+      window.dispatchEvent(
+        new CustomEvent('cowork:focus-input', {
+          detail: { clear: shouldClearInput },
+        }),
+      );
     }, 0);
   }, [dispatch, mainView, currentSessionId]);
 
@@ -496,18 +532,26 @@ const App: React.FC = () => {
     });
 
     if (config.providers) {
-      const allModels: { id: string; name: string; provider?: string; providerKey?: string; supportsImage?: boolean }[] = [];
+      const allModels: {
+        id: string;
+        name: string;
+        provider?: string;
+        providerKey?: string;
+        supportsImage?: boolean;
+      }[] = [];
       Object.entries(config.providers).forEach(([providerName, providerConfig]) => {
         if (providerConfig.enabled && providerConfig.models) {
-          providerConfig.models.forEach((model: { id: string; name: string; supportsImage?: boolean }) => {
-            allModels.push({
-              id: model.id,
-              name: model.name,
-              provider: getProviderDisplayName(providerName, providerConfig),
-              providerKey: providerName,
-              supportsImage: model.supportsImage ?? false,
-            });
-          });
+          providerConfig.models.forEach(
+            (model: { id: string; name: string; supportsImage?: boolean }) => {
+              allModels.push({
+                id: model.id,
+                name: model.name,
+                provider: getProviderDisplayName(providerName, providerConfig),
+                providerKey: providerName,
+                supportsImage: model.supportsImage ?? false,
+              });
+            },
+          );
         }
       });
       if (allModels.length > 0) {
@@ -651,10 +695,7 @@ const App: React.FC = () => {
 
     // 其他情况使用原有的权限模态框
     return (
-      <CoworkPermissionModal
-        permission={pendingPermission}
-        onRespond={handlePermissionResponse}
-      />
+      <CoworkPermissionModal permission={pendingPermission} onRespond={handlePermissionResponse} />
     );
   }, [pendingPermission, handlePermissionResponse]);
 
@@ -728,9 +769,7 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
-      {toastMessage && (
-        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
-      )}
+      {toastMessage && <Toast message={toastMessage} onClose={() => setToastMessage(null)} />}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar
           onShowLogin={handleShowLogin}
@@ -741,6 +780,7 @@ const App: React.FC = () => {
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowMcp={handleShowMcp}
           onShowAgents={handleShowAgents}
+          onShowBookmarks={handleShowBookmarks}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -781,6 +821,12 @@ const App: React.FC = () => {
                 onShowCowork={handleShowCowork}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
               />
+            ) : mainView === 'bookmarks' ? (
+              <BookmarksView
+                onJumpToMessage={handleJumpToMessage}
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={() => setIsSidebarCollapsed(false)}
+              />
             ) : (
               <CoworkView
                 onRequestAppSettings={privacyAgreed === true && !showWelcome ? handleShowSettings : undefined}
@@ -789,6 +835,8 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
+                pendingScrollTarget={pendingScrollTarget}
+                onClearPendingScroll={() => setPendingScrollTarget(null)}
               />
             )}
           </div>
@@ -820,10 +868,7 @@ const App: React.FC = () => {
       )}
       {permissionModal}
       {privacyAgreed === false && (
-        <PrivacyDialog
-          onAccept={handlePrivacyAccept}
-          onReject={handlePrivacyReject}
-        />
+        <PrivacyDialog onAccept={handlePrivacyAccept} onReject={handlePrivacyReject} />
       )}
       {showWelcome && (
         <WelcomeDialog
@@ -836,4 +881,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+export default App;
