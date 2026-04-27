@@ -5,6 +5,7 @@ interface AgentSummary {
   name: string;
   description: string;
   icon: string;
+  model: string;
   enabled: boolean;
   isDefault: boolean;
   source: 'custom' | 'preset';

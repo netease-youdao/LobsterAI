@@ -7,6 +7,7 @@ const asar = require('@electron/asar');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 const { syncLocalOpenClawExtensions } = require('./sync-local-openclaw-extensions.cjs');
 const { packMultipleSources } = require('./pack-openclaw-tar.cjs');
+const { DIST_DIFFS_EXTENSION_DIR, DIST_EXTENSIONS_DIR, summarizeGatewayAsarEntries } = require('./openclaw-runtime-packaging.cjs');
 
 function isWindowsTarget(context) {
   return context?.electronPlatformName === 'win32';
@@ -101,7 +102,7 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
     return;
   }
 
-  const extensionsDir = path.join(runtimeRoot, 'extensions');
+  const extensionsDir = path.join(runtimeRoot, 'third-party-extensions');
   const missing = [];
 
   for (const plugin of plugins) {
@@ -123,14 +124,61 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
   console.log(`[electron-builder-hooks] Verified ${plugins.length} preinstalled OpenClaw plugin(s).`);
 }
 
+function hasCompiledLocalExtension(runtimeRoot, extensionId) {
+  const pluginDir = path.join(runtimeRoot, 'third-party-extensions', extensionId);
+  return existsSync(path.join(pluginDir, 'openclaw.plugin.json'))
+    && existsSync(path.join(pluginDir, 'index.js'));
+}
+
+function precompileLocalExtensions(runtimeRoot, buildHint) {
+  const scriptPath = path.join(__dirname, 'precompile-openclaw-extensions.cjs');
+  const result = spawnSync(process.execPath, [scriptPath, runtimeRoot], {
+    cwd: path.join(__dirname, '..'),
+    stdio: 'inherit',
+  });
+
+  if (result.status !== 0) {
+    throw new Error(
+      '[electron-builder-hooks] Failed to precompile local OpenClaw extensions. '
+      + `Run \`${buildHint}\` before packaging.`,
+    );
+  }
+}
+
+function ensureBundledLocalExtensions(runtimeRoot, buildHint) {
+  const requiredLocalExtensions = ['mcp-bridge', 'ask-user-question'];
+  const missingCompiledExtensions = requiredLocalExtensions.filter(
+    (extensionId) => !hasCompiledLocalExtension(runtimeRoot, extensionId),
+  );
+
+  if (missingCompiledExtensions.length === 0) {
+    return;
+  }
+
+  console.log(
+    '[electron-builder-hooks] Restoring local OpenClaw extensions before packaging: '
+    + missingCompiledExtensions.join(', '),
+  );
+  syncLocalOpenClawExtensions(runtimeRoot);
+  precompileLocalExtensions(runtimeRoot, buildHint);
+
+  const stillMissing = requiredLocalExtensions.filter(
+    (extensionId) => !hasCompiledLocalExtension(runtimeRoot, extensionId),
+  );
+  if (stillMissing.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw runtime is missing compiled local extensions: '
+      + stillMissing.join(', ')
+      + `. Run \`${buildHint}\` before packaging.`,
+    );
+  }
+}
+
 function ensureBundledOpenClawRuntime(context) {
   const { runtimeRoot, targetId } = syncCurrentOpenClawRuntimeForTarget(context);
   const buildHint = getOpenClawRuntimeBuildHint(targetId);
 
-  const localMcpBridgeDir = path.join(runtimeRoot, 'extensions', 'mcp-bridge');
-  if (!existsSync(localMcpBridgeDir)) {
-    syncLocalOpenClawExtensions(runtimeRoot);
-  }
+  ensureBundledLocalExtensions(runtimeRoot, buildHint);
 
   const requiredExternalPaths = [
     path.join(runtimeRoot, 'node_modules'),
@@ -169,10 +217,9 @@ function ensureBundledOpenClawRuntime(context) {
 
   const gatewayAsarPath = path.join(runtimeRoot, 'gateway.asar');
   if (existsSync(gatewayAsarPath)) {
-    let entries;
+    let summary;
     try {
-      // Normalize paths: on Windows, asar.listPackage may return backslash paths
-      entries = new Set(asar.listPackage(gatewayAsarPath).map(e => e.replace(/\\/g, '/')));
+      summary = summarizeGatewayAsarEntries(asar.listPackage(gatewayAsarPath));
     } catch (error) {
       throw new Error(
         '[electron-builder-hooks] Failed to read OpenClaw gateway.asar: '
@@ -180,14 +227,26 @@ function ensureBundledOpenClawRuntime(context) {
       );
     }
 
-    const hasOpenClawEntry = entries.has('/openclaw.mjs');
-    const hasControlUiIndex = entries.has('/dist/control-ui/index.html');
-    const hasGatewayEntry = entries.has('/dist/entry.js') || entries.has('/dist/entry.mjs');
-
-    if (!hasOpenClawEntry || !hasControlUiIndex || !hasGatewayEntry) {
+    if (!summary.hasOpenClawEntry || !summary.hasControlUiIndex || !summary.hasGatewayEntry || summary.hasBundledExtensions) {
       throw new Error(
         '[electron-builder-hooks] OpenClaw gateway.asar is incomplete. '
-        + `openclaw.mjs=${hasOpenClawEntry}, control-ui=${hasControlUiIndex}, entry=${hasGatewayEntry}.`,
+        + `openclaw.mjs=${summary.hasOpenClawEntry}, control-ui=${summary.hasControlUiIndex}, entry=${summary.hasGatewayEntry}, extensions=${summary.hasBundledExtensions}.`,
+      );
+    }
+
+    const bundledExtensionsDir = path.join(runtimeRoot, DIST_EXTENSIONS_DIR);
+    if (!existsSync(bundledExtensionsDir)) {
+      throw new Error(
+        '[electron-builder-hooks] Bundled OpenClaw runtime is missing bare dist/extensions. '
+        + `Expected ${bundledExtensionsDir} after gateway.asar packing.`,
+      );
+    }
+
+    const diffsExtensionDir = path.join(runtimeRoot, DIST_DIFFS_EXTENSION_DIR);
+    if (existsSync(diffsExtensionDir)) {
+      throw new Error(
+        '[electron-builder-hooks] Bundled OpenClaw runtime still contains the diffs extension. '
+        + `Expected ${diffsExtensionDir} to be removed before packaging.`,
       );
     }
 
@@ -332,72 +391,39 @@ function applyMacIconFix(appPath) {
 }
 
 /**
- * Remove broken symlinks from a directory recursively.
- * This fixes macOS code signing failures caused by dangling symlinks in node_modules/.bin
+ * Remove all node_modules/.bin directories from the cfmind tree.
+ *
+ * macOS codesign rejects symlinks inside app bundles (even valid relative ones).
+ * .bin/ directories contain only CLI wrapper symlinks that are never used at
+ * runtime, so removing them entirely is safe and fixes signing.
  */
-function removeBrokenSymlinks(dir) {
-  if (!existsSync(dir)) return 0;
+function removeAllBinDirsInCfmind(appOutDir) {
+  const cfmindDir = path.join(appOutDir, 'Contents', 'Resources', 'cfmind');
 
-  let removedCount = 0;
-  const entries = readdirSync(dir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-
-    try {
-      if (entry.isSymbolicLink()) {
-        // Check if symlink target exists
-        try {
-          statSync(fullPath); // follows symlink
-        } catch {
-          // Symlink is broken - remove it
-          rmSync(fullPath, { force: true });
-          removedCount++;
-        }
-      } else if (entry.isDirectory()) {
-        removedCount += removeBrokenSymlinks(fullPath);
-      }
-    } catch (err) {
-      // Skip entries we can't access
-    }
-  }
-
-  return removedCount;
-}
-
-/**
- * Clean up broken symlinks in cfmind/extensions to prevent macOS signing failures.
- */
-function cleanupBrokenSymlinksInExtensions(appOutDir) {
-  const extensionsDir = path.join(appOutDir, 'Contents', 'Resources', 'cfmind', 'extensions');
-
-  if (!existsSync(extensionsDir)) {
+  if (!existsSync(cfmindDir)) {
     return;
   }
 
-  console.log('[electron-builder-hooks] Cleaning up broken symlinks in cfmind/extensions...');
+  console.log('[electron-builder-hooks] Removing node_modules/.bin directories from cfmind...');
 
-  let totalRemoved = 0;
-  const extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
-
-  for (const entry of extensionEntries) {
-    if (!entry.isDirectory()) continue;
-
-    const nodeModulesBin = path.join(extensionsDir, entry.name, 'node_modules', '.bin');
-    if (existsSync(nodeModulesBin)) {
-      const removed = removeBrokenSymlinks(nodeModulesBin);
-      if (removed > 0) {
-        console.log(`[electron-builder-hooks]   ${entry.name}: removed ${removed} broken symlink(s)`);
-        totalRemoved += removed;
+  let removedCount = 0;
+  const walk = (dir) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (!entry.isDirectory()) continue;
+      if (entry.name === '.bin' && path.basename(path.dirname(full)) === 'node_modules') {
+        rmSync(full, { recursive: true, force: true });
+        removedCount++;
+        continue;
       }
+      walk(full);
     }
-  }
+  };
+  walk(cfmindDir);
 
-  if (totalRemoved > 0) {
-    console.log(`[electron-builder-hooks] ✓ Removed ${totalRemoved} broken symlink(s) total`);
-  } else {
-    console.log('[electron-builder-hooks] ✓ No broken symlinks found');
-  }
+  console.log(`[electron-builder-hooks] ✓ Removed ${removedCount} .bin director${removedCount === 1 ? 'y' : 'ies'} from cfmind`);
 }
 
 /**
@@ -551,8 +577,8 @@ async function afterPack(context) {
     const appPath = path.join(context.appOutDir, `${appName}.app`);
 
     if (existsSync(appPath)) {
-      // Clean up broken symlinks before signing to prevent ENOENT errors
-      cleanupBrokenSymlinksInExtensions(appPath);
+      // Remove all .bin directories (symlinks) before signing to prevent codesign failures
+      removeAllBinDirsInCfmind(appPath);
       applyMacIconFix(appPath);
     } else {
       console.warn(`[electron-builder-hooks] App not found at ${appPath}, skipping icon fix`);

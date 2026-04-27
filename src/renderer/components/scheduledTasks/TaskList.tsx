@@ -1,11 +1,12 @@
+import { ClockIcon, EllipsisVerticalIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { ClockIcon, EllipsisVerticalIcon } from '@heroicons/react/24/outline';
+
+import type { ScheduledTask } from '../../../scheduledTask/types';
+import { i18nService } from '../../services/i18n';
+import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
-import { scheduledTaskService } from '../../services/scheduledTask';
-import { i18nService } from '../../services/i18n';
-import type { ScheduledTask } from '../../../scheduledTask/types';
 import { formatScheduleLabel, getStatusLabelKey, getStatusTone } from './utils';
 
 interface TaskListItemProps {
@@ -62,7 +63,7 @@ const TaskListItem: React.FC<TaskListItemProps> = ({ task, onRequestDelete }) =>
             void scheduledTaskService.toggleTask(task.id, !task.enabled);
           }}
           className={`relative shrink-0 w-7 h-4 rounded-full transition-colors ${
-            task.enabled ? 'bg-primary' : 'bg-border'
+            task.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
           }`}
         >
           <span

@@ -32,11 +32,13 @@ export const ProviderName = {
   Minimax: 'minimax',
   Youdaozhiyun: 'youdaozhiyun',
   Qwen: 'qwen',
+  Qianfan: 'qianfan',
   Xiaomi: 'xiaomi',
   StepFun: 'stepfun',
   Volcengine: 'volcengine',
   OpenRouter: 'openrouter',
   Ollama: 'ollama',
+  LmStudio: 'lm-studio',
   Custom: 'custom',
   LobsteraiServer: 'lobsterai-server',
   Copilot: 'github-copilot',
@@ -52,6 +54,7 @@ export const OpenClawProviderId = {
   Anthropic: 'anthropic',
   OpenAI: 'openai',
   DeepSeek: 'deepseek',
+  Qianfan: 'qianfan',
   Qwen: 'qwen-portal', // OpenClaw normalizes 'qwen' → 'qwen-portal'; use canonical ID to avoid config diff loop
   Zai: 'zai', // OpenClaw official provider ID for Zhipu/GLM
   Volcengine: 'volcengine',
@@ -63,6 +66,7 @@ export const OpenClawProviderId = {
   Copilot: 'github-copilot',
   LobsteraiCopilot: 'lobsterai-copilot',
   Ollama: 'ollama',
+  LmStudio: 'lm-studio',
   Lobster: 'lobster',
 } as const;
 export type OpenClawProviderId = typeof OpenClawProviderId[keyof typeof OpenClawProviderId];
@@ -87,6 +91,7 @@ export type ApiFormat = typeof ApiFormat[keyof typeof ApiFormat];
 // ─── Auth Type ──────────────────────────────────────────────────────────
 export const AuthType = {
   ApiKey: 'api-key',
+  OAuth: 'oauth',
 } as const;
 export type AuthType = typeof AuthType[keyof typeof AuthType];
 
@@ -97,6 +102,12 @@ export type AuthType = typeof AuthType[keyof typeof AuthType];
 interface ProviderDefInput {
   /** Provider identifier (e.g. 'openai', 'moonshot') */
   readonly id: string;
+  /** Human-readable display name shown in UI, e.g. 'OpenAI', 'GitHub Copilot' */
+  readonly label: string;
+  /** Provider console / product website URL */
+  readonly website?: string;
+  /** API key creation page URL. Omit for providers that don't use API keys (e.g. Ollama). */
+  readonly apiKeyUrl?: string;
   /** Default base URL */
   readonly defaultBaseUrl: string;
   /** Default API format */
@@ -167,6 +178,9 @@ const PROVIDER_DEFINITIONS = [
   // ── China ──
   {
     id: ProviderName.DeepSeek,
+    label: 'DeepSeek',
+    website: 'https://platform.deepseek.com',
+    apiKeyUrl: 'https://platform.deepseek.com/api_keys',
     openClawProviderId: OpenClawProviderId.DeepSeek,
     defaultBaseUrl: 'https://api.deepseek.com/anthropic',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -177,10 +191,17 @@ const PROVIDER_DEFINITIONS = [
     },
     region: 'china',
     enPriority: 0,
-    defaultModels: [{ id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }],
+    defaultModels: [
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false },
+      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
+    ],
   },
   {
     id: ProviderName.Moonshot,
+    label: 'Moonshot',
+    website: 'https://platform.moonshot.cn',
+    apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys',
     openClawProviderId: OpenClawProviderId.Moonshot,
     // Moonshot's /anthropic endpoint does not fully implement the Anthropic Messages spec
     // (no tool use, incomplete streaming, etc.). API connectivity tests pass, but actual
@@ -199,11 +220,17 @@ const PROVIDER_DEFINITIONS = [
     },
     region: 'china',
     enPriority: 0,
-    defaultModels: [{ id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true }],
+    defaultModels: [
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true },
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true },
+    ],
     codingPlanModels: [{ id: 'kimi-for-coding', name: 'Kimi K2.5', supportsImage: true }],
   },
   {
     id: ProviderName.Qwen,
+    label: 'Qwen',
+    website: 'https://dashscope.console.aliyun.com',
+    apiKeyUrl: 'https://dashscope.console.aliyun.com/apiKey',
     openClawProviderId: OpenClawProviderId.Qwen,
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/apps/anthropic',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -226,6 +253,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Zhipu,
+    label: 'Zhipu',
+    website: 'https://open.bigmodel.cn',
+    apiKeyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     openClawProviderId: OpenClawProviderId.Zai,
     defaultBaseUrl: 'https://open.bigmodel.cn/api/anthropic',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -248,6 +278,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Minimax,
+    label: 'MiniMax',
+    website: 'https://platform.minimaxi.com',
+    apiKeyUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
     openClawProviderId: OpenClawProviderId.Minimax,
     defaultBaseUrl: 'https://api.minimaxi.com/anthropic',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -265,6 +298,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Volcengine,
+    label: 'Volcengine',
+    website: 'https://console.volcengine.com/ark',
+    apiKeyUrl: 'https://console.volcengine.com/ark',
     openClawProviderId: OpenClawProviderId.Volcengine,
     defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/compatible',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -288,6 +324,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Youdaozhiyun,
+    label: 'Youdao',
+    website: 'https://ai.youdao.com',
+    apiKeyUrl: 'https://ai.youdao.com/console',
     openClawProviderId: OpenClawProviderId.Youdaozhiyun,
     defaultBaseUrl: 'https://openapi.youdao.com/llmgateway/api/v1/chat/completions',
     defaultApiFormat: ApiFormat.OpenAI,
@@ -306,7 +345,27 @@ const PROVIDER_DEFINITIONS = [
     ],
   },
   {
+    id: ProviderName.Qianfan,
+    label: 'Qianfan',
+    apiKeyUrl: 'https://console.bce.baidu.com/qianfan/ais/console/apiKey',
+    openClawProviderId: OpenClawProviderId.Qianfan,
+    defaultBaseUrl: 'https://qianfan.baidubce.com/v2',
+    defaultApiFormat: ApiFormat.OpenAI,
+    codingPlanSupported: false,
+    region: 'china',
+    enPriority: 0,
+    defaultModels: [
+      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', supportsImage: false },
+      { id: 'deepseek-r1', name: 'DeepSeek R1', supportsImage: false },
+      { id: 'ernie-4.5-8k', name: 'ERNIE 4.5 8K', supportsImage: false },
+      { id: 'ernie-4.5-turbo-8k', name: 'ERNIE 4.5 Turbo', supportsImage: false },
+    ],
+  },
+  {
     id: ProviderName.StepFun,
+    label: 'StepFun',
+    website: 'https://platform.stepfun.com',
+    apiKeyUrl: 'https://platform.stepfun.com/interface-key',
     openClawProviderId: OpenClawProviderId.StepFun,
     defaultBaseUrl: 'https://api.stepfun.com/v1',
     defaultApiFormat: ApiFormat.OpenAI,
@@ -317,6 +376,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Xiaomi,
+    label: 'Xiaomi',
+    website: 'https://dev.mi.com/platform',
+    apiKeyUrl: 'https://dev.mi.com/platform',
     openClawProviderId: OpenClawProviderId.Xiaomi,
     defaultBaseUrl: 'https://api.xiaomimimo.com/anthropic',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -331,6 +393,8 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Ollama,
+    label: 'Ollama',
+    website: 'https://ollama.com',
     openClawProviderId: OpenClawProviderId.Ollama,
     defaultBaseUrl: 'http://localhost:11434/v1',
     defaultApiFormat: ApiFormat.OpenAI,
@@ -346,10 +410,27 @@ const PROVIDER_DEFINITIONS = [
       { id: 'glm-4.7-flash', name: 'GLM 4.7 Flash', supportsImage: false },
     ],
   },
+  {
+    id: ProviderName.LmStudio,
+    label: 'LM Studio',
+    website: 'https://lmstudio.ai',
+    openClawProviderId: OpenClawProviderId.LmStudio,
+    defaultBaseUrl: 'http://localhost:1234/v1',
+    defaultApiFormat: ApiFormat.OpenAI,
+    codingPlanSupported: false,
+    switchableBaseUrls: {
+      anthropic: 'http://localhost:1234',
+      openai: 'http://localhost:1234/v1',
+    },
+    region: 'china',
+    enPriority: 0,
+    defaultModels: [],
+  },
   // ── Global ──
   {
     id: ProviderName.Copilot,
-    openClawProviderId: OpenClawProviderId.Copilot,
+    label: 'GitHub Copilot',
+    openClawProviderId: OpenClawProviderId.LobsteraiCopilot,
     defaultBaseUrl: 'https://api.individual.githubcopilot.com',
     defaultApiFormat: ApiFormat.OpenAI,
     codingPlanSupported: false,
@@ -364,6 +445,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.OpenAI,
+    label: 'OpenAI',
+    website: 'https://platform.openai.com',
+    apiKeyUrl: 'https://platform.openai.com/api-keys',
     openClawProviderId: OpenClawProviderId.OpenAI,
     defaultBaseUrl: 'https://api.openai.com/v1',
     defaultApiFormat: ApiFormat.OpenAI,
@@ -379,6 +463,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Gemini,
+    label: 'Gemini',
+    website: 'https://aistudio.google.com',
+    apiKeyUrl: 'https://aistudio.google.com/apikey',
     openClawProviderId: OpenClawProviderId.Google,
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     defaultApiFormat: ApiFormat.Gemini,
@@ -393,6 +480,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.Anthropic,
+    label: 'Anthropic',
+    website: 'https://console.anthropic.com',
+    apiKeyUrl: 'https://console.anthropic.com/settings/keys',
     openClawProviderId: OpenClawProviderId.Anthropic,
     defaultBaseUrl: 'https://api.anthropic.com',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -407,6 +497,9 @@ const PROVIDER_DEFINITIONS = [
   },
   {
     id: ProviderName.OpenRouter,
+    label: 'OpenRouter',
+    website: 'https://openrouter.ai',
+    apiKeyUrl: 'https://openrouter.ai/keys',
     openClawProviderId: OpenClawProviderId.OpenRouter,
     defaultBaseUrl: 'https://openrouter.ai/api',
     defaultApiFormat: ApiFormat.Anthropic,
@@ -433,6 +526,12 @@ const PROVIDER_DEFINITIONS = [
 export interface ProviderDef {
   /** Provider identifier (e.g. 'openai', 'moonshot') */
   readonly id: string;
+  /** Human-readable display name shown in UI */
+  readonly label: string;
+  /** Provider console / product website URL */
+  readonly website?: string;
+  /** API key creation page URL */
+  readonly apiKeyUrl?: string;
   /** Default base URL */
   readonly defaultBaseUrl: string;
   /** Default API format */
@@ -541,12 +640,17 @@ class ProviderRegistryImpl {
     const orderedProviders = [...priority, ...china, ...global];
     const unique = [...new Set(orderedProviders)];
 
-    // Move ollama to the end (custom providers are appended dynamically by Settings)
+    // Move local providers (ollama, lm-studio) to the end
     const ollamaIdx = unique.indexOf(ProviderName.Ollama);
     if (ollamaIdx !== -1) {
       unique.splice(ollamaIdx, 1);
     }
+    const lmStudioIdx = unique.indexOf(ProviderName.LmStudio);
+    if (lmStudioIdx !== -1) {
+      unique.splice(lmStudioIdx, 1);
+    }
     unique.push(ProviderName.Ollama);
+    unique.push(ProviderName.LmStudio);
     return unique;
   }
 }

@@ -10,7 +10,7 @@ import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
-import { mergeReports,scanMultipleSkillDirs, scanSkillSecurity } from './libs/skillSecurity/skillSecurityScanner';
+import { mergeReports,scanMultipleSkillDirs } from './libs/skillSecurity/skillSecurityScanner';
 import type { SecurityReportAction,SkillSecurityReport } from './libs/skillSecurity/skillSecurityTypes';
 import { SqliteStore } from './sqliteStore';
 
@@ -253,8 +253,6 @@ const SKILL_FILE_NAME = 'SKILL.md';
 const SKILLS_CONFIG_FILE = 'skills.config.json';
 const SKILL_STATE_KEY = 'skills_state';
 const WATCH_DEBOUNCE_MS = 250;
-const CLAUDE_SKILLS_DIR_NAME = '.claude';
-const CLAUDE_SKILLS_SUBDIR = 'skills';
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -1044,12 +1042,7 @@ const downloadNpmPackage = async (spec: string, tempRoot: string): Promise<strin
 
   // Use tar to extract (Node.js built-in zlib + tar via npm's own bundled tar)
   const tarExtract = await new Promise<{ code: number; stderr: string }>((resolve) => {
-    const tarCommand = npmCliJs ? electronPath : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
-    const tarArgs = npmCliJs
-      ? [npmCliJs, 'exec', '--', 'tar', 'xzf', tgzPath, '-C', extractDir]
-      : ['exec', '--', 'tar', 'xzf', tgzPath, '-C', extractDir];
-
-    // Try system tar first (available on all platforms including Windows 10+)
+    // Use system tar (available on all platforms including Windows 10+)
     const child = spawn('tar', ['xzf', tgzPath, '-C', extractDir], {
       windowsHide: true,
       stdio: ['ignore', 'ignore', 'pipe'],
@@ -1309,10 +1302,32 @@ export class SkillManager {
     }
 
     try {
+      // Build allowlist of bundled skill IDs from skills.config.json so
+      // user-added skill folders that happen to sit in the bundled root
+      // (e.g. restored by the installer's AppData backup) are not synced
+      // to user data. Falls back to the legacy "sync everything" behavior
+      // if the config is missing or malformed.
+      let bundledIds: Set<string> | null = null;
+      try {
+        const configPath = path.join(bundledRoot, SKILLS_CONFIG_FILE);
+        if (fs.existsSync(configPath)) {
+          const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          if (parsed?.defaults && typeof parsed.defaults === 'object') {
+            bundledIds = new Set(Object.keys(parsed.defaults));
+          }
+        }
+      } catch (error) {
+        console.warn('[skills] Failed to parse skills.config.json for sync filter:', error);
+      }
+
       const bundledSkillDirs = listSkillDirs(bundledRoot);
       console.log('[skills] syncBundledSkillsToUserData: found', bundledSkillDirs.length, 'bundled skills');
       bundledSkillDirs.forEach((dir) => {
         const id = path.basename(dir);
+        if (bundledIds && !bundledIds.has(id)) {
+          console.log(`[skills] syncBundledSkillsToUserData: skipping non-bundled "${id}"`);
+          return;
+        }
         const targetDir = path.join(userRoot, id);
         const targetExists = fs.existsSync(targetDir);
 
@@ -1524,12 +1539,20 @@ export class SkillManager {
       throw new Error('Built-in skills cannot be deleted');
     }
 
-    const targetDir = resolveWithin(root, id);
+    let targetDir: string | null = resolveWithin(root, id);
     if (!fs.existsSync(targetDir)) {
-      throw new Error('Skill not found');
+      const bundledRoot = this.getBundledSkillsRoot();
+      if (bundledRoot && bundledRoot !== root) {
+        const bundledTarget = resolveWithin(bundledRoot, id);
+        targetDir = fs.existsSync(bundledTarget) ? bundledTarget : null;
+      } else {
+        targetDir = null;
+      }
     }
 
-    fs.rmSync(targetDir, { recursive: true, force: true });
+    if (targetDir !== null) {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
     const state = this.loadSkillStateMap();
     delete state[id];
     this.saveSkillStateMap(state);
@@ -2121,6 +2144,17 @@ export class SkillManager {
     if (!builtInRoot || !fs.existsSync(builtInRoot)) {
       return new Set();
     }
+    try {
+      const configPath = path.join(builtInRoot, SKILLS_CONFIG_FILE);
+      if (fs.existsSync(configPath)) {
+        const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (parsed?.defaults && typeof parsed.defaults === 'object') {
+          return new Set(Object.keys(parsed.defaults));
+        }
+      }
+    } catch (error) {
+      console.warn('[skills] Failed to parse skills.config.json for built-in skill list:', error);
+    }
     return new Set(listSkillDirs(builtInRoot).map(dir => path.basename(dir)));
   }
 
@@ -2177,21 +2211,11 @@ export class SkillManager {
     const resolvedPrimary = primaryRoot ?? this.getSkillsRoot();
     const roots: string[] = [resolvedPrimary];
 
-    const claudeSkillsRoot = this.getClaudeSkillsRoot();
-    if (claudeSkillsRoot && fs.existsSync(claudeSkillsRoot)) {
-      roots.push(claudeSkillsRoot);
-    }
-
     const appRoot = this.getBundledSkillsRoot();
     if (appRoot !== resolvedPrimary && fs.existsSync(appRoot)) {
       roots.push(appRoot);
     }
     return roots;
-  }
-
-  private getClaudeSkillsRoot(): string | null {
-    const homeDir = app.getPath('home');
-    return path.join(homeDir, CLAUDE_SKILLS_DIR_NAME, CLAUDE_SKILLS_SUBDIR);
   }
 
   private getBundledSkillsRoot(): string {

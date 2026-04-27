@@ -6,52 +6,52 @@
     "email": "lobsterai.project@rd.netease.com"
   },
   "license": "MIT",
-  "version": "2026.4.3",
+  "version": "2026.4.25",
   "openclaw": {
-    "version": "v2026.3.2",
+    "version": "v2026.4.14",
     "repo": "https://github.com/openclaw/openclaw.git",
     "plugins": [
       {
-        "id": "dingtalk",
-        "npm": "@soimy/dingtalk",
-        "version": "3.4.0"
+        "id": "dingtalk-connector",
+        "npm": "@dingtalk-real-ai/dingtalk-connector",
+        "version": "0.8.16"
       },
       {
-        "id": "feishu-openclaw-plugin",
-        "npm": "@larksuiteoapi/feishu-openclaw-plugin",
-        "version": "2026.3.8"
-      },
-      {
-        "id": "openclaw-qqbot",
-        "npm": "@tencent-connect/openclaw-qqbot",
-        "version": "1.6.4"
+        "id": "openclaw-lark",
+        "npm": "@larksuite/openclaw-lark",
+        "version": "2026.4.7"
       },
       {
         "id": "wecom-openclaw-plugin",
         "npm": "@wecom/wecom-openclaw-plugin",
-        "version": "1.0.12"
+        "version": "2026.4.22"
       },
       {
         "id": "openclaw-weixin",
         "npm": "@tencent-weixin/openclaw-weixin",
-        "version": "1.0.3"
+        "version": "2.1.7"
       },
       {
         "id": "moltbot-popo",
         "npm": "moltbot-popo",
-        "version": "1.0.66",
+        "version": "2.1.0",
         "registry": "https://npm.nie.netease.com",
         "optional": true
       },
       {
-        "id": "openclaw-nim",
-        "npm": "openclaw-nim",
-        "version": "0.3.1"
+        "id": "openclaw-nim-channel",
+        "npm": "git+https://github.com/netease-im/openclaw-nim-channel.git#1.1.1",
+        "version": "1.1.1"
       },
       {
         "id": "openclaw-netease-bee",
         "npm": "openclaw-netease-bee",
         "version": "0.1.3"
+      },
+      {
+        "id": "clawemail-email",
+        "npm": "@clawemail/email",
+        "version": "0.9.12"
       }
     ]
   },
@@ -68,10 +68,11 @@
     "prepare": "husky",
     "test": "vitest run",
     "pretest": "npm rebuild better-sqlite3",
+    "test:sqlite-backup:seed": "node tests/sqlite-backup/generate-large-db.cjs",
     "preview": "vite preview",
     "compile:electron": "tsc --project electron-tsconfig.json",
     "precompile:electron": "electron-builder install-app-deps",
-    "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json",
+    "build:skill:web-search": "npm install --prefix SKILLs/web-search && npx tsc -p SKILLs/web-search/tsconfig.json && node -e \"const fs=require('fs');['.connection','.server.log','.server.pid'].forEach(f=>{try{fs.unlinkSync('SKILLs/web-search/'+f)}catch(e){}});\"",
     "build:skill:tech-news": "node scripts/build-skill-tech-news.js",
     "build:skill:email": "cd SKILLs/imap-smtp-email && npm install --production",
     "build:skills": "npm run build:skill:web-search && npm run build:skill:tech-news && npm run build:skill:email",
@@ -81,7 +82,7 @@
     "postinstall": "patch-package && electron-builder install-app-deps",
     "pack": "npm run setup:python-runtime && npm run build && npm run compile:electron && npm run build:skills && electron-builder --dir",
     "dist": "npm run setup:python-runtime && npm run build && npm run compile:electron && npm run build:skills && electron-builder",
-    "dist:mac": "node -r dotenv/config node_modules/.bin/electron-builder --mac --config electron-builder.json",
+    "dist:mac": "electron-builder --mac --config electron-builder.json",
     "predist:mac": "npm run build && npm run compile:electron && npm run build:skills && npm run openclaw:runtime:mac-arm64",
     "dist:mac:x64": "npm run build && npm run compile:electron && npm run build:skills && npm run openclaw:runtime:mac-x64 && electron-builder --mac --x64",
     "dist:mac:arm64": "npm run build && npm run compile:electron && npm run build:skills && npm run openclaw:runtime:mac-arm64 && electron-builder --mac --arm64",
@@ -100,19 +101,19 @@
     "openclaw:extensions:local": "node scripts/sync-local-openclaw-extensions.cjs",
     "openclaw:bundle": "node scripts/bundle-openclaw-gateway.cjs",
     "openclaw:precompile": "node scripts/precompile-openclaw-extensions.cjs",
+    "openclaw:channel-deps": "node scripts/install-openclaw-channel-deps.cjs",
     "openclaw:prune": "node scripts/prune-openclaw-runtime.cjs",
     "openclaw:runtime:host": "node scripts/openclaw-runtime-host.cjs",
-    "openclaw:runtime:mac-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs mac-arm64 && node scripts/sync-openclaw-runtime-current.cjs mac-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:prune",
-    "openclaw:runtime:mac-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs mac-x64 && node scripts/sync-openclaw-runtime-current.cjs mac-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:prune",
-    "openclaw:runtime:win-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs win-x64 && node scripts/sync-openclaw-runtime-current.cjs win-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:prune",
-    "openclaw:runtime:win-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs win-arm64 && node scripts/sync-openclaw-runtime-current.cjs win-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:prune",
-    "openclaw:runtime:linux-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-x64 && node scripts/sync-openclaw-runtime-current.cjs linux-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:prune",
-    "openclaw:runtime:linux-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-arm64 && node scripts/sync-openclaw-runtime-current.cjs linux-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:prune",
+    "openclaw:runtime:mac-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs mac-arm64 && node scripts/sync-openclaw-runtime-current.cjs mac-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
+    "openclaw:runtime:mac-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs mac-x64 && node scripts/sync-openclaw-runtime-current.cjs mac-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
+    "openclaw:runtime:win-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs win-x64 && node scripts/sync-openclaw-runtime-current.cjs win-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
+    "openclaw:runtime:win-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs win-arm64 && node scripts/sync-openclaw-runtime-current.cjs win-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
+    "openclaw:runtime:linux-x64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-x64 && node scripts/sync-openclaw-runtime-current.cjs linux-x64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
+    "openclaw:runtime:linux-arm64": "npm run openclaw:ensure && npm run openclaw:patch && node scripts/run-build-openclaw-runtime.cjs linux-arm64 && node scripts/sync-openclaw-runtime-current.cjs linux-arm64 && npm run openclaw:bundle && npm run openclaw:plugins && npm run openclaw:extensions:local && npm run openclaw:precompile && npm run openclaw:channel-deps && npm run openclaw:prune",
     "regenerate:icon": "bash scripts/regenerate-mac-icon.sh",
     "fix:mac-icon": "bash scripts/fix-mac-icon-display.sh"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.12",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-go": "^6.0.1",
@@ -134,7 +135,6 @@
     "@electron/remote": "^2.0.12",
     "@headlessui/react": "^1.7.18",
     "@heroicons/react": "^2.1.1",
-    "@larksuite/openclaw-lark": "^2026.3.17",
     "@larksuite/openclaw-lark-tools": "~1.0.26",
     "@larksuiteoapi/node-sdk": "^1.58.0",
     "@modelcontextprotocol/sdk": "^1.27.1",

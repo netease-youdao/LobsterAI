@@ -458,6 +458,7 @@ LobsterAI pins its OpenClaw dependency to a specific release version, declared i
 | `OPENCLAW_SRC` | Path to OpenClaw source directory | `../openclaw` |
 | `OPENCLAW_FORCE_BUILD` | Set to `1` to force rebuild even if version matches | — |
 | `OPENCLAW_SKIP_ENSURE` | Set to `1` to skip automatic version checkout | — |
+| `LOBSTERAI_SQLITE_BACKUP_ALWAYS_ON_STARTUP` | Set to `1` or `true` to force an automatic backup on every app startup for QA/testing | — |
 
 ## Development Guidelines
 

@@ -1,6 +1,5 @@
 import { PlatformRegistry } from '@shared/platform';
-import { OpenClawProviderId,ProviderRegistry } from '@shared/providers/constants';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import type {
@@ -13,20 +12,16 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
+import { toOpenClawModelRef } from '../../utils/openclawModelRef';
 import ModelSelector from '../ModelSelector';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
-
-function toOpenClawModelRef(model: { id: string; providerKey?: string; isServerModel?: boolean }): string {
-  if (model.isServerModel) return `${OpenClawProviderId.LobsteraiServer}/${model.id}`;
-  const openClawId = ProviderRegistry.getOpenClawProviderId(model.providerKey ?? '');
-  return `${openClawId}/${model.id}`;
-}
 
 interface TaskFormProps {
   mode: 'create' | 'edit';
   task?: ScheduledTask;
   onCancel: () => void;
   onSaved: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface FormState {
@@ -78,6 +73,25 @@ function isIMChannel(channel: string): boolean {
   return PlatformRegistry.isIMChannel(channel);
 }
 
+function conversationOptionMatchesValue(
+  channel: string,
+  optionConversationId: string,
+  selectedValue: string,
+): boolean {
+  const optionId = optionConversationId.trim();
+  const value = selectedValue.trim();
+  if (!optionId || !value) return false;
+  if (optionId === value) return true;
+
+  const platform = PlatformRegistry.platformOfChannel(channel);
+  if (platform === 'nim') {
+    if (optionId.endsWith(`:${value}`)) return true;
+    if (optionId.endsWith(`|${value}`)) return true;
+  }
+
+  return false;
+}
+
 function createFormState(task?: ScheduledTask): FormState {
   if (!task) return { ...DEFAULT_FORM_STATE, ...nowDefaults() };
 
@@ -127,8 +141,9 @@ function buildScheduleInput(form: FormState): ScheduledTaskInput['schedule'] {
   return { kind: 'cron', expr: `${min} ${hr} ${form.monthDay} * *` };
 }
 
-const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) => {
+const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved, onDirtyChange }) => {
   const [form, setForm] = useState<FormState>(() => createFormState(task));
+  const initialFormRef = useRef<string>(JSON.stringify(createFormState(task)));
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const [channelOptions, setChannelOptions] = useState<ScheduledTaskChannelOption[]>(() => {
     const base: ScheduledTaskChannelOption[] = [];
@@ -146,11 +161,19 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  const isDirty = JSON.stringify(form) !== initialFormRef.current;
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
   const isAdvanced = form.planType === 'advanced';
   const showConversationSelector = isIMChannel(form.notifyChannel);
 
   useEffect(() => {
-    setForm(createFormState(task));
+    const nextForm = createFormState(task);
+    initialFormRef.current = JSON.stringify(nextForm);
+    setForm(nextForm);
   }, [task]);
 
   useEffect(() => {
@@ -181,8 +204,15 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
     }
 
     let cancelled = false;
+    const selectedChannelOption = channelOptions.find(
+      (option) => option.value === form.notifyChannel && option.accountId === form.notifyAccountId,
+    );
     setConversationsLoading(true);
-    void scheduledTaskService.listChannelConversations(form.notifyChannel, form.notifyAccountId).then((result) => {
+    void scheduledTaskService.listChannelConversations(
+      form.notifyChannel,
+      form.notifyAccountId,
+      selectedChannelOption?.filterAccountId ?? form.notifyAccountId,
+    ).then((result) => {
       if (cancelled) return;
       setConversations(result);
       setConversationsLoading(false);
@@ -196,7 +226,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.notifyChannel, form.notifyAccountId]);
+  }, [form.notifyChannel, form.notifyAccountId, channelOptions]);
 
   const updateForm = (patch: Partial<FormState>) => {
     setForm((current) => ({ ...current, ...patch }));
@@ -268,6 +298,8 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       } else if (task) {
         await scheduledTaskService.updateTaskById(task.id, input);
       }
+      initialFormRef.current = JSON.stringify(form);
+      onDirtyChange?.(false);
       onSaved();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -542,6 +574,13 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
   const renderNotifyRow = () => {
     const selectedLogo = getChannelLogo(form.notifyChannel);
+    const selectedConversation = conversations.find(
+      (conv) => conversationOptionMatchesValue(form.notifyChannel, conv.conversationId, form.notifyTo),
+    );
+    const selectedConversationLabel = selectedConversation
+      ? selectedConversation.conversationId
+      : form.notifyTo;
+
     return (
       <div>
         <label className={labelClass}>{i18nService.t('scheduledTasksFormNotifyChannel')}</label>
@@ -630,7 +669,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
                 <span className="truncate text-sm">
                   {conversationsLoading
                     ? i18nService.t('scheduledTasksFormNotifyConversationLoading')
-                    : form.notifyTo || i18nService.t('scheduledTasksFormNotifyConversationNone')}
+                    : selectedConversationLabel || i18nService.t('scheduledTasksFormNotifyConversationNone')}
                 </span>
                 <svg className={`w-4 h-4 ml-2 flex-shrink-0 transition-transform ${convDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -643,15 +682,22 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
                       {i18nService.t('scheduledTasksFormNotifyConversationNone')}
                     </div>
                   ) : (
-                    conversations.map((conv) => (
+                    conversations.map((conv) => {
+                      const isActive = conversationOptionMatchesValue(
+                        form.notifyChannel,
+                        conv.conversationId,
+                        form.notifyTo,
+                      );
+                      return (
                       <div
                         key={conv.conversationId}
-                        className={`px-3 py-2 text-sm cursor-pointer hover:bg-surface-raised transition-colors truncate ${form.notifyTo === conv.conversationId ? 'bg-surface-raised text-foreground' : 'text-foreground'}`}
+                        className={`px-3 py-2 text-sm cursor-pointer hover:bg-surface-raised transition-colors truncate ${isActive ? 'bg-surface-raised text-foreground' : 'text-foreground'}`}
                         onClick={() => { updateForm({ notifyTo: conv.conversationId }); setConvDropdownOpen(false); }}
                       >
                         {conv.conversationId}
                       </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               )}
@@ -669,7 +715,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
       </h2>
 
       <div>
-        <label className={labelClass}>{i18nService.t('scheduledTasksFormName')}</label>
+        <label className={labelClass}>{i18nService.t('scheduledTasksFormName')}<span className="text-red-400 text-xs ml-0.5">*</span></label>
         <input
           type="text"
           value={form.name}
@@ -682,7 +728,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
 
       <div>
         <label className={labelClass}>
-          {i18nService.t('scheduledTasksFormPayloadTextAgent')}
+          {i18nService.t('scheduledTasksFormPayloadTextAgent')}<span className="text-red-400 text-xs ml-0.5">*</span>
         </label>
         <div className="rounded-lg border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-white focus-within:ring-1 focus-within:ring-claude-accent/40 focus-within:border-claude-accent">
           <textarea
@@ -748,6 +794,7 @@ const TaskForm: React.FC<TaskFormProps> = ({ mode, task, onCancel, onSaved }) =>
               : i18nService.t('scheduledTasksFormUpdate')}
         </button>
       </div>
+
     </div>
   );
 };

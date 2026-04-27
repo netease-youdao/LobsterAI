@@ -1,8 +1,14 @@
 const { notarize } = require('@electron/notarize');
 const path = require('path');
 
-// 加载 .env 文件
-require('dotenv').config();
+// Load .env when dotenv is available, but do not require it for packaging.
+try {
+  require('dotenv').config();
+} catch (error) {
+  if (!error || error.code !== 'MODULE_NOT_FOUND') {
+    throw error;
+  }
+}
 
 exports.default = async function notarizing(context) {
   const { electronPlatformName, appOutDir } = context;

@@ -1,10 +1,15 @@
+import Database from 'better-sqlite3';
+import crypto from 'crypto';
 import { app } from 'electron';
 import { EventEmitter } from 'events';
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import Database from 'better-sqlite3';
+
 import { DB_FILENAME } from './appConstants';
+import {
+  openSqliteDatabaseWithRecovery,
+  SqliteBackupManager,
+} from './libs/sqliteBackup/sqliteBackupManager';
 
 type ChangePayload<T = unknown> = {
   key: string;
@@ -18,24 +23,38 @@ export class SqliteStore {
   private db: Database.Database;
   private dbPath: string;
   private emitter = new EventEmitter();
+  private didRunMigration = false;
 
   private constructor(db: Database.Database, dbPath: string) {
     this.db = db;
     this.dbPath = dbPath;
   }
 
-  static create(userDataPath?: string): SqliteStore {
+  static async create(userDataPath?: string): Promise<SqliteStore> {
     const basePath = userDataPath ?? app.getPath('userData');
     const dbPath = path.join(basePath, DB_FILENAME);
 
-    const db = new Database(dbPath);
+    let db = openSqliteDatabaseWithRecovery(basePath, dbPath);
 
-    // WAL mode: persists across connections, never reverts. NORMAL sync is safe under WAL
-    // (no data loss on OS crash; power-loss risk is the same as DELETE mode).
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.pragma('cache_size = -8000'); // 8 MB; negative value = kibibytes
-    db.pragma('wal_autocheckpoint = 1000'); // checkpoint every ~4 MB of WAL writes
+    const autoBackupEnabled = SqliteStore.readSqliteAutoBackupEnabled(db);
+    if (autoBackupEnabled) {
+      const backupManager = new SqliteBackupManager(basePath);
+      const health = backupManager.verifyDatabaseHealth(db);
+      if (!health.ok) {
+        const healthReason = 'reason' in health ? health.reason : 'unknown reason';
+        console.warn(`[SqliteBackup] Startup health check failed: ${healthReason}`);
+        try {
+          db.close();
+        } catch {
+          // Ignore close failures before restore.
+        }
+        const restoreResult = backupManager.restoreLatestBackup(dbPath);
+        if (!restoreResult.restored) {
+          console.warn('[SqliteBackup] No valid snapshot was restored; continuing with database reinitialization');
+        }
+        db = openSqliteDatabaseWithRecovery(basePath, dbPath);
+      }
+    }
 
     const store = new SqliteStore(db, dbPath);
     store.initializeTables(basePath);
@@ -61,6 +80,7 @@ export class SqliteStore {
         pinned INTEGER NOT NULL DEFAULT 0,
         cwd TEXT NOT NULL,
         system_prompt TEXT NOT NULL DEFAULT '',
+        model_override TEXT NOT NULL DEFAULT '',
         execution_mode TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -178,14 +198,22 @@ export class SqliteStore {
 
       if (!colNames.includes('execution_mode')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN execution_mode TEXT;');
+        this.didRunMigration = true;
       }
 
       if (!colNames.includes('pinned')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;');
+        this.didRunMigration = true;
       }
 
       if (!colNames.includes('active_skill_ids')) {
         this.db.exec('ALTER TABLE cowork_sessions ADD COLUMN active_skill_ids TEXT;');
+        this.didRunMigration = true;
+      }
+
+      if (!colNames.includes('model_override')) {
+        this.db.exec("ALTER TABLE cowork_sessions ADD COLUMN model_override TEXT NOT NULL DEFAULT '';");
+        this.didRunMigration = true;
       }
 
       // Migration: Add sequence column to cowork_messages
@@ -194,6 +222,7 @@ export class SqliteStore {
 
       if (!msgColNames.includes('sequence')) {
         this.db.exec('ALTER TABLE cowork_messages ADD COLUMN sequence INTEGER');
+        this.didRunMigration = true;
 
         // Assign sequence numbers to existing messages ordered by created_at + ROWID
         this.db.exec(`
@@ -214,6 +243,7 @@ export class SqliteStore {
 
     try {
       this.db.exec('UPDATE cowork_sessions SET pinned = 0 WHERE pinned IS NULL;');
+      this.didRunMigration = true;
     } catch {
       // Column might not exist yet.
     }
@@ -226,6 +256,7 @@ export class SqliteStore {
         this.db.exec(
           "ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'main';",
         );
+        this.didRunMigration = true;
       }
     } catch {
       // Column already exists or migration not needed.
@@ -270,6 +301,7 @@ export class SqliteStore {
         SET value = 'local'
         WHERE key = 'executionMode' AND value = 'container';
       `);
+      this.didRunMigration = true;
     } catch (error) {
       console.warn('Failed to migrate cowork execution mode:', error);
     }
@@ -330,8 +362,29 @@ export class SqliteStore {
     return this.db;
   }
 
+  getDbPath(): string {
+    return this.dbPath;
+  }
+
+  getDidRunMigration(): boolean {
+    return this.didRunMigration;
+  }
+
   close(): void {
     this.db.close();
+  }
+
+  private static readSqliteAutoBackupEnabled(db: Database.Database): boolean {
+    try {
+      const row = db.prepare("SELECT value FROM kv WHERE key = 'app_config'").get() as
+        | { value: string }
+        | undefined;
+      if (!row?.value) return false;
+      const parsed = JSON.parse(row.value) as { sqliteAutoBackupEnabled?: boolean };
+      return parsed.sqliteAutoBackupEnabled === true;
+    } catch {
+      return false;
+    }
   }
 
   private tryReadLegacyMemoryText(): string {

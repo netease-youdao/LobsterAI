@@ -1,0 +1,37 @@
+--- a/scripts/ui.js
++++ b/scripts/ui.js
+@@ -89,10 +89,21 @@ function createSpawnOptions(cmd, args, envOverride) {
+   };
+ }
+
++function quoteIfNeeded(cmd) {
++  // On Windows with shell: true, cmd.exe splits unquoted paths at spaces.
++  // Wrap the command in double-quotes when the resolved path contains spaces.
++  if (process.platform === "win32" && cmd.includes(" ")) {
++    return `"${cmd}"`;
++  }
++  return cmd;
++}
++
+ function run(cmd, args) {
+   let child;
++  const opts = createSpawnOptions(cmd, args);
++  const effectiveCmd = opts.shell ? quoteIfNeeded(cmd) : cmd;
+   try {
+-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
++    child = spawn(effectiveCmd, args, opts);
+   } catch (err) {
+     console.error(`Failed to launch ${cmd}:`, err);
+     process.exit(1);
+@@ -111,8 +122,10 @@ function run(cmd, args) {
+
+ function runSync(cmd, args, envOverride) {
+   let result;
++  const opts = createSpawnOptions(cmd, args, envOverride);
++  const effectiveCmd = opts.shell ? quoteIfNeeded(cmd) : cmd;
+   try {
+-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
++    result = spawnSync(effectiveCmd, args, opts);
+   } catch (err) {
+     console.error(`Failed to launch ${cmd}:`, err);
+     process.exit(1);

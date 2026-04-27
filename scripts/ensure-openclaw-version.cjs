@@ -168,14 +168,22 @@ if (tagCheck !== 0) {
   die(`Tag ${desiredVersion} not found in the OpenClaw repository. Check openclaw.version in package.json.`);
 }
 
-// Discard any local modifications (typically build artifacts from previous builds)
-// before checking out the desired tag. Developers working on OpenClaw itself
-// should use OPENCLAW_SKIP_ENSURE=1 to prevent this.
+// Discard any local modifications and untracked files (typically build artifacts
+// and files created by patches from a different LobsterAI branch) before checking
+// out the desired tag. Developers working on OpenClaw itself should use
+// OPENCLAW_SKIP_ENSURE=1 to prevent this.
 const hasLocalChanges = gitExitCode(['diff', '--quiet', 'HEAD'], { cwd: openclawSrc }) !== 0;
-if (hasLocalChanges) {
-  warn('Discarding local modifications in OpenClaw source (build artifacts).');
+const hasUntrackedFiles =
+  git(['ls-files', '--others', '--exclude-standard'], { cwd: openclawSrc }).length > 0;
+if (hasLocalChanges || hasUntrackedFiles) {
+  warn('Discarding local modifications and untracked files in OpenClaw source.');
   warn('Use OPENCLAW_SKIP_ENSURE=1 if you are developing OpenClaw locally.');
-  git(['checkout', '.'], { cwd: openclawSrc });
+  if (hasLocalChanges) {
+    git(['checkout', '.'], { cwd: openclawSrc });
+  }
+  if (hasUntrackedFiles) {
+    git(['clean', '-fd'], { cwd: openclawSrc });
+  }
 }
 
 // Checkout the desired tag (force to handle any remaining conflicts)

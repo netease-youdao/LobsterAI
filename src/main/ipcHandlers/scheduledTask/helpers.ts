@@ -12,7 +12,24 @@ export function initScheduledTaskHelpers(d: ScheduledTaskHelperDeps): void {
   deps = d;
 }
 
-const MULTI_INSTANCE_CONFIG_KEYS = new Set(['dingtalk', 'feishu', 'qq']);
+const MULTI_INSTANCE_CONFIG_KEYS = new Set(['dingtalk', 'feishu', 'nim', 'qq', 'wecom', 'telegram', 'discord']);
+
+function deriveNimRuntimeAccountId(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const inst = value as { nimToken?: string; appKey?: string; account?: string };
+  const nimToken = inst.nimToken?.trim();
+  if (nimToken) {
+    const delimiter = nimToken.includes('|') ? '|' : '-';
+    const parts = nimToken.split(delimiter).map((part) => part.trim());
+    if (parts.length === 3 && parts[0] && parts[1]) {
+      return `${parts[0]}:${parts[1]}`;
+    }
+  }
+  if (inst.appKey?.trim() && inst.account?.trim()) {
+    return `${inst.appKey.trim()}:${inst.account.trim()}`;
+  }
+  return null;
+}
 
 function isConfigKeyEnabled(key: string, value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
@@ -28,7 +45,12 @@ function isConfigKeyEnabled(key: string, value: unknown): boolean {
   return (value as { enabled?: boolean }).enabled === true;
 }
 
-export function listScheduledTaskChannels(): Array<{ value: string; label: string; accountId?: string }> {
+export function listScheduledTaskChannels(): Array<{
+  value: string;
+  label: string;
+  accountId?: string;
+  filterAccountId?: string;
+}> {
   const manager = deps?.getIMGatewayManager();
   const config = manager?.getConfig();
   if (!config) {
@@ -39,7 +61,10 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
 
   const enabledPlatforms = new Set<string>();
   // For multi-instance platforms: collect per-instance info (accountId + name).
-  const instancesByPlatform = new Map<string, Array<{ accountId: string; instanceName: string }>>();
+  const instancesByPlatform = new Map<
+    string,
+    Array<{ accountId: string; instanceName: string; filterAccountId?: string }>
+  >();
 
   for (const [key, value] of Object.entries(configRecord)) {
     if (!isConfigKeyEnabled(key, value)) continue;
@@ -51,9 +76,14 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
         .filter((inst) => inst && typeof inst === 'object' && (inst as { enabled?: boolean }).enabled)
         .map((inst) => {
           const i = inst as { instanceId?: string; instanceName?: string };
+          const nimAccountId = key === 'nim'
+            ? ((i.instanceId ?? '').slice(0, 8) || deriveNimRuntimeAccountId(inst))
+            : null;
+          const accountId = nimAccountId ?? (i.instanceId ?? '').slice(0, 8);
           return {
-            accountId: (i.instanceId ?? '').slice(0, 8),
-            instanceName: i.instanceName || (i.instanceId ?? '').slice(0, 8),
+            accountId,
+            instanceName: i.instanceName || (accountId ?? (i.instanceId ?? '').slice(0, 8)),
+            filterAccountId: accountId || undefined,
           };
         })
         .filter((e) => e.accountId);
@@ -61,7 +91,12 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
     }
   }
 
-  const result: Array<{ value: string; label: string; accountId?: string }> = [];
+  const result: Array<{
+    value: string;
+    label: string;
+    accountId?: string;
+    filterAccountId?: string;
+  }> = [];
 
   for (const option of PlatformRegistry.channelOptions()) {
     const platform = PlatformRegistry.platformOfChannel(option.value);
@@ -71,7 +106,12 @@ export function listScheduledTaskChannels(): Array<{ value: string; label: strin
     if (instances && instances.length > 0) {
       // Multi-instance: one option per enabled instance, each carrying its accountId.
       for (const inst of instances) {
-        result.push({ value: option.value, label: inst.instanceName, accountId: inst.accountId });
+        result.push({
+          value: option.value,
+          label: inst.instanceName,
+          accountId: inst.accountId,
+          filterAccountId: inst.filterAccountId,
+        });
       }
     } else {
       result.push(option);

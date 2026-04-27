@@ -1,9 +1,9 @@
 ---
 name: youdaonote
-description: "有道云笔记全能工具：笔记管理（创建、搜索、浏览、读取）、待办管理（创建、完成、分组）、网页剪藏（服务端抓取）。当用户需要操作有道云笔记时使用此 Skill。"
+description: "有道云笔记官方 skill，支持笔记 CRUD（创建/读取/更新/删除）、待办管理、网页剪藏、笔记搜索、文件夹管理等基础操作。如需构建知识库或 Wiki，请使用 youdaonote-llm-wiki skill 而非本 skill。"
 official: true
-version: 1.0.0
-minCliVersion: "1.2.0"
+version: 1.0.6
+minCliVersion: "1.3.0"
 ---
 
 # YoudaoNote — 有道云笔记
@@ -21,6 +21,7 @@ minCliVersion: "1.2.0"
 
 | 命令 | 用途 | 示例 |
 |------|------|------|
+| `mkdir` | 创建文件夹 | `youdaonote mkdir "文件夹名" [-f <父目录ID>]` |
 | `save` | 保存笔记（✅ 推荐，支持 Markdown 富文本） | `youdaonote save --file note.json` |
 | `create` | 创建笔记（⚠️ 仅纯文本，不支持 Markdown 富文本） | `youdaonote create -n "标题" -c "内容" [-f <目录ID>]` |
 | `update` | 更新 Markdown 笔记 | `youdaonote update <fileId> -c "内容"` 或 `--file content.md` |
@@ -66,25 +67,32 @@ B  保存为有道专有格式（.note）
 请回复 A 或 B：
 ```
 
-收到用户选择后，按以下方式构造命令：
+收到用户选择后，按以下方式构造命令（**优先使用 `contentFile` 方案，避免 JSON 转义问题**）：
 
 - **选 A**：`save` 命令，`type: "md"`，文件名加 `.md` 后缀
   ```
-  {"title":"标题.md","type":"md","content":"Markdown 内容"}
+  # Step 1：Write 工具将 Markdown 写入 /tmp/note-content.md（无需 JSON 转义）
+  {"title":"标题.md","type":"md","contentFile":"/tmp/note-content.md","parentId":"文件夹ID"}
   ```
+  备选（短内容）：`{"title":"标题.md","type":"md","content":"Markdown 内容","parentId":"文件夹ID"}`
 - **选 B**：`save` 命令，`type: "note"`，`contentFormat: "md"`，文件名加 `.note` 后缀
   ```
-  {"title":"标题.note","type":"note","contentFormat":"md","content":"Markdown 内容"}
+  # Step 1：Write 工具将 Markdown 写入 /tmp/note-content.md（无需 JSON 转义）
+  {"title":"标题.note","type":"note","contentFormat":"md","contentFile":"/tmp/note-content.md","parentId":"文件夹ID"}
   ```
+  备选（短内容）：`{"title":"标题.note","type":"note","contentFormat":"md","content":"Markdown 内容","parentId":"文件夹ID"}`
+
+> `parentId` 为可选字段：填写 `youdaonote list` 返回的文件夹 ID 可指定目标目录；不填则默认存入「我的资源/收藏笔记」。
 - **用户未明确选择**（回复"随便"/"你决定"等）：默认选 A
 
 ### 创建 / 保存
 
 ```bash
-# ✅ 推荐：支持 Markdown 富文本（标题、列表、代码块等）
+# ✅ 推荐：contentFile 方案（Write 工具写文件 → save 传路径，无需 JSON 转义）
+# Step 1：Write 工具将 Markdown 写入 /tmp/note-content.md
+printf '%s\n' '{"title":"笔记.md","type":"md","contentFile":"/tmp/note-content.md"}' | youdaonote save --json
+# ✅ 短内容可直接内联（无换行/特殊字符时）
 printf '%s\n' '{"title":"笔记","contentFormat":"md","content":"# 标题\n\n内容"}' | youdaonote save
-# ✅ 大内容（>10KB）通过文件传递
-youdaonote save --file note.json
 # ⚠️ 仅纯文本，不支持 Markdown 格式，有格式需求时禁用
 youdaonote create -n "标题" -c "纯文本内容"
 ```
@@ -121,9 +129,12 @@ export PATH="$HOME/.local/bin:$PATH"
 # 安装后立即重新执行用户原始请求
 ```
 
-**Windows（CMD/PowerShell）**：不支持一键安装，告知用户下载预编译包：
-- x64：https://artifact.lx.netease.com/download/youdaonote-cli/youdaonote-cli-windows-x64.tar.gz
+**Windows（CMD/PowerShell）**：Agent 应自动完成下载、解压、加入 PATH 的全过程，尽量不让用户手动操作。下载地址：
+- x64（常见新 CPU）：https://artifact.lx.netease.com/download/youdaonote-cli/youdaonote-cli-windows-x64.tar.gz
+- x64（旧 CPU、无 AVX2 等，运行默认包秒退 / 退出码约 `0xC000001D`）：https://artifact.lx.netease.com/download/youdaonote-cli/youdaonote-cli-win-x64-bl.tar.gz
 - ARM64：https://artifact.lx.netease.com/download/youdaonote-cli/youdaonote-cli-windows-arm64.tar.gz
+
+安装策略：先尝试默认 x64 包，若运行闪退或退出码为 `0xC000001D`，自动换用 x64 baseline 包重试。
 
 ## 故障排查
 
@@ -142,3 +153,4 @@ export PATH="$HOME/.local/bin:$PATH"
 - `list` 输出的 `id` 与 `read` 的 `fileId` 等价
 - `read` 返回的 `rawFormat` 标识笔记原始格式：`md`=Markdown、`note`=云笔记、`txt`=纯文本；`isRaw` 标识返回的 content 是否为原始内容（`true`=原文可直接编辑，`false`=经过转换的纯文本）
 - **禁止用 `create` 保存 Markdown 内容**：`create` 不支持 `contentFormat`，即使内容含 Markdown 语法也会存为纯文本静默丢失格式，有格式需求时一律使用 `save` 并指定 `contentFormat: "md"`
+- `save` 命令通过 JSON 的 **`parentId`** 字段指定目标文件夹（值来自 `list` 返回的文件夹 ID）；不传则默认存到「我的资源/收藏笔记」。**禁止使用 `folderId` 等其他命名——服务端会静默忽略未知字段。**

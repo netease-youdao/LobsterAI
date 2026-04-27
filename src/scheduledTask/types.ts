@@ -117,11 +117,14 @@ export interface ScheduledTaskRunEvent {
 export interface ScheduledTaskChannelOption {
   value: string;
   label: string;
-  /** For multi-instance platforms (feishu, dingtalk, qq), the account ID that
-   *  identifies a specific bot instance.  Passed as `delivery.accountId` so the
-   *  channel plugin can call `LarkClient.fromCfg(cfg, accountId)` instead of
-   *  falling back to the `default` account. */
+  /** Multi-instance platforms use this stable instance selector as
+   *  `delivery.accountId`. Plugins may internally map it to a protocol-level
+   *  account identity such as appKey:accid. */
   accountId?: string;
+  /** Optional account identifier used only when querying local conversation
+   *  mappings. Some plugins persist a different routing-safe account prefix
+   *  than the delivery-time accountId expected by OpenClaw. */
+  filterAccountId?: string;
 }
 
 export interface ScheduledTaskConversationOption {
