@@ -972,6 +972,35 @@ export class OpenClawConfigSync {
     this.getAgents = deps.getAgents;
   }
 
+  /**
+   * Stamp the `meta` field onto an openclaw config object before writing.
+   *
+   * OpenClaw's config health monitor (`observeConfigSnapshot`) compares every
+   * read against a "last known good" fingerprint.  One of the checks is
+   * `hasConfigMeta` — if the previous good config had `meta` but the current
+   * one doesn't, an anomaly is logged and the file content is persisted as a
+   * `.clobbered.<timestamp>` snapshot.  Because LobsterAI writes openclaw.json
+   * directly (bypassing OpenClaw's own `writeConfigFile` which calls
+   * `stampConfigVersion`), we need to stamp `meta` ourselves.
+   */
+  private stampConfigMeta(config: Record<string, unknown>): Record<string, unknown> {
+    let version: string | null = null;
+    try {
+      version =
+        this.engineManager.getStatus().version ||
+        this.engineManager.getDesiredVersion();
+    } catch {
+      // Engine manager may not be fully initialised (e.g. in tests).
+    }
+    return {
+      ...config,
+      meta: {
+        ...(version ? { lastTouchedVersion: version } : {}),
+        lastTouchedAt: new Date().toISOString(),
+      },
+    };
+  }
+
   private buildSessionConfig(): Record<string, unknown> {
     const policy = this.getOpenClawSessionPolicy?.() ?? {
       keepAlive: OpenClawSessionKeepAlive.ThirtyDays,
@@ -1871,7 +1900,20 @@ export class OpenClawConfigSync {
       currentContent = '';
     }
 
-    const configChanged = currentContent !== nextContent;
+    // Compare ignoring `meta` — it contains timestamps that change on every
+    // write and should not trigger a gateway restart.
+    const configChanged = (() => {
+      if (!currentContent) return true;
+      try {
+        const cur = JSON.parse(currentContent);
+        delete cur.meta;
+        const nxt = JSON.parse(nextContent);
+        delete nxt.meta;
+        return JSON.stringify(cur) !== JSON.stringify(nxt);
+      } catch {
+        return currentContent !== nextContent;
+      }
+    })();
 
     // Detect mcp-bridge config changes (callbackUrl, tools) separately.
     // Even when the overall plugins section appears "UNCHANGED" in the
@@ -1930,8 +1972,9 @@ export class OpenClawConfigSync {
       } catch { /* ignore parse errors in diag */ }
       try {
         ensureDir(path.dirname(configPath));
+        const stampedContent = `${JSON.stringify(this.stampConfigMeta(managedConfig), null, 2)}\n`;
         const tmpPath = `${configPath}.tmp-${Date.now()}`;
-        fs.writeFileSync(tmpPath, nextContent, 'utf8');
+        fs.writeFileSync(tmpPath, stampedContent, 'utf8');
         fs.renameSync(tmpPath, configPath);
       } catch (error) {
         return {
@@ -2712,14 +2755,28 @@ export class OpenClawConfigSync {
 
     const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
 
-    if (currentContent === nextContent) {
+    // Compare ignoring `meta` timestamps to avoid unnecessary writes.
+    const unchanged = (() => {
+      if (!currentContent) return false;
+      try {
+        const cur = JSON.parse(currentContent);
+        delete cur.meta;
+        const nxt = JSON.parse(nextContent);
+        delete nxt.meta;
+        return JSON.stringify(cur) === JSON.stringify(nxt);
+      } catch {
+        return currentContent === nextContent;
+      }
+    })();
+    if (unchanged) {
       return { ok: true, changed: false, configPath };
     }
 
     try {
       ensureDir(path.dirname(configPath));
+      const stampedContent = `${JSON.stringify(this.stampConfigMeta(mergedConfig), null, 2)}\n`;
       const tmpPath = `${configPath}.tmp-${Date.now()}`;
-      fs.writeFileSync(tmpPath, nextContent, 'utf8');
+      fs.writeFileSync(tmpPath, stampedContent, 'utf8');
       fs.renameSync(tmpPath, configPath);
       return { ok: true, changed: true, configPath };
     } catch (error) {
