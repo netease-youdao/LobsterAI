@@ -1,0 +1,182 @@
+/*
+ * Custom driver.js styles for LobsterAI onboarding.
+ * Overrides default driver.js appearance to match the project's design system:
+ * - Uses --lobster-* CSS variables for theme compatibility
+ * - Matches border-radius, shadow, font, and spacing patterns
+ * - Supports all 14 built-in themes (light + dark)
+ */
+
+/* ── Overlay ── */
+.driver-overlay {
+  background: rgba(0, 0, 0, 0.4) !important;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ── Highlighted element stage ── */
+.driver-active-element {
+  /* Let the stage border-radius from config handle the shape */
+}
+
+/* ── Popover container ── */
+.driver-popover.lobster-onboarding-popover {
+  background: var(--lobster-surface) !important;
+  color: var(--lobster-foreground) !important;
+  border: 1px solid var(--lobster-border) !important;
+  border-radius: 1rem !important; /* 16px = rounded-2xl */
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.16),
+    0 2px 8px rgba(0, 0, 0, 0.08) !important; /* shadow-modal */
+  padding: 0 !important;
+  min-width: 280px;
+  max-width: 360px;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, 'Segoe UI', Roboto,
+    sans-serif;
+  animation: lobster-popover-in 0.2s ease-out;
+}
+
+@keyframes lobster-popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── Arrow ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-arrow {
+  border: 0 !important;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-arrow-side-left {
+  border-left-color: var(--lobster-surface) !important;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-arrow-side-right {
+  border-right-color: var(--lobster-surface) !important;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-arrow-side-top {
+  border-top-color: var(--lobster-surface) !important;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-arrow-side-bottom {
+  border-bottom-color: var(--lobster-surface) !important;
+}
+
+/* ── Title ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-title {
+  font-size: 0.9375rem; /* 15px */
+  font-weight: 600;
+  color: var(--lobster-text-primary) !important;
+  padding: 1.125rem 1.25rem 0 !important;
+  margin: 0 !important;
+  line-height: 1.4;
+}
+
+/* ── Description ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-description {
+  font-size: 0.8125rem; /* 13px */
+  font-weight: 400;
+  color: var(--lobster-text-secondary) !important;
+  padding: 0.5rem 1.25rem 0 !important;
+  margin: 0 !important;
+  line-height: 1.6;
+}
+
+/* ── Close button ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-close-btn {
+  color: var(--lobster-text-secondary) !important;
+  font-size: 1.25rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  top: 0.75rem !important;
+  right: 0.75rem !important;
+  border-radius: 0.5rem !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-close-btn:hover {
+  background: var(--lobster-surface-raised) !important;
+  color: var(--lobster-text-primary) !important;
+}
+
+/* ── Footer (progress + buttons) ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-footer {
+  padding: 0.75rem 1.25rem 1rem !important;
+  margin: 0 !important;
+  border-top: 1px solid var(--lobster-border) !important;
+  margin-top: 1rem !important;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* ── Progress text ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-progress-text {
+  font-size: 0.6875rem; /* 11px */
+  font-weight: 500;
+  color: var(--lobster-text-muted) !important;
+  flex-shrink: 0;
+}
+
+/* ── Navigation buttons (shared) ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-navigation-btns {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-prev-btn,
+.driver-popover.lobster-onboarding-popover .driver-popover-next-btn {
+  font-size: 0.8125rem !important; /* 13px */
+  font-weight: 500 !important;
+  padding: 0.375rem 0.875rem !important;
+  border-radius: 0.75rem !important; /* rounded-xl */
+  border: none !important;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s,
+    transform 0.1s;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-prev-btn:active,
+.driver-popover.lobster-onboarding-popover .driver-popover-next-btn:active {
+  transform: scale(0.98);
+}
+
+/* ── Previous button (secondary style) ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-prev-btn {
+  background: transparent !important;
+  color: var(--lobster-text-secondary) !important;
+  text-shadow: none !important;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-prev-btn:hover {
+  background: var(--lobster-surface-raised) !important;
+  color: var(--lobster-text-primary) !important;
+}
+
+/* ── Next / Done button (primary style) ── */
+.driver-popover.lobster-onboarding-popover .driver-popover-next-btn {
+  background: var(--lobster-primary) !important;
+  color: var(--lobster-primary-foreground) !important;
+  text-shadow: none !important;
+}
+
+.driver-popover.lobster-onboarding-popover .driver-popover-next-btn:hover {
+  background: var(--lobster-primary-hover) !important;
+}
