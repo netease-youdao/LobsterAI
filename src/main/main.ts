@@ -90,6 +90,7 @@ import { McpStore } from './mcpStore';
 import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 import { loadOpenClawSessionPolicyConfig, saveOpenClawSessionPolicyConfig } from './openclawSessionPolicy/store';
+import { safeOpenExternal } from './openExternalGuard';
 import { SkillManager } from './skillManager';
 import { getSkillServiceManager } from './skillServices';
 import { SqliteStore } from './sqliteStore';
@@ -2246,7 +2247,11 @@ if (!gotTheLock) {
     try {
       const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
       const finalUrl = `${baseUrl}?source=electron`;
-      await shell.openExternal(finalUrl);
+      const openResult = await safeOpenExternal(finalUrl, 'auth:login');
+      if (!openResult.ok) {
+        console.error('[Auth] login failed:', openResult.error);
+        return { success: false, error: openResult.error };
+      }
       return { success: true };
     } catch (error) {
       console.error('[Auth] login failed:', error);
@@ -4828,12 +4833,11 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
-    try {
-      await shell.openExternal(url);
+    const openResult = await safeOpenExternal(url, 'shell:openExternal');
+    if (openResult.ok) {
       return { success: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
+    return { success: false, error: openResult.error, reason: openResult.reason };
   });
 
   ipcMain.handle(AppUpdateIpc.GetState, async () => {
@@ -5180,7 +5184,7 @@ if (!gotTheLock) {
           },
         };
       }
-      shell.openExternal(url);
+      void safeOpenExternal(url, 'windowOpenHandler');
       return { action: 'deny' };
     });
 
