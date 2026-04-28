@@ -116,9 +116,16 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({ artifacts }) => {
         className="shrink border-l border-border bg-background flex h-full overflow-hidden"
       >
         {/* Left: File list */}
-        <div className="w-[180px] shrink-0 border-r border-border flex flex-col h-full overflow-hidden">
+        <div className={`${selectedArtifact ? 'w-[180px] shrink-0 border-r border-border' : 'flex-1'} flex flex-col h-full overflow-hidden`}>
           <div className="h-10 flex items-center px-3 border-b border-border shrink-0">
             <span className="text-xs font-medium text-secondary">{t('artifactFiles')}</span>
+            <span className="flex-1" />
+            <button
+              onClick={handleClose}
+              className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
+            >
+              <CloseIcon />
+            </button>
           </div>
           <FileDirectoryView
             artifacts={artifacts}
@@ -127,79 +134,73 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({ artifacts }) => {
           />
         </div>
 
-        {/* Right: Preview area */}
-        <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-          {selectedArtifact ? (
-            <>
-              {/* Header: filename + type + actions */}
-              <div className="h-10 flex items-center gap-2 px-3 border-b border-border shrink-0">
-                <span className="text-xs text-muted">{TYPE_ICONS[selectedArtifact.type] || '<>'}</span>
-                <span className="text-sm font-medium truncate">{selectedArtifact.fileName || selectedArtifact.title}</span>
-                <span className="text-xs text-muted">{TYPE_LABELS[selectedArtifact.type] || selectedArtifact.type}</span>
-                <span className="flex-1" />
+        {/* Right: Preview area (only shown when an artifact is selected) */}
+        {selectedArtifact && (
+          <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+            {/* Header: filename + type + actions */}
+            <div className="h-10 flex items-center gap-2 px-3 border-b border-border shrink-0">
+              <span className="text-xs text-muted">{TYPE_ICONS[selectedArtifact.type] || '<>'}</span>
+              <span className="text-sm font-medium truncate">{selectedArtifact.fileName || selectedArtifact.title}</span>
+              <span className="text-xs text-muted">{TYPE_LABELS[selectedArtifact.type] || selectedArtifact.type}</span>
+              <span className="flex-1" />
+              <button
+                onClick={handleCopy}
+                className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
+                title={t('artifactCopyCode')}
+              >
+                <CopyIcon />
+              </button>
+              {selectedArtifact.filePath && (
                 <button
-                  onClick={handleCopy}
+                  onClick={handleRevealInFolder}
                   className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
-                  title={t('artifactCopyCode')}
+                  title={t('artifactOpenFolder')}
                 >
-                  <CopyIcon />
+                  <FolderIcon />
                 </button>
-                {selectedArtifact.filePath && (
-                  <button
-                    onClick={handleRevealInFolder}
-                    className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
-                    title={t('artifactOpenFolder')}
-                  >
-                    <FolderIcon />
-                  </button>
-                )}
-                <button
-                  onClick={handleClose}
-                  className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
-                >
-                  <CloseIcon />
-                </button>
-              </div>
-
-              {/* Preview/Code tabs */}
-              <div className="flex border-b border-border shrink-0">
-                <button
-                  onClick={() => dispatch(setActiveTab('preview'))}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors border-b-2 ${
-                    activeTab === 'preview'
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {t('artifactPreview')}
-                </button>
-                <button
-                  onClick={() => dispatch(setActiveTab('code'))}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors border-b-2 ${
-                    activeTab === 'code'
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {t('artifactCode')}
-                </button>
-              </div>
-
-              {/* Render area */}
-              <div className="flex-1 min-h-0 overflow-hidden">
-                {activeTab === 'preview' ? (
-                  <ArtifactRenderer artifact={selectedArtifact} />
-                ) : (
-                  <CodeRenderer artifact={selectedArtifact} />
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-muted text-sm">
-              {t('artifactNoPreview')}
+              )}
+              <button
+                onClick={() => dispatch(selectArtifact(null))}
+                className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
+              >
+                <CloseIcon />
+              </button>
             </div>
-          )}
-        </div>
+
+            {/* Preview/Code tabs */}
+            <div className="flex border-b border-border shrink-0">
+              <button
+                onClick={() => dispatch(setActiveTab('preview'))}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors border-b-2 ${
+                  activeTab === 'preview'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-secondary hover:text-foreground'
+                }`}
+              >
+                {t('artifactPreview')}
+              </button>
+              <button
+                onClick={() => dispatch(setActiveTab('code'))}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors border-b-2 ${
+                  activeTab === 'code'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-secondary hover:text-foreground'
+                }`}
+              >
+                {t('artifactCode')}
+              </button>
+            </div>
+
+            {/* Render area */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {activeTab === 'preview' ? (
+                <ArtifactRenderer artifact={selectedArtifact} sessionArtifacts={artifacts} />
+              ) : (
+                <CodeRenderer artifact={selectedArtifact} />
+              )}
+            </div>
+          </div>
+        )}
       </aside>
     </>
   );

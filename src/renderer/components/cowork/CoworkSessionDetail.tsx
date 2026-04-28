@@ -33,10 +33,11 @@ import {
 } from '../../store/slices/artifactSlice';
 import { setActiveSkillIds } from '../../store/slices/skillSlice';
 import type { Artifact } from '../../types/artifact';
+import { PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact';
 import type { CoworkImageAttachment,CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import type { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
-import { ArtifactPanel } from '../artifacts';
+import { ArtifactPanel, ArtifactPreviewCard } from '../artifacts';
 import Modal from '../common/Modal';
 import ComposeIcon from '../icons/ComposeIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
@@ -306,12 +307,15 @@ const PushPinIcon: React.FC<React.SVGProps<SVGSVGElement> & { slashed?: boolean 
   </svg>
 );
 
-const ArtifactPanelIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <rect x="1.5" y="2" width="13" height="12" rx="1.5" />
-    <line x1="10" y1="2" x2="10" y2="14" />
-  </svg>
-);
+const ArtifactPanelIcon: React.FC<React.SVGProps<SVGSVGElement> & { open?: boolean }> = ({ open, ...props }) => {
+  const dividerX = open ? 10.5 : 12.5;
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="1.5" y="2" width="13" height="12" rx="2" />
+      <line x1={dividerX} y1="2" x2={dividerX} y2="14" />
+    </svg>
+  );
+};
 
 class ArtifactPanelErrorBoundary extends React.Component<
   { children: React.ReactNode; onClose: () => void },
@@ -1456,12 +1460,14 @@ const ThinkingBlock: React.FC<{
 
 export const AssistantTurnBlock: React.FC<{
   turn: ConversationTurn;
+  artifacts?: Artifact[];
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
 }> = ({
   turn,
+  artifacts,
   resolveLocalFilePath,
   mapDisplayText,
   showTypingIndicator = false,
@@ -1609,6 +1615,13 @@ export const AssistantTurnBlock: React.FC<{
               );
             })}
             {showTypingIndicator && <TypingDots />}
+            {artifacts && artifacts.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {artifacts.map(artifact => (
+                  <ArtifactPreviewCard key={artifact.id} artifact={artifact} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2537,6 +2550,21 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const userRailIdx = turn.userMessage ? railCounter++ : -1;
       const asstRailIdx = asstContent ? railCounter++ : -1;
 
+      const turnMessageIds = new Set<string>();
+      for (const item of turn.assistantItems) {
+        if (item.type === 'assistant' || item.type === 'system' || item.type === 'tool_result') {
+          turnMessageIds.add(item.message.id);
+        } else if (item.type === 'tool_group') {
+          turnMessageIds.add(item.group.toolUse.id);
+          if (item.group.toolResult) {
+            turnMessageIds.add(item.group.toolResult.id);
+          }
+        }
+      }
+      const turnArtifacts = sessionArtifacts.filter(
+        a => turnMessageIds.has(a.messageId) && PREVIEWABLE_ARTIFACT_TYPES.has(a.type)
+      );
+
       return (
         <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
           {turn.userMessage && (
@@ -2548,6 +2576,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <div data-export-role="assistant-block" {...(asstRailIdx >= 0 ? { 'data-rail-index': asstRailIdx } : undefined)}>
               <AssistantTurnBlock
                 turn={turn}
+                artifacts={turnArtifacts}
                 resolveLocalFilePath={resolveLocalFilePath}
                 mapDisplayText={mapDisplayText}
                 showTypingIndicator={showTypingIndicator}
@@ -2561,9 +2590,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   };
 
   return (
-    <div className="flex-1 flex h-full overflow-hidden">
-    <div ref={detailRootRef} className="flex-1 flex flex-col bg-background h-full" style={{ minWidth: 480 }}>
-      {/* Header */}
+    <div className="flex-1 flex flex-col h-full overflow-hidden">
+      {/* Header — spans full width */}
       <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border bg-surface shrink-0">
         {/* Left side: Toggle buttons (when collapsed) + Title */}
         <div className="flex h-full items-center gap-2 min-w-0">
@@ -2640,14 +2668,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           <button
             type="button"
             onClick={() => dispatch(togglePanel())}
-            className={`relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition-colors ${
-              isPanelOpen ? 'text-primary bg-primary/10' : 'text-secondary hover:bg-surface-raised hover:text-foreground'
-            }`}
+            className="relative h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
             aria-label={i18nService.t('artifactPanelToggle')}
           >
-            <ArtifactPanelIcon className="h-4 w-4" />
+            <ArtifactPanelIcon className="h-4 w-4" open={isPanelOpen} />
             {sessionArtifacts.length > 0 && (
-              <span className="text-xs">{sessionArtifacts.length}</span>
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 flex items-center justify-center rounded-full bg-primary text-[10px] text-white leading-none px-1">
+                {sessionArtifacts.length}
+              </span>
             )}
           </button>
 
@@ -2794,6 +2822,10 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             </div>
         </Modal>
       )}
+
+      {/* Content row: chat + artifact panel */}
+      <div className="flex-1 flex overflow-hidden">
+      <div ref={detailRootRef} className="flex-1 flex flex-col bg-background h-full" style={{ minWidth: 480 }}>
       <div className="relative flex-1 min-h-0">
         <div
           ref={scrollContainerRef}
@@ -3042,6 +3074,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         <ArtifactPanel artifacts={sessionArtifacts} />
       </ArtifactPanelErrorBoundary>
     )}
+    </div>
     </div>
   );
 };

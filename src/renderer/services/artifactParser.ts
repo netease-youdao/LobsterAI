@@ -23,6 +23,7 @@ const EXTENSION_TO_ARTIFACT_TYPE: Record<string, ArtifactType> = {
   '.mmd': 'mermaid',
   '.jsx': 'react',
   '.tsx': 'react',
+  '.css': 'code',
 };
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);

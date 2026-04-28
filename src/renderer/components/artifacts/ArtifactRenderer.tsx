@@ -11,9 +11,10 @@ import SvgRenderer from './renderers/SvgRenderer';
 
 interface ArtifactRendererProps {
   artifact: Artifact;
+  sessionArtifacts?: Artifact[];
 }
 
-const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ artifact }) => {
+const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ artifact, sessionArtifacts }) => {
   switch (artifact.type) {
     case 'html':
       return <HtmlRenderer artifact={artifact} />;
@@ -24,7 +25,7 @@ const ArtifactRenderer: React.FC<ArtifactRendererProps> = ({ artifact }) => {
     case 'mermaid':
       return <MermaidRenderer artifact={artifact} />;
     case 'react':
-      return <ReactRenderer artifact={artifact} />;
+      return <ReactRenderer artifact={artifact} sessionArtifacts={sessionArtifacts} />;
     case 'code':
       return <CodeRenderer artifact={artifact} />;
     default:

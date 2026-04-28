@@ -1,5 +1,7 @@
 export type ArtifactType = 'html' | 'svg' | 'image' | 'mermaid' | 'react' | 'code';
 
+export const PREVIEWABLE_ARTIFACT_TYPES = new Set<ArtifactType>(['html', 'svg', 'react', 'mermaid', 'image']);
+
 export type ArtifactSource = 'codeblock' | 'tool';
 
 export interface Artifact {
