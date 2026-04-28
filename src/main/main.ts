@@ -5544,7 +5544,15 @@ if (!gotTheLock) {
           throw new Error(`本地 session 不存在 (electronTaskId=${sessionId})，请重新从 iOS 发起任务`);
         }
         store.updateSession(sessionId, { status: 'running' });
-        store.addMessage(sessionId, { type: 'user', content: text });
+        const addedUserMessage = store.addMessage(sessionId, { type: 'user', content: text });
+        BrowserWindow.getAllWindows().forEach(win => {
+          if (!win.isDestroyed()) {
+            win.webContents.send('cowork:stream:message', {
+              sessionId,
+              message: sanitizeCoworkMessageForIpc(addedUserMessage),
+            });
+          }
+        });
         const config = store.getConfig();
         const systemPrompt = mergeCoworkSystemPrompt(resolveCoworkAgentEngine(), session.systemPrompt ?? config.systemPrompt);
         const options = {
