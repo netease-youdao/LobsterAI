@@ -691,6 +691,37 @@ exports.plugin = {
   } else {
     log('openclaw-lark not found, skipping deferred loading patch');
   }
+
+  // --- Post-install patch: dingtalk-connector file:// URL fix (Windows only) ---
+  // On Windows, downloadImageToFile returns paths with backslashes (e.g.
+  // D:\data\media\inbound\image.jpg).  The original code constructs
+  // `file://${path}` which produces `file://D:\...` — an invalid file URL
+  // where the drive letter is parsed as the hostname, causing
+  // safeFileURLToPath to reject it.  Images silently fail to reach the model.
+  // On macOS/Linux paths start with `/`, so `file://${path}` already produces
+  // a valid three-slash URL — no patching needed there.
+  //
+  // Fix: on Windows, normalise backslashes to forward slashes and use three
+  // slashes after `file:` so the hostname is always empty.
+  const dingtalkMsgHandlerPath = path.join(
+    runtimeExtensionsDir, 'dingtalk-connector', 'src', 'core', 'message-handler.ts'
+  );
+  if (fs.existsSync(dingtalkMsgHandlerPath)) {
+    let dtSrc = fs.readFileSync(dingtalkMsgHandlerPath, 'utf8');
+    const brokenPattern = "imageLocalPaths.map(p => `![image](file://${p})`)";
+    if (dtSrc.includes(brokenPattern)) {
+      dtSrc = dtSrc.replace(
+        brokenPattern,
+        "imageLocalPaths.map(p => { if (process.platform !== 'win32') return `![image](file://${p})`; const n = p.replace(/\\\\/g, '/'); return `![image](file:///${n})`; })"
+      );
+      fs.writeFileSync(dingtalkMsgHandlerPath, dtSrc);
+      log('Patched dingtalk-connector/message-handler.ts: fixed file:// URL format for Windows');
+    } else {
+      log('dingtalk-connector/message-handler.ts: file:// pattern not found or already patched, skipping');
+    }
+  } else {
+    log('dingtalk-connector not found, skipping file:// URL patch');
+  }
 }
 
 if (require.main === module) {
