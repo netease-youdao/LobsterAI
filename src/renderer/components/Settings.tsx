@@ -595,6 +595,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const memoryImportInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
   const updateCheckTimerRef = useRef<number | null>(null);
 
@@ -823,6 +824,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
+  const [isExportingMemory, setIsExportingMemory] = useState<boolean>(false);
+  const [isImportingMemory, setIsImportingMemory] = useState<boolean>(false);
+  const [memoryImportPending, setMemoryImportPending] = useState<{ raw: string; fileName: string } | null>(null);
   const [bootstrapIdentity, setBootstrapIdentity] = useState<string>('');
   const [bootstrapUser, setBootstrapUser] = useState<string>('');
   const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
@@ -1643,6 +1647,279 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const handleOpenCoworkMemoryModal = () => {
     resetCoworkMemoryEditor();
     setShowMemoryModal(true);
+  };
+
+  // --- Memory Export: Markdown ---
+  const handleExportMemoryAsMarkdown = async () => {
+    setError(null);
+    setIsExportingMemory(true);
+    try {
+      const entries = await coworkService.listMemoryEntries({});
+      if (!entries || entries.length === 0) {
+        setError(i18nService.t('coworkMemoryExportEmpty'));
+        return;
+      }
+      const date = new Date().toISOString().slice(0, 10);
+      const lines = [
+        `# LobsterAI Memories`,
+        ``,
+        `> Exported on ${date}`,
+        ``,
+        ...entries.map((entry) => `- ${entry.text}`),
+        ``,
+      ];
+      const markdown = lines.join('\n');
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `lobsterai-memories-${date}.md`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (err) {
+      console.error('Failed to export memories as markdown:', err);
+      setError(i18nService.t('coworkMemoryExportFailed'));
+    } finally {
+      setIsExportingMemory(false);
+    }
+  };
+
+  // --- Memory Export: Image (PNG) ---
+  const handleExportMemoryAsImage = async () => {
+    setError(null);
+    setIsExportingMemory(true);
+    try {
+      const entries = await coworkService.listMemoryEntries({});
+      if (!entries || entries.length === 0) {
+        setError(i18nService.t('coworkMemoryExportEmpty'));
+        return;
+      }
+
+      const date = new Date().toISOString().slice(0, 10);
+      const padding = 40;
+      const lineHeight = 28;
+      const titleFontSize = 20;
+      const bodyFontSize = 14;
+      const subtitleFontSize = 12;
+      const headerHeight = titleFontSize + subtitleFontSize + 30;
+
+      // Measure max text width with a temp canvas
+      const measureCanvas = document.createElement('canvas');
+      const measureCtx = measureCanvas.getContext('2d')!;
+      measureCtx.font = `${bodyFontSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
+      let maxTextWidth = 0;
+      for (const entry of entries) {
+        const w = measureCtx.measureText(`•  ${entry.text}`).width;
+        if (w > maxTextWidth) maxTextWidth = w;
+      }
+
+      const canvasWidth = Math.min(Math.max(maxTextWidth + padding * 2, 400), 1200);
+      const canvasHeight = headerHeight + entries.length * lineHeight + padding * 2;
+      const dpr = window.devicePixelRatio || 2;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = canvasWidth * dpr;
+      canvas.height = canvasHeight * dpr;
+      const ctx = canvas.getContext('2d')!;
+      ctx.scale(dpr, dpr);
+
+      // Background
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, canvasWidth, canvasHeight, 16);
+      ctx.fill();
+
+      // Title
+      ctx.fillStyle = '#1a1a2e';
+      ctx.font = `bold ${titleFontSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
+      ctx.fillText('🧠 LobsterAI Memories', padding, padding + titleFontSize);
+
+      // Subtitle
+      ctx.fillStyle = '#6b7280';
+      ctx.font = `${subtitleFontSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
+      ctx.fillText(`${entries.length} entries · ${date}`, padding, padding + titleFontSize + subtitleFontSize + 8);
+
+      // Divider line
+      const dividerY = padding + headerHeight;
+      ctx.strokeStyle = '#e5e7eb';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padding, dividerY);
+      ctx.lineTo(canvasWidth - padding, dividerY);
+      ctx.stroke();
+
+      // Entries
+      ctx.fillStyle = '#374151';
+      ctx.font = `${bodyFontSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
+      const startY = dividerY + lineHeight;
+      for (let i = 0; i < entries.length; i++) {
+        const text = entries[i].text;
+        const y = startY + i * lineHeight;
+        // Truncate if too wide
+        let displayText = `•  ${text}`;
+        const maxWidth = canvasWidth - padding * 2;
+        if (ctx.measureText(displayText).width > maxWidth) {
+          while (ctx.measureText(displayText + '…').width > maxWidth && displayText.length > 0) {
+            displayText = displayText.slice(0, -1);
+          }
+          displayText += '…';
+        }
+        ctx.fillText(displayText, padding, y);
+      }
+
+      // Watermark
+      ctx.fillStyle = '#d1d5db';
+      ctx.font = `${subtitleFontSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
+      ctx.textAlign = 'right';
+      ctx.fillText('LobsterAI', canvasWidth - padding, canvasHeight - 14);
+      ctx.textAlign = 'left';
+
+      // Download as PNG
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `lobsterai-memories-${date}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Failed to export memories as image:', err);
+      setError(i18nService.t('coworkMemoryExportImageFailed'));
+    } finally {
+      setIsExportingMemory(false);
+    }
+  };
+
+  // --- Memory Import ---
+  const handleMemoryImportClick = () => {
+    memoryImportInputRef.current?.click();
+  };
+
+  const handleMemoryImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setError(null);
+    try {
+      const raw = await file.text();
+      if (!raw.trim()) {
+        setError(i18nService.t('coworkMemoryImportInvalidFile'));
+        return;
+      }
+      // Stash file content and show the import-mode picker dialog
+      setMemoryImportPending({ raw, fileName: file.name });
+    } catch (err) {
+      console.error('Failed to read import file:', err);
+      setError(i18nService.t('coworkMemoryImportFailed'));
+    }
+  };
+
+  const handleMemoryImportConfirm = async (mode: 'whole' | 'split') => {
+    const pending = memoryImportPending;
+    setMemoryImportPending(null);
+    if (!pending) return;
+
+    setError(null);
+    setIsImportingMemory(true);
+
+    try {
+      const { raw, fileName } = pending;
+      let texts: string[] = [];
+
+      if (mode === 'whole') {
+        // Import the entire file content as a single memory entry
+        const trimmed = raw.trim();
+        if (trimmed.length >= 2) {
+          texts = [trimmed];
+        }
+      } else {
+        // Split mode: parse into individual entries
+        if (fileName.endsWith('.md') || fileName.endsWith('.markdown')) {
+          const lines = raw.split(/\r?\n/);
+          for (const line of lines) {
+            const match = line.trim().match(/^-\s+(.+)$/);
+            if (match?.[1]) {
+              const text = match[1].replace(/\s+/g, ' ').trim();
+              if (text.length >= 2) {
+                texts.push(text);
+              }
+            }
+          }
+        } else if (fileName.endsWith('.json')) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            setError(i18nService.t('coworkMemoryImportInvalidFile'));
+            return;
+          }
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              const text = typeof item === 'string' ? item : (item as { text?: string })?.text;
+              if (typeof text === 'string' && text.trim().length >= 2) {
+                texts.push(text.trim());
+              }
+            }
+          } else {
+            setError(i18nService.t('coworkMemoryImportInvalidFile'));
+            return;
+          }
+        } else {
+          const lines = raw.split(/\r?\n/);
+          for (const line of lines) {
+            const text = line.replace(/^[-*•]\s*/, '').trim();
+            if (text.length >= 2) {
+              texts.push(text);
+            }
+          }
+        }
+      }
+
+      if (texts.length === 0) {
+        setError(i18nService.t('coworkMemoryImportInvalidFile'));
+        return;
+      }
+
+      // De-duplicate against existing entries
+      const existing = await coworkService.listMemoryEntries({});
+      const existingSet = new Set(
+        existing.map((e) => e.text.toLowerCase().replace(/\s+/g, ' ').trim())
+      );
+
+      let imported = 0;
+      let duplicates = 0;
+      for (const text of texts) {
+        const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (existingSet.has(normalized)) {
+          duplicates++;
+          continue;
+        }
+        existingSet.add(normalized);
+        await coworkService.createMemoryEntry({ text });
+        imported++;
+      }
+
+      await loadCoworkMemoryData();
+
+      const messages: string[] = [];
+      if (imported > 0) {
+        messages.push(i18nService.t('coworkMemoryImportSuccess').replace('{count}', String(imported)));
+      }
+      if (duplicates > 0) {
+        messages.push(i18nService.t('coworkMemoryImportDuplicate').replace('{count}', String(duplicates)));
+      }
+      if (messages.length > 0) {
+        setError(messages.join('；'));
+      }
+    } catch (err) {
+      console.error('Failed to import memories:', err);
+      setError(i18nService.t('coworkMemoryImportFailed'));
+    } finally {
+      setIsImportingMemory(false);
+    }
   };
 
   // Toggle provider enabled status
@@ -3021,6 +3298,41 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
                 </div>
               )}
+
+              {/* Import / Export toolbar */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleMemoryImportClick}
+                  disabled={isImportingMemory || coworkMemoryListLoading}
+                  className="inline-flex items-center px-2 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                >
+                  {isImportingMemory ? '...' : i18nService.t('coworkMemoryImport')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportMemoryAsMarkdown}
+                  disabled={isExportingMemory || coworkMemoryListLoading}
+                  className="inline-flex items-center px-2 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                >
+                  {i18nService.t('coworkMemoryExportMarkdown')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportMemoryAsImage}
+                  disabled={isExportingMemory || coworkMemoryListLoading}
+                  className="inline-flex items-center px-2 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                >
+                  {i18nService.t('coworkMemoryExportImage')}
+                </button>
+              </div>
+              <input
+                ref={memoryImportInputRef}
+                type="file"
+                accept=".md,.markdown,.json,.txt"
+                className="hidden"
+                onChange={handleMemoryImportFile}
+              />
 
               <input
                 type="text"
@@ -4641,6 +4953,61 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           )}
 
           {/* Memory Modal */}
+          {memoryImportPending && (
+            <div
+              className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+              onClick={() => setMemoryImportPending(null)}
+            >
+              <div
+                className="dark:bg-claude-darkSurface bg-claude-surface dark:border-claude-darkBorder border-claude-border border rounded-2xl shadow-xl w-full max-w-sm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-5 pt-5 pb-4 border-b dark:border-claude-darkBorder border-claude-border">
+                  <h3 className="text-base font-semibold dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('coworkMemoryImportModeTitle')}
+                  </h3>
+                  <p className="text-xs mt-1 dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">
+                    {memoryImportPending.fileName}
+                  </p>
+                </div>
+                <div className="px-5 py-4 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => { void handleMemoryImportConfirm('whole'); }}
+                    className="w-full text-left px-4 py-3 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                  >
+                    <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('coworkMemoryImportModeWhole')}
+                    </div>
+                    <div className="text-xs mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('coworkMemoryImportModeWholeHint')}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void handleMemoryImportConfirm('split'); }}
+                    className="w-full text-left px-4 py-3 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                  >
+                    <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      {i18nService.t('coworkMemoryImportModeSplit')}
+                    </div>
+                    <div className="text-xs mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('coworkMemoryImportModeSplitHint')}
+                    </div>
+                  </button>
+                </div>
+                <div className="flex justify-end px-5 pb-5">
+                  <button
+                    type="button"
+                    onClick={() => setMemoryImportPending(null)}
+                    className="px-3 py-1.5 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover rounded-xl border dark:border-claude-darkBorder border-claude-border transition-colors"
+                  >
+                    {i18nService.t('cancel')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {showMemoryModal && (
             <div
               className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
