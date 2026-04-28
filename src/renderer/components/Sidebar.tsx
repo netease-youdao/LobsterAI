@@ -149,6 +149,12 @@ const Sidebar: React.FC<SidebarProps> = ({
       className={`shrink-0 bg-surface-raised flex flex-col sidebar-transition overflow-hidden ${
         isCollapsed ? 'w-0' : 'w-60'
       }`}
+      style={{
+        opacity: isCollapsed ? 0 : 1,
+        transition: isCollapsed
+          ? 'width 220ms cubic-bezier(0.4,0,0.2,1), opacity 120ms cubic-bezier(0.4,0,0.2,1)'
+          : 'width 220ms cubic-bezier(0.4,0,0.2,1), opacity 180ms cubic-bezier(0.4,0,0.2,1) 60ms',
+      }}
     >
       <div className="pt-3 pb-3">
         <div className="draggable sidebar-header-drag h-8 flex items-center justify-between px-3">

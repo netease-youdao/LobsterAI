@@ -171,9 +171,9 @@ select::-ms-expand {
   background-color: var(--lobster-surface-raised);
 }
 
-/* Sidebar width transition - instant toggle, no animation */
+/* Sidebar width transition */
 .sidebar-transition {
-  transition: none;
+  transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Subtle separator line */
