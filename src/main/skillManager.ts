@@ -1550,15 +1550,36 @@ export class SkillManager {
       }
     }
 
-    if (targetDir !== null) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+    console.log('[skills] deleteSkill: id=%s, targetDir=%s, platform=%s', id, targetDir, process.platform);
+
+    // Release directory handles held by fs.watch() before deleting;
+    // on Windows, open handles prevent rmSync from removing the directory.
+    this.stopWatching();
+    try {
+      if (targetDir !== null) {
+        const startMs = Date.now();
+        fs.rmSync(targetDir, {
+          recursive: true,
+          force: true,
+          maxRetries: process.platform === 'win32' ? 5 : 0,
+          retryDelay: process.platform === 'win32' ? 200 : 0,
+        });
+        console.log('[skills] deleteSkill: directory removed in %dms', Date.now() - startMs);
+      } else {
+        console.warn('[skills] deleteSkill: directory not found on disk, cleaning state only');
+      }
+      const state = this.loadSkillStateMap();
+      delete state[id];
+      this.saveSkillStateMap(state);
+      this.notifySkillsChanged();
+      console.log('[skills] deleteSkill: completed successfully for "%s"', id);
+      return this.listSkills();
+    } catch (error) {
+      console.error('[skills] deleteSkill: failed to remove "%s" at %s:', id, targetDir, error);
+      throw error;
+    } finally {
+      this.startWatching();
     }
-    const state = this.loadSkillStateMap();
-    delete state[id];
-    this.saveSkillStateMap(state);
-    this.startWatching();
-    this.notifySkillsChanged();
-    return this.listSkills();
   }
 
   async downloadSkill(source: string): Promise<{

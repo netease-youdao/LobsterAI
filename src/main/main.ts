@@ -2477,6 +2477,7 @@ if (!gotTheLock) {
       const skills = getSkillManager().deleteSkill(id);
       return { success: true, skills };
     } catch (error) {
+      console.error('[skills] Failed to delete skill:', id, error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to delete skill' };
     }
   });
