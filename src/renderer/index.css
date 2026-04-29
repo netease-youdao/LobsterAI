@@ -186,6 +186,13 @@ select::-ms-expand {
 .modal-backdrop {
   @apply bg-black/40 backdrop-blur-sm;
   animation: fade-in 0.2s ease-out;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.fixed {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 /* Modal content entrance */
