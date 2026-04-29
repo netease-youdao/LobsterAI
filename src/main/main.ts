@@ -3160,6 +3160,9 @@ if (!gotTheLock) {
         return { success: false, error: 'Capture rect is required' };
       }
 
+      if (event.sender.isDestroyed()) {
+        return { success: false, error: 'Window has been closed' };
+      }
       const image = await event.sender.capturePage(captureRect);
       return savePngWithDialog(event.sender, image.toPNG(), defaultFileName);
     } catch (error) {
@@ -3182,6 +3185,9 @@ if (!gotTheLock) {
         return { success: false, error: 'Capture rect is required' };
       }
 
+      if (event.sender.isDestroyed()) {
+        return { success: false, error: 'Window has been closed' };
+      }
       const image = await event.sender.capturePage(captureRect);
       const pngBuffer = image.toPNG();
 
@@ -5003,6 +5009,7 @@ if (!gotTheLock) {
         try {
           while (true) {
             const { value, done } = await reader.read();
+            if (event.sender.isDestroyed()) break;
             if (done) {
               event.sender.send(`api:stream:${options.requestId}:done`);
               break;
@@ -5011,6 +5018,7 @@ if (!gotTheLock) {
             event.sender.send(`api:stream:${options.requestId}:data`, chunk);
           }
         } catch (error) {
+          if (event.sender.isDestroyed()) return;
           if (error instanceof Error && error.name === 'AbortError') {
             event.sender.send(`api:stream:${options.requestId}:abort`);
           } else {
