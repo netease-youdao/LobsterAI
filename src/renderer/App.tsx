@@ -726,12 +726,20 @@ const App: React.FC = () => {
               <ChatBubbleLeftRightIcon className="h-8 w-8 text-white" />
             </div>
             <div className="text-foreground text-xl font-medium text-center">{initError}</div>
-            <button
-              onClick={() => handleShowSettings()}
-              className="px-6 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl shadow-md transition-colors text-sm font-medium"
-            >
-              {i18nService.t('openSettings')}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => window.electron.appInfo.relaunch()}
+                className="px-6 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl shadow-md transition-colors text-sm font-medium"
+              >
+                {i18nService.t('restartApp')}
+              </button>
+              <button
+                onClick={() => handleShowSettings()}
+                className="px-6 py-2.5 text-secondary hover:bg-surface-raised rounded-xl transition-colors text-sm font-medium"
+              >
+                {i18nService.t('openSettings')}
+              </button>
+            </div>
           </div>
           {showSettings && (
             <Settings
