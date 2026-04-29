@@ -74,7 +74,6 @@ export interface IMGatewayManagerOptions {
   coworkRuntime?: CoworkRuntime;
   coworkStore?: CoworkStore;
   ensureCoworkReady?: () => Promise<void>;
-  isOpenClawEngine?: () => boolean;
   syncOpenClawConfig?: (reason?: string) => Promise<void>;
   ensureOpenClawGatewayConnected?: () => Promise<void>;
   getOpenClawGatewayClient?: () => GatewayClientLike | null;
@@ -95,7 +94,6 @@ export class IMGatewayManager extends EventEmitter {
   private getLLMConfig: (() => Promise<any>) | null = null;
   private getSkillsPrompt: (() => Promise<string | null>) | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
-  private isOpenClawEngine: (() => boolean) | null = null;
   private syncOpenClawConfig: ((reason?: string) => Promise<void>) | null = null;
   private ensureOpenClawGatewayConnected: (() => Promise<void>) | null = null;
   private getOpenClawGatewayClient: (() => GatewayClientLike | null) | null = null;
@@ -130,7 +128,6 @@ export class IMGatewayManager extends EventEmitter {
       this.coworkStore = options.coworkStore;
     }
     this.ensureCoworkReady = options?.ensureCoworkReady ?? null;
-    this.isOpenClawEngine = options?.isOpenClawEngine ?? null;
     this.syncOpenClawConfig = options?.syncOpenClawConfig ?? null;
     this.ensureOpenClawGatewayConnected = options?.ensureOpenClawGatewayConnected ?? null;
     this.getOpenClawGatewayClient = options?.getOpenClawGatewayClient ?? null;

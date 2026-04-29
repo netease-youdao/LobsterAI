@@ -180,12 +180,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   }
 
   private safeResolveEngine(): CoworkAgentEngine {
-    const nextEngine = this.getCurrentEngine();
-    if (nextEngine === 'openclaw') {
-      this.currentEngine = nextEngine;
-      return nextEngine;
-    }
-    this.currentEngine = 'openclaw';
-    return 'openclaw';
+    this.currentEngine = this.getCurrentEngine();
+    return this.currentEngine;
   }
 }

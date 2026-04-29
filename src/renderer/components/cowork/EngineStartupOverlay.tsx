@@ -1,10 +1,8 @@
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 import React, { useEffect,useState } from 'react';
-import { useSelector } from 'react-redux';
 
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
-import { selectIsOpenClawEngine } from '../../store/selectors/coworkSelectors';
 import type { OpenClawEngineStatus } from '../../types/cowork';
 
 const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
@@ -30,12 +28,9 @@ const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
  * Renders on top of all views (cowork, skills, scheduled tasks, mcp).
  */
 const EngineStartupOverlay: React.FC = () => {
-  const isOpenClawEngine = useSelector(selectIsOpenClawEngine);
   const [status, setStatus] = useState<OpenClawEngineStatus | null>(null);
 
   useEffect(() => {
-    if (!isOpenClawEngine) return;
-
     coworkService.getOpenClawEngineStatus().then((s) => {
       if (s) setStatus(s);
     });
@@ -45,9 +40,9 @@ const EngineStartupOverlay: React.FC = () => {
     });
 
     return unsubscribe;
-  }, [isOpenClawEngine]);
+  }, []);
 
-  if (!isOpenClawEngine || !status || status.phase !== 'starting') {
+  if (!status || status.phase !== 'starting') {
     return null;
   }
 

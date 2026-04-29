@@ -3,7 +3,7 @@ import { expect,test } from 'vitest';
 import { buildScheduledTaskEnginePrompt } from './enginePrompt';
 
 test('openclaw prompt points scheduled task requests to the native cron tool', () => {
-  const prompt = buildScheduledTaskEnginePrompt('openclaw');
+  const prompt = buildScheduledTaskEnginePrompt();
 
   expect(prompt).toMatch(/native `cron` tool/i);
   expect(prompt).toMatch(/action: "add".*cron\.add/i);
@@ -25,7 +25,7 @@ test('openclaw prompt points scheduled task requests to the native cron tool', (
 });
 
 test('scheduled task prompt always uses the openclaw instructions', () => {
-  const prompt = buildScheduledTaskEnginePrompt('openclaw');
+  const prompt = buildScheduledTaskEnginePrompt();
 
   expect(prompt).not.toMatch(/switch the agent engine/i);
   expect(prompt).not.toMatch(/do not attempt to create, update, list, enable, disable, or delete scheduled tasks/i);

@@ -336,11 +336,6 @@ export interface UpdateAgentRequest {
   enabled?: boolean;
 }
 
-const COWORK_AGENT_ENGINE = 'openclaw';
-
-function normalizeCoworkAgentEngineValue(_value?: string | null): CoworkAgentEngine {
-  return COWORK_AGENT_ENGINE;
-}
 
 export interface CoworkMessageMetadata {
   toolName?: string;
@@ -1072,7 +1067,7 @@ export class CoworkStore {
       workingDirectory: cfg.get('workingDirectory') || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
       executionMode: 'local' as CoworkExecutionMode,
-      agentEngine: normalizeCoworkAgentEngineValue(cfg.get('agentEngine')),
+      agentEngine: 'openclaw' as CoworkAgentEngine,
       memoryEnabled: parseBooleanConfig(cfg.get('memoryEnabled'), DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
         cfg.get('memoryImplicitUpdateEnabled'),
@@ -1107,7 +1102,7 @@ export class CoworkStore {
       this.upsertConfig('executionMode', config.executionMode, now);
     }
     if (config.agentEngine !== undefined) {
-      this.upsertConfig('agentEngine', normalizeCoworkAgentEngineValue(config.agentEngine), now);
+      this.upsertConfig('agentEngine', 'openclaw', now);
     }
     if (config.memoryEnabled !== undefined) {
       this.upsertConfig('memoryEnabled', config.memoryEnabled ? '1' : '0', now);

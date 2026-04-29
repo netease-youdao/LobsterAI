@@ -5,12 +5,10 @@ import { useDispatch,useSelector } from 'react-redux';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { quickActionService } from '../../services/quickAction';
-import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import {
   selectCoworkConfig,
   selectCurrentSession,
-  selectIsOpenClawEngine,
   selectIsStreaming,
 } from '../../store/selectors/coworkSelectors';
 import { addMessage, clearCurrentSession, setCurrentSession, setStreaming, updateSessionStatus } from '../../store/slices/coworkSlice';
@@ -60,7 +58,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const currentSession = useSelector(selectCurrentSession);
   const isStreaming = useSelector(selectIsStreaming);
   const config = useSelector(selectCoworkConfig);
-  const isOpenClawEngine = useSelector(selectIsOpenClawEngine);
 
   const activeSkillIds = useSelector((state: RootState) => state.skill.activeSkillIds);
   const skills = useSelector((state: RootState) => state.skill.skills);
@@ -178,7 +175,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       count: imageAttachments?.length ?? 0,
       details: imageAttachments?.map(a => ({ name: a.name, mimeType: a.mimeType, base64Length: a.base64Data?.length ?? 0 })) ?? [],
     });
-    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
+    if (openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
       return false;
     }
@@ -266,11 +263,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       // auto-routing prompt to avoid injecting Claude SDK tool-calling instructions
       // that confuse non-Claude models (e.g. kimi-k2.5 falls back to text-based
       // tool calls, producing empty tool names and err=true failures).
-      let effectiveSkillPrompt = skillPrompt;
-      if (!skillPrompt && !isOpenClawEngine) {
-        effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
-      }
-      const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
+      const combinedSystemPrompt = [skillPrompt, config.systemPrompt]
         .filter(p => p?.trim())
         .join('\n\n') || undefined;
 
@@ -334,7 +327,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     if (!currentSession) return;
     // Prevent duplicate submissions
     if (isContinuingRef.current) return;
-    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
+    if (openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
       window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
       return false;
     }
@@ -358,11 +351,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
       // Combine skill prompt with system prompt for continuation.
       // Skip auto-routing prompt for OpenClaw — skills are loaded natively.
-      let effectiveSkillPrompt = skillPrompt;
-      if (!skillPrompt && !isOpenClawEngine) {
-        effectiveSkillPrompt = await skillService.getAutoRoutingPrompt() || undefined;
-      }
-      const combinedSystemPrompt = [effectiveSkillPrompt, config.systemPrompt]
+      const combinedSystemPrompt = [skillPrompt, config.systemPrompt]
         .filter(p => p?.trim())
         .join('\n\n') || undefined;
 
@@ -448,7 +437,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   }, [dispatch, currentSession]);
 
   useEffect(() => {
-    if (!isOpenClawEngine) return;
     if (!currentSession || currentSession.status !== 'running') return;
 
     const runningSessionId = currentSession.id;
@@ -460,7 +448,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
     };
-  }, [currentSession, isOpenClawEngine]);
+  }, [currentSession]);
 
   if (!isInitialized) {
     return (
@@ -477,11 +465,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     );
   }
 
-  const shouldShowEngineStatus = Boolean(isOpenClawEngine && openClawStatus && openClawStatus.phase !== 'running');
+  const shouldShowEngineStatus = Boolean(openClawStatus && openClawStatus.phase !== 'running');
   const isEngineError = openClawStatus?.phase === 'error';
-  const isEngineReady = isOpenClawEngine
-    ? isOpenClawReadyForSession(openClawStatus)
-    : true;
+  const isEngineReady = isOpenClawReadyForSession(openClawStatus);
 
   const homeHeader = (
     <div className="draggable flex h-12 items-center justify-between px-4 border-b border-border shrink-0">
@@ -506,13 +492,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           </div>
         )}
         <ModelSelector
-          value={isOpenClawEngine ? currentAgentSelectedModel : undefined}
-          onChange={isOpenClawEngine
-            ? async (nextModel) => {
-                if (!nextModel) return;
-                dispatch(setSelectedModel({ agentId: currentAgentId, model: nextModel }));
-              }
-            : undefined}
+          value={currentAgentSelectedModel}
+          onChange={async (nextModel) => {
+            if (!nextModel) return;
+            dispatch(setSelectedModel({ agentId: currentAgentId, model: nextModel }));
+          }}
         />
       </div>
       <div className="non-draggable flex items-center">

@@ -382,7 +382,7 @@ export class IMCoworkHandler extends EventEmitter {
     const config = this.coworkStore.getConfig();
     const imSettings = this.imStore.getIMSettings();
     const systemPrompt = config.systemPrompt || '';
-    const scheduledTaskPrompt = buildScheduledTaskEnginePrompt(config.agentEngine);
+    const scheduledTaskPrompt = buildScheduledTaskEnginePrompt();
 
     // Build media instruction for IM media sending capability
     const mediaInstruction = buildIMMediaInstruction(imSettings);

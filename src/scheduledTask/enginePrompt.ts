@@ -1,6 +1,4 @@
-import type { CoworkAgentEngine } from '../main/libs/agentEngine/types';
-
-export function buildScheduledTaskEnginePrompt(_engine: CoworkAgentEngine): string {
+export function buildScheduledTaskEnginePrompt(): string {
   return [
     '## Scheduled Tasks',
     '- Use the native `cron` tool for any scheduled task creation or management request.',

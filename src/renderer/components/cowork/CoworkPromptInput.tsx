@@ -925,31 +925,27 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   <div className="flex flex-col items-start gap-1">
                     <ModelSelector
                       dropdownDirection="up"
-                      value={coworkAgentEngine === 'openclaw'
-                        ? (agentModelIsInvalid && currentSession?.modelOverride
-                          ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
-                          : agentSelectedModel)
-                        : null}
-                      onChange={coworkAgentEngine === 'openclaw'
-                        ? async (nextModel) => {
-                            if (!nextModel) return;
-                            const modelRef = toOpenClawModelRef(nextModel);
-                            console.log('[CoworkPromptInput] model selected:', { id: nextModel.id, providerKey: nextModel.providerKey, isServerModel: nextModel.isServerModel, modelRef });
-                            if (sessionId) {
-                              await coworkService.patchSession(sessionId, { model: modelRef });
-                              if (currentAgent && agentModelIsInvalid) {
-                                console.log('[CoworkPromptInput] auto-fixing invalid agent model:', currentAgent.id, currentAgent.model, '->', modelRef);
-                                agentService.updateAgent(currentAgent.id, { model: modelRef });
-                              }
-                              return;
-                            }
-                            if (!currentAgent) return;
-                            console.log('[CoworkPromptInput] home page model change (Redux only, no agent update):', { modelRef, modelName: nextModel.name, providerKey: nextModel.providerKey });
-                            dispatch(setSelectedModel({ agentId: currentAgentId, model: nextModel }));
+                      value={agentModelIsInvalid && currentSession?.modelOverride
+                        ? { id: '__invalid__', name: currentSession.modelOverride.split('/').pop() || currentSession.modelOverride } as Model
+                        : agentSelectedModel}
+                      onChange={async (nextModel) => {
+                        if (!nextModel) return;
+                        const modelRef = toOpenClawModelRef(nextModel);
+                        console.log('[CoworkPromptInput] model selected:', { id: nextModel.id, providerKey: nextModel.providerKey, isServerModel: nextModel.isServerModel, modelRef });
+                        if (sessionId) {
+                          await coworkService.patchSession(sessionId, { model: modelRef });
+                          if (currentAgent && agentModelIsInvalid) {
+                            console.log('[CoworkPromptInput] auto-fixing invalid agent model:', currentAgent.id, currentAgent.model, '->', modelRef);
+                            agentService.updateAgent(currentAgent.id, { model: modelRef });
                           }
-                        : undefined}
+                          return;
+                        }
+                        if (!currentAgent) return;
+                        console.log('[CoworkPromptInput] home page model change (Redux only, no agent update):', { modelRef, modelName: nextModel.name, providerKey: nextModel.providerKey });
+                        dispatch(setSelectedModel({ agentId: currentAgentId, model: nextModel }));
+                      }}
                     />
-                    {coworkAgentEngine === 'openclaw' && agentModelIsInvalid && (
+                    {agentModelIsInvalid && (
                       <span className="max-w-60 text-[11px] leading-4 text-red-500">
                         {i18nService.t('agentModelInvalidHint')}
                       </span>

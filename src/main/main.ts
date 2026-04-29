@@ -1037,7 +1037,7 @@ const shouldRefreshServerQuotaForSession = (sessionId: string): boolean => {
 };
 
 const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
-  return getCoworkStore().getConfig().agentEngine;
+  return 'openclaw';
 };
 
 const getOpenClawConfigSync = (): OpenClawConfigSync => {
@@ -1644,15 +1644,11 @@ const getIMGatewayManager = () => {
         coworkRuntime: runtime,
         coworkStore: store,
         ensureCoworkReady: async () => {
-          if (resolveCoworkAgentEngine() !== 'openclaw') {
-            return;
-          }
           const status = await ensureOpenClawRunningForCowork();
           if (status.phase !== 'running') {
             throw new Error(status.message || 'AI engine is initializing. Please try again in a moment.');
           }
         },
-        isOpenClawEngine: () => resolveCoworkAgentEngine() === 'openclaw',
         syncOpenClawConfig: async (reason?: string) => {
           await syncOpenClawConfig({
             reason: reason || 'im-gateway-sync',
@@ -1803,11 +1799,10 @@ const getIMGatewayManager = () => {
 };
 
 function mergeCoworkSystemPrompt(
-  engine: CoworkAgentEngine,
   systemPrompt?: string,
 ): string | undefined {
   const sections = [
-    buildScheduledTaskEnginePrompt(engine),
+    buildScheduledTaskEnginePrompt(),
     systemPrompt?.trim() || '',
   ].filter(Boolean);
   return sections.length > 0 ? sections.join('\n\n') : undefined;
@@ -2805,18 +2800,14 @@ if (!gotTheLock) {
     modelOverride?: string;
   }) => {
     try {
-      const activeEngine = resolveCoworkAgentEngine();
-      if (activeEngine === 'openclaw') {
-        const engineStatus = await ensureOpenClawRunningForCowork();
-        if (engineStatus.phase !== 'running') {
-          return getEngineNotReadyResponse(engineStatus);
-        }
+      const engineStatus = await ensureOpenClawRunningForCowork();
+      if (engineStatus.phase !== 'running') {
+        return getEngineNotReadyResponse(engineStatus);
       }
 
       const coworkStoreInstance = getCoworkStore();
       const config = coworkStoreInstance.getConfig();
       const systemPrompt = mergeCoworkSystemPrompt(
-        activeEngine,
         options.systemPrompt ?? config.systemPrompt,
       );
       const selectedWorkspaceRoot = (options.cwd || config.workingDirectory || '').trim();
@@ -2927,12 +2918,9 @@ if (!gotTheLock) {
     imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
   }) => {
     try {
-      const activeEngine = resolveCoworkAgentEngine();
-      if (activeEngine === 'openclaw') {
-        const engineStatus = await ensureOpenClawRunningForCowork();
-        if (engineStatus.phase !== 'running') {
-          return getEngineNotReadyResponse(engineStatus);
-        }
+      const engineStatus = await ensureOpenClawRunningForCowork();
+      if (engineStatus.phase !== 'running') {
+        return getEngineNotReadyResponse(engineStatus);
       }
 
       const runtime = getCoworkEngineRouter();
@@ -2950,7 +2938,6 @@ if (!gotTheLock) {
       }
       runtime.continueSession(options.sessionId, options.prompt, {
         systemPrompt: mergeCoworkSystemPrompt(
-          activeEngine,
           options.systemPrompt ?? existingSession?.systemPrompt,
         ),
         skillIds: options.activeSkillIds,
@@ -3729,11 +3716,6 @@ if (!gotTheLock) {
       }
 
       const nextConfig = getCoworkStore().getConfig();
-      if (normalizedAgentEngine !== undefined && normalizedAgentEngine !== previousConfig.agentEngine) {
-        getCoworkEngineRouter().handleEngineConfigChanged(normalizedAgentEngine);
-      }
-      const switchedToOpenClaw = normalizedAgentEngine === 'openclaw'
-        && previousConfig.agentEngine !== 'openclaw';
 
       const shouldSyncOpenClawConfig = normalizedExecutionMode !== undefined
         || normalizedAgentEngine !== undefined
@@ -3753,11 +3735,6 @@ if (!gotTheLock) {
         }
       }
 
-      if (switchedToOpenClaw) {
-        void ensureOpenClawRunningForCowork().catch((error) => {
-          console.error('[OpenClaw] Failed to auto-start gateway after engine switch:', error);
-        });
-      }
       return { success: true };
     } catch (error) {
       return {
@@ -5865,18 +5842,16 @@ if (!gotTheLock) {
       console.error('[OpenClaw] Startup config sync failed:', startupSync.error);
     }
     profiler.measure('syncOpenClawConfig');
-    if (resolveCoworkAgentEngine() === 'openclaw') {
-      void ensureOpenClawRunningForCowork().then(() => {
-        // Start cron polling once the gateway is confirmed running.
-        try {
-          getCronJobService().startPolling();
-        } catch (err) {
-          console.warn('[Main] CronJobService not available after OpenClaw startup:', err);
-        }
-      }).catch((error) => {
-        console.error('[OpenClaw] Failed to auto-start gateway on app startup:', error);
-      });
-    }
+    void ensureOpenClawRunningForCowork().then(() => {
+      // Start cron polling once the gateway is confirmed running.
+      try {
+        getCronJobService().startPolling();
+      } catch (err) {
+        console.warn('[Main] CronJobService not available after OpenClaw startup:', err);
+      }
+    }).catch((error) => {
+      console.error('[OpenClaw] Failed to auto-start gateway on app startup:', error);
+    });
 
     // ── Step 1: Show window ASAP ──────────────────────────────────────
     // CSP + createWindow moved before skill initialisation so the user
