@@ -178,7 +178,7 @@
     "7zip-bin": "^5.2.0",
     "autoprefixer": "^10.4.17",
     "concurrently": "^8.2.2",
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.1.0",
     "electron": "40.2.1",
     "electron-builder": "^24.12.0",
     "esbuild": "^0.21.5",
