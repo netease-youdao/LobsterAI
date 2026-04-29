@@ -3164,7 +3164,6 @@ class I18nService {
           console.log(`[i18n] Legacy user detected with custom language: ${config.language}`);
           this.currentLanguage = config.language;
           configService.updateConfig({
-            ...config,
             language_initialized: true,
           });
         } else {
@@ -3181,7 +3180,6 @@ class I18nService {
 
             // 保存语言配置和初始化标记
             configService.updateConfig({
-              ...config,
               language: defaultLanguage,
               language_initialized: true,
             });
@@ -3190,7 +3188,6 @@ class I18nService {
             // 如果获取系统语言失败,默认使用英文
             this.currentLanguage = 'en';
             configService.updateConfig({
-              ...config,
               language: 'en',
               language_initialized: true,
             });
@@ -3204,7 +3201,6 @@ class I18nService {
           // 如果配置无效,fallback 到英文
           this.currentLanguage = 'en';
           configService.updateConfig({
-            ...config,
             language: 'en',
           });
         }
