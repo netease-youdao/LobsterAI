@@ -1010,7 +1010,7 @@ export class IMCoworkHandler extends EventEmitter {
       if (accumulator.timeoutId) {
         clearTimeout(accumulator.timeoutId);
       }
-      accumulator.reject(new Error('Handler destroyed'));
+      accumulator.reject?.(new Error('Handler destroyed'));
     });
     this.messageAccumulators.clear();
     this.imSessionIds.clear();
