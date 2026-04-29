@@ -174,7 +174,7 @@
     "@types/yazl": "^3.3.0",
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^6.0.1",
     "7zip-bin": "^5.2.0",
     "autoprefixer": "^10.4.17",
     "concurrently": "^8.2.2",
