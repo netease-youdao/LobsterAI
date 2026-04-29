@@ -14,6 +14,7 @@ interface ScheduledTaskState {
   runs: Record<string, ScheduledTaskRun[]>;
   runsHasMore: Record<string, boolean>;
   allRuns: ScheduledTaskRunWithName[];
+  allRunsHasMore: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -25,6 +26,7 @@ const initialState: ScheduledTaskState = {
   runs: {},
   runsHasMore: {},
   allRuns: [],
+  allRunsHasMore: false,
   loading: false,
   error: null,
 };
@@ -47,26 +49,23 @@ const scheduledTaskSlice = createSlice({
       state.tasks.unshift(action.payload);
     },
     updateTask(state, action: PayloadAction<ScheduledTask>) {
-      const index = state.tasks.findIndex((t) => t.id === action.payload.id);
+      const index = state.tasks.findIndex(t => t.id === action.payload.id);
       if (index !== -1) {
         state.tasks[index] = action.payload;
       }
     },
     removeTask(state, action: PayloadAction<string>) {
-      state.tasks = state.tasks.filter((t) => t.id !== action.payload);
+      state.tasks = state.tasks.filter(t => t.id !== action.payload);
       if (state.selectedTaskId === action.payload) {
         state.selectedTaskId = null;
         state.viewMode = 'list';
       }
       delete state.runs[action.payload];
       delete state.runsHasMore[action.payload];
-      state.allRuns = state.allRuns.filter((r) => r.taskId !== action.payload);
+      state.allRuns = state.allRuns.filter(r => r.taskId !== action.payload);
     },
-    updateTaskState(
-      state,
-      action: PayloadAction<{ taskId: string; taskState: TaskState }>
-    ) {
-      const task = state.tasks.find((t) => t.id === action.payload.taskId);
+    updateTaskState(state, action: PayloadAction<{ taskId: string; taskState: TaskState }>) {
+      const task = state.tasks.find(t => t.id === action.payload.taskId);
       if (task) {
         task.state = action.payload.taskState;
       }
@@ -80,21 +79,21 @@ const scheduledTaskSlice = createSlice({
     },
     setRuns(
       state,
-      action: PayloadAction<{ taskId: string; runs: ScheduledTaskRun[]; hasMore: boolean }>
+      action: PayloadAction<{ taskId: string; runs: ScheduledTaskRun[]; hasMore: boolean }>,
     ) {
       state.runs[action.payload.taskId] = action.payload.runs;
       state.runsHasMore[action.payload.taskId] = action.payload.hasMore;
     },
     appendRuns(
       state,
-      action: PayloadAction<{ taskId: string; runs: ScheduledTaskRun[]; hasMore: boolean }>
+      action: PayloadAction<{ taskId: string; runs: ScheduledTaskRun[]; hasMore: boolean }>,
     ) {
       const { taskId, runs, hasMore } = action.payload;
       if (!state.runs[taskId]) {
         state.runs[taskId] = runs;
       } else {
-        const existingIds = new Set(state.runs[taskId].map((r) => r.id));
-        const newRuns = runs.filter((r) => !existingIds.has(r.id));
+        const existingIds = new Set(state.runs[taskId].map(r => r.id));
+        const newRuns = runs.filter(r => !existingIds.has(r.id));
         state.runs[taskId] = [...state.runs[taskId], ...newRuns];
       }
       state.runsHasMore[taskId] = hasMore;
@@ -104,20 +103,26 @@ const scheduledTaskSlice = createSlice({
       if (!state.runs[taskId]) {
         state.runs[taskId] = [];
       }
-      const existingIndex = state.runs[taskId].findIndex(
-        (r) => r.id === action.payload.id
-      );
+      const existingIndex = state.runs[taskId].findIndex(r => r.id === action.payload.id);
       if (existingIndex !== -1) {
         state.runs[taskId][existingIndex] = action.payload;
       } else {
         state.runs[taskId].unshift(action.payload);
       }
     },
-    setAllRuns(state, action: PayloadAction<ScheduledTaskRunWithName[]>) {
-      state.allRuns = action.payload;
+    setAllRuns(
+      state,
+      action: PayloadAction<{ runs: ScheduledTaskRunWithName[]; hasMore: boolean }>,
+    ) {
+      state.allRuns = action.payload.runs;
+      state.allRunsHasMore = action.payload.hasMore;
     },
-    appendAllRuns(state, action: PayloadAction<ScheduledTaskRunWithName[]>) {
-      state.allRuns = [...state.allRuns, ...action.payload];
+    appendAllRuns(
+      state,
+      action: PayloadAction<{ runs: ScheduledTaskRunWithName[]; hasMore: boolean }>,
+    ) {
+      state.allRuns = [...state.allRuns, ...action.payload.runs];
+      state.allRunsHasMore = action.payload.hasMore;
     },
   },
 });

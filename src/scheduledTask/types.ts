@@ -1,9 +1,4 @@
-import type {
-  DeliveryMode,
-  SessionTarget,
-  WakeMode,
-  TaskStatus,
-} from './constants';
+import type { DeliveryMode, SessionTarget, TaskStatus,WakeMode } from './constants';
 
 export interface ScheduleAt {
   kind: 'at';
@@ -135,3 +130,12 @@ export interface ScheduledTaskConversationOption {
 }
 
 export type ScheduledTaskViewMode = 'list' | 'create' | 'edit' | 'detail';
+
+export interface RunFilter {
+  /** ISO date string (YYYY-MM-DD), inclusive lower bound for startedAt */
+  startDate?: string;
+  /** ISO date string (YYYY-MM-DD), inclusive upper bound for startedAt */
+  endDate?: string;
+  /** Filter by task run status */
+  status?: string;
+}

@@ -20,6 +20,7 @@ import type {
   ScheduledTaskInput,
   ScheduledTaskStatusEvent,
   ScheduledTaskRunEvent,
+  RunFilter,
 } from '../../scheduledTask/types';
 import { i18nService } from './i18n';
 
@@ -66,7 +67,7 @@ class ScheduledTaskService {
   }
 
   destroy(): void {
-    this.cleanupFns.forEach((fn) => fn());
+    this.cleanupFns.forEach(fn => fn());
     this.cleanupFns = [];
     this.initialized = false;
   }
@@ -75,23 +76,19 @@ class ScheduledTaskService {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
-    const cleanupStatus = api.onStatusUpdate(
-      (event: ScheduledTaskStatusEvent) => {
-        store.dispatch(
-          updateTaskState({
-            taskId: event.taskId,
-            taskState: event.state,
-          })
-        );
-      }
-    );
+    const cleanupStatus = api.onStatusUpdate((event: ScheduledTaskStatusEvent) => {
+      store.dispatch(
+        updateTaskState({
+          taskId: event.taskId,
+          taskState: event.state,
+        }),
+      );
+    });
     this.cleanupFns.push(cleanupStatus);
 
-    const cleanupRun = api.onRunUpdate(
-      (event: ScheduledTaskRunEvent) => {
-        store.dispatch(addOrUpdateRun(event.run));
-      }
-    );
+    const cleanupRun = api.onRunUpdate((event: ScheduledTaskRunEvent) => {
+      store.dispatch(addOrUpdateRun(event.run));
+    });
     this.cleanupFns.push(cleanupRun);
 
     // Listen for full refresh events (e.g., after first poll or migration)
@@ -127,7 +124,9 @@ class ScheduledTaskService {
       const result = await api.create(input);
       if (result.success && result.task) {
         if (hasTaskDataAnomaly(result.task)) {
-          const msg = i18nService.t('scheduledTasksDataAnomalyWarning').replace('{name}', result.task.name);
+          const msg = i18nService
+            .t('scheduledTasksDataAnomalyWarning')
+            .replace('{name}', result.task.name);
           showToast(msg);
         }
         store.dispatch(addTask(result.task));
@@ -140,10 +139,7 @@ class ScheduledTaskService {
     }
   }
 
-  async updateTaskById(
-    id: string,
-    input: Partial<ScheduledTaskInput>
-  ): Promise<void> {
+  async updateTaskById(id: string, input: Partial<ScheduledTaskInput>): Promise<void> {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
@@ -217,12 +213,12 @@ class ScheduledTaskService {
     }
   }
 
-  async loadRuns(taskId: string, limit = 20, offset?: number): Promise<void> {
+  async loadRuns(taskId: string, limit = 20, offset?: number, filter?: RunFilter): Promise<void> {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
     try {
-      const result = await api.listRuns(taskId, limit, offset);
+      const result = await api.listRuns(taskId, limit, offset, filter);
       if (result.success && result.runs) {
         const hasMore = result.runs.length >= limit;
         if (offset && offset > 0) {
@@ -236,17 +232,18 @@ class ScheduledTaskService {
     }
   }
 
-  async loadAllRuns(limit?: number, offset?: number): Promise<void> {
+  async loadAllRuns(limit?: number, offset?: number, filter?: RunFilter): Promise<void> {
     const api = window.electron?.scheduledTasks;
     if (!api) return;
 
     try {
-      const result = await api.listAllRuns(limit, offset);
+      const result = await api.listAllRuns(limit, offset, filter);
       if (result.success && result.runs) {
+        const hasMore = (result.runs as unknown[]).length >= (limit ?? 50);
         if (offset && offset > 0) {
-          store.dispatch(appendAllRuns(result.runs));
+          store.dispatch(appendAllRuns({ runs: result.runs, hasMore }));
         } else {
-          store.dispatch(setAllRuns(result.runs));
+          store.dispatch(setAllRuns({ runs: result.runs, hasMore }));
         }
       }
     } catch (err: unknown) {

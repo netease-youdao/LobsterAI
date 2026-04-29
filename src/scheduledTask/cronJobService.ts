@@ -1,4 +1,23 @@
 import { BrowserWindow } from 'electron';
+
+import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
+import { PlatformRegistry } from '../shared/platform';
+import type {
+  DeliveryMode as DeliveryModeType,
+  GatewayStatus as GatewayStatusType,
+  SessionTarget as SessionTargetType,
+  WakeMode as WakeModeType,
+} from './constants';
+import {
+  DeliveryMode,
+  GatewayStatus,
+  IpcChannel,
+  PayloadKind,
+  ScheduleKind,
+  SessionTarget,
+  TaskStatus,
+  WakeMode,
+} from './constants';
 import type {
   Schedule,
   ScheduledTask,
@@ -9,24 +28,6 @@ import type {
   ScheduledTaskRunWithName,
   TaskState,
 } from './types';
-import { parseChannelSessionKey } from '../main/libs/openclawChannelSessionSync';
-import { PlatformRegistry } from '../shared/platform';
-import {
-  ScheduleKind,
-  PayloadKind,
-  DeliveryMode,
-  SessionTarget,
-  WakeMode,
-  TaskStatus,
-  GatewayStatus,
-  IpcChannel,
-} from './constants';
-import type {
-  SessionTarget as SessionTargetType,
-  WakeMode as WakeModeType,
-  DeliveryMode as DeliveryModeType,
-  GatewayStatus as GatewayStatusType,
-} from './constants';
 
 type GatewayClientLike = {
   request: <T = Record<string, unknown>>(
@@ -244,7 +245,10 @@ function toGatewayPayload(payload: ScheduledTaskPayload): GatewayPayload {
 }
 
 function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | undefined {
-  console.log('[CronJobService][toGatewayDelivery] input delivery:', JSON.stringify(delivery, null, 2));
+  console.log(
+    '[CronJobService][toGatewayDelivery] input delivery:',
+    JSON.stringify(delivery, null, 2),
+  );
   if (!delivery) {
     console.log('[CronJobService][toGatewayDelivery] no delivery, returning undefined');
     return undefined;
@@ -257,7 +261,10 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
       ...(delivery.channel ? { channel: delivery.channel } : {}),
       ...(delivery.to ? { to: delivery.to } : {}),
     } as GatewayDelivery;
-    console.log('[CronJobService][toGatewayDelivery] mode=none with preserved channel/to:', JSON.stringify(result));
+    console.log(
+      '[CronJobService][toGatewayDelivery] mode=none with preserved channel/to:',
+      JSON.stringify(result),
+    );
     return result;
   }
 
@@ -275,11 +282,12 @@ function toGatewayDelivery(delivery?: ScheduledTaskDelivery): GatewayDelivery | 
     ...(openclawChannel ? { channel: openclawChannel } : {}),
     ...(delivery.to ? { to: delivery.to } : {}),
     ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
-    ...(typeof delivery.bestEffort === 'boolean'
-      ? { bestEffort: delivery.bestEffort }
-      : {}),
+    ...(typeof delivery.bestEffort === 'boolean' ? { bestEffort: delivery.bestEffort } : {}),
   };
-  console.log('[CronJobService][toGatewayDelivery] output gatewayDelivery:', JSON.stringify(result, null, 2));
+  console.log(
+    '[CronJobService][toGatewayDelivery] output gatewayDelivery:',
+    JSON.stringify(result, null, 2),
+  );
   return result;
 }
 
@@ -294,9 +302,9 @@ export function mapGatewayTaskState(
   // When delivery.mode is "none" and the gateway reports an error that is
   // purely a delivery failure, downgrade to success.
   if (
-    lastStatus === TaskStatus.Error
-    && deliveryMode === DeliveryMode.None
-    && isDeliveryOnlyError({
+    lastStatus === TaskStatus.Error &&
+    deliveryMode === DeliveryMode.None &&
+    isDeliveryOnlyError({
       status: state.lastRunStatus ?? state.lastStatus,
       error: state.lastError,
       deliveryError: state.lastDeliveryError,
@@ -343,28 +351,25 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
     schedule: mapGatewaySchedule(job.schedule),
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payload: job.payload.kind === PayloadKind.SystemEvent
-      ? { kind: PayloadKind.SystemEvent, text: job.payload.text }
-      : {
-          kind: PayloadKind.AgentTurn,
-          message: job.payload.message,
-          ...(typeof job.payload.timeoutSeconds === 'number'
-            ? { timeoutSeconds: job.payload.timeoutSeconds }
-            : {}),
-          ...(job.payload.model ? { model: job.payload.model } : {}),
-        },
+    payload:
+      job.payload.kind === PayloadKind.SystemEvent
+        ? { kind: PayloadKind.SystemEvent, text: job.payload.text }
+        : {
+            kind: PayloadKind.AgentTurn,
+            message: job.payload.message,
+            ...(typeof job.payload.timeoutSeconds === 'number'
+              ? { timeoutSeconds: job.payload.timeoutSeconds }
+              : {}),
+            ...(job.payload.model ? { model: job.payload.model } : {}),
+          },
     delivery: {
       mode: delivery.mode,
       ...(delivery.channel || inferredChannel
         ? { channel: delivery.channel ?? inferredChannel }
         : {}),
-      ...(delivery.to || inferredTo
-        ? { to: delivery.to ?? inferredTo }
-        : {}),
+      ...(delivery.to || inferredTo ? { to: delivery.to ?? inferredTo } : {}),
       ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
-      ...(typeof delivery.bestEffort === 'boolean'
-        ? { bestEffort: delivery.bestEffort }
-        : {}),
+      ...(typeof delivery.bestEffort === 'boolean' ? { bestEffort: delivery.bestEffort } : {}),
     },
     agentId: job.agentId ?? null,
     sessionKey: job.sessionKey ?? null,
@@ -375,15 +380,16 @@ export function mapGatewayJob(job: GatewayJob): ScheduledTask {
 }
 
 export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
-  let status = entry.action && entry.action !== 'finished'
-    ? TaskStatus.Running
-    : (mapGatewayResultStatus(entry.status) ?? TaskStatus.Error);
+  let status =
+    entry.action && entry.action !== 'finished'
+      ? TaskStatus.Running
+      : (mapGatewayResultStatus(entry.status) ?? TaskStatus.Error);
 
   // Suppress delivery-only errors: the agent turn succeeded but the
   // gateway conflated a delivery failure with the job status.
   if (
-    status === TaskStatus.Error
-    && isDeliveryOnlyError({
+    status === TaskStatus.Error &&
+    isDeliveryOnlyError({
       status: entry.status,
       error: entry.error,
       deliveryError: entry.deliveryError,
@@ -402,7 +408,10 @@ export function mapGatewayRun(entry: GatewayRunLogEntry): ScheduledTaskRun {
     sessionKey: entry.sessionKey ?? null,
     status,
     startedAt: new Date(tsMs).toISOString(),
-    finishedAt: status === TaskStatus.Running ? null : new Date(safeFiniteNumber(entry.ts, tsMs)).toISOString(),
+    finishedAt:
+      status === TaskStatus.Running
+        ? null
+        : new Date(safeFiniteNumber(entry.ts, tsMs)).toISOString(),
     durationMs: safeFiniteNumberOrNull(entry.durationMs),
     error: status === TaskStatus.Success ? null : (entry.error ?? null),
   };
@@ -462,17 +471,27 @@ export class CronJobService {
 
   async addJob(input: ScheduledTaskInput): Promise<ScheduledTask> {
     console.log('[CronJobService][addJob] full input:', JSON.stringify(input, null, 2));
-    console.log('[CronJobService][addJob] delivery details:', JSON.stringify({
-      deliveryMode: input.delivery?.mode,
-      deliveryChannel: input.delivery?.channel,
-      deliveryTo: input.delivery?.to,
-      deliveryAccountId: input.delivery?.accountId,
-      sessionTarget: input.sessionTarget,
-      sessionKey: input.sessionKey,
-    }, null, 2));
+    console.log(
+      '[CronJobService][addJob] delivery details:',
+      JSON.stringify(
+        {
+          deliveryMode: input.delivery?.mode,
+          deliveryChannel: input.delivery?.channel,
+          deliveryTo: input.delivery?.to,
+          deliveryAccountId: input.delivery?.accountId,
+          sessionTarget: input.sessionTarget,
+          sessionKey: input.sessionKey,
+        },
+        null,
+        2,
+      ),
+    );
     const client = await this.client();
     const gatewayDelivery = toGatewayDelivery(input.delivery);
-    console.log('[CronJobService][addJob] resolved gatewayDelivery:', JSON.stringify(gatewayDelivery));
+    console.log(
+      '[CronJobService][addJob] resolved gatewayDelivery:',
+      JSON.stringify(gatewayDelivery),
+    );
     const job = await client.request<GatewayJob>('cron.add', {
       name: input.name,
       description: input.description || undefined,
@@ -493,14 +512,21 @@ export class CronJobService {
 
   async updateJob(id: string, input: Partial<ScheduledTaskInput>): Promise<ScheduledTask> {
     console.log('[CronJobService][updateJob] id:', id, 'input:', JSON.stringify(input, null, 2));
-    console.log('[CronJobService][updateJob] delivery details:', JSON.stringify({
-      deliveryMode: input.delivery?.mode,
-      deliveryChannel: input.delivery?.channel,
-      deliveryTo: input.delivery?.to,
-      deliveryAccountId: input.delivery?.accountId,
-      sessionTarget: input.sessionTarget,
-      sessionKey: input.sessionKey,
-    }, null, 2));
+    console.log(
+      '[CronJobService][updateJob] delivery details:',
+      JSON.stringify(
+        {
+          deliveryMode: input.delivery?.mode,
+          deliveryChannel: input.delivery?.channel,
+          deliveryTo: input.delivery?.to,
+          deliveryAccountId: input.delivery?.accountId,
+          sessionTarget: input.sessionTarget,
+          sessionKey: input.sessionKey,
+        },
+        null,
+        2,
+      ),
+    );
     const client = await this.client();
     const patch: Record<string, unknown> = {};
 
@@ -513,7 +539,8 @@ export class CronJobService {
     if (input.sessionTarget !== undefined) patch.sessionTarget = input.sessionTarget;
     if (input.wakeMode !== undefined) patch.wakeMode = input.wakeMode;
     if (input.payload !== undefined) patch.payload = toGatewayPayload(input.payload);
-    if (input.delivery !== undefined) patch.delivery = toGatewayDelivery(input.delivery) ?? { mode: DeliveryMode.None };
+    if (input.delivery !== undefined)
+      patch.delivery = toGatewayDelivery(input.delivery) ?? { mode: DeliveryMode.None };
     if (input.agentId !== undefined) patch.agentId = input.agentId?.trim() || null;
     if (input.sessionKey !== undefined) patch.sessionKey = input.sessionKey?.trim() || null;
 
@@ -553,7 +580,7 @@ export class CronJobService {
         query: id,
         limit: 20,
       });
-      return result.jobs?.find((job) => job.id === id) ?? null;
+      return result.jobs?.find(job => job.id === id) ?? null;
     } catch {
       return null;
     }
@@ -570,7 +597,12 @@ export class CronJobService {
     await client.request('cron.run', { id });
   }
 
-  async listRuns(jobId: string, limit = 20, offset = 0): Promise<ScheduledTaskRun[]> {
+  async listRuns(
+    jobId: string,
+    limit = 20,
+    offset = 0,
+    filter?: import('./types').RunFilter,
+  ): Promise<ScheduledTaskRun[]> {
     const client = await this.client();
     const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
       scope: 'job',
@@ -578,6 +610,9 @@ export class CronJobService {
       limit,
       offset,
       sortDir: 'desc',
+      ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
+      ...(filter?.endDate && { endMs: new Date(filter.endDate + 'T23:59:59').getTime() }),
+      ...(filter?.status && { status: filter.status }),
     });
     return Array.isArray(result.entries) ? result.entries.map(mapGatewayRun) : [];
   }
@@ -592,19 +627,26 @@ export class CronJobService {
     return typeof result.total === 'number' ? result.total : 0;
   }
 
-  async listAllRuns(limit = 20, offset = 0): Promise<ScheduledTaskRunWithName[]> {
+  async listAllRuns(
+    limit = 20,
+    offset = 0,
+    filter?: import('./types').RunFilter,
+  ): Promise<ScheduledTaskRunWithName[]> {
     const client = await this.client();
     const result = await client.request<{ entries?: GatewayRunLogEntry[] }>('cron.runs', {
       scope: 'all',
       limit,
       offset,
       sortDir: 'desc',
+      ...(filter?.startDate && { startMs: new Date(filter.startDate + 'T00:00:00').getTime() }),
+      ...(filter?.endDate && { endMs: new Date(filter.endDate + 'T23:59:59').getTime() }),
+      ...(filter?.status && { status: filter.status }),
     });
     if (!Array.isArray(result.entries) || result.entries.length === 0) return [];
 
     // Build a jobId→name map for entries missing jobName
     const missingIds = new Set(
-      result.entries.filter((e) => !e.jobName && !e.summary).map((e) => e.jobId),
+      result.entries.filter(e => !e.jobName && !e.summary).map(e => e.jobId),
     );
     const nameMap = new Map<string, string>();
     if (missingIds.size > 0) {
@@ -620,12 +662,10 @@ export class CronJobService {
       }
     }
 
-    return result.entries.map((entry) => ({
+    return result.entries.map(entry => ({
       ...mapGatewayRun(entry),
-      taskName: entry.jobName
-        || nameMap.get(entry.jobId)
-        || extractRunTitle(entry.summary)
-        || entry.jobId,
+      taskName:
+        entry.jobName || nameMap.get(entry.jobId) || extractRunTitle(entry.summary) || entry.jobId,
     }));
   }
 
@@ -702,7 +742,7 @@ export class CronJobService {
         this.lastKnownRunAtMs.set(job.id, lastRunAtMs);
       }
 
-      const currentIds = new Set(jobs.map((job) => job.id));
+      const currentIds = new Set(jobs.map(job => job.id));
       for (const knownId of this.lastKnownStates.keys()) {
         if (!currentIds.has(knownId)) {
           this.lastKnownStates.delete(knownId);
@@ -720,7 +760,7 @@ export class CronJobService {
   }
 
   private emitStatusUpdate(taskId: string, state: TaskState): void {
-    BrowserWindow.getAllWindows().forEach((window) => {
+    BrowserWindow.getAllWindows().forEach(window => {
       if (!window.isDestroyed()) {
         window.webContents.send(IpcChannel.StatusUpdate, { taskId, state });
       }
@@ -728,7 +768,7 @@ export class CronJobService {
   }
 
   private emitRunUpdate(run: ScheduledTaskRunWithName): void {
-    BrowserWindow.getAllWindows().forEach((window) => {
+    BrowserWindow.getAllWindows().forEach(window => {
       if (!window.isDestroyed()) {
         window.webContents.send(IpcChannel.RunUpdate, { run });
       }
@@ -736,7 +776,7 @@ export class CronJobService {
   }
 
   private emitFullRefresh(): void {
-    BrowserWindow.getAllWindows().forEach((window) => {
+    BrowserWindow.getAllWindows().forEach(window => {
       if (!window.isDestroyed()) {
         window.webContents.send(IpcChannel.Refresh);
       }
