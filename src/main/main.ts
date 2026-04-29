@@ -2474,11 +2474,15 @@ if (!gotTheLock) {
       console.log('[Auth:getModels] Response data:', JSON.stringify(data).slice(0, 500));
       if (data.code !== 0) return { success: false };
       // Cache server model metadata for use in OpenClaw config sync (supportsImage, etc.)
-      updateServerModelMetadata(data.data);
+      const serverModelsChanged = updateServerModelMetadata(data.data);
       // Re-sync so the gateway picks up the correct supportsImage values for server models.
       // This IPC can run after normal chat completion when the renderer refreshes quota/model
       // state, so server model updates must not force a hard gateway restart.
-      syncOpenClawConfig({ reason: 'server-models-updated', restartGatewayIfRunning: false }).catch(() => {});
+      if (serverModelsChanged) {
+        syncOpenClawConfig({ reason: 'server-models-updated', restartGatewayIfRunning: false }).catch(() => {});
+      } else {
+        console.debug('[Auth:getModels] server model metadata unchanged, skipping config sync');
+      }
       return { success: true, models: data.data };
     } catch (e) {
       console.error('[Auth:getModels] Error:', e);

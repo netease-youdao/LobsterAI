@@ -42,7 +42,15 @@ vi.mock('./claudeSettings', () => ({
 
 vi.mock('./openclawLocalExtensions', () => ({
   findThirdPartyExtensionsDir: () => null,
-  hasBundledOpenClawExtension: () => true,
+  hasBundledOpenClawExtension: (id: string) => id !== 'qwen-portal-auth',
+  resolveOpenClawExtensionPluginId: (id: string) => {
+    const manifestIds: Record<string, string> = {
+      'clawemail-email': 'email',
+      'openclaw-nim-channel': 'nimsuite-openclaw-nim-channel',
+    };
+    if (id === 'qwen-portal-auth') return null;
+    return manifestIds[id] ?? id;
+  },
 }));
 
 vi.mock('./openclawTokenProxy', () => ({
@@ -576,6 +584,82 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.plugins.entries).not.toHaveProperty('feishu');
     expect(config.plugins.entries.qqbot).toEqual({ enabled: true });
     expect(config.plugins.entries).not.toHaveProperty('openclaw-qqbot');
+  });
+
+  test('writes plugin entries using manifest ids and removes stale package ids', async () => {
+    const { OpenClawConfigSync } = await import('./openclawConfigSync');
+
+    fs.writeFileSync(configPath, JSON.stringify({
+      plugins: {
+        entries: {
+          'clawemail-email': { enabled: true },
+          'openclaw-nim-channel': { enabled: true },
+        },
+      },
+    }, null, 2));
+
+    const sync = new OpenClawConfigSync({
+      engineManager: {
+        getConfigPath: () => configPath,
+        getGatewayToken: () => 'gateway-token',
+        getStateDir: () => stateDir,
+        getBaseDir: () => tmpDir,
+      } as never,
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+      }),
+      isEnterprise: () => false,
+      getTelegramInstances: () => [],
+      getDiscordOpenClawConfig: () => null,
+      getDingTalkInstances: () => [],
+      getFeishuInstances: () => [],
+      getQQInstances: () => [],
+      getWecomConfig: () => null,
+      getWecomInstances: () => [],
+      getPopoConfig: () => null,
+      getEmailOpenClawConfig: () => ({
+        instances: [{
+          instanceId: 'email-work',
+          instanceName: 'Work Email',
+          enabled: true,
+          transport: 'ws',
+          email: 'user@example.com',
+          apiKey: 'ck_test',
+          agentId: 'main',
+        }],
+      }),
+      getNimInstances: () => [{
+        instanceId: 'nim-work',
+        instanceName: 'NIM Work',
+        enabled: true,
+        appKey: 'nim-app-key',
+        account: 'nim-account',
+        token: 'nim-token',
+      }],
+      getNeteaseBeeChanConfig: () => null,
+      getWeixinConfig: () => null,
+      getIMSettings: () => null,
+      getSkillsList: () => [],
+      getAgents: () => [],
+    } as never);
+
+    const result = sync.sync('manifest-plugin-ids');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.plugins.entries).not.toHaveProperty('clawemail-email');
+    expect(config.plugins.entries).not.toHaveProperty('openclaw-nim-channel');
+    expect(config.plugins.entries.email).toEqual({ enabled: true });
+    expect(config.plugins.entries['nimsuite-openclaw-nim-channel']).toEqual({ enabled: true });
   });
 
   test('writes weixin channel config using dmPolicy and allowFrom instead of unsupported accountId', async () => {

@@ -264,6 +264,98 @@ test('reconcileWithHistory: gateway returns tail subset — preserves older loca
   expect(session.messages.length).toBe(4);
 });
 
+test('reconcileWithHistory: tail window starting with assistant does not rewrite when already synced', async () => {
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'First question', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'First answer', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'user', content: 'Second question', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: 'Second answer', timestamp: 4, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'assistant', content: 'First answer' },
+        { role: 'user', content: 'Second question' },
+        { role: 'assistant', content: 'Second answer' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(0);
+  expect(session.messages.length).toBe(4);
+});
+
+test('reconcileWithHistory: tail window starting with assistant updates anchored tail without duplication', async () => {
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'First question', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'First answer', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'user', content: 'Second question', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: 'Streaming partial...', timestamp: 4, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'assistant', content: 'First answer' },
+        { role: 'user', content: 'Second question' },
+        { role: 'assistant', content: 'Full complete answer from gateway.' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(1);
+  expect(getLastReplaceArgs()!.authoritative).toEqual([
+    { role: 'user', text: 'First question' },
+    { role: 'assistant', text: 'First answer' },
+    { role: 'user', text: 'Second question' },
+    { role: 'assistant', text: 'Full complete answer from gateway.' },
+  ]);
+});
+
+test('reconcileWithHistory: tail window repairs stale leading assistant before anchor', async () => {
+  const { session, store, getReplaceCallCount, getLastReplaceArgs } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'First question', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'Stale previous answer', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'user', content: 'Second question', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: 'Streaming partial...', timestamp: 4, metadata: {} },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'assistant', content: 'Correct previous answer' },
+        { role: 'user', content: 'Second question' },
+        { role: 'assistant', content: 'Full complete answer from gateway.' },
+      ],
+    }),
+  };
+
+  await adapter.reconcileWithHistory(session.id, 'managed:session-1');
+
+  expect(getReplaceCallCount()).toBe(1);
+  expect(getLastReplaceArgs()!.authoritative).toEqual([
+    { role: 'user', text: 'First question' },
+    { role: 'assistant', text: 'Correct previous answer' },
+    { role: 'user', text: 'Second question' },
+    { role: 'assistant', text: 'Full complete answer from gateway.' },
+  ]);
+});
+
 test('reconcileWithHistory: empty history — sets cursor to 0', async () => {
   const { session, store, getReplaceCallCount } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1, metadata: {} },

@@ -45,7 +45,7 @@ const gwDiagTs = (): string => {
   const abs = Math.abs(tz);
   return `[GW-RESTART-DIAG] ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
 };
-import { findThirdPartyExtensionsDir, hasBundledOpenClawExtension } from './openclawLocalExtensions';
+import { findThirdPartyExtensionsDir, hasBundledOpenClawExtension, resolveOpenClawExtensionPluginId } from './openclawLocalExtensions';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
 import { isSystemProxyEnabled } from './systemProxy';
 
@@ -186,6 +186,8 @@ const MANAGED_OWNER_ALLOW_FROM = [
 ];
 
 const MANAGED_TOOL_DENY = ['web_search'] as const;
+const EMAIL_PLUGIN_ID = 'email';
+const NIM_CHANNEL_PLUGIN_ID = 'nimsuite-openclaw-nim-channel';
 
 const MANAGED_SKILL_ENTRY_OVERRIDES: Record<string, { enabled: boolean }> = {
   // QQ plugin ships a legacy reminder skill that steers the model toward a
@@ -881,6 +883,25 @@ const readPreinstalledPluginIds = (): string[] => {
   }
 };
 
+type PreinstalledOpenClawPlugin = {
+  packageId: string;
+  pluginId: string;
+};
+
+const readPreinstalledPlugins = (): PreinstalledOpenClawPlugin[] => (
+  readPreinstalledPluginIds()
+    .map((packageId) => {
+      const pluginId = resolveOpenClawExtensionPluginId(packageId);
+      return pluginId ? { packageId, pluginId } : null;
+    })
+    .filter((plugin): plugin is PreinstalledOpenClawPlugin => plugin !== null)
+);
+
+const pluginMatches = (
+  plugin: PreinstalledOpenClawPlugin,
+  ...ids: string[]
+): boolean => ids.includes(plugin.packageId) || ids.includes(plugin.pluginId);
+
 const isBundledPluginAvailable = (pluginId: string): boolean => {
   return hasBundledOpenClawExtension(pluginId);
 };
@@ -1188,11 +1209,13 @@ export class OpenClawConfigSync {
 
     const workspaceDir = (coworkConfig.workingDirectory || '').trim();
 
-    const preinstalledPluginIds = readPreinstalledPluginIds().filter(id =>
-      isBundledPluginAvailable(id),
+    const preinstalledPlugins = readPreinstalledPlugins();
+    const hasPreinstalledPlugin = (...ids: string[]) => (
+      preinstalledPlugins.some((plugin) => pluginMatches(plugin, ...ids))
     );
     const hasMcpBridgePlugin = isBundledPluginAvailable('mcp-bridge');
     const hasAskUserPlugin = isBundledPluginAvailable('ask-user-question');
+    const qwenPortalAuthPluginId = resolveOpenClawExtensionPluginId('qwen-portal-auth');
 
     // Detect if any provider uses Qwen/Aliyun DashScope URLs — OpenClaw auto-injects
     // qwen-portal-auth plugin for these, so we must declare it to prevent config diff loops.
@@ -1233,6 +1256,8 @@ export class OpenClawConfigSync {
     const wecomInstances = this.getWecomInstances();
 
     const popoConfig = this.getPopoConfig();
+
+    const emailConfig = this.getEmailOpenClawConfig?.();
 
     const nimInstances = this.getNimInstances();
 
@@ -1349,12 +1374,23 @@ export class OpenClawConfigSync {
         sessionRetention: '7d',
       },
       ...((() => {
-        // Remove known-stale plugin entries that no longer ship with the
-        // runtime.  These ghost entries cause harmless but noisy "plugin
-        // not found" warnings on every gateway startup.
-        const knownStalePluginIds = ['dingtalk', 'openclaw-nim-channel', 'qwen-portal-auth', 'openclaw-qqbot'];
+        // Remove legacy package/directory ids from plugin entries.  OpenClaw
+        // validates entries by the manifest `id`, so aliases like
+        // `clawemail-email` and `openclaw-nim-channel` produce noisy
+        // "plugin not found" warnings even when the package exists.
+        const packageAliasPluginIds = preinstalledPlugins
+          .filter((plugin) => plugin.packageId !== plugin.pluginId)
+          .map((plugin) => plugin.packageId);
+        const knownStalePluginIds = [
+          'dingtalk',
+          'openclaw-nim-channel',
+          'clawemail-email',
+          'qwen-portal-auth',
+          'openclaw-qqbot',
+          ...packageAliasPluginIds,
+        ];
         const transientPluginIds = [
-          ...(preinstalledPluginIds.includes('openclaw-lark') ? ['feishu'] : []),
+          ...(hasPreinstalledPlugin('openclaw-lark') ? ['feishu'] : []),
         ];
         const cleanedExistingEntries = Object.fromEntries(
           Object.entries(existingPluginEntries).filter(([id]) => (
@@ -1371,33 +1407,36 @@ export class OpenClawConfigSync {
           ...cleanedExistingEntries,
           qqbot: { enabled: qqbotPluginEnabled },
           ...Object.fromEntries(
-            preinstalledPluginIds.map(id => {
+            preinstalledPlugins.map(plugin => {
               // Sync plugin enabled state with the corresponding channel config.
               // When a channel is disabled in the UI, its plugin must also be
               // disabled so OpenClaw doesn't load it at all.
               const pluginEnabled = (() => {
-                if (id === DINGTALK_OPENCLAW_CHANNEL || id === 'dingtalk') return dingTalkInstances.some(i => i.enabled && i.clientId);
-                if (id === 'openclaw-lark' || id === 'feishu-openclaw-plugin')
+                if (pluginMatches(plugin, DINGTALK_OPENCLAW_CHANNEL, 'dingtalk')) return dingTalkInstances.some(i => i.enabled && i.clientId);
+                if (pluginMatches(plugin, 'openclaw-lark', 'feishu-openclaw-plugin'))
                   return feishuInstances.some(i => i.enabled && i.appId);
-                if (id === 'openclaw-qqbot') return qqInstances.some(i => i.enabled && i.appId);
-                if (id === 'wecom-openclaw-plugin') return wecomInstances.some(i => i.enabled && i.botId);
-                if (id === 'moltbot-popo') return !!(popoConfig?.enabled && popoConfig.appKey);
-                if (id === 'nim') return nimInstances.some(i => i.enabled && ((i.nimToken && i.nimToken.trim()) || (i.appKey && i.account && i.token)));
-                if (id === 'openclaw-netease-bee') return !!(neteaseBeeChanConfig?.enabled && neteaseBeeChanConfig.clientId && neteaseBeeChanConfig.secret);
-                if (id === 'openclaw-weixin') return true; // Always keep enabled for QR login discovery
+                if (pluginMatches(plugin, 'openclaw-qqbot')) return qqInstances.some(i => i.enabled && i.appId);
+                if (pluginMatches(plugin, 'wecom-openclaw-plugin')) return wecomInstances.some(i => i.enabled && i.botId);
+                if (pluginMatches(plugin, 'moltbot-popo')) return !!(popoConfig?.enabled && popoConfig.appKey);
+                if (pluginMatches(plugin, 'openclaw-nim-channel', NIM_CHANNEL_PLUGIN_ID, 'nim'))
+                  return nimInstances.some(i => i.enabled && ((i.nimToken && i.nimToken.trim()) || (i.appKey && i.account && i.token)));
+                if (pluginMatches(plugin, 'openclaw-netease-bee')) return !!(neteaseBeeChanConfig?.enabled && neteaseBeeChanConfig.clientId && neteaseBeeChanConfig.secret);
+                if (pluginMatches(plugin, 'openclaw-weixin')) return true; // Always keep enabled for QR login discovery
+                if (pluginMatches(plugin, 'clawemail-email', EMAIL_PLUGIN_ID)) return !!emailConfig?.instances.some(i => i.enabled && i.email);
                 return true; // other plugins stay enabled
               })();
-              return [id, { enabled: pluginEnabled }];
+              return [plugin.pluginId, { enabled: pluginEnabled }];
             }),
           ),
-          ...(preinstalledPluginIds.includes('feishu-openclaw-plugin')
+          ...(hasPreinstalledPlugin('feishu-openclaw-plugin')
             ? { feishu: { enabled: false } }
             : {}),
           ...(hasMcpBridgePlugin ? { 'mcp-bridge': { enabled: true } } : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
-          // OpenClaw auto-injects qwen-portal-auth for Qwen/DashScope URLs; declare it
-          // explicitly so configSync doesn't remove it and trigger restart loops.
-          ...(hasQwenProvider ? { 'qwen-portal-auth': { enabled: true } } : {}),
+          // Some OpenClaw versions auto-inject qwen-portal-auth for
+          // Qwen/DashScope URLs. Declare it only when the plugin actually
+          // exists, otherwise it becomes a stale entry on every startup.
+          ...(hasQwenProvider && qwenPortalAuthPluginId ? { [qwenPortalAuthPluginId]: { enabled: true } } : {}),
           // Disable acpx (ACP agent runtime) — LobsterAI does not use ACP and
           // the embedded probe adds ~11s to gateway startup while it waits for
           // a process that always fails.  See openclaw/openclaw#62588.
@@ -1790,7 +1829,6 @@ export class OpenClawConfigSync {
     }
 
     // Sync Email OpenClaw channel config (multi-instance)
-    const emailConfig = this.getEmailOpenClawConfig?.();
     if (emailConfig?.instances && emailConfig.instances.length > 0) {
       const enabledInstances = emailConfig.instances.filter(i => i.enabled && i.email);
 
@@ -1905,7 +1943,7 @@ export class OpenClawConfigSync {
     // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin)
     // Only write the channel entry when the plugin is actually installed,
     // otherwise the gateway rejects the config as invalid.
-    if (preinstalledPluginIds.includes('openclaw-weixin')) {
+    if (hasPreinstalledPlugin('openclaw-weixin')) {
       const weixinChannelEnabled = !!weixinConfig?.enabled;
       const weixinChannel: Record<string, unknown> = {
         enabled: weixinChannelEnabled,

@@ -310,26 +310,41 @@ const normalizeEntryText = (
   return result;
 };
 
+const isSameHistoryEntry = (
+  left: { role: 'user' | 'assistant'; text: string },
+  right: { role: 'user' | 'assistant'; text: string },
+): boolean => left.role === right.role && left.text === right.text;
+
 /**
  * Find the tail-alignment point between local and authoritative entries.
  *
- * Uses user-message texts as anchors (they are immutable in IM), avoiding
- * false mismatches caused by assistant streaming partials.
- *
- * Returns the index in `localEntries` where the authoritative window begins,
- * or -1 when no overlap is found.
- *
- * The search finds the **largest** k such that the last k user-message texts
- * in local equal the first k user-message texts in auth.  Larger overlap
- * means a wider correction window, which maximises consistency with the
- * OpenClaw dashboard.
+ * `chat.history` can return a bounded tail window that starts in the middle of
+ * a turn, often with an assistant entry before the first user anchor. Prefer a
+ * full role/text overlap first; then fall back to user-message anchors and
+ * report both the local and authoritative start indices so leading orphan
+ * assistant entries are not duplicated into the local prefix on every poll.
  */
-const findTailAlignmentIndex = (
+const findTailAlignment = (
   localEntries: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
   authEntries: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
-): number => {
-  if (authEntries.length === 0) return -1;
-  if (localEntries.length === 0) return 0;
+): { localIdx: number; authIdx: number } | null => {
+  if (authEntries.length === 0) return null;
+  if (localEntries.length === 0) return { localIdx: 0, authIdx: 0 };
+
+  const maxEntryOverlap = Math.min(localEntries.length, authEntries.length);
+  for (let overlap = maxEntryOverlap; overlap >= 1; overlap -= 1) {
+    const localStart = localEntries.length - overlap;
+    let match = true;
+    for (let idx = 0; idx < overlap; idx += 1) {
+      if (!isSameHistoryEntry(localEntries[localStart + idx], authEntries[idx])) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return { localIdx: localStart, authIdx: 0 };
+    }
+  }
 
   // Extract user-only entries with their original indices
   const localUsers: Array<{ idx: number; text: string }> = [];
@@ -339,14 +354,17 @@ const findTailAlignmentIndex = (
     }
   }
 
-  const authUsers: string[] = [];
-  for (const e of authEntries) {
-    if (e.role === 'user') authUsers.push(e.text);
+  const authUsers: Array<{ idx: number; text: string }> = [];
+  for (let i = 0; i < authEntries.length; i++) {
+    const entry = authEntries[i];
+    if (entry.role === 'user') {
+      authUsers.push({ idx: i, text: entry.text });
+    }
   }
 
   if (authUsers.length === 0 || localUsers.length === 0) {
     // No user messages to anchor on — fall back to full replace
-    return 0;
+    return { localIdx: 0, authIdx: 0 };
   }
 
   // Find largest k where localUsers tail-k texts == authUsers head-k texts
@@ -355,20 +373,38 @@ const findTailAlignmentIndex = (
     const localStart = localUsers.length - k;
     let match = true;
     for (let j = 0; j < k; j++) {
-      if (localUsers[localStart + j].text !== authUsers[j]) {
+      if (localUsers[localStart + j].text !== authUsers[j].text) {
         match = false;
         break;
       }
     }
     if (match) {
       // The alignment point is the original index of the first overlapping
-      // user message in local.
-      return localUsers[localStart].idx;
+      // user message in local and authoritative history.
+      const localIdx = localUsers[localStart].idx;
+      const authIdx = authUsers[0].idx;
+      if (authIdx > 0) {
+        const leadingLocalIdx = localIdx - authIdx;
+        const leadingAuthAlreadyPresent = leadingLocalIdx >= 0
+          && authEntries.slice(0, authIdx).every((entry, idx) =>
+            isSameHistoryEntry(localEntries[leadingLocalIdx + idx], entry),
+          );
+        if (!leadingAuthAlreadyPresent) {
+          return {
+            localIdx: Math.max(0, leadingLocalIdx),
+            authIdx: 0,
+          };
+        }
+      }
+      return {
+        localIdx,
+        authIdx,
+      };
     }
   }
 
   // No overlap found
-  return -1;
+  return null;
 };
 
 const extractMessageText = extractGatewayMessageText;
@@ -3521,42 +3557,44 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         return;
       }
 
-      // Tail-alignment: find where the gateway window starts in local
-      const alignIdx = findTailAlignmentIndex(localEntries, authoritativeEntries);
+      // Tail-alignment: find where the gateway window overlaps local history.
+      const alignment = findTailAlignment(localEntries, authoritativeEntries);
 
       let entriesToStore: Array<{ role: 'user' | 'assistant'; text: string }>;
 
-      if (alignIdx > 0) {
+      if (alignment && (alignment.localIdx > 0 || alignment.authIdx > 0)) {
         // Gateway covers only the tail — preserve older local messages
-        const tail = localEntries.slice(alignIdx);
-        const tailInSync = tail.length === authoritativeEntries.length
+        const authoritativeTail = authoritativeEntries.slice(alignment.authIdx);
+        const tail = localEntries.slice(alignment.localIdx);
+        const tailInSync = tail.length === authoritativeTail.length
           && tail.every((entry, idx) =>
-            entry.role === authoritativeEntries[idx].role
-            && entry.text === authoritativeEntries[idx].text,
+            isSameHistoryEntry(entry, authoritativeTail[idx]),
           );
         if (tailInSync) {
           console.log(
             '[Reconcile] tail in sync — sessionId:', sessionId,
-            'preserved:', alignIdx, 'tail:', tail.length,
+            'preserved:', alignment.localIdx, 'tail:', tail.length,
+            'authSkipped:', alignment.authIdx,
           );
           this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
           return;
         }
         // Concat preserved prefix with authoritative tail
-        entriesToStore = [...localEntries.slice(0, alignIdx), ...authoritativeEntries];
+        entriesToStore = [...localEntries.slice(0, alignment.localIdx), ...authoritativeTail];
         console.log(
           '[Reconcile] tail replace — sessionId:', sessionId,
-          'preserved:', alignIdx, 'auth:', authoritativeEntries.length,
+          'preserved:', alignment.localIdx, 'auth:', authoritativeTail.length,
+          'authSkipped:', alignment.authIdx,
           'total:', entriesToStore.length,
         );
       } else {
-        // alignIdx === 0 (gateway covers full range) or -1 (no overlap)
+        // alignment.localIdx === 0 (gateway covers full range) or no overlap
         // In both cases: full replace to ensure dashboard consistency
         entriesToStore = authoritativeEntries;
         console.log(
           '[Reconcile] full replace — sessionId:', sessionId,
           'local:', localEntries.length, '→ auth:', authoritativeEntries.length,
-          'alignIdx:', alignIdx,
+          'alignIdx:', alignment?.localIdx ?? -1,
         );
       }
 
