@@ -320,23 +320,19 @@ class CoworkService {
             message: {
               id: `error-${Date.now()}`,
               type: 'system',
-              content: i18nService.t('coworkErrorSessionContinueFailed').replace('{error}', result.error),
+              content: classifyError(result.error),
               timestamp: Date.now(),
             },
           }));
         }
-      }
-      // Show a user-visible error message in the session
-      if (result.error) {
-        const errorContent = result.code === 'ENGINE_NOT_READY'
-          ? i18nService.t('coworkErrorEngineNotReady')
-          : classifyError(result.error);
+      } else if (result.error) {
+        // ENGINE_NOT_READY: show a specific engine-not-ready message
         store.dispatch(addMessage({
           sessionId: options.sessionId,
           message: {
             id: `error-${Date.now()}`,
             type: 'system',
-            content: errorContent,
+            content: i18nService.t('coworkErrorEngineNotReady'),
             timestamp: Date.now(),
           },
         }));
