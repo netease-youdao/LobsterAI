@@ -5,6 +5,8 @@ import PuzzleIcon from '../icons/PuzzleIcon';
 import { RootState } from '../../store';
 import { toggleActiveSkill, clearActiveSkills } from '../../store/slices/skillSlice';
 import { i18nService } from '../../services/i18n';
+import { skillService } from '../../services/skill';
+import SkillTooltip from './SkillTooltip';
 
 const ActiveSkillBadge: React.FC = () => {
   const dispatch = useDispatch();
@@ -30,23 +32,31 @@ const ActiveSkillBadge: React.FC = () => {
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
       {activeSkills.map(skill => (
-        <div
+        <SkillTooltip
           key={skill.id}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-primary-muted border border-primary"
+          skillName={skill.name}
+          description={skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
+          isOfficial={skill.isOfficial}
+          preferredPlacement="top"
+          delay={300}
         >
-          <PuzzleIcon className="h-3.5 w-3.5 text-primary" />
-          <span className="text-xs font-medium text-primary max-w-[80px] truncate">
-            {skill.name}
-          </span>
-          <button
-            type="button"
-            onClick={(e) => handleRemoveSkill(e, skill.id)}
-            className="p-0.5 rounded hover:bg-primary-muted transition-colors"
-            title={i18nService.t('clearSkill')}
+          <div
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-primary-muted border border-primary"
           >
-            <XMarkIcon className="h-2.5 w-2.5 text-primary" />
-          </button>
-        </div>
+            <PuzzleIcon className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-medium text-primary max-w-[80px] truncate">
+              {skill.name}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => handleRemoveSkill(e, skill.id)}
+              className="p-0.5 rounded hover:bg-primary-muted transition-colors"
+              title={i18nService.t('clearSkill')}
+            >
+              <XMarkIcon className="h-2.5 w-2.5 text-primary" />
+            </button>
+          </div>
+        </SkillTooltip>
       ))}
       {activeSkills.length > 1 && (
         <button

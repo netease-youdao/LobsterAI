@@ -8,6 +8,7 @@ import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { Skill } from '../../types/skill';
+import SkillTooltip from './SkillTooltip';
 
 interface SkillsPopoverProps {
   isOpen: boolean;
@@ -132,47 +133,56 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
         ) : (
           filteredSkills.map((skill) => {
             const isActive = activeSkillIds.includes(skill.id);
+            const localizedDesc = skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description);
             return (
-              <button
+              <SkillTooltip
                 key={skill.id}
-                onClick={() => handleSelectSkill(skill)}
-                className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${
-                  isActive
-                    ? 'dark:bg-primary/10 bg-primary/10'
-                    : 'hover:bg-surface-raised'
-                }`}
+                skillName={skill.name}
+                description={localizedDesc}
+                isOfficial={skill.isOfficial}
+                preferredPlacement="right"
+                delay={250}
               >
-                <div className={`mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                  isActive
-                    ? 'bg-primary text-white'
-                    : 'bg-surface-raised'
-                }`}>
-                  {isActive ? (
-                    <CheckIcon className="h-4 w-4" />
-                  ) : (
-                    <PuzzleIcon className="h-4 w-4 text-secondary" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium truncate ${
-                      isActive
-                        ? 'text-primary'
-                        : 'text-foreground'
-                    }`}>
-                      {skill.name}
-                    </span>
-                    {skill.isOfficial && (
-                      <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-primary/10 text-primary flex-shrink-0">
-                        {i18nService.t('official')}
-                      </span>
+                <button
+                  onClick={() => handleSelectSkill(skill)}
+                  className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${
+                    isActive
+                      ? 'dark:bg-primary/10 bg-primary/10'
+                      : 'hover:bg-surface-raised'
+                  }`}
+                >
+                  <div className={`mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    isActive
+                      ? 'bg-primary text-white'
+                      : 'bg-surface-raised'
+                  }`}>
+                    {isActive ? (
+                      <CheckIcon className="h-4 w-4" />
+                    ) : (
+                      <PuzzleIcon className="h-4 w-4 text-secondary" />
                     )}
                   </div>
-                  <p className="text-xs text-secondary truncate mt-0.5">
-                    {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
-                  </p>
-                </div>
-              </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-medium truncate ${
+                        isActive
+                          ? 'text-primary'
+                          : 'text-foreground'
+                      }`}>
+                        {skill.name}
+                      </span>
+                      {skill.isOfficial && (
+                        <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-primary/10 text-primary flex-shrink-0">
+                          {i18nService.t('official')}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-secondary truncate mt-0.5">
+                      {localizedDesc}
+                    </p>
+                  </div>
+                </button>
+              </SkillTooltip>
             );
           })
         )}
