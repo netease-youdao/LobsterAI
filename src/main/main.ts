@@ -547,6 +547,12 @@ const TITLEBAR_COLORS = {
   light: { color: '#F3F4F6', symbolColor: '#1A1D23' },
 } as const;
 
+// Allowlist of URL protocols permitted for shell.openExternal().
+// Blocks dangerous schemes (file://, smb://, ms-msdt://, vscode://, etc.) that
+// could trigger local program execution or credential leakage.
+// See: https://www.electronjs.org/docs/latest/tutorial/security#15-do-not-use-shellopenexternal-with-untrusted-content
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['https:', 'http:', 'mailto:']);
+
 const safeDecodeURIComponent = (value: string): string => {
   try {
     return decodeURIComponent(value);
@@ -2246,6 +2252,11 @@ if (!gotTheLock) {
     try {
       const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
       const finalUrl = `${baseUrl}?source=electron`;
+      const parsed = new URL(finalUrl);
+      if (!ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
+        console.warn(`[Auth] blocked login URL with disallowed protocol: ${parsed.protocol}`);
+        return { success: false, error: `Protocol not allowed: ${parsed.protocol}` };
+      }
       await shell.openExternal(finalUrl);
       return { success: true };
     } catch (error) {
@@ -4829,6 +4840,11 @@ if (!gotTheLock) {
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     try {
+      const parsed = new URL(url);
+      if (!ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
+        console.warn(`[shell:openExternal] blocked disallowed protocol: ${parsed.protocol}`);
+        return { success: false, error: `Protocol not allowed: ${parsed.protocol}` };
+      }
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
@@ -5180,7 +5196,16 @@ if (!gotTheLock) {
           },
         };
       }
-      shell.openExternal(url);
+      try {
+        const parsed = new URL(url);
+        if (ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
+          shell.openExternal(url);
+        } else {
+          console.warn(`[WindowOpenHandler] blocked disallowed protocol: ${parsed.protocol}`);
+        }
+      } catch {
+        console.warn(`[WindowOpenHandler] blocked invalid URL: ${url}`);
+      }
       return { action: 'deny' };
     });
 
