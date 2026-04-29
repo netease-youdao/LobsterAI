@@ -1270,9 +1270,9 @@ const bindCoworkRuntimeForwarder = (): void => {
   if (coworkRuntimeForwarderBound) return;
   const runtime = getCoworkEngineRouter();
 
-  // Captures final assistant text per iOS session — OpenClaw saves messages
-  // through the renderer→IPC path which is async, so SQLite isn't populated
-  // yet when 'complete' fires. We capture it here synchronously instead.
+  // Tracks the current streaming assistant text per iOS session.
+  // Flushed to NIM whenever a tool_use message arrives (same split point as chatbox)
+  // and on 'complete' for the final reply.
   const pendingIosAssistantText = new Map<string, string>();
 
   runtime.on('message', (sessionId: string, message: unknown) => {
@@ -1290,11 +1290,21 @@ const bindCoworkRuntimeForwarder = (): void => {
         console.error('Failed to forward cowork message:', error);
       }
     });
-    // Capture final assistant content for iOS sessions
-    const msg = message as { type?: string; content?: string; metadata?: { isThinking?: boolean } };
-    if (msg?.type === 'assistant' && !msg?.metadata?.isThinking && msg?.content) {
-      if (getTaskIdForElectronSession(sessionId)) {
+    const msg = message as { type?: string; content?: string; metadata?: { isThinking?: boolean; toolName?: string; toolInput?: unknown } };
+    const iosTaskId = getTaskIdForElectronSession(sessionId);
+    if (iosTaskId) {
+      if (msg?.type === 'assistant' && !msg?.metadata?.isThinking && msg?.content) {
         pendingIosAssistantText.set(sessionId, msg.content);
+      } else if (msg?.type === 'tool_use') {
+        // Same split point as chatbox: flush accumulated assistant text then send the tool call
+        const assistantContent = pendingIosAssistantText.get(sessionId);
+        pendingIosAssistantText.delete(sessionId);
+        if (assistantContent) {
+          sendExtYdNimMessage(assistantContent, { action: 'normal', taskId: iosTaskId })
+            .catch(e => console.error('[iOS NIM] intermediate reply failed:', (e as Error)?.message));
+        }
+        sendExtYdNimMessage(msg.content ?? `Using tool: ${msg.metadata?.toolName ?? 'unknown'}`, { action: 'tool_use', taskId: iosTaskId, toolName: String(msg.metadata?.toolName ?? 'unknown') })
+          .catch(e => console.error('[iOS NIM] tool_use message failed:', (e as Error)?.message));
       }
     }
   });
@@ -1351,13 +1361,11 @@ const bindCoworkRuntimeForwarder = (): void => {
     } catch {
       // ignore
     }
-    // iOS hook: send NIM reply + save assistant message to server
+    // iOS hook: send final NIM reply + normal_finish + save assistant message to server
     const iosTaskId = getTaskIdForElectronSession(sessionId);
     console.log('[iOS NIM] complete hook — sessionId:', sessionId, 'iosTaskId:', iosTaskId ?? 'none');
     if (iosTaskId) {
       try {
-        // Prefer the message captured from the 'message' event (sync, always populated for
-        // OpenClaw sessions). Fall back to SQLite for Claude runtime sessions.
         const pendingContent = pendingIosAssistantText.get(sessionId);
         pendingIosAssistantText.delete(sessionId);
         const content = pendingContent ??
@@ -1376,6 +1384,8 @@ const bindCoworkRuntimeForwarder = (): void => {
         } else {
           console.error('[iOS NIM] complete: no assistant content found for sessionId:', sessionId);
         }
+        sendExtYdNimMessage(' ', { action: 'normal_finish', taskId: iosTaskId })
+          .catch(e => console.error('[iOS NIM] normal_finish failed:', (e as Error)?.message));
       } catch (e) {
         console.error('[iOS NIM] complete hook error:', (e as Error)?.message);
       }
