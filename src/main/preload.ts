@@ -115,9 +115,24 @@ contextBridge.exposeInMainWorld('electron', {
   },
   ipcRenderer: {
     send: (channel: string, ...args: any[]) => {
+      const ALLOWED_SEND_CHANNELS = [
+        'network:status-change',
+      ];
+      if (!ALLOWED_SEND_CHANNELS.includes(channel)) {
+        console.warn(`[preload] Blocked ipcRenderer.send on disallowed channel: ${channel}`);
+        return;
+      }
       ipcRenderer.send(channel, ...args);
     },
     on: (channel: string, func: (...args: any[]) => void) => {
+      const ALLOWED_ON_CHANNELS = [
+        'app:openSettings',
+        'app:newTask',
+      ];
+      if (!ALLOWED_ON_CHANNELS.includes(channel)) {
+        console.warn(`[preload] Blocked ipcRenderer.on for disallowed channel: ${channel}`);
+        return () => {};
+      }
       const handler = (_event: any, ...args: any[]) => func(...args);
       ipcRenderer.on(channel, handler);
       return () => ipcRenderer.removeListener(channel, handler);
