@@ -1303,7 +1303,18 @@ const bindCoworkRuntimeForwarder = (): void => {
           sendExtYdNimMessage(assistantContent, { action: 'normal', taskId: iosTaskId })
             .catch(e => console.error('[iOS NIM] intermediate reply failed:', (e as Error)?.message));
         }
-        sendExtYdNimMessage(msg.content ?? `Using tool: ${msg.metadata?.toolName ?? 'unknown'}`, { action: 'tool_use', taskId: iosTaskId, toolName: String(msg.metadata?.toolName ?? 'unknown') })
+        const toolName = String(msg.metadata?.toolName ?? 'unknown');
+        const toolInput = msg.metadata?.toolInput;
+        let toolDetail = '';
+        if (toolInput && typeof toolInput === 'object') {
+          const inp = toolInput as Record<string, unknown>;
+          const primary = inp.command ?? inp.path ?? inp.file_path ?? inp.url
+            ?? Object.values(inp).find(v => typeof v === 'string');
+          if (typeof primary === 'string' && primary.trim()) {
+            toolDetail = ' ' + (primary.length > 120 ? primary.slice(0, 120) + '...' : primary);
+          }
+        }
+        sendExtYdNimMessage(`● ${toolName}${toolDetail}`, { action: 'tool_use', taskId: iosTaskId, toolName })
           .catch(e => console.error('[iOS NIM] tool_use message failed:', (e as Error)?.message));
       }
     }
