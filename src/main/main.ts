@@ -1308,13 +1308,19 @@ const bindCoworkRuntimeForwarder = (): void => {
         let toolDetail = '';
         if (toolInput && typeof toolInput === 'object') {
           const inp = toolInput as Record<string, unknown>;
-          const primary = inp.command ?? inp.path ?? inp.file_path ?? inp.url
-            ?? Object.values(inp).find(v => typeof v === 'string');
-          if (typeof primary === 'string' && primary.trim()) {
-            toolDetail = ' ' + (primary.length > 120 ? primary.slice(0, 120) + '...' : primary);
+          const simpleVal = typeof inp.command === 'string' ? inp.command.trim()
+            : typeof inp.file_path === 'string' ? inp.file_path.trim()
+            : typeof inp.path === 'string' ? inp.path.trim()
+            : typeof inp.url === 'string' ? inp.url.trim()
+            : null;
+          if (simpleVal) {
+            toolDetail = ' ' + (simpleVal.length > 120 ? simpleVal.slice(0, 120) + '…' : simpleVal);
+          } else {
+            const json = JSON.stringify(toolInput);
+            toolDetail = ' ' + (json.length > 120 ? json.slice(0, 120) + '…' : json);
           }
         }
-        sendExtYdNimMessage(`● ${toolName}${toolDetail}`, { action: 'tool_use', taskId: iosTaskId, toolName })
+        sendExtYdNimMessage(`● ${toolName}${toolDetail}`, { action: 'normal_tool_use', taskId: iosTaskId, toolName })
           .catch(e => console.error('[iOS NIM] tool_use message failed:', (e as Error)?.message));
       }
     }

@@ -483,6 +483,10 @@ async function routeIncomingMessage(msg: any): Promise<void> {
       // Electron user message echoed back from iOS — just log, do not re-process
       console.log('[YdNimClient] normal_right echo received, taskId:', ext?.taskId);
       broadcastToRenderer('yd-nim:log', { text: `normal_right echo: taskId=${ext?.taskId ?? 'n/a'}`, time: Date.now() });
+    } else if (action === 'normal_tool_use' || action === 'normal_finish') {
+      // Outbound-only actions echoed back — just log, no further action needed
+      console.log(`[YdNimClient] ${action} echo received, taskId:`, ext?.taskId);
+      broadcastToRenderer('yd-nim:log', { text: `${action} echo: taskId=${ext?.taskId ?? 'n/a'}`, time: Date.now() });
     } else if (action === 'ack') {
       // Ack from iOS — just log, no further action needed
       console.log('[YdNimClient] iOS ack received, taskId:', ext?.taskId);
