@@ -709,8 +709,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       <>
       <div className="grid grid-cols-2 gap-3">
         {filteredSkills.length === 0 ? (
-          <div className="col-span-2 text-center py-8 text-sm text-secondary">
-            {i18nService.t('noSkillsAvailable')}
+          <div className="col-span-2 flex flex-col items-center justify-center py-12">
+            <PuzzleIcon className="h-10 w-10 text-secondary/40 mb-3" />
+            <p className="text-sm font-medium text-secondary mb-1">
+              {i18nService.t('noSkillsAvailable')}
+            </p>
+            <p className="text-xs text-secondary/60">
+              {i18nService.t('noSkillsAvailableHint')}
+            </p>
           </div>
         ) : (
           filteredSkills.map((skill) => (
@@ -820,8 +826,14 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
         ) : (
           <>
             {filteredMarketplaceSkills.length === 0 ? (
-              <div className="text-center py-12 text-sm text-secondary">
-                {i18nService.t('skillMarketplaceEmpty')}
+              <div className="flex flex-col items-center justify-center py-12">
+                <PuzzleIcon className="h-10 w-10 text-secondary/40 mb-3" />
+                <p className="text-sm font-medium text-secondary mb-1">
+                  {i18nService.t('skillMarketplaceEmpty')}
+                </p>
+                <p className="text-xs text-secondary/60">
+                  {i18nService.t('skillMarketplaceEmptyHint')}
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
