@@ -4793,6 +4793,19 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('shell:openHtmlInBrowser', async (_event, htmlContent: string) => {
+    try {
+      const tmpDir = path.join(os.tmpdir(), 'lobsterai-preview');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const tmpFile = path.join(tmpDir, `preview-${Date.now()}.html`);
+      fs.writeFileSync(tmpFile, htmlContent, 'utf-8');
+      await shell.openExternal(`file://${tmpFile}`);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
+
   ipcMain.handle(AppUpdateIpc.GetState, async () => {
     return getAppUpdateCoordinator().getState();
   });
@@ -5027,11 +5040,29 @@ if (!gotTheLock) {
     }
   };
 
+  const isArtifactSandboxUrl = (url: string): boolean => {
+    try {
+      const pathname = new URL(url).pathname;
+      return pathname.endsWith('/artifact-react-sandbox.html')
+        || pathname.includes('/vendor/react.production.min.js')
+        || pathname.includes('/vendor/react-dom.production.min.js')
+        || pathname.includes('/vendor/babel.min.js');
+    } catch {
+      return false;
+    }
+  };
+
   // 设置 Content Security Policy
   const setContentSecurityPolicy = () => {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
       // 跳过企微授权页面，让其使用自身的 CSP（否则外部脚本被阻止导致空白页）
       if (isWecomAuthUrl(details.url)) {
+        callback({ responseHeaders: details.responseHeaders });
+        return;
+      }
+
+      // 跳过 artifact 沙箱及其 vendor 脚本的 CSP（iframe sandbox="allow-scripts" 隔离）
+      if (isArtifactSandboxUrl(details.url)) {
         callback({ responseHeaders: details.responseHeaders });
         return;
       }
@@ -5047,7 +5078,7 @@ if (!gotTheLock) {
         "font-src 'self' data:",
         "media-src 'self'",
         "worker-src 'self' blob:",
-        "frame-src 'self'"
+        "frame-src 'self' file:"
       ];
 
       callback({

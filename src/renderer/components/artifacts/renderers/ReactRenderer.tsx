@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Artifact } from '@/types/artifact';
 
@@ -14,7 +14,6 @@ function resolveCompanionCss(
 ): string {
   const cssBlocks: string[] = [];
 
-  // Match relative CSS imports: import './App.css', import '../styles.css', etc.
   const cssImportRe = /import\s+['"]([^'"]+\.css)['"]\s*;?/g;
   let match: RegExpExecArray | null;
 
@@ -22,7 +21,6 @@ function resolveCompanionCss(
     const importPath = match[1];
     const importName = importPath.split('/').pop() || '';
 
-    // Find a matching CSS artifact by fileName
     const cssArtifact = sessionArtifacts.find(
       a => a.fileName === importName && a.content,
     );
@@ -31,7 +29,6 @@ function resolveCompanionCss(
       continue;
     }
 
-    // Try matching by resolving relative to the artifact's own directory
     if (artifact.filePath) {
       const dir = artifact.filePath.substring(0, artifact.filePath.lastIndexOf('/'));
       const resolvedPath = normalizePath(`${dir}/${importPath}`);
@@ -96,90 +93,152 @@ function preprocessJsx(source: string): { code: string; componentName: string | 
   return { code, componentName };
 }
 
-function escapeForScript(str: string): string {
-  return str.replace(/\\/g, '\\\\').replace(/<\//g, '<\\/');
-}
+function assembleProjectFiles(
+  artifact: Artifact,
+  sessionArtifacts: Artifact[],
+): string {
+  const resolved = new Set<string>();
+  const codeBlocks: string[] = [];
 
-function buildReactIframeHtml(jsxSource: string, companionCss: string): string {
-  const { code, componentName } = preprocessJsx(jsxSource);
+  const entryId = artifact.id;
+  resolved.add(entryId);
 
-  const renderTarget = componentName || 'App';
+  const jsxImportRe = /import\s+(?:(?:\w+|\{[^}]*\})\s+from\s+)?['"]([^'"]+)['"]\s*;?/g;
 
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <style>
-    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; }
-    #root { min-height: 100vh; }
-    .react-render-error { color: #ef4444; padding: 16px; font-family: monospace; white-space: pre-wrap; }
-  </style>
-  ${companionCss ? `<style>${escapeForScript(companionCss)}<\/style>` : ''}
-  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"><\/script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"><\/script>
-  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"><\/script>
-  <script>
-    // Expose React APIs as globals so stripped imports still work
-    var useState = React.useState;
-    var useEffect = React.useEffect;
-    var useRef = React.useRef;
-    var useMemo = React.useMemo;
-    var useCallback = React.useCallback;
-    var useContext = React.useContext;
-    var useReducer = React.useReducer;
-    var useLayoutEffect = React.useLayoutEffect;
-    var useId = React.useId;
-    var createContext = React.createContext;
-    var Fragment = React.Fragment;
-    var createElement = React.createElement;
-    var cloneElement = React.cloneElement;
-    var forwardRef = React.forwardRef;
-    var memo = React.memo;
-    var lazy = React.lazy;
-    var Suspense = React.Suspense;
-    var StrictMode = React.StrictMode;
-    var Children = React.Children;
-    var createRef = React.createRef;
-    var isValidElement = React.isValidElement;
-  <\/script>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="text/babel">
-    try {
-      ${escapeForScript(code)}
+  function resolveImports(source: string, currentArtifact: Artifact) {
+    let match: RegExpExecArray | null;
+    const re = new RegExp(jsxImportRe.source, 'g');
 
-      var __Component__ = (typeof ${renderTarget} !== 'undefined') ? ${renderTarget} : null;
-      if (__Component__) {
-        ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(__Component__));
-      } else {
-        document.getElementById('root').innerHTML =
-          '<div class="react-render-error">Component "${renderTarget}" not found</div>';
+    while ((match = re.exec(source)) !== null) {
+      const importPath = match[1];
+
+      // Skip CSS imports (handled separately) and package imports
+      if (importPath.endsWith('.css') || !importPath.startsWith('.')) continue;
+
+      const importName = importPath.split('/').pop() || '';
+      const candidates = [
+        importName + '.tsx', importName + '.ts', importName + '.jsx', importName + '.js',
+        importName,
+      ];
+
+      let found: Artifact | undefined;
+
+      // Try matching by fileName
+      for (const candidate of candidates) {
+        found = sessionArtifacts.find(
+          a => a.id !== entryId && !resolved.has(a.id) && a.fileName === candidate && a.content && a.type === 'react',
+        );
+        if (found) break;
       }
-    } catch (err) {
-      document.getElementById('root').innerHTML =
-        '<div class="react-render-error">' + err.message + '<\\/div>';
+
+      // Try matching by relative path resolution
+      if (!found && currentArtifact.filePath) {
+        const dir = currentArtifact.filePath.substring(0, currentArtifact.filePath.lastIndexOf('/'));
+        for (const ext of ['', '.tsx', '.ts', '.jsx', '.js']) {
+          const resolvedPath = normalizePath(`${dir}/${importPath}${ext}`);
+          found = sessionArtifacts.find(
+            a => a.id !== entryId && !resolved.has(a.id) && a.filePath === resolvedPath && a.content,
+          );
+          if (found) break;
+        }
+      }
+
+      if (found) {
+        resolved.add(found.id);
+        const { code } = preprocessJsx(found.content);
+        resolveImports(found.content, found);
+        codeBlocks.push(code);
+      }
     }
-  <\/script>
-</body>
-</html>`;
+  }
+
+  resolveImports(artifact.content, artifact);
+
+  const { code: entryCode } = preprocessJsx(artifact.content);
+  codeBlocks.push(entryCode);
+
+  return codeBlocks.join('\n\n');
 }
+
+type SandboxState = 'loading' | 'ready' | 'rendered' | 'error';
+
+const SANDBOX_URL = './artifact-react-sandbox.html';
 
 const ReactRenderer: React.FC<ReactRendererProps> = ({ artifact, sessionArtifacts }) => {
-  const iframeHtml = useMemo(() => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [sandboxState, setSandboxState] = useState<SandboxState>('loading');
+  const sandboxReadyRef = useRef(false);
+
+  const processed = useMemo(() => {
     const companionCss = sessionArtifacts
       ? resolveCompanionCss(artifact.content, artifact, sessionArtifacts)
       : '';
-    return buildReactIframeHtml(artifact.content, companionCss);
-  }, [artifact.content, artifact.filePath, sessionArtifacts]);
+
+    const assembledCode = sessionArtifacts
+      ? assembleProjectFiles(artifact, sessionArtifacts)
+      : preprocessJsx(artifact.content).code;
+
+    const { componentName } = preprocessJsx(artifact.content);
+
+    return { code: assembledCode, componentName: componentName || 'App', companionCss };
+  }, [artifact, sessionArtifacts]);
+
+  const sendToSandbox = useCallback(() => {
+    const iframe = iframeRef.current;
+    if (!iframe?.contentWindow || !sandboxReadyRef.current) return;
+    iframe.contentWindow.postMessage({
+      type: 'sandbox:render',
+      code: processed.code,
+      companionCss: processed.companionCss,
+      componentName: processed.componentName,
+    }, '*');
+  }, [processed]);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (!event.data || typeof event.data.type !== 'string') return;
+      if (iframeRef.current && event.source !== iframeRef.current.contentWindow) return;
+
+      switch (event.data.type) {
+        case 'sandbox:ready':
+          sandboxReadyRef.current = true;
+          setSandboxState('ready');
+          sendToSandbox();
+          break;
+        case 'sandbox:render-success':
+          setSandboxState('rendered');
+          break;
+        case 'sandbox:render-error':
+          setSandboxState('error');
+          break;
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [sendToSandbox]);
+
+  useEffect(() => {
+    if (sandboxReadyRef.current) {
+      sendToSandbox();
+    }
+  }, [processed, sendToSandbox]);
 
   return (
-    <iframe
-      className="w-full h-full border-0"
-      srcDoc={iframeHtml}
-      sandbox="allow-scripts"
-      title={artifact.title}
-    />
+    <div className="w-full h-full relative">
+      {sandboxState === 'loading' && (
+        <div className="absolute inset-0 flex items-center justify-center text-muted text-sm z-10 bg-background">
+          Loading preview...
+        </div>
+      )}
+      <iframe
+        ref={iframeRef}
+        className="w-full h-full border-0"
+        src={SANDBOX_URL}
+        sandbox="allow-scripts"
+        title={artifact.title}
+      />
+    </div>
   );
 };
 

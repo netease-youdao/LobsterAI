@@ -3,7 +3,6 @@ import { useDispatch, useSelector } from 'react-redux';
 
 import { i18nService } from '@/services/i18n';
 import type { RootState } from '@/store';
-import type { ArtifactType } from '@/types/artifact';
 import {
   closePanel,
   MAX_PANEL_WIDTH,
@@ -15,6 +14,7 @@ import {
   setActiveTab,
   setPanelWidth,
 } from '@/store/slices/artifactSlice';
+import type { ArtifactType } from '@/types/artifact';
 import type { Artifact } from '@/types/artifact';
 
 import ArtifactRenderer from './ArtifactRenderer';
@@ -22,6 +22,27 @@ import FileDirectoryView from './FileDirectoryView';
 import CodeRenderer from './renderers/CodeRenderer';
 
 const t = (key: string) => i18nService.t(key);
+
+const BROWSER_OPENABLE_TYPES = new Set<ArtifactType>(['html', 'svg', 'mermaid', 'react']);
+
+function buildBrowserHtml(artifact: Artifact): string | null {
+  switch (artifact.type) {
+    case 'html':
+      return artifact.content;
+    case 'svg':
+      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title><style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f5f5f5}</style></head><body>${artifact.content}</body></html>`;
+    case 'mermaid':
+      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title><script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"><\/script><style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff;font-family:system-ui,sans-serif}</style></head><body><pre class="mermaid">${escapeHtml(artifact.content)}</pre><script>mermaid.initialize({startOnLoad:true,theme:'default',securityLevel:'loose'});<\/script></body></html>`;
+    case 'react':
+      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title><script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"><\/script><script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"><\/script><script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"><\/script><script src="https://cdn.tailwindcss.com"><\/script><style>body{margin:0;font-family:system-ui,sans-serif}#root{min-height:100vh}.react-render-error{color:#ef4444;padding:16px;font-family:monospace;white-space:pre-wrap}</style><script>var useState=React.useState;var useEffect=React.useEffect;var useRef=React.useRef;var useMemo=React.useMemo;var useCallback=React.useCallback;var useContext=React.useContext;var useReducer=React.useReducer;var Fragment=React.Fragment;var createElement=React.createElement;var forwardRef=React.forwardRef;var memo=React.memo;var createContext=React.createContext;<\/script></head><body><div id="root"></div><script type="text/babel">try{${artifact.content.replace(/import\s+.*?['"][^'"]+['"]\s*;?\s*/g, '').replace(/export\s+default\s+function\s+/, 'function ').replace(/export\s+default\s+class\s+/, 'class ').replace(/export\s+default\s+(\w+)\s*;?/, '').replace(/export\s+(?=(?:const|let|var|function|class)\s)/g, '')}; var __C__=typeof App!=='undefined'?App:null; if(__C__)ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(__C__));else document.getElementById('root').innerHTML='<div class=\"react-render-error\">Component not found</div>';}catch(e){document.getElementById('root').innerHTML='<div class=\"react-render-error\">'+e.message+'</div>';}<\/script></body></html>`;
+    default:
+      return null;
+  }
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 const TYPE_LABELS: Record<ArtifactType, string> = {
   html: 'Html',
@@ -104,6 +125,24 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({ artifacts }) => {
     window.electron?.shell?.showItemInFolder(selectedArtifact.filePath);
   }, [selectedArtifact]);
 
+  const handleOpenInBrowser = useCallback(() => {
+    if (!selectedArtifact) return;
+
+    // Has file on disk: open directly
+    if (selectedArtifact.filePath) {
+      const fileUrl = `file://${selectedArtifact.filePath}`;
+      window.electron?.shell?.openExternal(fileUrl);
+      return;
+    }
+
+    // No file path: generate HTML and open via temp file
+    if (!selectedArtifact.content) return;
+    const html = buildBrowserHtml(selectedArtifact);
+    if (html) {
+      window.electron?.shell?.openHtmlInBrowser(html);
+    }
+  }, [selectedArtifact]);
+
   return (
     <>
       {/* Drag handle */}
@@ -150,6 +189,15 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({ artifacts }) => {
               >
                 <CopyIcon />
               </button>
+              {BROWSER_OPENABLE_TYPES.has(selectedArtifact.type) && (
+                <button
+                  onClick={handleOpenInBrowser}
+                  className="p-1 rounded text-secondary hover:text-foreground hover:bg-surface transition-colors"
+                  title={t('artifactOpenInBrowser')}
+                >
+                  <BrowserIcon />
+                </button>
+              )}
               {selectedArtifact.filePath && (
                 <button
                   onClick={handleRevealInFolder}
@@ -216,6 +264,14 @@ const CopyIcon = () => (
 const FolderIcon = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M2 4.5A1.5 1.5 0 013.5 3h2.879a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6v5.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5v-7z" />
+  </svg>
+);
+
+const BrowserIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="8" cy="8" r="6" />
+    <ellipse cx="8" cy="8" rx="2.5" ry="6" />
+    <path d="M2 8h12" />
   </svg>
 );
 

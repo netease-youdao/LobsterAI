@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; }
+    #root { min-height: 100vh; }
+    .react-render-error {
+      color: #ef4444;
+      padding: 16px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .sandbox-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      color: #888;
+      font-size: 14px;
+    }
+  </style>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="./vendor/react.production.min.js"></script>
+  <script src="./vendor/react-dom.production.min.js"></script>
+  <script src="./vendor/babel.min.js"></script>
+  <script>
+    var useState = React.useState;
+    var useEffect = React.useEffect;
+    var useRef = React.useRef;
+    var useMemo = React.useMemo;
+    var useCallback = React.useCallback;
+    var useContext = React.useContext;
+    var useReducer = React.useReducer;
+    var useLayoutEffect = React.useLayoutEffect;
+    var useId = React.useId;
+    var createContext = React.createContext;
+    var Fragment = React.Fragment;
+    var createElement = React.createElement;
+    var cloneElement = React.cloneElement;
+    var forwardRef = React.forwardRef;
+    var memo = React.memo;
+    var lazy = React.lazy;
+    var Suspense = React.Suspense;
+    var StrictMode = React.StrictMode;
+    var Children = React.Children;
+    var createRef = React.createRef;
+    var isValidElement = React.isValidElement;
+    var useTransition = React.useTransition;
+    var useDeferredValue = React.useDeferredValue;
+    var useSyncExternalStore = React.useSyncExternalStore;
+    var useInsertionEffect = React.useInsertionEffect;
+  </script>
+</head>
+<body>
+  <div id="root">
+    <div class="sandbox-loading">Initializing preview...</div>
+  </div>
+  <script>
+    (function() {
+      var _currentRoot = null;
+
+      function renderComponent(code, companionCss, componentName) {
+        try {
+          var existingStyle = document.getElementById('companion-css');
+          if (existingStyle) existingStyle.remove();
+          if (companionCss) {
+            var styleEl = document.createElement('style');
+            styleEl.id = 'companion-css';
+            styleEl.textContent = companionCss;
+            document.head.appendChild(styleEl);
+          }
+
+          var compiled = Babel.transform(code, {
+            presets: ['react'],
+            filename: 'artifact.tsx'
+          }).code;
+
+          var Component = null;
+          try {
+            var fn = new Function('React', 'ReactDOM', 'useState', 'useEffect', 'useRef', 'useMemo',
+              'useCallback', 'useContext', 'useReducer', 'useLayoutEffect', 'useId',
+              'createContext', 'Fragment', 'createElement', 'cloneElement', 'forwardRef',
+              'memo', 'lazy', 'Suspense', 'StrictMode', 'Children', 'createRef', 'isValidElement',
+              'useTransition', 'useDeferredValue', 'useSyncExternalStore', 'useInsertionEffect',
+              compiled + '\n;return (typeof ' + componentName + ' !== "undefined") ? ' + componentName + ' : null;'
+            );
+            Component = fn(React, ReactDOM, useState, useEffect, useRef, useMemo,
+              useCallback, useContext, useReducer, useLayoutEffect, useId,
+              createContext, Fragment, createElement, cloneElement, forwardRef,
+              memo, lazy, Suspense, StrictMode, Children, createRef, isValidElement,
+              useTransition, useDeferredValue, useSyncExternalStore, useInsertionEffect
+            );
+          } catch (evalErr) {
+            throw new Error('Evaluation error: ' + evalErr.message);
+          }
+
+          if (!Component) {
+            throw new Error('Component "' + componentName + '" not found after compilation');
+          }
+
+          var rootEl = document.getElementById('root');
+          if (!_currentRoot) {
+            rootEl.innerHTML = '';
+            _currentRoot = ReactDOM.createRoot(rootEl);
+          }
+          _currentRoot.render(React.createElement(Component));
+
+          window.parent.postMessage({ type: 'sandbox:render-success' }, '*');
+        } catch (err) {
+          var rootEl = document.getElementById('root');
+          if (_currentRoot) {
+            _currentRoot.unmount();
+            _currentRoot = null;
+          }
+          rootEl.innerHTML = '<div class="react-render-error">' +
+            escapeHtml(err.message) + '</div>';
+
+          window.parent.postMessage({
+            type: 'sandbox:render-error',
+            error: err.message
+          }, '*');
+        }
+      }
+
+      function escapeHtml(str) {
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      window.addEventListener('message', function(event) {
+        if (event.data && event.data.type === 'sandbox:render') {
+          renderComponent(
+            event.data.code,
+            event.data.companionCss || '',
+            event.data.componentName || 'App'
+          );
+        }
+      });
+
+      window.parent.postMessage({ type: 'sandbox:ready' }, '*');
+    })();
+  </script>
+</body>
+</html>
