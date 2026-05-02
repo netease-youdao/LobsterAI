@@ -712,6 +712,7 @@ const App: React.FC = () => {
             <div className="text-foreground text-xl font-medium">{i18nService.t('loading')}</div>
           </div>
         </div>
+        <EngineStartupOverlay />
       </div>
     );
   }
@@ -751,6 +752,7 @@ const App: React.FC = () => {
             />
           )}
         </div>
+        <EngineStartupOverlay />
       </div>
     );
   }

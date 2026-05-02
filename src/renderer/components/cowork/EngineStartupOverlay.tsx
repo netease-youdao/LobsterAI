@@ -1,10 +1,8 @@
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 import React, { useEffect,useState } from 'react';
-import { useSelector } from 'react-redux';
 
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
-import { selectIsOpenClawEngine } from '../../store/selectors/coworkSelectors';
 import type { OpenClawEngineStatus } from '../../types/cowork';
 
 const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
@@ -30,12 +28,9 @@ const resolveEngineStatusText = (status: OpenClawEngineStatus): string => {
  * Renders on top of all views (cowork, skills, scheduled tasks, mcp).
  */
 const EngineStartupOverlay: React.FC = () => {
-  const isOpenClawEngine = useSelector(selectIsOpenClawEngine);
   const [status, setStatus] = useState<OpenClawEngineStatus | null>(null);
 
   useEffect(() => {
-    if (!isOpenClawEngine) return;
-
     coworkService.getOpenClawEngineStatus().then((s) => {
       if (s) setStatus(s);
     });
@@ -45,15 +40,16 @@ const EngineStartupOverlay: React.FC = () => {
     });
 
     return unsubscribe;
-  }, [isOpenClawEngine]);
+  }, []);
 
-  if (!isOpenClawEngine || !status || status.phase !== 'starting') {
+  if (!status || status.phase !== 'starting') {
     return null;
   }
 
   const progressPercent = typeof status.progressPercent === 'number'
     ? Math.max(0, Math.min(100, Math.round(status.progressPercent)))
     : null;
+  const statusText = (status.message && status.message.trim()) || resolveEngineStatusText(status);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/90 backdrop-blur-sm">
@@ -63,7 +59,7 @@ const EngineStartupOverlay: React.FC = () => {
             <ChatBubbleLeftRightIcon className="h-5 w-5" />
           </div>
           <div className="text-sm text-foreground">
-            {resolveEngineStatusText(status)}
+            {statusText}
           </div>
           {progressPercent !== null && (
             <div className="w-full space-y-1">

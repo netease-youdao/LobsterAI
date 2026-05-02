@@ -3237,9 +3237,7 @@ class I18nService {
 
     // 更新配置
     try {
-      const config = configService.getConfig();
       configService.updateConfig({
-        ...config,
         language,
       });
     } catch (error) {

@@ -107,6 +107,30 @@ const gwDiagTs = (): string => {
   return `[GW-RESTART-DIAG] ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
 };
 
+const OPENCLAW_STARTUP_TRACE_WINDOW_MS = 120_000;
+const openClawStartupTraceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const openClawStartupTraceStartedAt = Date.now();
+let openClawStartupMcpBridgeReady = false;
+let openClawStartupMcpBridgeToolsCount = 0;
+
+const isInOpenClawStartupTraceWindow = (): boolean =>
+  Date.now() - openClawStartupTraceStartedAt < OPENCLAW_STARTUP_TRACE_WINDOW_MS;
+
+const logOpenClawStartupTrace = (event: string, details?: Record<string, unknown>): void => {
+  if (!isInOpenClawStartupTraceWindow()) {
+    return;
+  }
+  const elapsedMs = Date.now() - openClawStartupTraceStartedAt;
+  const detailText = details
+    ? Object.entries(details)
+      .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
+      .join(' ')
+    : '';
+  console.log(
+    `[OpenClawStartupTrace] id=${openClawStartupTraceId} +${elapsedMs}ms event=${event}${detailText ? ` ${detailText}` : ''}`,
+  );
+};
+
 // 设置应用程序名称
 app.name = APP_NAME;
 app.setName(APP_NAME);
@@ -846,15 +870,172 @@ const getAppUpdateCoordinator = (): AppUpdateCoordinator => {
   return appUpdateCoordinator;
 };
 
+const pendingPostStartGatewayRestartReasons = new Set<string>();
+let postStartGatewayRestartInProgress = false;
+let startupOverlayLatchActive = false;
+let startupOverlayLastProgress: number | undefined;
+let startupOverlayLastMessage: string | undefined;
+let preStartGatewayPrepInProgressCount = 0;
+
+const clampStatusProgressPercent = (progressPercent: number | undefined): number | undefined => {
+  if (typeof progressPercent !== 'number' || !Number.isFinite(progressPercent)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(100, Math.round(progressPercent)));
+};
+
+const getDisplayedOpenClawStatus = (status: OpenClawEngineStatus): OpenClawEngineStatus => {
+  if (status.phase === 'starting') {
+    startupOverlayLatchActive = true;
+  }
+
+  if (preStartGatewayPrepInProgressCount > 0 && status.phase === 'ready') {
+    startupOverlayLatchActive = true;
+    const prepProgress = startupOverlayLastProgress ?? 1;
+    const prepMessage = 'Starting AI engine: preparing startup...';
+    startupOverlayLastProgress = prepProgress;
+    startupOverlayLastMessage = prepMessage;
+    return {
+      ...status,
+      phase: 'starting',
+      progressPercent: prepProgress,
+      message: prepMessage,
+    };
+  }
+
+  if (postStartGatewayRestartInProgress) {
+    const stage2Progress = clampStatusProgressPercent(status.progressPercent);
+    startupOverlayLastProgress = stage2Progress;
+    startupOverlayLastMessage = 'Starting AI engine (2/2): applying configuration...';
+    return {
+      ...status,
+      phase: 'starting',
+      progressPercent: stage2Progress,
+      message: startupOverlayLastMessage,
+    };
+  }
+
+  if (pendingPostStartGatewayRestartReasons.size > 0) {
+    const stage1Progress = status.phase === 'running'
+      ? 100
+      : clampStatusProgressPercent(status.progressPercent);
+    const stage1Message = status.phase === 'running'
+      ? 'Starting AI engine (1/2) complete. Preparing stage 2...'
+      : 'Starting AI engine (1/2)...';
+    startupOverlayLastProgress = stage1Progress;
+    startupOverlayLastMessage = stage1Message;
+
+    return {
+      ...status,
+      phase: 'starting',
+      progressPercent: stage1Progress,
+      message: stage1Message,
+    };
+  }
+
+  // During startup we can briefly observe a transient "ready" status while a start
+  // operation is still in progress. Keep overlay visible to avoid flicker/reopen.
+  if (startupOverlayLatchActive && status.phase === 'ready') {
+    return {
+      ...status,
+      phase: 'starting',
+      progressPercent: startupOverlayLastProgress,
+      message: startupOverlayLastMessage || 'Starting AI engine...',
+    };
+  }
+
+  if (status.phase === 'running' || status.phase === 'error' || status.phase === 'not_installed') {
+    startupOverlayLatchActive = false;
+    startupOverlayLastProgress = undefined;
+    startupOverlayLastMessage = undefined;
+  }
+
+  return status;
+};
+
 const forwardOpenClawStatus = (status: OpenClawEngineStatus): void => {
+  const displayStatus = getDisplayedOpenClawStatus(status);
   const windows = BrowserWindow.getAllWindows();
   windows.forEach((win) => {
     if (win.isDestroyed()) return;
     try {
-      win.webContents.send('openclaw:engine:onProgress', status);
+      win.webContents.send('openclaw:engine:onProgress', displayStatus);
     } catch (error) {
       console.error('Failed to forward OpenClaw engine status:', error);
     }
+  });
+};
+
+const beginPreStartGatewayPreparation = (): void => {
+  const wasActive = preStartGatewayPrepInProgressCount > 0;
+  preStartGatewayPrepInProgressCount += 1;
+  if (wasActive) {
+    return;
+  }
+  startupOverlayLatchActive = true;
+  if (startupOverlayLastProgress === undefined) {
+    startupOverlayLastProgress = 1;
+  }
+  startupOverlayLastMessage = 'Starting AI engine: preparing startup...';
+  const manager = getOpenClawEngineManager();
+  forwardOpenClawStatus(manager.getStatus());
+};
+
+const endPreStartGatewayPreparation = (): void => {
+  if (preStartGatewayPrepInProgressCount === 0) {
+    return;
+  }
+  preStartGatewayPrepInProgressCount = Math.max(0, preStartGatewayPrepInProgressCount - 1);
+  if (preStartGatewayPrepInProgressCount > 0) {
+    return;
+  }
+  const manager = getOpenClawEngineManager();
+  forwardOpenClawStatus(manager.getStatus());
+};
+
+const maybeRestartGatewayAfterStartup = (status: OpenClawEngineStatus): void => {
+  if (postStartGatewayRestartInProgress && status.phase === 'running' && pendingPostStartGatewayRestartReasons.size === 0) {
+    postStartGatewayRestartInProgress = false;
+    // Push one more status tick so the overlay can exit cleanly.
+    forwardOpenClawStatus(status);
+  }
+
+  if (status.phase !== 'running' || pendingPostStartGatewayRestartReasons.size === 0) {
+    return;
+  }
+
+  const manager = getOpenClawEngineManager();
+  const reasons = Array.from(pendingPostStartGatewayRestartReasons);
+  pendingPostStartGatewayRestartReasons.clear();
+  const mergedReason = reasons.join(',');
+  logOpenClawStartupTrace('post-start-restart-trigger', {
+    reasons,
+    phase: status.phase,
+    mcpBridgeReady: openClawStartupMcpBridgeReady,
+    mcpBridgeToolsCount: openClawStartupMcpBridgeToolsCount,
+  });
+
+  console.log(
+    `${gwDiagTs()} post-start restart: gateway reached running, applying pending restart for reasons=${mergedReason}`,
+  );
+
+  if (hasActiveGatewayWorkloads()) {
+    console.log(
+      `${gwDiagTs()} post-start restart: active workloads detected, deferring restart for reasons=${mergedReason}`,
+    );
+    scheduleDeferredGatewayRestart(`post-start:${mergedReason}`);
+    return;
+  }
+
+  postStartGatewayRestartInProgress = true;
+  // Emit synthetic "still starting" immediately before invoking restart.
+  forwardOpenClawStatus(status);
+  void manager.restartGateway(`post-start-config-sync:${mergedReason}`).catch((error) => {
+    postStartGatewayRestartInProgress = false;
+    console.error(
+      `${gwDiagTs()} post-start restart: failed to restart gateway for reasons=${mergedReason}:`,
+      error,
+    );
   });
 };
 
@@ -863,9 +1044,12 @@ const bindOpenClawStatusForwarder = (): void => {
   const manager = getOpenClawEngineManager();
   manager.on('status', (status) => {
     forwardOpenClawStatus(status);
+    maybeRestartGatewayAfterStartup(status);
   });
   openClawStatusForwarderBound = true;
-  forwardOpenClawStatus(manager.getStatus());
+  const currentStatus = manager.getStatus();
+  forwardOpenClawStatus(currentStatus);
+  maybeRestartGatewayAfterStartup(currentStatus);
 };
 
 const getEngineNotReadyResponse = (status: OpenClawEngineStatus) => {
@@ -892,11 +1076,17 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
     const elapsed = () => `${Date.now() - t0}ms`;
     try {
       console.log(`[OpenClaw] bootstrap starting (reason=${reason})`);
+      logOpenClawStartupTrace('bootstrap-start', { reason });
 
       // Start MCP Bridge before config sync so mcpBridge tools are included in openclaw.json
       const bridgeResult = await startMcpBridge().catch((err: unknown) => {
         console.error(`[OpenClaw] bootstrap: MCP bridge startup failed (non-fatal):`, err);
         return null as McpBridgeConfig | null;
+      });
+      logOpenClawStartupTrace('bootstrap-mcp-bridge-ready', {
+        reason,
+        tools: bridgeResult?.tools.length ?? 0,
+        callbackReady: !!bridgeResult?.callbackUrl,
       });
       console.log(`[OpenClaw] bootstrap: MCP bridge setup done (${elapsed()}), result=${bridgeResult ? `${bridgeResult.tools.length} tools` : 'null'}`);
       console.log(`[OpenClaw] bootstrap: mcpBridgeServer=${mcpBridgeServer?.callbackUrl || 'null'}, mcpServerManager.tools=${mcpServerManager?.toolManifest?.length ?? 'null'}, secret=${mcpBridgeSecret ? 'set' : 'null'}`);
@@ -911,6 +1101,12 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
       const syncResult = await syncOpenClawConfig({
         reason: `bootstrap:${reason}`,
         restartGatewayIfRunning: false,
+      });
+      logOpenClawStartupTrace('bootstrap-sync-complete', {
+        reason,
+        success: syncResult.success,
+        changed: syncResult.changed,
+        mcpBridgeConfigChanged: !!syncResult.mcpBridgeConfigChanged,
       });
       console.log(`[OpenClaw] bootstrap: syncOpenClawConfig done (${elapsed()}), success=${syncResult.success}`);
       if (!syncResult.success) {
@@ -927,6 +1123,10 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
         return ensuredStatus;
       }
       const result = await manager.startGateway(`bootstrap:${reason}`);
+      logOpenClawStartupTrace('bootstrap-start-gateway-complete', {
+        reason,
+        phase: result.phase,
+      });
       console.log(`[OpenClaw] bootstrap completed (${elapsed()}), phase=${result.phase}`);
       return result;
     } catch (error) {
@@ -948,7 +1148,7 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
 // proactive token refresh before syncing config to the gateway.
 let pendingTokenRefresh: Promise<string | null> | null = null;
 
-const ensureOpenClawRunningForCowork = async () => {
+const ensureOpenClawRunningForCowork = async (reason = 'ensure-running-for-cowork') => {
   const manager = getOpenClawEngineManager();
   const status = manager.getStatus();
   if (status.phase === 'running') {
@@ -964,28 +1164,49 @@ const ensureOpenClawRunningForCowork = async () => {
     return status;
   }
 
-  // Wait for any in-flight token refresh so that the gateway starts with
-  // a fresh token rather than the stale one that triggered the refresh.
-  if (pendingTokenRefresh) {
-    console.log('[OpenClaw] ensureRunning: awaiting pending token refresh before gateway start');
-    await pendingTokenRefresh.catch(() => {});
-  }
+  beginPreStartGatewayPreparation();
+  try {
 
-  // Ensure MCP bridge is started and config is synced before launching the gateway,
-  // so that mcpBridge tools are available in openclaw.json when the gateway loads.
-  await startMcpBridge().catch((err: unknown) => {
-    console.error('[OpenClaw] ensureRunning: MCP bridge startup failed (non-fatal):', err);
-  });
-  const syncResult = await syncOpenClawConfig({
-    reason: 'ensureRunning:mcpBridge',
-    restartGatewayIfRunning: false,
-  });
-  if (!syncResult.success) {
-    console.error('[OpenClaw] ensureRunning: config sync failed:', syncResult.error);
-  }
+    // Wait for any in-flight token refresh so that the gateway starts with
+    // a fresh token rather than the stale one that triggered the refresh.
+    if (pendingTokenRefresh) {
+      console.log('[OpenClaw] ensureRunning: awaiting pending token refresh before gateway start');
+      await pendingTokenRefresh.catch(() => {});
+    }
 
-  console.log(`${gwDiagTs()} ensureRunning: gateway not running (phase=${status.phase}), starting`);
-  return await manager.startGateway('ensure-running-for-cowork');
+    // Ensure MCP bridge is started and config is synced before launching the gateway,
+    // so that mcpBridge tools are available in openclaw.json when the gateway loads.
+    await startMcpBridge().catch((err: unknown) => {
+      console.error('[OpenClaw] ensureRunning: MCP bridge startup failed (non-fatal):', err);
+    });
+    logOpenClawStartupTrace('ensure-running-mcp-bridge-ready', {
+      reason,
+      mcpBridgeReady: openClawStartupMcpBridgeReady,
+      mcpBridgeToolsCount: openClawStartupMcpBridgeToolsCount,
+    });
+    const syncResult = await syncOpenClawConfig({
+      reason: 'ensureRunning:mcpBridge',
+      restartGatewayIfRunning: false,
+    });
+    logOpenClawStartupTrace('ensure-running-sync-complete', {
+      reason,
+      success: syncResult.success,
+      changed: syncResult.changed,
+      mcpBridgeConfigChanged: !!syncResult.mcpBridgeConfigChanged,
+    });
+    if (!syncResult.success) {
+      console.error('[OpenClaw] ensureRunning: config sync failed:', syncResult.error);
+    }
+
+    console.log(`${gwDiagTs()} ensureRunning: gateway not running (phase=${status.phase}), starting`);
+    logOpenClawStartupTrace('ensure-running-start-gateway', {
+      reason,
+      previousPhase: status.phase,
+    });
+    return await manager.startGateway(reason);
+  } finally {
+    endPreStartGatewayPreparation();
+  }
 };
 
 const getCoworkStore = () => {
@@ -1202,11 +1423,33 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   }, DEFERRED_RESTART_MAX_WAIT_MS);
 };
 
-const syncOpenClawConfig = async (
+type OpenClawConfigSyncOptions = {
+  reason: string;
+  restartGatewayIfRunning?: boolean;
+};
+
+type OpenClawConfigSyncResponse = {
+  success: boolean;
+  changed: boolean;
+  mcpBridgeConfigChanged?: boolean;
+  status?: OpenClawEngineStatus;
+  error?: string;
+};
+
+const runSyncOpenClawConfig = async (
   options: { reason: string; restartGatewayIfRunning?: boolean } = { reason: 'unknown' },
-): Promise<{ success: boolean; changed: boolean; mcpBridgeConfigChanged?: boolean; status?: OpenClawEngineStatus; error?: string }> => {
+): Promise<OpenClawConfigSyncResponse> => {
   const D = gwDiagTs;
   console.log(`${D()} ──── syncOpenClawConfig START reason=${options.reason} restartIfRunning=${!!options.restartGatewayIfRunning}`);
+  const manager = getOpenClawEngineManager();
+  const phaseAtSyncStart = manager.getStatus().phase;
+  logOpenClawStartupTrace('sync-start', {
+    reason: options.reason,
+    restartIfRunning: !!options.restartGatewayIfRunning,
+    phaseAtSync: phaseAtSyncStart,
+    mcpBridgeReady: openClawStartupMcpBridgeReady,
+    mcpBridgeToolsCount: openClawStartupMcpBridgeToolsCount,
+  });
 
   const syncResult = getOpenClawConfigSync().sync(options.reason);
   console.log(`${D()} sync() ok=${syncResult.ok} changed=${syncResult.changed} bindingsChanged=${!!syncResult.bindingsChanged}`);
@@ -1269,6 +1512,11 @@ const syncOpenClawConfig = async (
 
   if (!needsHardRestart) {
     console.log(`${D()} ──── NO RESTART, hot-reload only. reason=${options.reason}`);
+    logOpenClawStartupTrace('sync-no-restart', {
+      reason: options.reason,
+      changed: syncResult.changed,
+      phaseAtSync: phaseAtSyncStart,
+    });
     return {
       success: true,
       changed: syncResult.changed,
@@ -1276,10 +1524,32 @@ const syncOpenClawConfig = async (
     };
   }
 
-  const manager = getOpenClawEngineManager();
   const status = manager.getStatus();
+  if (status.phase === 'starting') {
+    pendingPostStartGatewayRestartReasons.add(options.reason);
+    console.log(
+      `${D()} ──── RESTART QUEUED after startup (phase=starting). reason=${options.reason}`,
+    );
+    logOpenClawStartupTrace('sync-queued-post-start-restart', {
+      reason: options.reason,
+      phaseAtSync: status.phase,
+      pendingReasons: Array.from(pendingPostStartGatewayRestartReasons),
+      mcpBridgeReady: openClawStartupMcpBridgeReady,
+      mcpBridgeToolsCount: openClawStartupMcpBridgeToolsCount,
+    });
+    return {
+      success: true,
+      changed: true,
+      status,
+    };
+  }
+
   if (status.phase !== 'running') {
     console.log(`${D()} ──── RESTART NEEDED but gateway not running (phase=${status.phase}), skipping. reason=${options.reason}`);
+    logOpenClawStartupTrace('sync-restart-skipped-not-running', {
+      reason: options.reason,
+      phaseAtSync: status.phase,
+    });
     return {
       success: true,
       changed: true,
@@ -1289,6 +1559,10 @@ const syncOpenClawConfig = async (
 
   if (hasActiveGatewayWorkloads()) {
     console.log(`${D()} ──── RESTART DEFERRED (active workloads). reason=${options.reason}`);
+    logOpenClawStartupTrace('sync-restart-deferred', {
+      reason: options.reason,
+      phaseAtSync: status.phase,
+    });
     scheduleDeferredGatewayRestart(options.reason);
     return {
       success: true,
@@ -1298,6 +1572,10 @@ const syncOpenClawConfig = async (
   }
 
   console.log(`${D()} ──── HARD RESTART EXECUTING. reason=${options.reason}, phase=${status.phase}, port=${status.message?.match(/loopback:(\d+)/)?.[1] ?? 'unknown'}`);
+  logOpenClawStartupTrace('sync-hard-restart-executing', {
+    reason: options.reason,
+    phaseAtSync: status.phase,
+  });
   if (openClawRuntimeAdapter) {
     openClawRuntimeAdapter.disconnectGatewayClient();
   }
@@ -1317,6 +1595,124 @@ const syncOpenClawConfig = async (
     changed: true,
     status: restarted,
   };
+};
+
+const OPENCLAW_SYNC_STARTUP_WINDOW_MS = 30_000;
+const OPENCLAW_SYNC_STARTUP_DEBOUNCE_MS = 200;
+const OPENCLAW_SYNC_NORMAL_DEBOUNCE_MS = 50;
+const openClawSyncSchedulerStartedAt = Date.now();
+
+type PendingOpenClawSyncRequest = {
+  options: OpenClawConfigSyncOptions;
+  resolve: (value: OpenClawConfigSyncResponse) => void;
+  reject: (reason?: unknown) => void;
+};
+
+let openClawSyncInFlight: Promise<void> | null = null;
+let openClawSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingOpenClawSyncRequests: PendingOpenClawSyncRequest[] = [];
+
+const isInOpenClawSyncStartupWindow = (): boolean =>
+  Date.now() - openClawSyncSchedulerStartedAt < OPENCLAW_SYNC_STARTUP_WINDOW_MS;
+
+const mergeOpenClawSyncBatch = (
+  requests: PendingOpenClawSyncRequest[],
+): { options: OpenClawConfigSyncOptions; mergedReasonCount: number } => {
+  const uniqueReasons: string[] = [];
+  let restartGatewayIfRunning = false;
+  for (const request of requests) {
+    if (!uniqueReasons.includes(request.options.reason)) {
+      uniqueReasons.push(request.options.reason);
+    }
+    restartGatewayIfRunning ||= !!request.options.restartGatewayIfRunning;
+  }
+  const mergedReason = uniqueReasons.join(',');
+  return {
+    options: {
+      reason: mergedReason || 'unknown',
+      restartGatewayIfRunning,
+    },
+    mergedReasonCount: uniqueReasons.length,
+  };
+};
+
+const scheduleOpenClawSyncDrain = (): void => {
+  if (openClawSyncInFlight || openClawSyncTimer || pendingOpenClawSyncRequests.length === 0) {
+    return;
+  }
+
+  const debounceMs = isInOpenClawSyncStartupWindow()
+    ? OPENCLAW_SYNC_STARTUP_DEBOUNCE_MS
+    : OPENCLAW_SYNC_NORMAL_DEBOUNCE_MS;
+
+  openClawSyncTimer = setTimeout(() => {
+    openClawSyncTimer = null;
+    void drainOpenClawSyncRequests();
+  }, debounceMs);
+};
+
+const drainOpenClawSyncRequests = async (): Promise<void> => {
+  if (openClawSyncInFlight) {
+    return;
+  }
+
+  openClawSyncInFlight = (async () => {
+    let drainRounds = 0;
+    while (pendingOpenClawSyncRequests.length > 0) {
+      drainRounds += 1;
+      const batch = pendingOpenClawSyncRequests;
+      pendingOpenClawSyncRequests = [];
+      const { options, mergedReasonCount } = mergeOpenClawSyncBatch(batch);
+      const coalescedCount = Math.max(batch.length - 1, 0);
+      const phaseAtDrain = getOpenClawEngineManager().getStatus().phase;
+      console.log(
+        `[OpenClawSyncQueue] draining sync round=${drainRounds}, requests=${batch.length}, coalesced=${coalescedCount}, mergedReasons=${mergedReasonCount}, startupWindow=${isInOpenClawSyncStartupWindow()}, restartIfRunning=${!!options.restartGatewayIfRunning}, reason=${options.reason}, phaseAtDrain=${phaseAtDrain}, mcpBridgeReady=${openClawStartupMcpBridgeReady}, mcpBridgeToolsCount=${openClawStartupMcpBridgeToolsCount}`,
+      );
+      logOpenClawStartupTrace('sync-queue-drain', {
+        round: drainRounds,
+        requests: batch.length,
+        coalesced: coalescedCount,
+        mergedReasonCount,
+        reason: options.reason,
+        phaseAtDrain,
+        mcpBridgeReady: openClawStartupMcpBridgeReady,
+        mcpBridgeToolsCount: openClawStartupMcpBridgeToolsCount,
+      });
+
+      try {
+        const result = await runSyncOpenClawConfig(options);
+        batch.forEach((request) => request.resolve(result));
+      } catch (error) {
+        batch.forEach((request) => request.reject(error));
+      }
+    }
+  })().finally(() => {
+    openClawSyncInFlight = null;
+    if (pendingOpenClawSyncRequests.length > 0) {
+      scheduleOpenClawSyncDrain();
+    }
+  });
+
+  await openClawSyncInFlight;
+};
+
+const syncOpenClawConfig = async (
+  options: OpenClawConfigSyncOptions = { reason: 'unknown' },
+): Promise<OpenClawConfigSyncResponse> => {
+  return await new Promise<OpenClawConfigSyncResponse>((resolve, reject) => {
+    pendingOpenClawSyncRequests.push({ options, resolve, reject });
+    logOpenClawStartupTrace('sync-enqueue', {
+      reason: options.reason,
+      queueSize: pendingOpenClawSyncRequests.length,
+      startupWindow: isInOpenClawSyncStartupWindow(),
+      mcpBridgeReady: openClawStartupMcpBridgeReady,
+      mcpBridgeToolsCount: openClawStartupMcpBridgeToolsCount,
+    });
+    if (openClawSyncInFlight) {
+      return;
+    }
+    scheduleOpenClawSyncDrain();
+  });
 };
 
 const bindCoworkRuntimeForwarder = (): void => {
@@ -1407,6 +1803,7 @@ const getCoworkEngineRouter = () => {
     if (!openClawRuntimeAdapter) {
       openClawRuntimeAdapter = new OpenClawRuntimeAdapter(getCoworkStore(), getOpenClawEngineManager(), {
         normalizeModelRef: normalizeOpenClawModelRef,
+        ensureGatewayRunning: (startupReason) => ensureOpenClawRunningForCowork(startupReason),
       });
       // Wire up channel session sync for IM conversations via OpenClaw
       try {
@@ -1464,6 +1861,10 @@ const startMcpBridge = (): Promise<McpBridgeConfig | null> => {
   mcpBridgeStartPromise = (async (): Promise<McpBridgeConfig | null> => {
   try {
     console.log('[McpBridge] startMcpBridge called');
+    logOpenClawStartupTrace('mcp-bridge-start', {
+      alreadyReady: openClawStartupMcpBridgeReady,
+      tools: openClawStartupMcpBridgeToolsCount,
+    });
 
     // Discover MCP tools (may be empty if no servers configured)
     const enabledServers = getMcpStore().getEnabledServers();
@@ -1530,13 +1931,26 @@ const startMcpBridge = (): Promise<McpBridgeConfig | null> => {
     const askUserCallbackUrl = mcpBridgeServer.askUserCallbackUrl;
     if (!callbackUrl || !askUserCallbackUrl) {
       console.error('[McpBridge] failed to get callback URL');
+      logOpenClawStartupTrace('mcp-bridge-callback-missing', {
+        tools: tools.length,
+      });
       return null;
     }
 
     console.log(`[McpBridge] started: ${tools.length} MCP tools, callback=${callbackUrl}`);
+    openClawStartupMcpBridgeReady = true;
+    openClawStartupMcpBridgeToolsCount = tools.length;
+    logOpenClawStartupTrace('mcp-bridge-started', {
+      callbackReady: true,
+      tools: tools.length,
+      enabledServers: enabledServers.length,
+    });
     return { callbackUrl, askUserCallbackUrl, secret: mcpBridgeSecret, tools };
   } catch (error) {
     console.error('[McpBridge] startup error:', error instanceof Error ? error.stack || error.message : String(error));
+    logOpenClawStartupTrace('mcp-bridge-start-error', {
+      message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
   })().finally(() => {
@@ -2039,13 +2453,16 @@ if (!gotTheLock) {
     getStore().set(key, value);
     if (key === 'app_config') {
       refreshEndpointsTestMode(getStore());
-      const syncResult = await syncOpenClawConfig({
+      void syncOpenClawConfig({
         reason: 'app-config-change',
         restartGatewayIfRunning: false,
+      }).then((syncResult) => {
+        if (!syncResult.success) {
+          console.error('[OpenClaw] Failed to sync config after app_config update:', syncResult.error);
+        }
+      }).catch((error) => {
+        console.error('[OpenClaw] Failed to schedule config sync after app_config update:', error);
       });
-      if (!syncResult.success) {
-        console.error('[OpenClaw] Failed to sync config after app_config update:', syncResult.error);
-      }
     }
   });
 
@@ -2604,7 +3021,7 @@ if (!gotTheLock) {
       const manager = getOpenClawEngineManager();
       return {
         success: true,
-        status: manager.getStatus(),
+        status: getDisplayedOpenClawStatus(manager.getStatus()),
       };
     } catch (error) {
       return {
@@ -5339,7 +5756,7 @@ if (!gotTheLock) {
     mainWindow.webContents.on('did-finish-load', () => {
       emitWindowState();
       if (openClawEngineManager && !mainWindow?.isDestroyed()) {
-        mainWindow.webContents.send('openclaw:engine:onProgress', openClawEngineManager.getStatus());
+        mainWindow.webContents.send('openclaw:engine:onProgress', getDisplayedOpenClawStatus(openClawEngineManager.getStatus()));
       }
     });
 
@@ -5558,6 +5975,7 @@ if (!gotTheLock) {
   // 初始化应用
   const initApp = async () => {
     const profiler = new StartupProfiler();
+    logOpenClawStartupTrace('main-startup-enter');
 
     profiler.mark('app.whenReady');
     console.log('[Main] initApp: waiting for app.whenReady()');
@@ -5872,7 +6290,9 @@ if (!gotTheLock) {
     }
     profiler.measure('syncOpenClawConfig');
     if (resolveCoworkAgentEngine() === 'openclaw') {
+      logOpenClawStartupTrace('main-auto-ensure-running-dispatch');
       void ensureOpenClawRunningForCowork().then(() => {
+        logOpenClawStartupTrace('main-auto-ensure-running-complete');
         // Start cron polling once the gateway is confirmed running.
         try {
           getCronJobService().startPolling();

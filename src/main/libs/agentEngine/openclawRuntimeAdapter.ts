@@ -20,6 +20,7 @@ import {
 import { OPENCLAW_AGENT_TIMEOUT_SECONDS } from '../openclawConfigSync';
 import {
   OpenClawEngineManager,
+  type OpenClawEngineStatus,
   type OpenClawGatewayConnectionInfo,
 } from '../openclawEngineManager';
 import {
@@ -71,6 +72,7 @@ type GatewayClientCtor = new (options: Record<string, unknown>) => GatewayClient
 
 type OpenClawRuntimeAdapterOptions = {
   normalizeModelRef?: (modelRef: string) => string;
+  ensureGatewayRunning?: (reason: string) => Promise<OpenClawEngineStatus>;
 };
 
 type ChatEventState = 'delta' | 'final' | 'aborted' | 'error';
@@ -1664,7 +1666,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private async _ensureGatewayClientReadyImpl(): Promise<void> {
     console.log('[ChannelSync] ensureGatewayClientReady: starting engine gateway...');
-    const engineStatus = await this.engineManager.startGateway('channel-sync-ensure-ready');
+    const engineStatus = this.options.ensureGatewayRunning
+      ? await this.options.ensureGatewayRunning('channel-sync-ensure-ready')
+      : await this.engineManager.startGateway('channel-sync-ensure-ready');
     console.log('[ChannelSync] ensureGatewayClientReady: engine phase=', engineStatus.phase, 'message=', engineStatus.message);
     if (engineStatus.phase !== 'running') {
       const message = engineStatus.message || 'OpenClaw engine is not running.';

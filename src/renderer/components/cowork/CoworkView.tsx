@@ -44,6 +44,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const [isInitialized, setIsInitialized] = useState(false);
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
+  const [showEngineErrorBanner, setShowEngineErrorBanner] = useState(false);
   // Track if we're starting/continuing a session to prevent duplicate submissions
   const isStartingRef = useRef(false);
   const isContinuingRef = useRef(false);
@@ -462,6 +463,23 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     };
   }, [currentSession, isOpenClawEngine]);
 
+  useEffect(() => {
+    if (!isOpenClawEngine) {
+      setShowEngineErrorBanner(false);
+      return;
+    }
+    if (openClawStatus?.phase !== 'error') {
+      setShowEngineErrorBanner(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setShowEngineErrorBanner(true);
+    }, 1200);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isOpenClawEngine, openClawStatus?.phase]);
+
   if (!isInitialized) {
     return (
       <div className="flex-1 h-full flex flex-col bg-background">
@@ -477,7 +495,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     );
   }
 
-  const shouldShowEngineStatus = Boolean(isOpenClawEngine && openClawStatus && openClawStatus.phase !== 'running');
+  // Startup progress is handled by the global EngineStartupOverlay.
+  // Keep the top banner only for stable error states to avoid startup flicker.
+  const shouldShowEngineStatus = Boolean(isOpenClawEngine && openClawStatus?.phase === 'error' && showEngineErrorBanner);
   const isEngineError = openClawStatus?.phase === 'error';
   const isEngineReady = isOpenClawEngine
     ? isOpenClawReadyForSession(openClawStatus)
@@ -528,7 +548,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   );
 
   // Engine status banner for error/non-running states (starting overlay is now global in App.tsx)
-  const engineStatusBanner = shouldShowEngineStatus && openClawStatus && openClawStatus.phase !== 'starting' ? (
+  const engineStatusBanner = shouldShowEngineStatus && openClawStatus ? (
     <div className={`shrink-0 flex items-center justify-between px-4 py-2 text-xs ${isEngineError
       ? 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300'
       : 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300'

@@ -1106,7 +1106,7 @@ export class OpenClawConfigSync {
         };
       }
 
-      providerSelection = buildProviderSelection({
+      const currentProviderSelection = buildProviderSelection({
         apiKey,
         baseURL,
         modelId,
@@ -1117,7 +1117,8 @@ export class OpenClawConfigSync {
         supportsImage: apiResolution.providerMetadata?.supportsImage,
         modelName: apiResolution.providerMetadata?.modelName,
       });
-      primaryModel = providerSelection.primaryModel;
+      providerSelection = currentProviderSelection;
+      primaryModel = currentProviderSelection.primaryModel;
 
       for (const p of resolveAllEnabledProviderConfigs()) {
         for (const m of p.models) {
@@ -1143,15 +1144,15 @@ export class OpenClawConfigSync {
         }
       }
 
-      if (!allProvidersMap[providerSelection.providerId]) {
-        allProvidersMap[providerSelection.providerId] = providerSelection.providerConfig;
+      if (!allProvidersMap[currentProviderSelection.providerId]) {
+        allProvidersMap[currentProviderSelection.providerId] = currentProviderSelection.providerConfig;
       } else {
-        const existing = allProvidersMap[providerSelection.providerId];
+        const existing = allProvidersMap[currentProviderSelection.providerId];
         const alreadyHas = existing.models.some(
-          em => em.id === providerSelection.providerConfig.models[0]?.id,
+          em => em.id === currentProviderSelection.providerConfig.models[0]?.id,
         );
-        if (!alreadyHas && providerSelection.providerConfig.models.length > 0) {
-          existing.models.push(...providerSelection.providerConfig.models);
+        if (!alreadyHas && currentProviderSelection.providerConfig.models.length > 0) {
+          existing.models.push(...currentProviderSelection.providerConfig.models);
         }
       }
 
@@ -1264,6 +1265,17 @@ export class OpenClawConfigSync {
     const neteaseBeeChanConfig = this.getNeteaseBeeChanConfig();
 
     const weixinConfig = this.getWeixinConfig();
+    const toRecordOrNull = (value: unknown): Record<string, unknown> | null =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+    const mcpBridgeCfg = this.getMcpBridgeConfig?.();
+    const hasReadyMcpBridgeConfig = Boolean(
+      mcpBridgeCfg &&
+      mcpBridgeCfg.callbackUrl &&
+      mcpBridgeCfg.askUserCallbackUrl &&
+      mcpBridgeCfg.tools.length > 0,
+    );
 
     const hasAnyChannel = hasDingTalkOpenClaw;
 
@@ -1397,6 +1409,8 @@ export class OpenClawConfigSync {
             !knownStalePluginIds.includes(id) && !transientPluginIds.includes(id)
           )),
         );
+        const existingMcpBridgeEntry = toRecordOrNull(cleanedExistingEntries['mcp-bridge']);
+        const existingAskUserEntry = toRecordOrNull(cleanedExistingEntries['ask-user-question']);
         const qqbotPluginEnabled = qqInstances.some(i => i.enabled && i.appId);
 
 
@@ -1431,8 +1445,22 @@ export class OpenClawConfigSync {
           ...(hasPreinstalledPlugin('feishu-openclaw-plugin')
             ? { feishu: { enabled: false } }
             : {}),
-          ...(hasMcpBridgePlugin ? { 'mcp-bridge': { enabled: true } } : {}),
-          ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
+          ...(hasMcpBridgePlugin && (hasReadyMcpBridgeConfig || !!existingMcpBridgeEntry)
+            ? {
+                'mcp-bridge': {
+                  ...(existingMcpBridgeEntry ?? {}),
+                  enabled: true,
+                },
+              }
+            : {}),
+          ...(hasAskUserPlugin && (Boolean(mcpBridgeCfg?.askUserCallbackUrl) || !!existingAskUserEntry)
+            ? {
+                'ask-user-question': {
+                  ...(existingAskUserEntry ?? {}),
+                  enabled: true,
+                },
+              }
+            : {}),
           // Some OpenClaw versions auto-inject qwen-portal-auth for
           // Qwen/DashScope URLs. Declare it only when the plugin actually
           // exists, otherwise it becomes a stale entry on every startup.
@@ -1472,7 +1500,6 @@ export class OpenClawConfigSync {
 
     // Sync MCP Bridge config into the plugin's own config section
     // (root-level keys are rejected by OpenClaw's strict schema validation)
-    const mcpBridgeCfg = this.getMcpBridgeConfig?.();
     console.log(`[OpenClawConfigSync] getMcpBridgeConfig: callbackUrl=${mcpBridgeCfg?.callbackUrl ?? 'null'}, tools=${mcpBridgeCfg?.tools?.length ?? 0}`);
     if (
       hasMcpBridgePlugin &&
