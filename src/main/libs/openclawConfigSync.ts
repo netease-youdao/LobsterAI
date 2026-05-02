@@ -1456,7 +1456,37 @@ export class OpenClawConfigSync {
                 // contract check.  See openclaw/openclaw#60196.
                 ...((() => {
                   const thirdPartyDir = findThirdPartyExtensionsDir();
-                  return thirdPartyDir ? { load: { paths: [thirdPartyDir] } } : {};
+                  if (!thirdPartyDir) return {};
+                  // Merge existing load.paths with the third-party dir —
+                  // preserve manually-added paths (like user-installed plugins
+                  // via npm/git) that LobsterAI itself didn't write, so they
+                  // survive config rewrites. Deduplicate while keeping order.
+                  const existingPaths = existingPlugins?.load?.paths ?? [];
+                  const merged = [...existingPaths];
+                  if (!merged.includes(thirdPartyDir)) merged.push(thirdPartyDir);
+                  // Also scan node_modules for openclaw plugin manifests so
+                  // npm-installed plugins (e.g. memory-lancedb-pro) are
+                  // automatically discovered even if config rewrites cleared
+                  // their paths.  This makes the merge above a safety net
+                  // rather than the sole recovery mechanism.
+                  try {
+                    const stateDir = this.engineManager.getStateDir();
+                    const nmPath = path.join(stateDir, 'node_modules');
+                    if (fs.existsSync(nmPath)) {
+                      const entries = fs.readdirSync(nmPath, { withFileTypes: true });
+                      for (const entry of entries) {
+                        if (!entry.isDirectory()) continue;
+                        const pkgDir = path.join(nmPath, entry.name);
+                        const manifestPath = path.join(pkgDir, 'openclaw.plugin.json');
+                        if (fs.existsSync(manifestPath) && !merged.includes(pkgDir)) {
+                          merged.push(pkgDir);
+                        }
+                      }
+                    }
+                  } catch {
+                    // Best-effort scan: if node_modules is inaccessible, skip.
+                  }
+                  return { load: { paths: merged } };
                 })()),
                 // Deny list cleared — unused bundled plugins are physically removed
                 // from dist/extensions/ at build time (see prune-openclaw-runtime.cjs).
@@ -2049,6 +2079,54 @@ export class OpenClawConfigSync {
         const changedKeys = [...allKeys].filter(k => JSON.stringify(currentObj[k]) !== JSON.stringify(nextObj[k]));
         console.log(`${gwDiagTs()} top-level changed keys:`, changedKeys.join(',') || '(none)');
       } catch { /* ignore parse errors in diag */ }
+    }
+
+    // [PATCH] Force-discover npm-installed openclaw plugins from both
+    // stateDir/node_modules and stateDir/../node_modules, then inject
+    // into managedConfig so they survive sync rewrites.
+    // Runs BEFORE configChanged check so the injection is always reflected
+    // in the comparison.
+    try {
+      const stateDir = this.engineManager.getStateDir();
+      const nmDirs = [
+        path.join(stateDir, 'node_modules'),
+        path.join(stateDir, '..', 'node_modules'),
+      ];
+        for (const nmDir of nmDirs) {
+          if (!fs.existsSync(nmDir)) continue;
+          const dirs = fs.readdirSync(nmDir, { withFileTypes: true });
+          for (const d of dirs) {
+            if (!d.isDirectory()) continue;
+            const manifestPath = path.join(nmDir, d.name, 'openclaw.plugin.json');
+            if (!fs.existsSync(manifestPath)) continue;
+            try {
+              const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+              if (!manifest.id) continue;
+              // Ensure plugins section exists
+              if (!managedConfig.plugins) managedConfig.plugins = {};
+              // Inject load.paths
+              const load = managedConfig.plugins.load = managedConfig.plugins.load || {};
+              const paths = load.paths = load.paths || [];
+              const pkgDir = path.join(nmDir, d.name);
+              if (!paths.includes(pkgDir)) paths.push(pkgDir);
+              // Inject entries
+              if (!managedConfig.plugins.entries) managedConfig.plugins.entries = {};
+              if (!managedConfig.plugins.entries[manifest.id]) {
+                managedConfig.plugins.entries[manifest.id] = { enabled: true };
+              }
+              // Inject slots
+              if (manifest.kind) {
+                if (!managedConfig.plugins.slots) managedConfig.plugins.slots = {};
+                if (!managedConfig.plugins.slots[manifest.kind]) {
+                  managedConfig.plugins.slots[manifest.kind] = manifest.id;
+                }
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+
+    if (configChanged) {
       try {
         ensureDir(path.dirname(configPath));
         const stampedContent = `${JSON.stringify(this.stampConfigMeta(managedConfig), null, 2)}\n`;
@@ -2850,6 +2928,34 @@ export class OpenClawConfigSync {
     if (unchanged) {
       return { ok: true, changed: false, configPath };
     }
+
+
+    // [PATCH] Force-discover npm plugins into mergedConfig (writeMinimalConfig path)
+    try {
+      const stateDir = this.engineManager.getStateDir();
+      const nmDirs = [
+        path.join(stateDir, 'node_modules'),
+        path.join(stateDir, '..', 'node_modules'),
+      ];
+      for (const nmDir of nmDirs) {
+        if (!fs.existsSync(nmDir)) continue;
+        const dirs = fs.readdirSync(nmDir, { withFileTypes: true });
+        for (const d of dirs) {
+          if (!d.isDirectory()) continue;
+          const manifestPath = path.join(nmDir, d.name, 'openclaw.plugin.json');
+          if (!fs.existsSync(manifestPath)) continue;
+          try {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            if (!manifest.id) continue;
+            if (!mergedConfig.plugins) mergedConfig.plugins = {};
+            const load = mergedConfig.plugins.load = mergedConfig.plugins.load || {};
+            const paths = load.paths = load.paths || [];
+            const pkgDir = path.resolve(nmDir, d.name);
+            if (!paths.includes(pkgDir)) paths.push(pkgDir);
+          } catch {}
+        }
+      }
+    } catch {}
 
     try {
       ensureDir(path.dirname(configPath));
