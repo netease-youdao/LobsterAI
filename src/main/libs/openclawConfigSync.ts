@@ -2929,6 +2929,34 @@ export class OpenClawConfigSync {
       return { ok: true, changed: false, configPath };
     }
 
+
+    // [PATCH] Force-discover npm plugins into mergedConfig (writeMinimalConfig path)
+    try {
+      const stateDir = this.engineManager.getStateDir();
+      const nmDirs = [
+        path.join(stateDir, 'node_modules'),
+        path.join(stateDir, '..', 'node_modules'),
+      ];
+      for (const nmDir of nmDirs) {
+        if (!fs.existsSync(nmDir)) continue;
+        const dirs = fs.readdirSync(nmDir, { withFileTypes: true });
+        for (const d of dirs) {
+          if (!d.isDirectory()) continue;
+          const manifestPath = path.join(nmDir, d.name, 'openclaw.plugin.json');
+          if (!fs.existsSync(manifestPath)) continue;
+          try {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            if (!manifest.id) continue;
+            if (!mergedConfig.plugins) mergedConfig.plugins = {};
+            const load = mergedConfig.plugins.load = mergedConfig.plugins.load || {};
+            const paths = load.paths = load.paths || [];
+            const pkgDir = path.resolve(nmDir, d.name);
+            if (!paths.includes(pkgDir)) paths.push(pkgDir);
+          } catch {}
+        }
+      }
+    } catch {}
+
     try {
       ensureDir(path.dirname(configPath));
       const stampedContent = `${JSON.stringify(this.stampConfigMeta(mergedConfig), null, 2)}\n`;
