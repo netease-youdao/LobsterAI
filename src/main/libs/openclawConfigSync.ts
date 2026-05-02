@@ -1456,7 +1456,15 @@ export class OpenClawConfigSync {
                 // contract check.  See openclaw/openclaw#60196.
                 ...((() => {
                   const thirdPartyDir = findThirdPartyExtensionsDir();
-                  return thirdPartyDir ? { load: { paths: [thirdPartyDir] } } : {};
+                  if (!thirdPartyDir) return {};
+                  // Merge existing load.paths with the third-party dir —
+                  // preserve manually-added paths (like user-installed plugins
+                  // via npm/git) that LobsterAI itself didn't write, so they
+                  // survive config rewrites. Deduplicate while keeping order.
+                  const existingPaths = existingPlugins?.load?.paths ?? [];
+                  const merged = [...existingPaths];
+                  if (!merged.includes(thirdPartyDir)) merged.push(thirdPartyDir);
+                  return { load: { paths: merged } };
                 })()),
                 // Deny list cleared — unused bundled plugins are physically removed
                 // from dist/extensions/ at build time (see prune-openclaw-runtime.cjs).
