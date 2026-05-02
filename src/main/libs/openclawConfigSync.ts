@@ -2079,15 +2079,19 @@ export class OpenClawConfigSync {
         const changedKeys = [...allKeys].filter(k => JSON.stringify(currentObj[k]) !== JSON.stringify(nextObj[k]));
         console.log(`${gwDiagTs()} top-level changed keys:`, changedKeys.join(',') || '(none)');
       } catch { /* ignore parse errors in diag */ }
-      // [PATCH] Force-discover npm-installed openclaw plugins from both
-      // stateDir/node_modules and stateDir/../node_modules, then inject
-      // into managedConfig so they survive sync rewrites.
-      try {
-        const stateDir = this.engineManager.getStateDir();
-        const nmDirs = [
-          path.join(stateDir, 'node_modules'),
-          path.join(stateDir, '..', 'node_modules'),
-        ];
+    }
+
+    // [PATCH] Force-discover npm-installed openclaw plugins from both
+    // stateDir/node_modules and stateDir/../node_modules, then inject
+    // into managedConfig so they survive sync rewrites.
+    // Runs BEFORE configChanged check so the injection is always reflected
+    // in the comparison.
+    try {
+      const stateDir = this.engineManager.getStateDir();
+      const nmDirs = [
+        path.join(stateDir, 'node_modules'),
+        path.join(stateDir, '..', 'node_modules'),
+      ];
         for (const nmDir of nmDirs) {
           if (!fs.existsSync(nmDir)) continue;
           const dirs = fs.readdirSync(nmDir, { withFileTypes: true });
@@ -2121,6 +2125,8 @@ export class OpenClawConfigSync {
           }
         }
       } catch {}
+
+    if (configChanged) {
       try {
         ensureDir(path.dirname(configPath));
         const stampedContent = `${JSON.stringify(this.stampConfigMeta(managedConfig), null, 2)}\n`;
