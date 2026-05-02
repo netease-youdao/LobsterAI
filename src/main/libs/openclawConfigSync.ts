@@ -1464,6 +1464,28 @@ export class OpenClawConfigSync {
                   const existingPaths = existingPlugins?.load?.paths ?? [];
                   const merged = [...existingPaths];
                   if (!merged.includes(thirdPartyDir)) merged.push(thirdPartyDir);
+                  // Also scan node_modules for openclaw plugin manifests so
+                  // npm-installed plugins (e.g. memory-lancedb-pro) are
+                  // automatically discovered even if config rewrites cleared
+                  // their paths.  This makes the merge above a safety net
+                  // rather than the sole recovery mechanism.
+                  try {
+                    const stateDir = this.engineManager.getStateDir();
+                    const nmPath = path.join(stateDir, 'node_modules');
+                    if (fs.existsSync(nmPath)) {
+                      const entries = fs.readdirSync(nmPath, { withFileTypes: true });
+                      for (const entry of entries) {
+                        if (!entry.isDirectory()) continue;
+                        const pkgDir = path.join(nmPath, entry.name);
+                        const manifestPath = path.join(pkgDir, 'openclaw.plugin.json');
+                        if (fs.existsSync(manifestPath) && !merged.includes(pkgDir)) {
+                          merged.push(pkgDir);
+                        }
+                      }
+                    }
+                  } catch {
+                    // Best-effort scan: if node_modules is inaccessible, skip.
+                  }
                   return { load: { paths: merged } };
                 })()),
                 // Deny list cleared — unused bundled plugins are physically removed
