@@ -142,6 +142,8 @@ type ActiveTurn = {
   bufferedAgentPayloads: BufferedAgentEvent[];
   /** Client-side timeout watchdog timer (fallback for missing gateway abort events). */
   timeoutTimer?: ReturnType<typeof setTimeout>;
+  /** Event idle timer — fires when no chat/agent events arrive within the idle window. */
+  idleTimer?: ReturnType<typeof setTimeout>;
 };
 
 type BufferedChatEvent = {
@@ -818,6 +820,8 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    */
   agentTimeoutSeconds = OPENCLAW_AGENT_TIMEOUT_SECONDS;
   private static readonly CLIENT_TIMEOUT_GRACE_MS = 30_000;
+  /** Idle timeout for WebSocket event stream — fires when no chat/agent events arrive for 5 minutes. */
+  private static readonly EVENT_IDLE_TIMEOUT_MS = 300_000;
 
   constructor(
     store: CoworkStore,
@@ -1470,6 +1474,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // lifecycle event fires). This timer fires slightly after the server-side
     // timeout to recover the UI from a stuck "running" state.
     this.startTurnTimeoutWatchdog(sessionId);
+    // Start event idle timer — recovers from stuck upstream agent that produces
+    // no events at all (complements the server-side timeout watchdog above).
+    this.resetEventIdleTimer(sessionId);
 
     const client = this.requireGatewayClient();
     try {
@@ -2287,6 +2294,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.lastAgentSeqByRunId.set(runId, seq);
     }
 
+    // Reset event idle timer on every non-buffered agent event
+    this.resetEventIdleTimer(sessionId);
+
     // Fast-path: skip assistant-stream events — they carry the same text as
     // chat deltas and dispatchAgentEvent() has no handler for stream=assistant.
     if (stream === 'assistant') {
@@ -2733,6 +2743,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
       this.lastChatSeqByRunId.set(runId, seq);
     }
+
+    // Reset event idle timer on every non-buffered chat event
+    this.resetEventIdleTimer(sessionId);
 
     if (state === 'delta') {
       this.handleChatDelta(sessionId, turn, chatPayload);
@@ -4133,6 +4146,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         clearTimeout(turn.timeoutTimer);
         turn.timeoutTimer = undefined;
       }
+      // Clear event idle timer
+      if (turn.idleTimer) {
+        clearTimeout(turn.idleTimer);
+        turn.idleTimer = undefined;
+      }
       // Cancel any pending throttled messageUpdate timer for this turn
       if (turn.assistantMessageId) {
         this.clearPendingMessageUpdate(turn.assistantMessageId);
@@ -4180,6 +4198,30 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       );
       this.handleChatAborted(sessionId, currentTurn);
     }, timeoutMs);
+  }
+
+  /**
+   * Reset the event idle timer for a turn.
+   * Called on every incoming chat or agent event. If no events arrive
+   * within EVENT_IDLE_TIMEOUT_MS the turn is treated as timed-out,
+   * recovering the UI from a stuck "running" state when the upstream
+   * agent hangs without producing any WS events.
+   */
+  private resetEventIdleTimer(sessionId: string): void {
+    const turn = this.activeTurns.get(sessionId);
+    if (!turn) return;
+    if (turn.idleTimer) {
+      clearTimeout(turn.idleTimer);
+    }
+    turn.idleTimer = setTimeout(() => {
+      const currentTurn = this.activeTurns.get(sessionId);
+      if (!currentTurn || currentTurn.turnToken !== turn.turnToken) return;
+      console.warn(
+        `[OpenClawRuntime] Event idle timeout fired for session ${sessionId}, `
+        + `runId=${currentTurn.runId} — no events received for ${OpenClawRuntimeAdapter.EVENT_IDLE_TIMEOUT_MS}ms`,
+      );
+      this.handleChatAborted(sessionId, currentTurn);
+    }, OpenClawRuntimeAdapter.EVENT_IDLE_TIMEOUT_MS);
   }
 
   /**
@@ -4309,6 +4351,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
     this.store.updateSession(sessionId, { status: 'running' });
     this.startTurnTimeoutWatchdog(sessionId);
+    this.resetEventIdleTimer(sessionId);
 
     // For channel sessions, prefetch user messages before streaming starts
     if (isChannel) {
