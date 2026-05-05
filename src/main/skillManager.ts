@@ -121,6 +121,55 @@ function resolveWindowsRegistryPath(): string | null {
   }
 }
 
+function isWindowsDeletePermissionError(error: unknown): boolean {
+  if (process.platform !== 'win32') return false;
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+}
+
+function tryWindowsDeleteFallback(targetDir: string): { success: boolean; detail?: string } {
+  if (process.platform !== 'win32') return { success: false, detail: 'not-windows' };
+
+  // Clear read-only/system/hidden attrs first, then force remove recursively.
+  const escapedPath = targetDir.replace(/"/g, '""');
+  const command = `attrib -r -s -h "${escapedPath}" /s /d >nul 2>&1 & rmdir /s /q "${escapedPath}"`;
+  const result = spawnSync('cmd.exe', ['/d', '/s', '/c', command], {
+    stdio: 'pipe',
+    windowsHide: true,
+    timeout: 10000,
+  });
+
+  if (!fs.existsSync(targetDir)) {
+    return { success: true };
+  }
+
+  const stderr = result.stderr?.toString('utf-8').trim();
+  const stdout = result.stdout?.toString('utf-8').trim();
+  const detail = stderr || stdout || `status=${result.status ?? 'null'}`;
+  return { success: false, detail };
+}
+
+function normalizeWindowsSkillDirectoryAttrs(targetDir: string): { success: boolean; detail?: string } {
+  if (process.platform !== 'win32') return { success: true };
+
+  const escapedPath = targetDir.replace(/"/g, '""');
+  const result = spawnSync('cmd.exe', ['/d', '/s', '/c', `attrib -r -s -h "${escapedPath}" /s /d`], {
+    stdio: 'pipe',
+    windowsHide: true,
+    timeout: 10000,
+  });
+
+  if (result.status === 0) {
+    return { success: true };
+  }
+
+  const stderr = result.stderr?.toString('utf-8').trim();
+  const stdout = result.stdout?.toString('utf-8').trim();
+  const detail = stderr || stdout || result.error?.message || `status=${result.status ?? 'null'}`;
+  return { success: false, detail };
+}
+
 /**
  * Build an environment for spawning skill scripts.
  * Merges the user's shell PATH with the current process environment.
@@ -1557,14 +1606,31 @@ export class SkillManager {
     this.stopWatching();
     try {
       if (targetDir !== null) {
+        let removedByFallback = false;
         const startMs = Date.now();
-        fs.rmSync(targetDir, {
-          recursive: true,
-          force: true,
-          maxRetries: process.platform === 'win32' ? 5 : 0,
-          retryDelay: process.platform === 'win32' ? 200 : 0,
-        });
-        console.log('[skills] deleteSkill: directory removed in %dms', Date.now() - startMs);
+        try {
+          fs.rmSync(targetDir, {
+            recursive: true,
+            force: true,
+            maxRetries: process.platform === 'win32' ? 5 : 0,
+            retryDelay: process.platform === 'win32' ? 200 : 0,
+          });
+        } catch (error) {
+          if (!isWindowsDeletePermissionError(error)) {
+            throw error;
+          }
+          const fallback = tryWindowsDeleteFallback(targetDir);
+          if (!fallback.success) {
+            console.warn('[skills] deleteSkill: Windows fallback failed for "%s": %s', id, fallback.detail || 'unknown');
+            throw error;
+          }
+          removedByFallback = true;
+        }
+        if (removedByFallback) {
+          console.warn('[skills] deleteSkill: directory removed via Windows fallback in %dms', Date.now() - startMs);
+        } else {
+          console.log('[skills] deleteSkill: directory removed in %dms', Date.now() - startMs);
+        }
       } else {
         console.warn('[skills] deleteSkill: directory not found on disk, cleaning state only');
       }
@@ -1767,6 +1833,12 @@ export class SkillManager {
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);
+        const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
+        if (normalizeResult.success) {
+          console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
+        } else {
+          console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
+        }
       }
 
       cleanupPathSafely(cleanupPath);
@@ -2016,6 +2088,12 @@ export class SkillManager {
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);
+        const normalizeResult = normalizeWindowsSkillDirectoryAttrs(targetDir);
+        if (normalizeResult.success) {
+          console.log('[skills] install normalization applied for "%s" at %s', folderName, targetDir);
+        } else {
+          console.warn('[skills] install normalization failed for "%s" at %s: %s', folderName, targetDir, normalizeResult.detail || 'unknown');
+        }
         installedIds.push(path.basename(targetDir));
       }
     }
@@ -2685,4 +2763,5 @@ export const __skillManagerTestUtils = {
   isTruthy,
   extractDescription,
   parseClawhubUrl,
+  isWindowsDeletePermissionError,
 };
