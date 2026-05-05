@@ -5124,6 +5124,10 @@ if (!gotTheLock) {
         try {
           while (true) {
             const { value, done } = await reader.read();
+            if (event.sender.isDestroyed()) {
+              reader.cancel();
+              break;
+            }
             if (done) {
               event.sender.send(`api:stream:${options.requestId}:done`);
               break;
@@ -5132,6 +5136,10 @@ if (!gotTheLock) {
             event.sender.send(`api:stream:${options.requestId}:data`, chunk);
           }
         } catch (error) {
+          if (event.sender.isDestroyed()) {
+            // Renderer is gone — silently drop the event to avoid a crash.
+            return;
+          }
           if (error instanceof Error && error.name === 'AbortError') {
             event.sender.send(`api:stream:${options.requestId}:abort`);
           } else {
