@@ -852,31 +852,33 @@ export class CoworkStore {
     const id = uuidv4();
     const now = Date.now();
 
-    const seqRow = this.db
-      .prepare(
-        'SELECT COALESCE(MAX(sequence), 0) + 1 as next_seq FROM cowork_messages WHERE session_id = ?',
-      )
-      .get(sessionId) as { next_seq: number } | undefined;
-    const sequence = seqRow?.next_seq ?? 1;
+    this.db.transaction(() => {
+      const seqRow = this.db
+        .prepare(
+          'SELECT COALESCE(MAX(sequence), 0) + 1 as next_seq FROM cowork_messages WHERE session_id = ?',
+        )
+        .get(sessionId) as { next_seq: number } | undefined;
+      const sequence = seqRow?.next_seq ?? 1;
 
-    this.db
-      .prepare(
-        `
-      INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `,
-      )
-      .run(
-        id,
-        sessionId,
-        message.type,
-        message.content,
-        message.metadata ? JSON.stringify(message.metadata) : null,
-        now,
-        sequence,
-      );
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+        )
+        .run(
+          id,
+          sessionId,
+          message.type,
+          message.content,
+          message.metadata ? JSON.stringify(message.metadata) : null,
+          now,
+          sequence,
+        );
 
-    this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
+      this.db.prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
+    })();
 
     return {
       id,
