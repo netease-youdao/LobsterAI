@@ -1147,8 +1147,58 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
 // Module-level handle so ensureOpenClawRunningForCowork can await any in-flight
 // proactive token refresh before syncing config to the gateway.
 let pendingTokenRefresh: Promise<string | null> | null = null;
+let ensureOpenClawRunningInFlight: Promise<OpenClawEngineStatus> | null = null;
+let ensureOpenClawRunningInFlightOwnerReason = '';
+const PENDING_TOKEN_REFRESH_WAIT_TIMEOUT_MS = 3000;
+
+const waitForPendingTokenRefresh = async (context: 'before-proceeding' | 'before-gateway-start'): Promise<void> => {
+  if (!pendingTokenRefresh) {
+    return;
+  }
+
+  const inFlightRefresh = pendingTokenRefresh;
+
+  if (context === 'before-proceeding') {
+    await inFlightRefresh.catch(() => {});
+    return;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const refreshSettledPromise: Promise<'done'> = inFlightRefresh
+      .then(() => 'done' as const)
+      .catch(() => 'done' as const);
+    const waitResult = await Promise.race([
+      refreshSettledPromise,
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), PENDING_TOKEN_REFRESH_WAIT_TIMEOUT_MS);
+      }),
+    ]);
+
+    if (waitResult === 'timeout') {
+      console.warn(
+        `${gwDiagTs()} ensureRunning: pending token refresh wait timed out after ${PENDING_TOKEN_REFRESH_WAIT_TIMEOUT_MS}ms, continuing gateway startup`,
+      );
+      logOpenClawStartupTrace('ensure-running-token-refresh-timeout', {
+        timeoutMs: PENDING_TOKEN_REFRESH_WAIT_TIMEOUT_MS,
+      });
+    }
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
 
 const ensureOpenClawRunningForCowork = async (reason = 'ensure-running-for-cowork') => {
+  if (ensureOpenClawRunningInFlight) {
+    console.log(
+      `${gwDiagTs()} ensureRunning: reusing in-flight pipeline (reason=${reason}, owner=${ensureOpenClawRunningInFlightOwnerReason || 'unknown'})`,
+    );
+    return await ensureOpenClawRunningInFlight;
+  }
+
+  const task = (async (): Promise<OpenClawEngineStatus> => {
   const manager = getOpenClawEngineManager();
   const status = manager.getStatus();
   if (status.phase === 'running') {
@@ -1156,7 +1206,7 @@ const ensureOpenClawRunningForCowork = async (reason = 'ensure-running-for-cowor
     // the gateway for token changes. Just wait for any in-flight refresh.
     if (pendingTokenRefresh) {
       console.log('[OpenClaw] ensureRunning: awaiting pending token refresh before proceeding');
-      await pendingTokenRefresh.catch(() => {});
+      await waitForPendingTokenRefresh('before-proceeding');
     }
     return manager.getStatus();
   }
@@ -1171,7 +1221,7 @@ const ensureOpenClawRunningForCowork = async (reason = 'ensure-running-for-cowor
     // a fresh token rather than the stale one that triggered the refresh.
     if (pendingTokenRefresh) {
       console.log('[OpenClaw] ensureRunning: awaiting pending token refresh before gateway start');
-      await pendingTokenRefresh.catch(() => {});
+      await waitForPendingTokenRefresh('before-gateway-start');
     }
 
     // Ensure MCP bridge is started and config is synced before launching the gateway,
@@ -1206,6 +1256,18 @@ const ensureOpenClawRunningForCowork = async (reason = 'ensure-running-for-cowor
     return await manager.startGateway(reason);
   } finally {
     endPreStartGatewayPreparation();
+  }
+  })();
+
+  ensureOpenClawRunningInFlight = task;
+  ensureOpenClawRunningInFlightOwnerReason = reason;
+  try {
+    return await task;
+  } finally {
+    if (ensureOpenClawRunningInFlight === task) {
+      ensureOpenClawRunningInFlight = null;
+      ensureOpenClawRunningInFlightOwnerReason = '';
+    }
   }
 };
 
