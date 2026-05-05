@@ -1045,11 +1045,13 @@ const bindOpenClawStatusForwarder = (): void => {
   manager.on('status', (status) => {
     forwardOpenClawStatus(status);
     maybeRestartGatewayAfterStartup(status);
+    maybeFlushDeferredStartupSync(status);
   });
   openClawStatusForwarderBound = true;
   const currentStatus = manager.getStatus();
   forwardOpenClawStatus(currentStatus);
   maybeRestartGatewayAfterStartup(currentStatus);
+  maybeFlushDeferredStartupSync(currentStatus);
 };
 
 const getEngineNotReadyResponse = (status: OpenClawEngineStatus) => {
@@ -1663,6 +1665,9 @@ const OPENCLAW_SYNC_STARTUP_WINDOW_MS = 30_000;
 const OPENCLAW_SYNC_STARTUP_DEBOUNCE_MS = 200;
 const OPENCLAW_SYNC_NORMAL_DEBOUNCE_MS = 50;
 const openClawSyncSchedulerStartedAt = Date.now();
+const OpenClawSyncReason = {
+  ServerModelsUpdated: 'server-models-updated',
+} as const;
 
 type PendingOpenClawSyncRequest = {
   options: OpenClawConfigSyncOptions;
@@ -1673,9 +1678,25 @@ type PendingOpenClawSyncRequest = {
 let openClawSyncInFlight: Promise<void> | null = null;
 let openClawSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingOpenClawSyncRequests: PendingOpenClawSyncRequest[] = [];
+const deferredStartupSyncReasons = new Set<string>();
+let deferredStartupSyncFlushInProgress = false;
 
 const isInOpenClawSyncStartupWindow = (): boolean =>
   Date.now() - openClawSyncSchedulerStartedAt < OPENCLAW_SYNC_STARTUP_WINDOW_MS;
+
+const shouldDeferOpenClawSyncDuringStartup = (options: OpenClawConfigSyncOptions): boolean => {
+  if (!isInOpenClawSyncStartupWindow()) {
+    return false;
+  }
+  if (options.reason !== OpenClawSyncReason.ServerModelsUpdated) {
+    return false;
+  }
+  if (options.restartGatewayIfRunning) {
+    return false;
+  }
+  const phase = getOpenClawEngineManager().getStatus().phase;
+  return phase !== 'running';
+};
 
 const mergeOpenClawSyncBatch = (
   requests: PendingOpenClawSyncRequest[],
@@ -1758,9 +1779,63 @@ const drainOpenClawSyncRequests = async (): Promise<void> => {
   await openClawSyncInFlight;
 };
 
+const maybeFlushDeferredStartupSync = (status: OpenClawEngineStatus): void => {
+  if (status.phase !== 'running' || deferredStartupSyncReasons.size === 0 || deferredStartupSyncFlushInProgress) {
+    return;
+  }
+
+  const reasons = Array.from(deferredStartupSyncReasons);
+  deferredStartupSyncReasons.clear();
+  deferredStartupSyncFlushInProgress = true;
+  const mergedReason = reasons.join(',');
+
+  console.log(
+    `${gwDiagTs()} startup-deferred sync: flushing deferred reasons after running: ${mergedReason}`,
+  );
+  logOpenClawStartupTrace('sync-deferred-flush-start', {
+    reasons,
+    phase: status.phase,
+  });
+
+  void syncOpenClawConfig({
+    reason: `deferred-startup:${mergedReason}`,
+    restartGatewayIfRunning: false,
+  }).catch((error) => {
+    console.error(
+      `${gwDiagTs()} startup-deferred sync: failed for reasons=${mergedReason}:`,
+      error,
+    );
+  }).finally(() => {
+    deferredStartupSyncFlushInProgress = false;
+    const currentStatus = getOpenClawEngineManager().getStatus();
+    if (currentStatus.phase === 'running' && deferredStartupSyncReasons.size > 0) {
+      maybeFlushDeferredStartupSync(currentStatus);
+    }
+  });
+};
+
 const syncOpenClawConfig = async (
   options: OpenClawConfigSyncOptions = { reason: 'unknown' },
 ): Promise<OpenClawConfigSyncResponse> => {
+  if (shouldDeferOpenClawSyncDuringStartup(options)) {
+    deferredStartupSyncReasons.add(options.reason);
+    const status = getOpenClawEngineManager().getStatus();
+    console.log(
+      `${gwDiagTs()} startup-deferred sync: deferring reason=${options.reason} (phase=${status.phase})`,
+    );
+    logOpenClawStartupTrace('sync-deferred-startup-window', {
+      reason: options.reason,
+      phase: status.phase,
+      startupWindow: true,
+      deferredCount: deferredStartupSyncReasons.size,
+    });
+    return {
+      success: true,
+      changed: false,
+      status,
+    };
+  }
+
   return await new Promise<OpenClawConfigSyncResponse>((resolve, reject) => {
     pendingOpenClawSyncRequests.push({ options, resolve, reject });
     logOpenClawStartupTrace('sync-enqueue', {
@@ -2958,7 +3033,7 @@ if (!gotTheLock) {
       // This IPC can run after normal chat completion when the renderer refreshes quota/model
       // state, so server model updates must not force a hard gateway restart.
       if (serverModelsChanged) {
-        syncOpenClawConfig({ reason: 'server-models-updated', restartGatewayIfRunning: false }).catch(() => {});
+        syncOpenClawConfig({ reason: OpenClawSyncReason.ServerModelsUpdated, restartGatewayIfRunning: false }).catch(() => {});
       } else {
         console.debug('[Auth:getModels] server model metadata unchanged, skipping config sync');
       }
