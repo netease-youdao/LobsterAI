@@ -12,6 +12,7 @@
 4. 服务端模型列表更新后，OpenClaw gateway 必须能拿到最新模型能力
 5. 修复不能把已知纯文本模型错误升级成视觉模型
 6. 即使 `openclaw.json` 已经写对，OpenClaw runtime 的 model catalog / 发图前能力预检也不能因为 provider alias 或 catalog miss 再把图片丢弃
+7. qwen3.6 Plus 任务已经完成后，迟到的 OpenClaw lifecycle 事件不能把 LobsterAI 会话重新置为 `running`
 
 ## 核心结论
 
@@ -29,12 +30,15 @@ promptImages=0
 
 这说明图片不是在 LobsterAI 侧上传或配置写入阶段丢失，而是在 OpenClaw runtime 的 `resolveGatewayModelSupportsImages()` 预检阶段被判定为不支持图片。根因是 OpenClaw 当前版本的 model catalog 可能没有包含显式配置的 provider model，且 provider 比较使用精确字符串；`qwen-portal` 与 OpenClaw 原生 `qwen` 没有归一化到同一 provider，catalog miss 后函数直接返回 `false`。
 
+**2026-05-06 补充结论 B：qwen3.6 Plus 完成后 UI 仍 loading 不是图片传输问题本身。** 现场唯一 `running` 会话 `82d47ef0-dc99-4d04-99aa-967815af76cb` 的 assistant 消息已写入 `metadata: { isStreaming:false, isFinal:true }`，OpenClaw 日志也显示同一 run 已 `run_completed`。随后 gateway 又发出同一 run 的迟到 `stream=lifecycle, phase=fallback` 事件。LobsterAI 旧逻辑会在没有 active turn 时把任何非 error agent event 当作 follow-up turn 重新创建，且 `phase=fallback` 没有 handler，最终把本地 session 状态重新置为 `running`，但再也没有 final/end 事件来收尾。
+
 | 场景 | 错误表现 | 根因 |
 |---|---|---|
 | `lobsterai-server/qwen3.6-plus-YoudaoInner` | 模型不在 provider 注册表里，图片被丢弃 | `lobsterai-server` 只注册默认模型，未合并服务端全量模型 |
 | `qwen-portal/qwen3.6-plus` | 模型存在，但 `input` 被写成 `['text']` | 本地 provider config 中 `supportsImage:false` 覆盖了真实能力 |
 | `custom_0/qwen3.6-plus` | 自定义供应商同名视觉模型可能被当作文本模型 | 自定义模型只信任用户保存的 `supportsImage` |
 | `openclaw.json` 已写出 `input: ['text', 'image']`，但 gateway 仍丢图 | `parseMessageWithAttachments` 继续提示 model does not support images | OpenClaw model catalog 未合并显式配置模型，且 `qwen-portal` / `qwen` provider alias 未归一化；catalog miss 直接降级为不支持图片 |
+| qwen3.6 Plus 已完成但 UI 仍 loading | DB 中 session 为 `running`，最新 assistant 消息已 final | 迟到 `lifecycle phase=fallback` 事件重新创建 ghost `ActiveTurn`，且没有后续事件清理 |
 
 ---
 
@@ -71,6 +75,13 @@ OpenClaw gateway
   → fallback to current OpenClaw config when catalog misses or is stale
   → parseMessageWithAttachments()
   → keep or drop image attachments based on models[].input
+
+OpenClawRuntimeAdapter
+  → track active turn runIds
+  → mark completed/aborted/errored runIds as recently closed
+  → ignore lifecycle phase=fallback diagnostic events
+  → drop late events for recently closed runIds
+  → prevent ghost ActiveTurn from setting session status back to running
 ```
 
 ### 设计原则
@@ -81,6 +92,7 @@ OpenClaw gateway
 4. **已知纯文本模型不被误升级。** 如果 provider registry 明确某模型不支持图片，用户配置里的 `supportsImage:true` 也会被纠正。
 5. **未知模型尊重用户配置。** 对 registry 不认识的模型，用户勾选“支持图像输入”仍然有效。
 6. **OpenClaw runtime 不能只信 catalog。** 发图前能力预检必须使用 provider alias 归一化，并在 catalog miss 或 catalog 过期时回退到当前 `openclaw.json`。
+7. **迟到 lifecycle 事件不能改变已完成状态。** `phase=fallback` 只作为诊断/兼容事件处理，不能创建或重开 LobsterAI turn；刚关闭的 runId 在短时间内作为 tombstone 保留，防止迟到事件绑定到后续 turn。
 
 ---
 
@@ -365,6 +377,58 @@ scripts/patches/v2026.4.14/openclaw-qwen-vision-catalog-fallback.patch
    - 自定义 / catalog miss 的视觉模型保留图片能力
    - 显式 text-only 模型不会被误升级
 
+### 问题 5：qwen3.6 Plus 完成后 UI 仍显示 loading
+
+#### 现象
+
+2026-05-06 现场会话：
+
+```text
+sessionId=82d47ef0-dc99-4d04-99aa-967815af76cb
+model=qwen-portal/qwen3.6-plus
+local status=running
+latest assistant metadata={ "isStreaming": false, "isFinal": true }
+```
+
+OpenClaw gateway 同一 run 已完成：
+
+```text
+lifecycle phase=end
+session state prev=processing new=idle reason="run_completed"
+embedded run done aborted=false
+```
+
+但完成数秒后又收到迟到事件：
+
+```text
+stream=lifecycle phase=fallback runId=<same completed run>
+```
+
+#### 根因
+
+`OpenClawRuntimeAdapter.handleAgentEvent()` 旧逻辑在满足以下条件时会自动创建 `ActiveTurn`：
+
+```text
+has resolved sessionId
+no active turn
+has sessionKey
+stream != error
+runId not in terminatedRunIds
+```
+
+`lifecycle phase=fallback` 满足这些条件，因此即使该 run 已经完成，也会触发 `ensureActiveTurn()`，把 session 状态重新写成 `running`。随后 `handleAgentLifecycleEvent()` 对 `phase=fallback` 没有任何收尾逻辑，所以 UI 会停在 loading。
+
+另一个风险是完成清理会立即删除 `sessionIdByRunId`。如果旧 run 的迟到事件在下一轮对话期间到达，旧 runId 可能被错误绑定到新 turn，污染当前任务的状态机。
+
+#### 修复
+
+LobsterAI runtime 侧新增防护：
+
+1. `stream=lifecycle, phase=fallback` 作为诊断事件处理，直接忽略，不能创建或重开 `ActiveTurn`
+2. `cleanupSessionTurn()` 清理 turn 时，把该 turn 的所有 `knownRunIds` 放入短 TTL tombstone
+3. `handleAgentEvent()`、`handleChatEvent()`、`processAgentAssistantText()`、`enqueuePendingAgentEvent()`、`ensureActiveTurn()`、`bindRunIdToTurn()` 遇到 recently closed runId 时直接丢弃或拒绝绑定
+4. tombstone 自动过期并有数量上限，避免长期持有 runId
+
 ---
 
 ## 涉及文件清单
@@ -380,6 +444,9 @@ scripts/patches/v2026.4.14/openclaw-qwen-vision-catalog-fallback.patch
 | `src/renderer/services/config.ts` | 加载和迁移本地 provider config 时修正模型能力 |
 | `src/renderer/components/Settings.tsx` | 设置页新增/编辑/导入/导出模型时修正模型能力 |
 | `scripts/patches/v2026.4.14/openclaw-qwen-vision-catalog-fallback.patch` | OpenClaw runtime 补丁：provider alias、catalog 合并显式配置模型、发图前能力预检回退当前 config |
+| `src/main/libs/agentEngine/constants.ts` | Agent lifecycle phase 常量定义 |
+| `src/main/libs/agentEngine/openclawRuntimeAdapter.ts` | LobsterAI runtime lifecycle 防护：忽略迟到 fallback，tombstone 已关闭 runId |
+| `src/main/libs/agentEngine/openclawRuntimeAdapter.test.ts` | 回归测试已完成 session 不会被迟到 lifecycle event 重新置为 running |
 
 ---
 
@@ -389,6 +456,7 @@ scripts/patches/v2026.4.14/openclaw-qwen-vision-catalog-fallback.patch
 
 ```bash
 npm test -- openclawConfigSync providers/constants
+npm test -- openclawRuntimeAdapter
 npm run build
 git diff --check
 ```
@@ -444,6 +512,8 @@ provider=lobsterai-server/qwen3.6-plus-YoudaoInner promptImages=1
 | `qwen-portal/qwen3.6-plus` 在 catalog 中只有 `qwen/qwen3.6-plus` | OpenClaw 通过 provider alias 匹配，保留图片 |
 | `lobsterai-server/qwen3.6-plus-YoudaoInner` 没进入 catalog 但 config 声明 image | `resolveGatewayModelSupportsImages()` 回退 config，保留图片 |
 | catalog miss 且 config 声明 `input: ['text']` | 仍按纯文本模型处理，不误升级 |
+| qwen3.6 Plus run 已 `chat final` / `run_completed` 后收到 `lifecycle phase=fallback` | 本地 session 保持 `completed`，不重新创建 `ActiveTurn` |
+| 旧 run 已清理后又收到同 runId 的迟到 lifecycle/chat/assistant event | 事件被丢弃，不绑定到当前或后续 turn |
 
 ---
 
@@ -456,6 +526,7 @@ provider=lobsterai-server/qwen3.6-plus-YoudaoInner promptImages=1
 5. `auth:getModels` 可能在普通对话完成后被调用用于刷新额度和模型状态，因此不能把模型列表变化当作硬重启信号。
 6. `openclaw-qwen-vision-catalog-fallback.patch` 是针对 OpenClaw `v2026.4.14` 的版本补丁；升级 OpenClaw 后需要重新确认 upstream 是否已包含等价修复，或重新生成 patch。
 7. 补丁落地后，需要重新应用 OpenClaw patches 并重建/替换 bundled runtime，正在运行的旧 runtime 不会自动获得源码补丁。
+8. recently closed runId tombstone 只覆盖短时间迟到事件；如果未来 gateway 在长时间后重放旧 run 事件，需要改为由 gateway 提供明确的 run lifecycle ordering 或持久化 completed run cursor。
 
 ---
 

@@ -583,6 +583,66 @@ test('lifecycle fallback repairs managed session assistant text from history', a
   expect(session.status).toBe('completed');
 });
 
+test('late lifecycle fallback event does not reopen a completed managed session', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: '你是哪个模型', timestamp: 1, metadata: {} },
+    {
+      id: 'msg-2',
+      type: 'assistant',
+      content: '当前会话使用的是 qwen-portal/qwen3.6-plus 模型。',
+      timestamp: 2,
+      metadata: { isStreaming: false, isFinal: true },
+    },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+
+  adapter.rememberSessionKey(session.id, sessionKey);
+  adapter.handleGatewayEvent({
+    event: 'agent',
+    seq: 1,
+    payload: {
+      runId: 'late-run',
+      sessionKey,
+      stream: 'lifecycle',
+      data: { phase: 'fallback' },
+    },
+  });
+
+  expect(session.status).toBe('completed');
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+  expect(adapter.sessionIdByRunId.has('late-run')).toBe(false);
+});
+
+test('late event for a closed run does not recreate a managed session turn', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+    { id: 'msg-2', type: 'assistant', content: 'done', timestamp: 2, metadata: { isStreaming: false, isFinal: true } },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+
+  adapter.rememberSessionKey(session.id, sessionKey);
+  adapter.ensureActiveTurn(session.id, sessionKey, 'closed-run');
+  session.status = 'completed';
+  adapter.cleanupSessionTurn(session.id);
+
+  adapter.handleGatewayEvent({
+    event: 'agent',
+    seq: 2,
+    payload: {
+      runId: 'closed-run',
+      sessionKey,
+      stream: 'lifecycle',
+      data: { phase: 'start' },
+    },
+  });
+
+  expect(session.status).toBe('completed');
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+  expect(adapter.sessionIdByRunId.has('closed-run')).toBe(false);
+});
+
 test('reconcileWithHistory: preserves tool messages', async () => {
   const { session, store, getReplaceCallCount } = createReconcileStore([
     { id: 'msg-1', type: 'user', content: 'Run a command', timestamp: 1, metadata: {} },
