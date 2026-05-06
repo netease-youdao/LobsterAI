@@ -2498,9 +2498,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('skills:delete', (_event, id: string) => {
+  ipcMain.handle('skills:delete', async (_event, id: string) => {
     try {
-      const skills = getSkillManager().deleteSkill(id);
+      const skills = await getSkillManager().deleteSkill(id);
       return { success: true, skills };
     } catch (error) {
       console.error('[skills] Failed to delete skill:', id, error);

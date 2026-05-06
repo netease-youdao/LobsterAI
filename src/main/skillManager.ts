@@ -128,26 +128,52 @@ function isWindowsDeletePermissionError(error: unknown): boolean {
   return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
 }
 
-function tryWindowsDeleteFallback(targetDir: string): { success: boolean; detail?: string } {
-  if (process.platform !== 'win32') return { success: false, detail: 'not-windows' };
+function tryWindowsDeleteFallbackAsync(targetDir: string): Promise<{ success: boolean; detail?: string }> {
+  if (process.platform !== 'win32') return Promise.resolve({ success: false, detail: 'not-windows' });
 
-  // Clear read-only/system/hidden attrs first, then force remove recursively.
-  const escapedPath = targetDir.replace(/"/g, '""');
-  const command = `attrib -r -s -h "${escapedPath}" /s /d >nul 2>&1 & rmdir /s /q "${escapedPath}"`;
-  const result = spawnSync('cmd.exe', ['/d', '/s', '/c', command], {
-    stdio: 'pipe',
-    windowsHide: true,
-    timeout: 10000,
+  return new Promise<void>(resolve => setTimeout(resolve, 50)).then(() => {
+    const escapedPath = targetDir.replace(/"/g, '""');
+    const command = `icacls "${escapedPath}" /reset /t /c >nul 2>&1 & attrib -r -s -h "${escapedPath}" /s /d >nul 2>&1 & rmdir /s /q "${escapedPath}"`;
+
+    return new Promise<{ success: boolean; detail?: string }>((resolve) => {
+      let settled = false;
+      const settle = (result: { success: boolean; detail?: string }) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+
+      const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
+        stdio: 'pipe',
+        windowsHide: true,
+      });
+
+      let stderr = '';
+      let stdout = '';
+      child.stderr?.on('data', (data: Buffer) => { stderr += data.toString('utf-8'); });
+      child.stdout?.on('data', (data: Buffer) => { stdout += data.toString('utf-8'); });
+
+      const timer = setTimeout(() => {
+        child.kill();
+        settle({ success: false, detail: 'timeout' });
+      }, 10000);
+
+      child.on('close', () => {
+        clearTimeout(timer);
+        if (!fs.existsSync(targetDir)) {
+          settle({ success: true });
+        } else {
+          const detail = stderr.trim() || stdout.trim() || 'unknown';
+          settle({ success: false, detail });
+        }
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        settle({ success: false, detail: err.message });
+      });
+    });
   });
-
-  if (!fs.existsSync(targetDir)) {
-    return { success: true };
-  }
-
-  const stderr = result.stderr?.toString('utf-8').trim();
-  const stdout = result.stdout?.toString('utf-8').trim();
-  const detail = stderr || stdout || `status=${result.status ?? 'null'}`;
-  return { success: false, detail };
 }
 
 function normalizeWindowsSkillDirectoryAttrs(targetDir: string): { success: boolean; detail?: string } {
@@ -1298,6 +1324,7 @@ export class SkillManager {
     existingSkillDir?: string;
   }>();
   private upgradingSkillIds = new Set<string>();
+  private deletingSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
 
@@ -1594,7 +1621,7 @@ export class SkillManager {
     return this.listSkills();
   }
 
-  deleteSkill(id: string): SkillRecord[] {
+  async deleteSkill(id: string): Promise<SkillRecord[]> {
     const root = this.ensureSkillsRoot();
     if (id !== path.basename(id)) {
       throw new Error('Invalid skill id');
@@ -1602,6 +1629,19 @@ export class SkillManager {
     if (this.isBuiltInSkillId(id)) {
       throw new Error('Built-in skills cannot be deleted');
     }
+    if (this.deletingSkillIds.has(id)) {
+      throw new Error(`Skill "${id}" is already being deleted`);
+    }
+
+    this.deletingSkillIds.add(id);
+    try {
+      return await this._performDelete(id, root);
+    } finally {
+      this.deletingSkillIds.delete(id);
+    }
+  }
+
+  private async _performDelete(id: string, root: string): Promise<SkillRecord[]> {
 
     let targetDir: string | null = resolveWithin(root, id);
     if (!fs.existsSync(targetDir)) {
@@ -1619,12 +1659,18 @@ export class SkillManager {
     // Release directory handles held by fs.watch() before deleting;
     // on Windows, open handles prevent rmSync from removing the directory.
     this.stopWatching();
+    // On Windows, watcher.close() triggers an async kernel operation to release
+    // the directory handle. Yield to the event loop so the handle is fully
+    // released before we attempt deletion.
+    if (process.platform === 'win32') {
+      await new Promise<void>(resolve => setTimeout(resolve, 100));
+    }
     try {
       if (targetDir !== null) {
         let removedByFallback = false;
         const startMs = Date.now();
         try {
-          fs.rmSync(targetDir, {
+          await fs.promises.rm(targetDir, {
             recursive: true,
             force: true,
             maxRetries: process.platform === 'win32' ? 5 : 0,
@@ -1634,12 +1680,27 @@ export class SkillManager {
           if (!isWindowsDeletePermissionError(error)) {
             throw error;
           }
-          const fallback = tryWindowsDeleteFallback(targetDir);
+          const fallback = await tryWindowsDeleteFallbackAsync(targetDir);
           if (!fallback.success) {
             console.warn('[skills] deleteSkill: Windows fallback failed for "%s": %s', id, fallback.detail || 'unknown');
-            throw error;
+            // Last resort: remove SKILL.md so listSkillDirs won't discover this
+            // directory, then rename it to a tombstone cleaned up on next startup.
+            try {
+              const skillMdPath = path.join(targetDir, SKILL_FILE_NAME);
+              if (fs.existsSync(skillMdPath)) {
+                fs.unlinkSync(skillMdPath);
+              }
+              const tombstone = targetDir + '.deleted.' + Date.now();
+              fs.renameSync(targetDir, tombstone);
+              console.warn('[skills] deleteSkill: directory renamed to tombstone "%s" as last resort', path.basename(tombstone));
+              removedByFallback = true;
+            } catch (renameError) {
+              console.error('[skills] deleteSkill: last-resort rename also failed:', renameError);
+              throw error;
+            }
+          } else {
+            removedByFallback = true;
           }
-          removedByFallback = true;
         }
         if (removedByFallback) {
           console.warn('[skills] deleteSkill: directory removed via Windows fallback in %dms', Date.now() - startMs);
@@ -2135,6 +2196,23 @@ export class SkillManager {
     this.stopWatching();
     const primaryRoot = this.ensureSkillsRoot();
     const roots = this.getSkillRoots(primaryRoot);
+
+    // Clean up tombstone directories left by failed deletions on Windows
+    if (process.platform === 'win32') {
+      for (const root of roots) {
+        if (!fs.existsSync(root)) continue;
+        try {
+          for (const entry of fs.readdirSync(root)) {
+            if (/\.deleted\.\d+$/.test(entry)) {
+              try {
+                fs.rmSync(path.join(root, entry), { recursive: true, force: true });
+                console.log('[skills] startWatching: cleaned up tombstone "%s"', entry);
+              } catch { /* will retry next time */ }
+            }
+          }
+        } catch { /* ignore scan errors */ }
+      }
+    }
 
     // Root-level watch: only react to directory additions/removals (new/deleted skills).
     const rootWatchHandler = (_event: string, filename: string | null) => {
