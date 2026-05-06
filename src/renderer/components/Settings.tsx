@@ -409,6 +409,16 @@ const getDefaultActiveProvider = (): ProviderType => {
   return firstEnabledProvider ?? providerKeys[0];
 };
 
+/** Join workspace directory with a filename using platform-aware separator. */
+const joinWorkspacePath = (dir: string | undefined, filename: string): string => {
+  const base = dir?.trim() || '~/.openclaw/workspace';
+  const sep = window.electron.platform === 'win32' ? '\\' : '/';
+  // Normalize: if base already ends with a separator, don't double it
+  return base.endsWith(sep) || base.endsWith('/') || base.endsWith('\\')
+    ? `${base}${filename}`
+    : `${base}${sep}${filename}`;
+};
+
 // System shortcuts that should not be captured (clipboard, undo, select-all, quit, etc.)
 const isSystemShortcut = (e: KeyboardEvent): boolean => {
   const key = e.key.toLowerCase();
@@ -3092,6 +3102,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       case 'coworkMemory':
         return (
           <div className="space-y-6">
+            {/* Section 1: Long-term Memory (MEMORY.md) */}
+            <div className="space-y-3 rounded-xl border px-4 py-4 border-border">
+              <div className="text-sm font-medium text-foreground">
+                {i18nService.t('coworkMemoryTitle')}
+              </div>
+              {/* Memory toggle hidden – always enabled by default */}
+              <div className="mt-2 text-xs text-secondary">
+                <span className="font-medium">{i18nService.t('coworkMemoryFilePath')}:</span>{' '}
+                <span className="break-all font-mono opacity-80">
+                  {joinWorkspacePath(coworkConfig.workingDirectory, 'MEMORY.md')}
+                </span>
+              </div>
+            </div>
+
             <div className="space-y-4 rounded-xl border px-4 py-4 border-border">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
@@ -4416,6 +4440,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             </div>
             <div className="flex flex-col flex-1 min-h-0 space-y-2">
               <p className="text-xs text-secondary shrink-0">{i18nService.t(activeItem.hintKey)}</p>
+              <div className="text-xs text-secondary opacity-60 shrink-0">
+                {i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, activeItem.key)}</span>
+              </div>
               <textarea
                 key={activeItem.key}
                 value={activeItem.value}

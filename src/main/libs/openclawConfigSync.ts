@@ -36,7 +36,6 @@ import {
 } from './openclawAgentModels';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import type { OpenClawEngineManager } from './openclawEngineManager';
-import { getMainAgentWorkspacePath } from './openclawMemoryFile';
 
 const gwDiagTs = (): string => {
   const d = new Date();
@@ -1057,9 +1056,11 @@ export class OpenClawConfigSync {
         const result = this.writeMinimalConfig(configPath, reason);
         // Still sync AGENTS.md even when API is not configured — skills/systemPrompt
         // may already be set and should be available when the user configures a model.
-        const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
-        const agentsMdWarning = this.syncAgentsMd(mainWorkspacePath, coworkConfig);
-        this.syncPerAgentWorkspaces(mainWorkspacePath, coworkConfig);
+        const workspaceDir = (coworkConfig.workingDirectory || '').trim();
+        const resolvedWorkspaceDir =
+          workspaceDir || path.join(app.getPath('home'), '.openclaw', 'workspace');
+        const agentsMdWarning = this.syncAgentsMd(resolvedWorkspaceDir, coworkConfig);
+        this.syncPerAgentWorkspaces(resolvedWorkspaceDir, coworkConfig);
         if (agentsMdWarning) result.agentsMdWarning = agentsMdWarning;
         return result;
       }
@@ -1181,8 +1182,7 @@ export class OpenClawConfigSync {
       `[OpenClawConfigSync] sandbox mode: ${sandboxMode} (executionMode: ${coworkConfig.executionMode || 'local'}, enterprise: ${this.isEnterprise()})`,
     );
 
-    const mainWorkspacePath = getMainAgentWorkspacePath(this.engineManager.getStateDir());
-    ensureDir(mainWorkspacePath);
+    const workspaceDir = (coworkConfig.workingDirectory || '').trim();
 
     const preinstalledPlugins = readPreinstalledPlugins();
     const hasPreinstalledPlugin = (...ids: string[]) => (
@@ -1287,7 +1287,7 @@ export class OpenClawConfigSync {
           sandbox: {
             mode: sandboxMode,
           },
-          workspace: path.resolve(mainWorkspacePath),
+          ...(workspaceDir ? { workspace: path.resolve(workspaceDir) } : {}),
           ...(coworkConfig.embeddingEnabled ? {
             memorySearch: {
               enabled: true,
@@ -2059,10 +2059,12 @@ export class OpenClawConfigSync {
     // Sync AGENTS.md with skills routing prompt to the OpenClaw workspace directory.
     // This runs on every sync regardless of openclaw.json changes, because skills
     // may have been installed/enabled/disabled independently.
-    const agentsMdWarning = this.syncAgentsMd(mainWorkspacePath, coworkConfig);
+    const resolvedWorkspaceDir =
+      workspaceDir || path.join(app.getPath('home'), '.openclaw', 'workspace');
+    const agentsMdWarning = this.syncAgentsMd(resolvedWorkspaceDir, coworkConfig);
 
     // Sync per-agent workspace files (SOUL.md, IDENTITY.md, AGENTS.md) for non-main agents
-    this.syncPerAgentWorkspaces(mainWorkspacePath, coworkConfig);
+    this.syncPerAgentWorkspaces(resolvedWorkspaceDir, coworkConfig);
 
     return {
       ok: true,

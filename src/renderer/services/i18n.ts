@@ -386,6 +386,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkBootstrapSoulTitle: '助手性格',
     coworkBootstrapSoulHint: '助手的性格、语气和行为准则。会强制助手遵循此设定。',
     coworkBootstrapPlaceholder: '支持 Markdown 格式，可用中文或英文书写',
+    coworkBootstrapStoragePath: '存储路径',
     coworkBootstrapSaveFailed: 'Agent 设定保存失败',
     coworkMemoryEnabled: '启用用户记忆',
     coworkMemoryEnabledHint: 'OpenClaw 会自动索引 MEMORY.md 文件，为 Agent 提供长期记忆检索。',
@@ -1944,6 +1945,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkBootstrapSoulHint:
       'Assistant personality, tone, and behavior guidelines. The assistant will be instructed to follow this.',
     coworkBootstrapPlaceholder: 'Supports Markdown. Write in any language.',
+    coworkBootstrapStoragePath: 'Storage path',
     coworkBootstrapSaveFailed: 'Failed to save agent settings',
     coworkMemoryEnabled: 'Enable user memories',
     coworkMemoryEnabledHint:
