@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 
 import type { OpenClawSessionPatch } from '../common/openclawSession';
+import { buildSessionTitleFromInput } from '../common/sessionTitle';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
 import { migrateScheduledTaskRunsToOpenclaw, migrateScheduledTasksToOpenclaw } from '../scheduledTask/migrate';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
@@ -2819,8 +2820,10 @@ if (!gotTheLock) {
         };
       }
 
-      // Generate title from first line of prompt
-      const fallbackTitle = options.prompt.split('\n')[0].slice(0, 50) || 'New Session';
+      const fallbackTitle = buildSessionTitleFromInput(
+        options.prompt,
+        t('coworkDefaultSessionTitle')
+      );
       const title = options.title?.trim() || fallbackTitle;
       const taskWorkingDirectory = resolveTaskWorkingDirectory(selectedWorkspaceRoot);
 
@@ -4755,7 +4758,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('generate-session-title', async (_event, userInput: string | null) => {
-    return generateSessionTitle(userInput);
+    return generateSessionTitle(userInput, t('coworkDefaultSessionTitle'));
   });
 
   ipcMain.handle('get-recent-cwds', async (_event, limit?: number) => {

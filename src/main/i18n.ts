@@ -23,6 +23,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     trayQuit: '退出',
 
     // Session titles (created by ChannelSessionSync)
+    coworkDefaultSessionTitle: '新对话',
     cronSessionPrefix: '定时',
     channelPrefixFeishu: '飞书',
     channelPrefixDingtalk: '钉钉',
@@ -268,6 +269,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     trayQuit: 'Quit',
 
     // Session titles
+    coworkDefaultSessionTitle: 'New Chat',
     cronSessionPrefix: 'Cron',
     channelPrefixFeishu: 'Feishu',
     channelPrefixDingtalk: 'DingTalk',

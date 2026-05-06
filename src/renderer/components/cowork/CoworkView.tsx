@@ -2,6 +2,7 @@ import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 import React, { useEffect, useRef,useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
+import { buildSessionTitleFromInput } from '../../../common/sessionTitle';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { quickActionService } from '../../services/quickAction';
@@ -213,7 +214,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
       // Create a temporary session with user message to show immediately
       const tempSessionId = `temp-${Date.now()}`;
-      const fallbackTitle = prompt.split('\n')[0].slice(0, 50) || i18nService.t('coworkNewSession');
+      const fallbackTitle = buildSessionTitleFromInput(
+        prompt,
+        i18nService.t('coworkDefaultSessionTitle')
+      );
       const now = Date.now();
 
       // Capture active skill IDs before clearing them
@@ -294,18 +298,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         }));
         dispatch(updateSessionStatus({ sessionId: tempSessionId, status: 'error' }));
         return;
-      }
-
-      // Generate title in the background and update when ready
-      if (startedSession) {
-        coworkService.generateSessionTitle(prompt).then(generatedTitle => {
-          const betterTitle = generatedTitle?.trim();
-          if (betterTitle && betterTitle !== fallbackTitle) {
-            coworkService.renameSession(startedSession.id, betterTitle);
-          }
-        }).catch(error => {
-          console.error('Failed to generate cowork session title:', error);
-        });
       }
 
       // Stop immediately if user cancelled while startup request was in flight.
