@@ -17,7 +17,7 @@ import {
 } from './openclawMemoryFile';
 
 const TAG = '[OpenClaw Migration]';
-const MIGRATION_KEY = 'migration.mainAgentWorkspace.v1.completed';
+const MIGRATION_KEY = 'migration.mainAgentWorkspace.v2.completed';
 
 const BOOTSTRAP_FILES = ['IDENTITY.md', 'USER.md', 'SOUL.md'];
 
@@ -97,7 +97,17 @@ export function migrateMainAgentWorkspace(
     return;
   }
 
-  // 1. Migrate MEMORY.md via merge-dedup
+  // 1. Migrate memory/ directory (daily logs)
+  //    Must run BEFORE MEMORY.md sync because syncMemoryFileOnWorkspaceChange
+  //    creates an empty memory/ dir as a side effect, which would cause
+  //    copyDirIfNeeded to skip the copy.
+  const oldMemoryDir = path.join(oldDir, 'memory');
+  const newMemoryDir = path.join(newDir, 'memory');
+  if (copyDirIfNeeded(oldMemoryDir, newMemoryDir)) {
+    console.log(`${TAG} Migrated memory/ directory`);
+  }
+
+  // 2. Migrate MEMORY.md via merge-dedup
   try {
     const result = syncMemoryFileOnWorkspaceChange(oldDir, newDir);
     console.log(`${TAG} MEMORY.md migration: synced=${result.synced}${result.error ? `, error=${result.error}` : ''}`);
@@ -105,20 +115,13 @@ export function migrateMainAgentWorkspace(
     console.warn(`${TAG} MEMORY.md migration failed:`, err instanceof Error ? err.message : err);
   }
 
-  // 2. Migrate bootstrap files (IDENTITY.md, USER.md, SOUL.md)
+  // 3. Migrate bootstrap files (IDENTITY.md, USER.md, SOUL.md)
   for (const filename of BOOTSTRAP_FILES) {
     const src = path.join(oldDir, filename);
     const dest = path.join(newDir, filename);
     if (copyIfNeeded(src, dest)) {
       console.log(`${TAG} Migrated ${filename}`);
     }
-  }
-
-  // 3. Migrate memory/ directory (daily logs)
-  const oldMemoryDir = path.join(oldDir, 'memory');
-  const newMemoryDir = path.join(newDir, 'memory');
-  if (copyDirIfNeeded(oldMemoryDir, newMemoryDir)) {
-    console.log(`${TAG} Migrated memory/ directory`);
   }
 
   // Mark as completed
