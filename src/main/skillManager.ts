@@ -180,12 +180,19 @@ function buildSkillEnv(): Record<string, string | undefined> {
   // Normalize PATH key casing on Windows to avoid duplicate PATH/Path issues
   normalizePathKey(env);
 
-  if (app.isPackaged) {
-    // Ensure HOME is set (crucial for npm to find its config)
-    if (!env.HOME) {
-      env.HOME = app.getPath('home');
-    }
+  // Ensure HOME is available for tools (e.g. clawhub CLI) that persist state
+  // under the user's home directory. Without this, some runtimes may resolve
+  // to root ("/.clawhub") in packaged apps.
+  if (!env.HOME) {
+    env.HOME = app.getPath('home');
+    console.debug('[skills] HOME was unset; using Electron user home directory');
+  }
+  if (process.platform === 'win32' && !env.USERPROFILE) {
+    env.USERPROFILE = env.HOME;
+    console.debug('[skills] USERPROFILE was unset; aligned with HOME for skill subprocesses');
+  }
 
+  if (app.isPackaged) {
     if (process.platform === 'win32') {
       // On Windows, merge the latest PATH from the registry to pick up
       // tools installed after the Electron app (or Explorer) was started.
@@ -966,13 +973,17 @@ const downloadClawhubSkill = async (
   targetDir: string,
   env: NodeJS.ProcessEnv
 ): Promise<void> => {
+  fs.mkdirSync(targetDir, { recursive: true });
   const npxCliJs = resolveNpxCliJs();
   const electronPath = getElectronNodeRuntimePath();
 
   let command: string;
   let args: string[];
   if (npxCliJs) {
-    console.log(`[downloadClawhubSkill] using bundled npx: electron="${electronPath}", npxCliJs="${npxCliJs}"`);
+    console.log(
+      `[downloadClawhubSkill] cwd="${targetDir}" skill="${skillName}" `
+      + `electron="${electronPath}" npxCliJs="${npxCliJs}"`,
+    );
     command = electronPath;
     args = [npxCliJs, 'clawhub@latest', 'install', skillName, '--dir', targetDir, '--no-input', '--force'];
     // Inject --require script to hide CMD windows from all descendant processes
@@ -982,7 +993,10 @@ const downloadClawhubSkill = async (
     }
   } else {
     const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    console.log(`[downloadClawhubSkill] bundled npx not found, falling back to system "${npxCommand}"`);
+    console.log(
+      `[downloadClawhubSkill] cwd="${targetDir}" skill="${skillName}" `
+      + `bundled npx not found, falling back to system "${npxCommand}"`,
+    );
     if (!hasCommand(npxCommand, env)) {
       throw new Error('npx is not available. Please install Node.js from https://nodejs.org/');
     }
@@ -992,6 +1006,7 @@ const downloadClawhubSkill = async (
 
   try {
     await runCommand(command, args, {
+      cwd: targetDir,
       env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
     });
   } catch (error) {
