@@ -1717,16 +1717,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         closeMenu();
       }
     };
-    const handleScroll = () => closeMenu();
+    const handleResize = () => closeMenu();
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
-    window.addEventListener('scroll', handleScroll, true);
-    window.addEventListener('resize', handleScroll);
+    window.addEventListener('resize', handleResize);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
-      window.removeEventListener('scroll', handleScroll, true);
-      window.removeEventListener('resize', handleScroll);
+      window.removeEventListener('resize', handleResize);
     };
   }, [menuPosition, closeMenu]);
 
