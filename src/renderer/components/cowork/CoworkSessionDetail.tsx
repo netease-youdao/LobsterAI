@@ -861,7 +861,7 @@ const ToolCallGroup: React.FC<{
   group: ToolGroupItem;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
-}> = ({
+}> = React.memo(({
   group,
   isLastInSequence = true,
   mapDisplayText,
@@ -1058,7 +1058,7 @@ const ToolCallGroup: React.FC<{
       )}
     </div>
   );
-};
+});
 
 // Copy button component
 const CopyButton: React.FC<{
@@ -1283,7 +1283,7 @@ const AssistantMessageItem: React.FC<{
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
-}> = ({
+}> = React.memo(({
   message,
   resolveLocalFilePath,
   mapDisplayText,
@@ -1338,7 +1338,7 @@ const AssistantMessageItem: React.FC<{
       )}
     </div>
   );
-};
+});
 
 // Streaming activity bar shown between messages and input
 const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ messages }) => {
@@ -1394,7 +1394,7 @@ const TypingDots: React.FC = () => (
 const ThinkingBlock: React.FC<{
   message: CoworkMessage;
   mapDisplayText?: (value: string) => string;
-}> = ({ message, mapDisplayText }) => {
+}> = React.memo(({ message, mapDisplayText }) => {
   const isCurrentlyStreaming = Boolean(message.metadata?.isStreaming);
   const [isExpanded, setIsExpanded] = useState(isCurrentlyStreaming);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
@@ -1435,7 +1435,7 @@ const ThinkingBlock: React.FC<{
       )}
     </div>
   );
-};
+});
 
 export const AssistantTurnBlock: React.FC<{
   turn: ConversationTurn;
