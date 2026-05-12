@@ -27,7 +27,11 @@ function resolveBashExecutable(rootDir) {
     });
     if (result.status === 0 && result.stdout) {
       const paths = result.stdout.trim().split(/\r?\n/).map(p => p.trim()).filter(Boolean);
-      const gitBash = paths.find(p => !p.toLowerCase().includes('windowsapps'));
+      const isWslBash = (p: string) => {
+        const lower = p.toLowerCase();
+        return lower.includes('windowsapps') || lower.includes('system32');
+      };
+      const gitBash = paths.find(p => !isWslBash(p));
       if (gitBash) return gitBash;
     }
   } catch {}
