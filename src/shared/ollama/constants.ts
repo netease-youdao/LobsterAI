@@ -4,6 +4,8 @@ export const OllamaIpcChannel = {
   Start: 'ollama:start',
   Stop: 'ollama:stop',
   Restart: 'ollama:restart',
+  GetServiceConfig: 'ollama:service-config:get',
+  SetServiceConfig: 'ollama:service-config:set',
   ModelsDir: 'ollama:models-dir',
   ListLocalModels: 'ollama:list-local-models',
   ListRunningModels: 'ollama:list-running-models',

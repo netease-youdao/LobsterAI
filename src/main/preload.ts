@@ -69,6 +69,8 @@ contextBridge.exposeInMainWorld('electron', {
     start: () => ipcRenderer.invoke(OllamaIpcChannel.Start),
     stop: () => ipcRenderer.invoke(OllamaIpcChannel.Stop),
     restart: () => ipcRenderer.invoke(OllamaIpcChannel.Restart),
+    getServiceConfig: () => ipcRenderer.invoke(OllamaIpcChannel.GetServiceConfig),
+    setServiceConfig: (config: any) => ipcRenderer.invoke(OllamaIpcChannel.SetServiceConfig, config),
     modelsDir: () => ipcRenderer.invoke(OllamaIpcChannel.ModelsDir),
     listLocalModels: () => ipcRenderer.invoke(OllamaIpcChannel.ListLocalModels),
     listRunningModels: () => ipcRenderer.invoke(OllamaIpcChannel.ListRunningModels),
