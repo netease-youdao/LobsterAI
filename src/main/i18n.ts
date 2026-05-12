@@ -185,6 +185,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinChannelProbeFailedSuggestion: '请稍后重试。如果问题持续，尝试重启 OpenClaw Gateway 或重新扫码绑定。',
     imWeixinChannelActive: '微信频道连接状态正常。',
     imWeixinGatewayProbeError: '微信频道探活失败：{error}',
+    imChannelActive: '{channel} 频道连接状态正常。',
+    imChannelNoSessions: '{channel} 频道暂无活跃会话，Bot 可能未连接。',
+    imChannelNoSessionsSuggestion: '请确认已正确扫码绑定，并检查 Bot 配置是否正确。',
+    imChannelProbeError: '频道探活失败：{error}',
 
     // NIM
     imNimFillCredentials: '请补全 AppKey、Account 和 Token 后重新测试连通性。',
@@ -473,6 +477,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinChannelProbeFailedSuggestion: 'Please try again later. If the issue persists, restart OpenClaw Gateway or re-scan the QR code.',
     imWeixinChannelActive: 'WeChat channel connection is active.',
     imWeixinGatewayProbeError: 'WeChat channel health check failed: {error}',
+    imChannelActive: '{channel} channel connection is active.',
+    imChannelNoSessions: '{channel} channel has no active sessions. The bot may not be connected.',
+    imChannelNoSessionsSuggestion: 'Please confirm the binding is correct and check the bot configuration.',
+    imChannelProbeError: 'Channel health check failed: {error}',
 
     // NIM
     imNimFillCredentials:

@@ -1091,6 +1091,33 @@ export class IMGatewayManager extends EventEmitter {
     }
   }
 
+  /**
+   * Probe a channel via the OpenClaw gateway using sessions.list.
+   * Returns a check array (empty on success, or error check on failure).
+   */
+  private async probeOpenClawChannel(
+    channelPrefix: string,
+  ): Promise<IMConnectivityCheck[]> {
+    const client = this.getOpenClawGatewayClient?.() ?? null;
+    if (!client) return [];
+
+    try {
+      const result = await client.request<{ sessions?: Array<{ key?: string }> }>(
+        'sessions.list',
+        { activeMinutes: 240, limit: 200 },
+      );
+      const hasSessions = result.sessions?.some(
+        s => s.key?.startsWith(`${channelPrefix}:`) || s.key?.includes(`${channelPrefix}:`),
+      );
+      if (hasSessions) {
+        return [{ code: 'inbound_activity', level: 'pass', message: t('imChannelActive', { channel: channelPrefix }) }];
+      }
+      return [{ code: 'inbound_activity', level: 'warn', message: t('imChannelNoSessions', { channel: channelPrefix }), suggestion: t('imChannelNoSessionsSuggestion') }];
+    } catch (err) {
+      return [{ code: 'platform_last_error', level: 'warn', message: t('imChannelProbeError', { error: String(err) }) }];
+    }
+  }
+
   private async testTelegramOpenClawConnectivity(
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult> {
@@ -1157,6 +1184,8 @@ export class IMGatewayManager extends EventEmitter {
       level: 'info',
       message: t('imTelegramOpenClawHint'),
     });
+
+    checks.push(...await this.probeOpenClawChannel('telegram'));
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
@@ -1232,6 +1261,8 @@ export class IMGatewayManager extends EventEmitter {
       level: 'info',
       message: t('imDiscordGroupMention'),
     });
+
+    checks.push(...await this.probeOpenClawChannel('discord'));
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
@@ -1323,6 +1354,8 @@ export class IMGatewayManager extends EventEmitter {
       suggestion: t('imFeishuEventSubscriptionSuggestion'),
     });
 
+    checks.push(...await this.probeOpenClawChannel('feishu'));
+
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
       : checks.some(c => c.level === 'warn')
@@ -1398,6 +1431,9 @@ export class IMGatewayManager extends EventEmitter {
       suggestion: t('imDingtalkBotMembershipSuggestion'),
     });
 
+    // Check 5: Probe gateway sessions
+    checks.push(...await this.probeOpenClawChannel('dingtalk-connector'));
+
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
       : checks.some(c => c.level === 'warn')
@@ -1445,6 +1481,8 @@ export class IMGatewayManager extends EventEmitter {
       level: 'info',
       message: t('imWecomOpenClawHint'),
     });
+
+    checks.push(...await this.probeOpenClawChannel('wecom'));
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
@@ -1509,37 +1547,8 @@ export class IMGatewayManager extends EventEmitter {
       message: t('imWeixinConfigReady'),
     });
 
-    // Check 3: Probe via sessions.list — read-only, no side effects
-    try {
-      const result = await client.request<{ sessions?: Array<{ key?: string }> }>(
-        'sessions.list',
-        { activeMinutes: 240, limit: 200 },
-      );
-      const hasWeixinSessions = result.sessions?.some(
-        s => s.key?.startsWith('openclaw-weixin:'),
-      );
-      if (hasWeixinSessions) {
-        checks.push({
-          code: 'inbound_activity',
-          level: 'pass',
-          message: t('imWeixinChannelActive'),
-        });
-      } else {
-        checks.push({
-          code: 'weixin_not_logged_in',
-          level: 'fail',
-          message: t('imWeixinChannelProbeFailed'),
-          suggestion: t('imWeixinChannelProbeFailedSuggestion'),
-        });
-      }
-    } catch (err) {
-      checks.push({
-        code: 'weixin_gateway_probe_failed',
-        level: 'warn',
-        message: t('imWeixinGatewayProbeError', { error: String(err) }),
-        suggestion: t('imWeixinChannelProbeFailedSuggestion'),
-      });
-    }
+    // Check 3: Probe via OpenClaw gateway sessions.list
+    checks.push(...await this.probeOpenClawChannel('openclaw-weixin'));
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
@@ -1740,6 +1749,8 @@ export class IMGatewayManager extends EventEmitter {
       suggestion: t('imNimP2pOnlySuggestion'),
     });
 
+    checks.push(...await this.probeOpenClawChannel('nim'));
+
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
       : checks.some(c => c.level === 'warn')
@@ -1796,6 +1807,8 @@ export class IMGatewayManager extends EventEmitter {
       level: 'info',
       message: t('imPopoOpenClawHint'),
     });
+
+    checks.push(...await this.probeOpenClawChannel('moltbot-popo'));
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
@@ -1877,6 +1890,8 @@ export class IMGatewayManager extends EventEmitter {
       level: 'info',
       message: t('imQqMentionHint'),
     });
+
+    checks.push(...await this.probeOpenClawChannel('qqbot'));
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'
