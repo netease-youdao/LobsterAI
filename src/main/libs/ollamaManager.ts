@@ -44,6 +44,7 @@ export class OllamaManager extends EventEmitter {
         version: version.version,
         executablePath: this.executablePath ?? undefined,
         pid: this.process?.pid,
+        managedByApp: Boolean(this.process),
       });
       return this.status;
     } catch {
@@ -55,6 +56,7 @@ export class OllamaManager extends EventEmitter {
     this.setStatus({
       status: executablePath ? 'installed' : 'not-installed',
       executablePath: executablePath ?? undefined,
+      managedByApp: false,
     });
     return this.status;
   }
@@ -66,11 +68,11 @@ export class OllamaManager extends EventEmitter {
       this.executablePath = await findOllamaExecutable();
     }
     if (!this.executablePath) {
-      this.setStatus({ status: 'not-installed' });
+      this.setStatus({ status: 'not-installed', managedByApp: false });
       return this.status;
     }
 
-    this.setStatus({ status: 'starting', executablePath: this.executablePath });
+    this.setStatus({ status: 'starting', executablePath: this.executablePath, managedByApp: true });
     this.process = spawn(this.executablePath, ['serve'], {
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -83,12 +85,12 @@ export class OllamaManager extends EventEmitter {
       console.log(`[Ollama] process exited with code ${code ?? 'null'} and signal ${signal ?? 'null'}`);
       this.process = null;
       if (this.status.status === 'running' || this.status.status === 'starting') {
-        this.setStatus({ status: 'stopped', executablePath: this.executablePath ?? undefined });
+        this.setStatus({ status: 'stopped', executablePath: this.executablePath ?? undefined, managedByApp: false });
       }
     });
     this.process.on('error', (error) => {
       console.warn('[Ollama] process failed:', error);
-      this.setStatus({ status: 'error', error: error.message, executablePath: this.executablePath ?? undefined });
+      this.setStatus({ status: 'error', error: error.message, executablePath: this.executablePath ?? undefined, managedByApp: false });
     });
 
     await this.waitUntilHealthy(10_000);
@@ -97,7 +99,17 @@ export class OllamaManager extends EventEmitter {
 
   async stop(): Promise<OllamaStatusSnapshot> {
     if (!this.process) {
-      this.setStatus({ status: 'stopped', executablePath: this.executablePath ?? undefined });
+      if (await this.isHealthy()) {
+        this.setStatus({
+          status: 'running',
+          executablePath: this.executablePath ?? undefined,
+          managedByApp: false,
+          error: 'Ollama is running outside this app and must be stopped externally.',
+        });
+        return this.status;
+      }
+
+      this.setStatus({ status: 'stopped', executablePath: this.executablePath ?? undefined, managedByApp: false });
       return this.status;
     }
 
@@ -114,7 +126,17 @@ export class OllamaManager extends EventEmitter {
       child.kill('SIGTERM');
     });
     this.process = null;
-    this.setStatus({ status: 'stopped', executablePath: this.executablePath ?? undefined });
+    if (await this.isHealthy()) {
+      this.setStatus({
+        status: 'running',
+        executablePath: this.executablePath ?? undefined,
+        managedByApp: false,
+        error: 'Ollama is still running outside this app.',
+      });
+      return this.status;
+    }
+
+    this.setStatus({ status: 'stopped', executablePath: this.executablePath ?? undefined, managedByApp: false });
     return this.status;
   }
 
@@ -131,11 +153,11 @@ export class OllamaManager extends EventEmitter {
     const installer = new OllamaInstaller((progress: OllamaInstallProgress) => {
       this.emit('install-progress', progress);
     });
-    this.setStatus({ status: 'installing', executablePath: this.executablePath ?? undefined });
+    this.setStatus({ status: 'installing', executablePath: this.executablePath ?? undefined, managedByApp: false });
     try {
       const result = await installer.install();
       if (result.needsManual) {
-        this.setStatus({ status: 'not-installed', executablePath: this.executablePath ?? undefined });
+        this.setStatus({ status: 'not-installed', executablePath: this.executablePath ?? undefined, managedByApp: false });
         return this.status;
       }
       await this.detect();
@@ -143,7 +165,7 @@ export class OllamaManager extends EventEmitter {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.emit('install-progress', { phase: 'failed', error: message } satisfies OllamaInstallProgress);
-      this.setStatus({ status: 'error', error: message, executablePath: this.executablePath ?? undefined });
+      this.setStatus({ status: 'error', error: message, executablePath: this.executablePath ?? undefined, managedByApp: false });
       return this.status;
     }
   }
@@ -198,6 +220,7 @@ export class OllamaManager extends EventEmitter {
         version: version.version,
         executablePath: this.executablePath ?? undefined,
         pid: this.process?.pid,
+        managedByApp: Boolean(this.process),
       });
       return true;
     } catch {
@@ -215,6 +238,7 @@ export class OllamaManager extends EventEmitter {
       status: 'error',
       executablePath: this.executablePath ?? undefined,
       error: 'Ollama did not become ready before timeout',
+      managedByApp: Boolean(this.process),
     });
   }
 

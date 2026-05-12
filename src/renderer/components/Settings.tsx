@@ -3,6 +3,7 @@ import { ArrowTopRightOnSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChip
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import type { OllamaStatusSnapshot } from '../../shared/ollama';
 import { OpenClawProviderId, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import { type AppConfig, defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, getVisibleProviders, isCustomProvider } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
@@ -569,6 +570,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusSnapshot | null>(null);
 
 
   // authType defaults to undefined on first open, which should behave as OAuth mode
@@ -617,6 +619,41 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   useEffect(() => {
     setShowApiKey(false);
   }, [activeProvider]);
+
+  void ollamaStatus;
+
+  const syncOllamaProviderEnabled = useCallback((status: OllamaStatusSnapshot) => {
+    const enabled = status.status === 'running';
+    setProviders(prev => {
+      if (prev[ProviderName.Ollama].enabled === enabled) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [ProviderName.Ollama]: {
+          ...prev[ProviderName.Ollama],
+          enabled,
+        },
+      };
+    });
+  }, []);
+
+  const refreshOllamaStatus = useCallback(async () => {
+    const status = await window.electron.ollama.status();
+    setOllamaStatus(status);
+    syncOllamaProviderEnabled(status);
+    return status;
+  }, [syncOllamaProviderEnabled]);
+
+  useEffect(() => {
+    if (activeTab !== 'model') return;
+    void refreshOllamaStatus().catch(() => undefined);
+    const unsubscribe = window.electron.ollama.onStatusChanged((status) => {
+      setOllamaStatus(status);
+      syncOllamaProviderEnabled(status);
+    });
+    return unsubscribe;
+  }, [activeTab, refreshOllamaStatus, syncOllamaProviderEnabled]);
 
   const handleExportLogs = useCallback(async () => {
     if (isExportingLogs) {

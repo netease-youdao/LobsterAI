@@ -1,7 +1,6 @@
+import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-
-import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 
 import { mcpCategories,mcpRegistry } from '../../data/mcpRegistry';
 import { i18nService } from '../../services/i18n';
@@ -489,7 +488,7 @@ const McpManager: React.FC = () => {
       <div>
       {/* ── Tab: Installed ──────────────────────────────── */}
       {activeTab === 'installed' && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {filteredInstalled.length === 0 ? (
             <div className="col-span-2 text-center py-12 text-sm text-secondary">
               {i18nService.t('mcpNoInstalledServers')}
@@ -581,7 +580,7 @@ const McpManager: React.FC = () => {
       {/* ── Tab: Marketplace ────────────────────────────── */}
       {activeTab === 'marketplace' && (
         <div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {filteredMarketplace.length === 0 ? (
               <div className="col-span-2 text-center py-12 text-sm text-secondary">
                 {i18nService.t('noMcpServersAvailable')}
@@ -646,7 +645,7 @@ const McpManager: React.FC = () => {
       {activeTab === 'custom' && (
         <div className="space-y-6">
           {/* Custom servers grid (add button + server cards) */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {/* Add custom server card */}
             <button
               type="button"
