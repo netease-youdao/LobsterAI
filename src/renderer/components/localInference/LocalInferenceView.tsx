@@ -1,6 +1,8 @@
 import {
+  AdjustmentsHorizontalIcon,
   ArrowDownTrayIcon,
   ArrowPathIcon,
+  BeakerIcon,
   CheckCircleIcon,
   CpuChipIcon,
   PaperAirplaneIcon,
@@ -8,9 +10,11 @@ import {
   ServerStackIcon,
   StopIcon,
   TrashIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { NvidiaSmiSnapshot } from '../../../shared/hardware';
 import type {
   MarketplaceModel,
   MarketplaceSearchParams,
@@ -50,6 +54,27 @@ type InferenceMessage = {
   content: string;
   thinking?: string;
   metrics?: OllamaChatChunk | null;
+};
+
+type LaunchFormState = {
+  numCtx: string;
+  numGpu: string;
+  numThread: string;
+  numBatch: string;
+  mainGpu: string;
+  lowVram: string;
+  useMmap: string;
+  useMlock: string;
+};
+
+type SuggestedLaunchOptions = {
+  numCtx: number;
+  numBatch: number;
+  numGpu?: number;
+  numThread: number;
+  mainGpu?: number;
+  lowVram?: boolean;
+  summary: string;
 };
 
 const DEFAULT_INFERENCE_OPTIONS: InferenceOptions = {
@@ -110,6 +135,7 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
   const [marketplaceTask, setMarketplaceTask] = useState<string>('all');
   const [marketplaceSize, setMarketplaceSize] = useState<string>('all');
   const [marketplaceQuant, setMarketplaceQuant] = useState<string>('all');
+  const [launchTarget, setLaunchTarget] = useState<OllamaModel | null>(null);
   const marketplaceSearchRef = useRef<number>(0);
   const installedModelNames = useMemo(() => new Set(localModels.map((m) => m.name)), [localModels]);
 
@@ -284,13 +310,15 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
     });
   };
 
-  const handlePreload = (modelName: string) => {
-    const input: OllamaModelLaunchInput = { model: modelName, keep_alive: -1 };
+  const handlePreload = (input: OllamaModelLaunchInput, openDebugger: boolean) => {
     void runAction(async () => {
       const result = await window.electron.ollama.preloadModel(input);
       setRunningModels(result.runningModels);
-      setSelectedModel(modelName);
-      setActiveTab('inference');
+      setSelectedModel(input.model);
+      setLaunchTarget(null);
+      if (openDebugger) {
+        setActiveTab('inference');
+      }
     });
   };
 
@@ -498,7 +526,7 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
               onPullNameChange={setPullName}
               onPull={handlePull}
               onCancelPull={handleCancelPull}
-              onPreload={handlePreload}
+              onConfigureLaunch={setLaunchTarget}
               onUnload={handleUnload}
               onDelete={handleDelete}
               onSetOpenClawModel={handleSetOpenClawModel}
@@ -562,6 +590,14 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
           )}
         </div>
       </div>
+      {launchTarget && (
+        <LaunchModelDialog
+          model={launchTarget}
+          loading={loading}
+          onClose={() => setLaunchTarget(null)}
+          onLaunch={handlePreload}
+        />
+      )}
     </div>
   );
 };
@@ -680,7 +716,7 @@ function ModelsPanel({
   onPullNameChange,
   onPull,
   onCancelPull,
-  onPreload,
+  onConfigureLaunch,
   onUnload,
   onDelete,
   onSetOpenClawModel,
@@ -697,7 +733,7 @@ function ModelsPanel({
   onPullNameChange: (value: string) => void;
   onPull: () => void;
   onCancelPull: () => void;
-  onPreload: (modelName: string) => void;
+  onConfigureLaunch: (model: OllamaModel) => void;
   onUnload: (modelName: string) => void;
   onDelete: (modelName: string) => void;
   onSetOpenClawModel: (modelName: string) => void;
@@ -764,7 +800,7 @@ function ModelsPanel({
                   model={model}
                   runningModel={runningModel}
                   loading={loading}
-                  onPreload={() => onPreload(model.name)}
+                  onConfigureLaunch={() => onConfigureLaunch(model)}
                   onUnload={() => onUnload(model.name)}
                   onDelete={() => onDelete(model.name)}
                   onSetOpenClawModel={() => onSetOpenClawModel(model.name)}
@@ -783,7 +819,7 @@ function ModelCard({
   model,
   runningModel,
   loading,
-  onPreload,
+  onConfigureLaunch,
   onUnload,
   onDelete,
   onSetOpenClawModel,
@@ -792,7 +828,7 @@ function ModelCard({
   model: OllamaModel;
   runningModel?: OllamaRunningModel;
   loading: boolean;
-  onPreload: () => void;
+  onConfigureLaunch: () => void;
   onUnload: () => void;
   onDelete: () => void;
   onSetOpenClawModel: () => void;
@@ -822,9 +858,9 @@ function ModelCard({
             {i18nService.t('localInferenceUnload')}
           </button>
         ) : (
-          <button type="button" onClick={onPreload} disabled={loading} className={smallOutlineButtonClass}>
+          <button type="button" onClick={onConfigureLaunch} disabled={loading} className={smallOutlineButtonClass}>
             <PlayIcon className="h-3.5 w-3.5" />
-            {i18nService.t('localInferenceLoad')}
+            {i18nService.t('localInferenceConfigureLaunch')}
           </button>
         )}
         <button type="button" onClick={onOpenInference} disabled={!isRunning} className={smallOutlineButtonClass}>
@@ -841,6 +877,287 @@ function ModelCard({
         </button>
       </div>
     </div>
+  );
+}
+
+function LaunchModelDialog({
+  model,
+  loading,
+  onClose,
+  onLaunch,
+}: {
+  model: OllamaModel;
+  loading: boolean;
+  onClose: () => void;
+  onLaunch: (input: OllamaModelLaunchInput, openDebugger: boolean) => void;
+}) {
+  const [form, setForm] = useState<LaunchFormState>({
+    numCtx: '4096',
+    numGpu: '',
+    numThread: '',
+    numBatch: '',
+    mainGpu: '',
+    lowVram: '',
+    useMmap: '',
+    useMlock: '',
+  });
+  const [optimizationSummary, setOptimizationSummary] = useState('');
+  const [detectingHardware, setDetectingHardware] = useState(false);
+  const updateForm = (key: keyof LaunchFormState, value: string) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+  const buildInput = (): OllamaModelLaunchInput => {
+    const options: NonNullable<OllamaModelLaunchInput['options']> = {};
+    const parsedNumCtx = parseOptionalInteger(form.numCtx);
+    const parsedNumGpu = parseOptionalInteger(form.numGpu);
+    const parsedNumThread = parseOptionalInteger(form.numThread);
+    const parsedNumBatch = parseOptionalInteger(form.numBatch);
+    const parsedMainGpu = parseOptionalInteger(form.mainGpu);
+    const parsedLowVram = parseOptionalBoolean(form.lowVram);
+    const parsedUseMmap = parseOptionalBoolean(form.useMmap);
+    const parsedUseMlock = parseOptionalBoolean(form.useMlock);
+
+    if (parsedNumCtx !== undefined) options.num_ctx = parsedNumCtx;
+    if (parsedNumBatch !== undefined) options.num_batch = parsedNumBatch;
+    if (parsedNumGpu !== undefined) options.num_gpu = parsedNumGpu;
+    if (parsedMainGpu !== undefined) options.main_gpu = parsedMainGpu;
+    if (parsedLowVram !== undefined) options.low_vram = parsedLowVram;
+    if (parsedUseMmap !== undefined) options.use_mmap = parsedUseMmap;
+    if (parsedUseMlock !== undefined) options.use_mlock = parsedUseMlock;
+    if (parsedNumThread !== undefined) options.num_thread = parsedNumThread;
+
+    return {
+      model: model.name,
+      keep_alive: -1,
+      ...(Object.keys(options).length > 0 ? { options } : {}),
+    };
+  };
+  const applyOptimizedLaunchOptions = async () => {
+    setDetectingHardware(true);
+    let snapshot: NvidiaSmiSnapshot | null = null;
+    try {
+      snapshot = await window.electron.hardware.nvidiaSmi();
+    } catch {
+      snapshot = null;
+    } finally {
+      setDetectingHardware(false);
+    }
+
+    const next = suggestLaunchOptions(model, snapshot, navigator.hardwareConcurrency);
+    setForm((current) => ({
+      ...current,
+      numCtx: String(next.numCtx),
+      numGpu: next.numGpu === undefined ? '' : String(next.numGpu),
+      numThread: String(next.numThread),
+      numBatch: String(next.numBatch),
+      mainGpu: next.mainGpu === undefined ? '' : String(next.mainGpu),
+      lowVram: next.lowVram ? 'true' : '',
+    }));
+    setOptimizationSummary(next.summary);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+          <div className="min-w-0">
+            <h3 className="text-xl font-semibold text-foreground">{i18nService.t('localInferenceLaunchTitle')}</h3>
+            <p className="mt-1 truncate font-mono text-xs text-secondary">{model.name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-secondary transition-colors hover:bg-surface-raised hover:text-foreground"
+            aria-label={i18nService.t('close')}
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4 overflow-y-auto px-5 py-4">
+          <section className="rounded-lg bg-surface-raised px-4 py-3">
+            <h4 className="text-sm font-semibold text-foreground">{i18nService.t('localInferenceLaunchLifecycleTitle')}</h4>
+            <p className="mt-1 text-sm text-secondary">{i18nService.t('localInferenceLaunchLifecycleDescription')}</p>
+          </section>
+
+          <section className="flex flex-col gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 md:flex-row md:items-center md:justify-between">
+            <div className="min-w-0">
+              <h4 className="text-sm font-semibold text-foreground">{i18nService.t('localInferenceLaunchAutoTitle')}</h4>
+              <p className="mt-1 text-sm text-secondary">
+                {optimizationSummary || i18nService.t('localInferenceLaunchAutoDescription')}
+              </p>
+              <p className="mt-1 text-xs text-secondary">{i18nService.t('localInferenceLaunchAutoFormula')}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void applyOptimizedLaunchOptions()}
+              disabled={loading || detectingHardware}
+              className={smallOutlineButtonClass}
+            >
+              <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
+              {i18nService.t('localInferenceLaunchAutoOptimize')}
+            </button>
+          </section>
+
+          <section className="rounded-lg bg-surface-raised px-4 py-3">
+            <h4 className="text-sm font-semibold text-foreground">{i18nService.t('localInferenceLaunchKeepAlive')}</h4>
+            <p className="mt-1 text-sm text-secondary">{i18nService.t('localInferenceLaunchKeepAliveForever')}</p>
+          </section>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <LaunchInput
+              label={i18nService.t('localInferenceLaunchNumCtx')}
+              value={form.numCtx}
+              min={512}
+              step={512}
+              hint={i18nService.t('localInferenceLaunchNumCtxHint')}
+              onChange={(value) => updateForm('numCtx', value)}
+            />
+            <LaunchInput
+              label={i18nService.t('localInferenceLaunchNumGpu')}
+              value={form.numGpu}
+              min={0}
+              placeholder={i18nService.t('localInferenceLaunchDefault')}
+              hint={i18nService.t('localInferenceLaunchNumGpuHint')}
+              onChange={(value) => updateForm('numGpu', value)}
+            />
+            <LaunchInput
+              label={i18nService.t('localInferenceLaunchNumThread')}
+              value={form.numThread}
+              min={1}
+              placeholder={i18nService.t('localInferenceLaunchDefault')}
+              hint={i18nService.t('localInferenceLaunchNumThreadHint')}
+              onChange={(value) => updateForm('numThread', value)}
+            />
+          </div>
+
+          <section className="space-y-3 rounded-lg border border-border px-4 py-3">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground">{i18nService.t('localInferenceLaunchAdvancedTitle')}</h4>
+              <p className="mt-1 text-sm text-secondary">{i18nService.t('localInferenceLaunchAdvancedDescription')}</p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <LaunchInput
+                label={i18nService.t('localInferenceLaunchNumBatch')}
+                value={form.numBatch}
+                min={1}
+                step={32}
+                placeholder={i18nService.t('localInferenceLaunchDefault')}
+                hint={i18nService.t('localInferenceLaunchNumBatchHint')}
+                onChange={(value) => updateForm('numBatch', value)}
+              />
+              <LaunchInput
+                label={i18nService.t('localInferenceLaunchMainGpu')}
+                value={form.mainGpu}
+                min={0}
+                placeholder={i18nService.t('localInferenceLaunchDefault')}
+                hint={i18nService.t('localInferenceLaunchMainGpuHint')}
+                onChange={(value) => updateForm('mainGpu', value)}
+              />
+              <LaunchSelect
+                label={i18nService.t('localInferenceLaunchLowVram')}
+                value={form.lowVram}
+                hint={i18nService.t('localInferenceLaunchLowVramHint')}
+                onChange={(value) => updateForm('lowVram', value)}
+              />
+              <LaunchSelect
+                label={i18nService.t('localInferenceLaunchUseMmap')}
+                value={form.useMmap}
+                hint={i18nService.t('localInferenceLaunchUseMmapHint')}
+                onChange={(value) => updateForm('useMmap', value)}
+              />
+              <LaunchSelect
+                label={i18nService.t('localInferenceLaunchUseMlock')}
+                value={form.useMlock}
+                hint={i18nService.t('localInferenceLaunchUseMlockHint')}
+                onChange={(value) => updateForm('useMlock', value)}
+              />
+            </div>
+          </section>
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-border px-5 py-4 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} disabled={loading} className="inline-flex h-9 items-center justify-center rounded-lg border border-border px-4 text-sm text-foreground transition-colors hover:bg-surface-raised disabled:opacity-60">
+            {i18nService.t('cancel')}
+          </button>
+          <button type="button" onClick={() => onLaunch(buildInput(), false)} disabled={loading} className={smallOutlineButtonClass.replace('h-7', 'h-9').replace('text-xs', 'text-sm') + ' justify-center px-4'}>
+            <PlayIcon className="h-4 w-4" />
+            {i18nService.t('localInferenceLaunchLoadOnly')}
+          </button>
+          <button type="button" onClick={() => onLaunch(buildInput(), true)} disabled={loading} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-60">
+            <BeakerIcon className="h-4 w-4" />
+            {i18nService.t('localInferenceLaunchLoadAndDebug')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LaunchInput({
+  label,
+  value,
+  hint,
+  min,
+  step,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  min?: number;
+  step?: number;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-2">
+      <span className="text-sm font-semibold text-foreground">{label}</span>
+      <input
+        type="number"
+        min={min}
+        step={step}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-lg border border-border bg-surface-input px-3 font-mono text-sm text-foreground outline-none transition-colors placeholder:text-secondary focus:border-primary/60"
+      />
+      <p className="text-xs text-secondary">{hint}</p>
+    </label>
+  );
+}
+
+function LaunchSelect({
+  label,
+  value,
+  hint,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-2">
+      <span className="text-sm font-semibold text-foreground">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-lg border border-border bg-surface-input px-3 text-sm text-foreground outline-none transition-colors focus:border-primary/60"
+      >
+        <option value="">{i18nService.t('localInferenceLaunchBooleanDefault')}</option>
+        <option value="true">{i18nService.t('localInferenceLaunchBooleanEnabled')}</option>
+        <option value="false">{i18nService.t('localInferenceLaunchBooleanDisabled')}</option>
+      </select>
+      <p className="text-xs text-secondary">{hint}</p>
+    </label>
   );
 }
 
@@ -1101,6 +1418,94 @@ function EmptyState({ title, action }: { title: string; action?: React.ReactNode
       {action}
     </div>
   );
+}
+
+function parseOptionalInteger(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseOptionalBoolean(value: string): boolean | undefined {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
+
+function suggestLaunchOptions(
+  model: OllamaModel,
+  snapshot: NvidiaSmiSnapshot | null,
+  hardwareConcurrency?: number,
+): SuggestedLaunchOptions {
+  const logicalThreads = Math.max(2, Math.floor(hardwareConcurrency || 4));
+  const parameterCount = resolveModelParameterCount(model);
+  const modelSizeBytes = model.size ?? 0;
+  const detectedVramMiB = getDetectedVramMiB(snapshot);
+  const estimatedMemoryBytes = modelSizeBytes > 0
+    ? modelSizeBytes * 1.35
+    : parameterCount > 0
+      ? parameterCount * 0.75
+      : 4 * 1024 ** 3;
+  const memoryGb = detectedVramMiB > 0
+    ? detectedVramMiB / 1024
+    : estimatedMemoryBytes / 1024 ** 3;
+  const numCtx = memoryGb <= 3 ? 2048 : memoryGb <= 9 ? 4096 : 8192;
+  const numBatch = memoryGb <= 3 ? 128 : memoryGb <= 9 ? 256 : 512;
+  const numThread = Math.max(1, Math.min(logicalThreads - 2, 16));
+  const numGpu = detectedVramMiB <= 0
+    ? memoryGb <= 3 ? 16 : memoryGb <= 9 ? 32 : undefined
+    : estimateGpuLayers(estimatedMemoryBytes, detectedVramMiB);
+  const lowVram = memoryGb <= 4;
+  const summaryKey = detectedVramMiB > 0
+    ? 'localInferenceLaunchAutoAppliedWithGpu'
+    : 'localInferenceLaunchAutoAppliedFallback';
+  const summary = i18nService.t(summaryKey)
+      .replace('{context}', numCtx.toLocaleString())
+      .replace('{gpuLayers}', numGpu === undefined ? i18nService.t('localInferenceLaunchDefault') : String(numGpu))
+      .replace('{threads}', String(numThread))
+      .replace('{batch}', String(numBatch))
+      .replace('{memory}', formatVramMiB(detectedVramMiB));
+
+  return {
+    numCtx,
+    numBatch,
+    numGpu,
+    numThread,
+    mainGpu: undefined,
+    lowVram,
+    summary,
+  };
+}
+
+function getDetectedVramMiB(snapshot: NvidiaSmiSnapshot | null): number {
+  if (!snapshot?.available) return 0;
+  return snapshot.gpus.reduce((total, gpu) => total + (gpu.memoryFreeMiB ?? gpu.memoryTotalMiB), 0);
+}
+
+function estimateGpuLayers(estimatedModelBytes: number, detectedVramMiB: number): number | undefined {
+  if (detectedVramMiB <= 0) return undefined;
+  const availableBytes = detectedVramMiB * 1024 ** 2 * 0.85;
+  if (availableBytes <= estimatedModelBytes * 0.2) return 0;
+  if (availableBytes >= estimatedModelBytes) return undefined;
+  return Math.max(1, Math.min(64, Math.floor((availableBytes / estimatedModelBytes) * 40)));
+}
+
+function formatVramMiB(value: number): string {
+  if (value <= 0) return i18nService.t('localInferenceLaunchDefault');
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} GB`;
+  return `${value} MB`;
+}
+
+function resolveModelParameterCount(model: OllamaModel): number {
+  const raw = model.details?.parameter_size ?? '';
+  const match = raw.trim().match(/^(\d+(?:\.\d+)?)\s*([BM])$/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return 0;
+  return match[2].toLowerCase() === 'b'
+    ? amount * 1_000_000_000
+    : amount * 1_000_000;
 }
 
 function loadInferenceOptions(): InferenceOptions {

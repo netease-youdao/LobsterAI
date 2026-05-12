@@ -36,9 +36,11 @@ export function registerOllamaIpcHandlers(
   ipcMain.handle(OllamaIpcChannel.Status, async () => manager.detect());
   ipcMain.handle(OllamaIpcChannel.Install, async () => {
     const status = await manager.install();
-    await shell.openExternal('https://ollama.com/download').catch((error) => {
-      console.warn('[Ollama] failed to open download page:', error);
-    });
+    if (status.status === 'not-installed' || status.status === 'error') {
+      await shell.openExternal('https://ollama.com/download').catch((error) => {
+        console.warn('[Ollama] failed to open download page:', error);
+      });
+    }
     return status;
   });
   ipcMain.handle(OllamaIpcChannel.Start, async () => manager.start());

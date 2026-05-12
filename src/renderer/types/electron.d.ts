@@ -1,5 +1,6 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type { AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type { NvidiaSmiSnapshot } from '../../shared/hardware';
 import type { MarketplaceSearchParams, MarketplaceSearchResult } from '../../shared/marketplace';
 import type {
   OllamaCancelPullResult,
@@ -375,6 +376,9 @@ interface IElectronAPI {
   };
   marketplace: {
     search: (params?: MarketplaceSearchParams) => Promise<MarketplaceSearchResult>;
+  };
+  hardware: {
+    nvidiaSmi: () => Promise<NvidiaSmiSnapshot>;
   };
   agents: {
     list: () => Promise<Agent[]>;

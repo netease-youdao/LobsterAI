@@ -12,6 +12,7 @@ import type {
   OllamaStatusSnapshot,
 } from '../../shared/ollama';
 import { OllamaClient } from './ollamaClient';
+import { OllamaInstaller } from './ollamaInstaller';
 
 const execFileAsync = promisify(execFile);
 const QUIT_RUNNING_MODELS_TIMEOUT_MS = 1500;
@@ -118,14 +119,28 @@ export class OllamaManager extends EventEmitter {
   }
 
   async install(): Promise<OllamaStatusSnapshot> {
-    const progress: OllamaInstallProgress = {
-      phase: 'needs-manual',
-      officialUrl: 'https://ollama.com/download',
-      message: 'Install Ollama from the official download page, then return here and start the service.',
-    };
-    this.emit('install-progress', progress);
-    await this.detect();
-    return this.status;
+    if ((await this.detect()).status === 'running' || this.status.status === 'installed') {
+      return this.status;
+    }
+
+    const installer = new OllamaInstaller((progress: OllamaInstallProgress) => {
+      this.emit('install-progress', progress);
+    });
+    this.setStatus({ status: 'installing', executablePath: this.executablePath ?? undefined });
+    try {
+      const result = await installer.install();
+      if (result.needsManual) {
+        this.setStatus({ status: 'not-installed', executablePath: this.executablePath ?? undefined });
+        return this.status;
+      }
+      await this.detect();
+      return this.status;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit('install-progress', { phase: 'failed', error: message } satisfies OllamaInstallProgress);
+      this.setStatus({ status: 'error', error: message, executablePath: this.executablePath ?? undefined });
+      return this.status;
+    }
   }
 
   async client(): Promise<OllamaClient> {

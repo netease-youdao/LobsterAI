@@ -111,6 +111,9 @@ contextBridge.exposeInMainWorld('electron', {
   marketplace: {
     search: (params?: any) => ipcRenderer.invoke(MarketplaceIpcChannel.Search, params),
   },
+  hardware: {
+    nvidiaSmi: () => ipcRenderer.invoke('hardware:nvidia-smi'),
+  },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),
     requestCalendar: () => ipcRenderer.invoke('permissions:requestCalendar'),
