@@ -380,7 +380,7 @@ contextBridge.exposeInMainWorld('electron', {
     openHtmlInBrowser: (htmlContent: string) => ipcRenderer.invoke('shell:openHtmlInBrowser', htmlContent),
   },
   voice: {
-    triggerDictation: () => ipcRenderer.invoke('voice:triggerDictation'),
+    triggerDictation: (macDictationShortcut?: string) => ipcRenderer.invoke('voice:triggerDictation', macDictationShortcut),
   },
   artifact: {
     watchFile: (filePath: string) => ipcRenderer.invoke('artifact:watchFile', filePath),

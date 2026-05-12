@@ -571,6 +571,70 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
   );
 };
 
+const MAC_DICTATION_OPTIONS = [
+  { value: 'mic', labelKey: 'macDictationMic' },
+  { value: 'control', labelKey: 'macDictationControl' },
+  { value: 'fn', labelKey: 'macDictationFn' },
+  { value: 'rightCmd', labelKey: 'macDictationRightCmd' },
+  { value: 'leftCmd', labelKey: 'macDictationLeftCmd' },
+  { value: 'eitherCmd', labelKey: 'macDictationEitherCmd' },
+] as const;
+
+const MacDictationSelect: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const currentLabel = i18nService.t(MAC_DICTATION_OPTIONS.find(o => o.value === value)?.labelKey ?? 'macDictationFn');
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div
+        onClick={() => setOpen(!open)}
+        className={`w-52 rounded-xl border px-3 py-1.5 text-sm cursor-pointer select-none text-center outline-none transition-colors
+          dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset dark:text-claude-darkText text-claude-text
+          ${open
+            ? 'border-claude-accent ring-1 ring-claude-accent/30'
+            : 'dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50'
+          }`}
+      >
+        {currentLabel}
+      </div>
+      {open && (
+        <div className="absolute right-0 mt-1 z-50 min-w-[200px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset shadow-elevated py-1">
+          {MAC_DICTATION_OPTIONS.map((option) => {
+            const label = i18nService.t(option.labelKey);
+            const isActive = value === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => { onChange(option.value); setOpen(false); }}
+                className={`flex items-center justify-between w-full px-3 py-1.5 text-sm transition-colors
+                  ${isActive
+                    ? 'dark:text-claude-accent text-claude-accent font-medium'
+                    : 'dark:text-claude-darkText text-claude-text'
+                  } hover:bg-claude-accent/10`}
+              >
+                <span>{label}</span>
+                {isActive && <span className="text-claude-accent">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, noticeI18nKey, noticeExtra, onUpdateFound, enterpriseConfig }) => {
   const dispatch = useDispatch();
   // 状态
@@ -650,6 +714,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
     sendMessage: defaultConfig.shortcuts!.sendMessage,
+    macDictation: defaultConfig.shortcuts?.macDictation,
   });
 
   // GitHub Copilot device code auth state
@@ -2064,16 +2129,19 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   // 快捷键更新处理
   const handleShortcutChange = (key: keyof typeof shortcuts, value: string) => {
-    // Check for conflicts with other shortcuts
-    const conflictKey = Object.keys(shortcuts).find(
-      k => k !== key && shortcuts[k as keyof typeof shortcuts] === value
-    );
-    if (conflictKey) {
-      const conflictLabel = i18nService.t(shortcutLabelMap[conflictKey] ?? conflictKey);
-      setNoticeMessage(
-        i18nService.t('shortcutConflict').replace('{0}', value).replace('{1}', conflictLabel)
+    // macDictation is not a global shortcut — skip conflict detection
+    if (key !== 'macDictation') {
+      // Check for conflicts with other shortcuts
+      const conflictKey = Object.keys(shortcuts).find(
+        k => k !== key && k !== 'macDictation' && shortcuts[k as keyof typeof shortcuts] === value
       );
-      return;
+      if (conflictKey) {
+        const conflictLabel = i18nService.t(shortcutLabelMap[conflictKey] ?? conflictKey);
+        setNoticeMessage(
+          i18nService.t('shortcutConflict').replace('{0}', value).replace('{1}', conflictLabel)
+        );
+        return;
+      }
     }
     setShortcuts(prev => ({
       ...prev,
@@ -4542,6 +4610,34 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 </div>
               </div>
             </div>
+            {isMacPlatform && (
+              <div className="mt-4 pt-4 border-t border-border">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 mr-4">
+                    <span className="text-sm text-foreground">
+                      {i18nService.t('macDictationShortcut')}
+                    </span>
+                    <p className="text-xs text-secondary mt-1">
+                      {i18nService.t('macDictationHint')}
+                      {' '}
+                      <button
+                        type="button"
+                        className="text-primary hover:underline"
+                        onClick={() => window.electron.shell.openExternal(
+                          'x-apple.systempreferences:com.apple.preference.keyboard?Dictation'
+                        )}
+                      >
+                        {i18nService.t('macDictationViewSettings')}
+                      </button>
+                    </p>
+                  </div>
+                  <MacDictationSelect
+                    value={shortcuts.macDictation ?? 'fn'}
+                    onChange={(v) => handleShortcutChange('macDictation', v)}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         );
 

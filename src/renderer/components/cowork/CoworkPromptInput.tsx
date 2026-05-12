@@ -213,12 +213,27 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isReadOnlyContextCompact, setIsReadOnlyContextCompact] = useState(false);
 
     const handleVoiceInput = useCallback(async () => {
+      if (isMacPlatform) {
+        const dictationShortcut = configService.getConfig().shortcuts?.macDictation;
+        if (!dictationShortcut) {
+          // First use — guide user to configure dictation shortcut in Settings
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: i18nService.t('voiceInputNeedConfig'),
+          }));
+          window.dispatchEvent(new CustomEvent('app:showSettings', {
+            detail: { initialTab: 'shortcuts' },
+          }));
+          return;
+        }
+      }
       textareaRef.current?.focus();
-      const result = await triggerSystemDictation();
+      const shortcut = isMacPlatform ? configService.getConfig().shortcuts?.macDictation : undefined;
+      const result = await triggerSystemDictation(shortcut);
       if (!result.success && result.error === 'permission_denied') {
         window.dispatchEvent(new CustomEvent('app:showToast', {
           detail: i18nService.t('voiceInputPermissionDenied'),
         }));
+        window.electron.shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
       }
     }, []);
 

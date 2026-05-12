@@ -40,6 +40,7 @@ export interface AppConfig {
     search: string;
     settings: string;
     sendMessage: string;
+    macDictation?: string;  // macOS dictation shortcut: 'mic' | 'control' | 'fn' | 'rightCmd' | 'leftCmd' | 'eitherCmd'
     [key: string]: string | undefined;
   };
 }

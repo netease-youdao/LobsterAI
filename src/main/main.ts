@@ -5178,7 +5178,7 @@ if (!gotTheLock) {
   // ---- artifact file watching ----
 
   // Voice dictation - trigger OS-level speech-to-text
-  ipcMain.handle('voice:triggerDictation', async () => {
+  ipcMain.handle('voice:triggerDictation', async (_event, macDictationShortcut?: string) => {
     try {
       if (process.platform === 'win32') {
         const { exec } = require('child_process');
@@ -5188,12 +5188,29 @@ if (!gotTheLock) {
         await execAsync(`powershell -NoProfile -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class KS{[DllImport(\\\"user32.dll\\\")]public static extern void keybd_event(byte k,byte s,uint f,int e);public static void WinH(){keybd_event(0x5B,0,0,0);keybd_event(0x48,0,0,0);keybd_event(0x48,0,2,0);keybd_event(0x5B,0,2,0);}}'; [KS]::WinH()"`);
         return { success: true };
       } else if (process.platform === 'darwin') {
-        // macOS: simulate Fn+Fn (dictation trigger) via AppleScript
+        // macOS: simulate dictation shortcut via AppleScript
+        // 'mic' is a single press; all others are double-press
+        const keyCodeMap: Record<string, number> = {
+          mic: 63,        // Microphone key (single press)
+          control: 59,    // Left Control
+          fn: 63,         // Fn / Globe key
+          leftCmd: 55,    // Left Command
+          rightCmd: 54,   // Right Command
+          eitherCmd: 55,  // Either Command → use left
+        };
+        const shortcut = macDictationShortcut ?? 'fn';
+        const keyCode = keyCodeMap[shortcut] ?? 63;
         const { exec } = require('child_process');
         const { promisify } = require('util');
         const execAsync = promisify(exec);
         try {
-          await execAsync(`osascript -e 'tell application "System Events" to key code 63' -e 'delay 0.05' -e 'tell application "System Events" to key code 63'`);
+          if (shortcut === 'mic') {
+            // Single press for microphone key
+            await execAsync(`osascript -e 'tell application "System Events" to key code ${keyCode}'`);
+          } else {
+            // Double press for all other shortcuts
+            await execAsync(`osascript -e 'tell application "System Events" to key code ${keyCode}' -e 'delay 0.05' -e 'tell application "System Events" to key code ${keyCode}'`);
+          }
           return { success: true };
         } catch (darwinError: unknown) {
           const stderr = typeof darwinError === 'object' && darwinError && 'stderr' in darwinError

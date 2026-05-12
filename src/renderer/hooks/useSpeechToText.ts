@@ -9,9 +9,9 @@
  *
  * Returns the result so callers can react to errors (e.g. permission_denied on macOS).
  */
-export async function triggerSystemDictation(): Promise<{ success: boolean; error?: string }> {
+export async function triggerSystemDictation(macDictationShortcut?: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const result = await window.electron.voice.triggerDictation();
+    const result = await window.electron.voice.triggerDictation(macDictationShortcut);
     if (!result.success) {
       console.warn('[Voice] triggerDictation failed:', result.error);
     }

@@ -556,7 +556,7 @@ interface IElectronAPI {
     openHtmlInBrowser: (htmlContent: string) => Promise<{ success: boolean; error?: string }>;
   };
   voice: {
-    triggerDictation: () => Promise<{ success: boolean; error?: string }>;
+    triggerDictation: (macDictationShortcut?: string) => Promise<{ success: boolean; error?: string }>;
   };
   artifact: {
     watchFile: (filePath: string) => Promise<void>;

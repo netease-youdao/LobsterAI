@@ -621,6 +621,16 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [handleShowSettings]);
 
+  // 监听渲染进程内部 CustomEvent 打开设置页（如语音输入首次引导）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<SettingsOpenOptions>).detail;
+      handleShowSettings(detail);
+    };
+    window.addEventListener('app:showSettings', handler);
+    return () => window.removeEventListener('app:showSettings', handler);
+  }, [handleShowSettings]);
+
   // 监听托盘菜单新建任务的 IPC 事件
   useEffect(() => {
     const unsubscribe = window.electron.ipcRenderer.on('app:newTask', () => {
