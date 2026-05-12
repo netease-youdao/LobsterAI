@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
@@ -7,12 +7,12 @@ import {
   type AppUpdateCheckResult,
   type AppUpdateInfo,
   AppUpdateIpc,
-  AppUpdateSource,
   type AppUpdateRuntimeState,
+  AppUpdateSource,
   AppUpdateStatus,
 } from '../../shared/appUpdate/constants';
 import type { SqliteStore } from '../sqliteStore';
-import { cancelActiveDownload, downloadUpdate, installUpdate } from './appUpdateInstaller';
+import { downloadUpdate } from './appUpdateInstaller';
 
 type ChangeLogLang = {
   title?: string;
