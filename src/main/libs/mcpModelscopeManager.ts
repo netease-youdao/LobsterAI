@@ -70,19 +70,18 @@ export async function searchModelScopeMCP(
     throw new Error(`ModelScope API error: HTTP ${response.status}`);
   }
 
-  const data = (await response.json()) as {
+  const raw = (await response.json()) as {
+    success?: boolean;
     data?: {
-      value?: {
-        mcp_server_list?: Array<{ name: string; id: string; description: string }>;
-        total_count?: number;
-      };
+      mcp_server_list?: Array<{ name: string; id: string; description: string }>;
+      total_count?: number;
     };
   };
 
-  const value = data?.data?.value;
-  const serverList = value?.mcp_server_list ?? [];
+  const resultData = raw?.data;
+  const serverList = resultData?.mcp_server_list ?? [];
   return {
-    total_count: value?.total_count ?? serverList.length,
+    total_count: resultData?.total_count ?? serverList.length,
     servers: serverList.map((item) => ({
       id: item.id,
       name: item.name,
@@ -105,7 +104,8 @@ export async function getModelScopeMCPDetail(
     throw new Error(`ModelScope API error: HTTP ${response.status}`);
   }
 
-  const rawData = (await response.json()) as Record<string, unknown>;
+  const parsed = (await response.json()) as Record<string, unknown>;
+  const rawData = (parsed?.data || parsed) as Record<string, unknown>;
 
   const operationalUrls = (rawData['operational_urls'] as Array<{ url: string }> | undefined) ?? [];
 
