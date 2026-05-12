@@ -14,6 +14,7 @@ import { CoworkView } from './components/cowork';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
+import { LocalInferenceView } from './components/localInference';
 import { McpView } from './components/mcp';
 import PrivacyDialog from './components/PrivacyDialog';
 import { ScheduledTasksView } from './components/scheduledTasks';
@@ -62,7 +63,7 @@ const INIT_STEP_TIMEOUT_MS_DEFAULT = 16_000;
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'localInference'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -320,6 +321,10 @@ const App: React.FC = () => {
 
   const handleShowMcp = useCallback(() => {
     setMainView('mcp');
+  }, []);
+
+  const handleShowLocalInference = useCallback(() => {
+    setMainView('localInference');
   }, []);
 
   const handleToggleSidebar = useCallback(() => {
@@ -789,6 +794,7 @@ const App: React.FC = () => {
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowMcp={handleShowMcp}
+          onShowLocalInference={handleShowLocalInference}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -816,6 +822,13 @@ const App: React.FC = () => {
               />
             ) : mainView === 'mcp' ? (
               <McpView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
+            ) : mainView === 'localInference' ? (
+              <LocalInferenceView
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}

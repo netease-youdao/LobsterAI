@@ -115,6 +115,7 @@
     "fix:mac-icon": "bash scripts/fix-mac-icon-display.sh"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-go": "^6.0.1",
@@ -133,6 +134,9 @@
     "@codemirror/language": "^6.12.3",
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/merge": "^6.12.1",
+    "@codemirror/search": "^6.7.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.42.1",
     "@electron/remote": "^2.0.12",
     "@headlessui/react": "^1.7.18",
     "@heroicons/react": "^2.1.1",
@@ -146,6 +150,7 @@
     "@types/uuid": "^10.0.0",
     "@uiw/react-codemirror": "^4.25.9",
     "@wecom/wecom-aibot-sdk": "^0.1.0",
+    "axios": "^1.16.0",
     "better-sqlite3": "^12.8.0",
     "bufferutil": "^4.1.0",
     "cheerio": "^1.2.0",
@@ -157,6 +162,7 @@
     "extract-zip": "^2.0.1",
     "form-data": "^4.0.5",
     "js-yaml": "^4.1.1",
+    "jszip": "^3.10.1",
     "katex": "^0.16.21",
     "mermaid": "^10.9.5",
     "nim-web-sdk-ng": "10.9.77-alpha.4",
@@ -185,6 +191,7 @@
     }
   },
   "devDependencies": {
+    "7zip-bin": "^5.2.0",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
     "@tailwindcss/typography": "^0.5.16",
@@ -201,7 +208,6 @@
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
     "@vitejs/plugin-react": "^4.2.1",
-    "7zip-bin": "^5.2.0",
     "autoprefixer": "^10.4.17",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",

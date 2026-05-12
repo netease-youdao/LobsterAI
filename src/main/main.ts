@@ -27,7 +27,9 @@ import {
 } from './im/imPairingStore';
 import { pollNimQrLogin, startNimQrLogin } from './im/nimQrLoginService';
 import type { DingTalkInstanceConfig, DiscordInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NimInstanceConfig, Platform, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from './im/types';
+import { registerMarketplaceIpcHandlers } from './ipcHandlers/marketplace';
 import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
+import { registerOllamaIpcHandlers } from './ipcHandlers/ollama';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -57,6 +59,7 @@ import { mergeEnterpriseOpenclawConfig, resolveEnterpriseConfigPath, syncEnterpr
 import { exportLogsZip } from './libs/logExport';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import { McpServerManager } from './libs/mcpServerManager';
+import { OllamaManager } from './libs/ollamaManager';
 import { parsePrimaryModelRef, resolveQualifiedAgentModelRef } from './libs/openclawAgentModels';
 import {
   buildManagedSessionKey,
@@ -796,6 +799,7 @@ let imGatewayManager: IMGatewayManager | null = null;
 let storeInitPromise: Promise<SqliteStore> | null = null;
 let sqliteBackupManager: SqliteBackupManager | null = null;
 let openClawEngineManager: OpenClawEngineManager | null = null;
+let ollamaManager: OllamaManager | null = null;
 let openClawConfigSync: OpenClawConfigSync | null = null;
 let openClawBootstrapPromise: Promise<OpenClawEngineStatus> | null = null;
 let openClawStatusForwarderBound = false;
@@ -848,6 +852,13 @@ const getOpenClawEngineManager = (): OpenClawEngineManager => {
     openClawEngineManager = new OpenClawEngineManager();
   }
   return openClawEngineManager;
+};
+
+const getOllamaManager = (): OllamaManager => {
+  if (!ollamaManager) {
+    ollamaManager = new OllamaManager();
+  }
+  return ollamaManager;
 };
 
 const getAppUpdateCoordinator = (): AppUpdateCoordinator => {
@@ -5706,6 +5717,12 @@ if (!gotTheLock) {
       });
     }
 
+    if (ollamaManager) {
+      await ollamaManager.shutdownForQuit().catch((error) => {
+        console.error('[Ollama] Failed to stop service on quit:', error);
+      });
+    }
+
     // Stop the cron job polling
     try {
       getCronJobService().stopPolling();
@@ -5826,6 +5843,11 @@ if (!gotTheLock) {
     }
     // Inject store getter into claudeSettings
     setStoreGetter(() => store);
+    registerOllamaIpcHandlers(getOllamaManager(), {
+      getStore,
+      syncOpenClawConfig,
+    });
+    registerMarketplaceIpcHandlers();
     // Inject auth getters for lobsterai-server provider routing
     // The getter proactively triggers a background token refresh when the
     // accessToken is within 5 minutes of expiry, so that the SDK always
