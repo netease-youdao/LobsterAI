@@ -89,7 +89,9 @@ const McpManager: React.FC = () => {
   const [marketplaceSource, setMarketplaceSource] = useState<'local' | 'modelscope'>('local');
   const [modelScopeServers, setModelScopeServers] = useState<ModelScopeMCPServer[]>([]);
   const [modelScopeLoading, setModelScopeLoading] = useState(false);
+  const [modelScopeSearchError, setModelScopeSearchError] = useState<string | null>(null);
   const [modelScopeInstallingId, setModelScopeInstallingId] = useState<string | null>(null);
+  const modelScopeAbortRef = useRef<AbortController | null>(null);
   const [bridgeSyncResult, setBridgeSyncResult] = useState<{ tools: number; error?: string } | null>(null);
   const currentLanguage = i18nService.getLanguage();
 
@@ -129,18 +131,33 @@ const McpManager: React.FC = () => {
 
   useEffect(() => {
     if (marketplaceSource !== 'modelscope') return;
-    let isActive = true;
-    const fetchModelScope = async () => {
+
+    modelScopeAbortRef.current?.abort();
+    const controller = new AbortController();
+    modelScopeAbortRef.current = controller;
+
+    const timer = setTimeout(async () => {
       setModelScopeLoading(true);
+      setModelScopeSearchError(null);
       const result = await mcpService.searchModelScope(searchQuery, 50);
-      if (!isActive) return;
+      if (controller.signal.aborted) return;
       setModelScopeLoading(false);
       if (result.success && result.data) {
         setModelScopeServers(result.data.servers);
+      } else if (result.success && !result.data) {
+        setModelScopeServers([]);
+      } else {
+        setModelScopeSearchError(result.error || 'Search failed');
+      }
+    }, 300);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+      if (modelScopeAbortRef.current === controller) {
+        modelScopeAbortRef.current = null;
       }
     };
-    fetchModelScope();
-    return () => { isActive = false; };
   }, [marketplaceSource, searchQuery]);
 
   const handleInstallModelScope = async (serverId: string) => {
@@ -703,6 +720,11 @@ const McpManager: React.FC = () => {
       {/* ── Tab: Marketplace — ModelScope ──────────────── */}
       {activeTab === 'marketplace' && marketplaceSource === 'modelscope' && (
         <div>
+          {modelScopeSearchError && (
+            <div className="mb-3 px-3 py-2 rounded-xl text-xs border dark:bg-red-500/10 bg-red-50 dark:text-red-400 text-red-600 dark:border-red-500/20 border-red-200">
+              {modelScopeSearchError}
+            </div>
+          )}
           {modelScopeLoading ? (
             <div className="flex items-center justify-center py-12">
               <svg className="animate-spin h-6 w-6 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -710,7 +732,7 @@ const McpManager: React.FC = () => {
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
             </div>
-          ) : modelScopeServers.length === 0 ? (
+          ) : !modelScopeSearchError && modelScopeServers.length === 0 ? (
             <div className="text-center py-12 text-sm text-secondary">
               {i18nService.t('mcpModelScopeNoResults') || 'No MCP servers found in ModelScope'}
             </div>

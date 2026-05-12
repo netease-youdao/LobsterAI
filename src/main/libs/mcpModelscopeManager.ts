@@ -111,10 +111,13 @@ export async function getModelScopeMCPDetail(
 
   const servers: ModelScopeMCPOperationalUrl[] = operationalUrls
     .filter((item) => item?.url)
-    .map((item) => ({
-      type: item.url.split('/').pop() || 'sse',
-      url: item.url,
-    }));
+    .map((item) => {
+      const lastSegment = item.url.replace(/\/+$/, '').split('/').pop() || '';
+      return {
+        type: lastSegment === 'streamable_http' ? 'streamable_http' : 'sse',
+        url: item.url,
+      };
+    });
 
   return {
     id: (rawData['id'] as string) || serverId,
