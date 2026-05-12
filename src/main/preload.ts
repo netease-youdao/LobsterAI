@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import { AgentIpcChannel } from '../shared/agent/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
+import { MarketplaceIpcChannel } from '../shared/marketplace/constants';
+import { OllamaIpcChannel } from '../shared/ollama/constants';
 import type { Platform } from '../shared/platform';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { OpenClawSessionIpc } from './openclawSession/constants';
@@ -60,6 +62,54 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('mcp:bridge:syncDone', handler);
       return () => ipcRenderer.removeListener('mcp:bridge:syncDone', handler);
     },
+  },
+  ollama: {
+    status: () => ipcRenderer.invoke(OllamaIpcChannel.Status),
+    install: () => ipcRenderer.invoke(OllamaIpcChannel.Install),
+    start: () => ipcRenderer.invoke(OllamaIpcChannel.Start),
+    stop: () => ipcRenderer.invoke(OllamaIpcChannel.Stop),
+    restart: () => ipcRenderer.invoke(OllamaIpcChannel.Restart),
+    modelsDir: () => ipcRenderer.invoke(OllamaIpcChannel.ModelsDir),
+    listLocalModels: () => ipcRenderer.invoke(OllamaIpcChannel.ListLocalModels),
+    listRunningModels: () => ipcRenderer.invoke(OllamaIpcChannel.ListRunningModels),
+    deleteModel: (name: string) => ipcRenderer.invoke(OllamaIpcChannel.DeleteModel, name),
+    showModel: (name: string) => ipcRenderer.invoke(OllamaIpcChannel.ShowModel, name),
+    createModel: (name: string, modelfile: string) =>
+      ipcRenderer.invoke(OllamaIpcChannel.CreateModel, name, modelfile),
+    preloadModel: (input: any) => ipcRenderer.invoke(OllamaIpcChannel.PreloadModel, input),
+    unloadModel: (name: string) => ipcRenderer.invoke(OllamaIpcChannel.UnloadModel, name),
+    pullModel: (name: string) => ipcRenderer.invoke(OllamaIpcChannel.PullModel, name),
+    cancelPull: (name: string) => ipcRenderer.invoke(OllamaIpcChannel.CancelPull, name),
+    chat: (payload: any) => ipcRenderer.invoke(OllamaIpcChannel.Chat, payload),
+    chatStream: (requestId: string, payload: any) =>
+      ipcRenderer.invoke(OllamaIpcChannel.ChatStream, requestId, payload),
+    cancelChatStream: (requestId: string) =>
+      ipcRenderer.invoke(OllamaIpcChannel.CancelChatStream, requestId),
+    setOpenClawModel: (modelName: string) =>
+      ipcRenderer.invoke(OllamaIpcChannel.SetOpenClawModel, modelName),
+    onStatusChanged: (callback: (snapshot: any) => void) => {
+      const handler = (_event: any, snapshot: any) => callback(snapshot);
+      ipcRenderer.on(OllamaIpcChannel.StatusChanged, handler);
+      return () => ipcRenderer.removeListener(OllamaIpcChannel.StatusChanged, handler);
+    },
+    onInstallProgress: (callback: (progress: any) => void) => {
+      const handler = (_event: any, progress: any) => callback(progress);
+      ipcRenderer.on(OllamaIpcChannel.InstallProgress, handler);
+      return () => ipcRenderer.removeListener(OllamaIpcChannel.InstallProgress, handler);
+    },
+    onPullProgress: (callback: (payload: any) => void) => {
+      const handler = (_event: any, payload: any) => callback(payload);
+      ipcRenderer.on(OllamaIpcChannel.PullProgress, handler);
+      return () => ipcRenderer.removeListener(OllamaIpcChannel.PullProgress, handler);
+    },
+    onChatStreamChunk: (callback: (payload: any) => void) => {
+      const handler = (_event: any, payload: any) => callback(payload);
+      ipcRenderer.on(OllamaIpcChannel.ChatStreamChunk, handler);
+      return () => ipcRenderer.removeListener(OllamaIpcChannel.ChatStreamChunk, handler);
+    },
+  },
+  marketplace: {
+    search: (params?: any) => ipcRenderer.invoke(MarketplaceIpcChannel.Search, params),
   },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),

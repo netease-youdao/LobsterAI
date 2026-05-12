@@ -1,5 +1,17 @@
 import type { OpenClawSessionPatch } from '../../common/openclawSession';
 import type { AppUpdateCheckResult, AppUpdateRuntimeState } from '../../shared/appUpdate/constants';
+import type { MarketplaceSearchParams, MarketplaceSearchResult } from '../../shared/marketplace';
+import type {
+  OllamaCancelPullResult,
+  OllamaChatChunk,
+  OllamaChatPayload,
+  OllamaInstallProgress,
+  OllamaModel,
+  OllamaModelLaunchInput,
+  OllamaModelLaunchResult,
+  OllamaRunningModel,
+  OllamaStatusSnapshot,
+} from '../../shared/ollama';
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -335,6 +347,34 @@ interface IElectronAPI {
     refreshBridge: () => Promise<{ success: boolean; tools: number; error?: string }>;
     onBridgeSyncStart: (callback: () => void) => () => void;
     onBridgeSyncDone: (callback: (data: { tools: number; error?: string }) => void) => () => void;
+  };
+  ollama: {
+    status: () => Promise<OllamaStatusSnapshot>;
+    install: () => Promise<OllamaStatusSnapshot>;
+    start: () => Promise<OllamaStatusSnapshot>;
+    stop: () => Promise<OllamaStatusSnapshot>;
+    restart: () => Promise<OllamaStatusSnapshot>;
+    modelsDir: () => Promise<string>;
+    listLocalModels: () => Promise<OllamaModel[]>;
+    listRunningModels: () => Promise<OllamaRunningModel[]>;
+    deleteModel: (name: string) => Promise<{ success: boolean }>;
+    showModel: (name: string) => Promise<unknown>;
+    createModel: (name: string, modelfile: string) => Promise<{ success: boolean }>;
+    preloadModel: (input: OllamaModelLaunchInput) => Promise<OllamaModelLaunchResult>;
+    unloadModel: (name: string) => Promise<OllamaModelLaunchResult>;
+    pullModel: (name: string) => Promise<{ success: boolean }>;
+    cancelPull: (name: string) => Promise<OllamaCancelPullResult>;
+    chat: (payload: OllamaChatPayload) => Promise<OllamaChatChunk>;
+    chatStream: (requestId: string, payload: OllamaChatPayload) => Promise<{ success: boolean }>;
+    cancelChatStream: (requestId: string) => Promise<{ success: boolean; cancelled: boolean }>;
+    setOpenClawModel: (modelName: string) => Promise<{ success: boolean; error?: string }>;
+    onStatusChanged: (callback: (snapshot: OllamaStatusSnapshot) => void) => () => void;
+    onInstallProgress: (callback: (progress: OllamaInstallProgress) => void) => () => void;
+    onPullProgress: (callback: (payload: { name: string; chunk: Record<string, unknown> }) => void) => () => void;
+    onChatStreamChunk: (callback: (payload: { requestId: string; chunk: OllamaChatChunk }) => void) => () => void;
+  };
+  marketplace: {
+    search: (params?: MarketplaceSearchParams) => Promise<MarketplaceSearchResult>;
   };
   agents: {
     list: () => Promise<Agent[]>;

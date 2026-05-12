@@ -1,4 +1,4 @@
-import { Cog6ToothIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { Cog6ToothIcon, CpuChipIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { AgentId } from '@shared/agent';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -27,11 +27,12 @@ import LoginButton from './LoginButton';
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'localInference';
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
   onShowMcp: () => void;
+  onShowLocalInference: () => void;
   onNewChat: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -56,6 +57,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowCowork,
   onShowScheduledTasks,
   onShowMcp,
+  onShowLocalInference,
   onNewChat,
   isCollapsed,
   onToggleCollapse,
@@ -277,6 +279,18 @@ const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={() => {
+              setIsSearchOpen(false);
+              onShowLocalInference();
+            }}
+            className={activeView === 'localInference' ? activeSidebarNavItemClassName : sidebarNavItemClassName}
+            aria-current={activeView === 'localInference' ? 'page' : undefined}
+          >
+            <CpuChipIcon className="h-4 w-4 shrink-0" />
+            {i18nService.t('localInferenceTitle')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
               onShowCowork();
               setIsSearchOpen(true);
             }}
@@ -401,7 +415,8 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       ) : (
-        <div className="px-3 pb-1 pt-1 flex items-center gap-1">
+        <div className="space-y-1 px-3 pb-1 pt-1">
+          <div className="flex items-center gap-1">
           {!hideLogin && (
             <div className="flex-1 min-w-0">
               <LoginButton />
@@ -416,6 +431,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             <Cog6ToothIcon className="h-4 w-4 shrink-0" />
             {i18nService.t('settings')}
           </button>
+          </div>
         </div>
       )}
       {/* Batch Delete Confirmation Modal */}
