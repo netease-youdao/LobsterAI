@@ -28,9 +28,19 @@ const targetId = resolveHostTargetId();
 const rootDir = path.resolve(__dirname, '..');
 const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
+// Ensure the current Node's directory is first in PATH for the whole build chain
+const env = { ...process.env };
+if (process.platform === 'win32') {
+  const nodeDir = path.dirname(process.execPath);
+  const pathEntries = Object.entries(env).filter(([k]) => k.toUpperCase() === 'PATH');
+  const pathValue = pathEntries.map(([, v]) => v).join(path.delimiter);
+  for (const [k] of pathEntries) delete env[k];
+  env.PATH = `${nodeDir}${path.delimiter}${pathValue}`;
+}
+
 const result = spawnSync(npmBin, ['run', `openclaw:runtime:${targetId}`], {
   cwd: rootDir,
-  env: process.env,
+  env,
   stdio: 'inherit',
   shell: true,
 });
