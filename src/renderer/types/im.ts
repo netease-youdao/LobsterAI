@@ -669,7 +669,10 @@ export type IMConnectivityCheckCode =
   | 'dingtalk_bot_membership_hint'
   | 'nim_p2p_only_hint'
   | 'openclaw_gateway_not_running'
-  | 'qq_guild_mention_hint';
+  | 'qq_guild_mention_hint'
+  | 'weixin_not_logged_in'
+  | 'weixin_account_missing'
+  | 'weixin_gateway_probe_failed';
 
 export interface IMConnectivityCheck {
   code: IMConnectivityCheckCode;
