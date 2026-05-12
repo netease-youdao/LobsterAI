@@ -2668,27 +2668,59 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:fetchMarketplace', async () => {
     const url = getSkillStoreUrl();
-    console.log(`[SkillMarketplace] fetching from: ${url}`);
+    const clawhubBase = 'https://clawhub.ai/api/v1/skills';
+    const apiUrl = url || clawhubBase;
+    console.log(`[SkillMarketplace] fetching from: ${apiUrl}`);
     try {
-      const https = await import('https');
-      const data = await new Promise<string>((resolve, reject) => {
-        const req = https.get(url, { timeout: 10000 }, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            res.resume();
-            return;
-          }
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk: string) => { body += chunk; });
-          res.on('end', () => resolve(body));
-          res.on('error', reject);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
-      });
-      return { success: true, data };
+      const MAX_PAGES = 3;
+      const PAGE_LIMIT = 100;
+      let cursor: string | undefined;
+      let allItems: Array<Record<string, unknown>> = [];
+      let pageCount = 0;
+      const overallTimeout = Date.now() + 10000;
+
+      while (pageCount < MAX_PAGES && Date.now() < overallTimeout) {
+        pageCount++;
+        const pageUrl = cursor
+          ? `${apiUrl}?limit=${PAGE_LIMIT}&cursor=${encodeURIComponent(cursor)}`
+          : `${apiUrl}?limit=${PAGE_LIMIT}`;
+        try {
+          const pageResponse = await fetch(pageUrl, { signal: AbortSignal.timeout(8000) });
+          if (!pageResponse.ok) break;
+          const pageData = await pageResponse.json() as {
+            items?: Array<Record<string, unknown>>;
+            nextCursor?: string;
+          };
+          const pageItems = pageData.items ?? [];
+          if (pageItems.length === 0) break;
+          allItems = allItems.concat(pageItems);
+          cursor = pageData.nextCursor;
+          if (!cursor) break;
+        } catch {
+          break;
+        }
+      }
+
+      console.log(`[SkillMarketplace] fetched ${allItems.length} skills (${pageCount} pages)`);
+
+      const marketplace = allItems.map((item) => ({
+        id: item.slug || item.id,
+        name: item.displayName || item.name,
+        description: item.summary || item.description || '',
+        tags: item.tags ? Object.keys(item.tags as Record<string, unknown>) : [],
+        url: `https://clawhub.ai/skills/${item.slug || item.id}`,
+        version: ((item.tags as Record<string, string> | undefined)?.latest) || '1.0.0',
+        source: {
+          from: 'ClawHub',
+          url: `https://clawhub.ai/skills/${item.slug || item.id}`,
+          author: ((item.owner as Record<string, unknown> | undefined)?.displayName as string) ?? '',
+        },
+      }));
+
+      const result = JSON.stringify({ data: { value: { marketplace, marketTags: [], localSkill: [] } } });
+      return { success: true, data: result };
     } catch (error) {
+      console.error('[SkillMarketplace] fetch error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch skill marketplace' };
     }
   });

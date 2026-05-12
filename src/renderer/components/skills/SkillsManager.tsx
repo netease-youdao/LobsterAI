@@ -32,6 +32,58 @@ type ImportSourceType = 'github' | 'clawhub';
 type DirectImportSource = 'zip' | 'folder' | 'remote';
 
 const importSourceTypes: ImportSourceType[] = ['github', 'clawhub'];
+const MARKETPLACE_MIN_PAGE_SIZE = 8;
+const MARKETPLACE_MAX_PAGE_SIZE = 40;
+const MARKETPLACE_DEFAULT_PAGE_SIZE = 20;
+const MARKETPLACE_PAGE_WINDOW = 2;
+
+type MarketplacePageItem = number | 'ellipsis-left' | 'ellipsis-right';
+
+const estimateMarketplacePageSize = () => {
+  if (typeof window === 'undefined') {
+    return MARKETPLACE_DEFAULT_PAGE_SIZE;
+  }
+
+  const columns = window.innerWidth >= 1536
+    ? 4
+    : window.innerWidth >= 1280
+      ? 3
+      : window.innerWidth >= 768
+        ? 2
+        : 1;
+  const availableHeight = Math.max(280, window.innerHeight - 320);
+  const rows = Math.max(2, Math.floor(availableHeight / 132));
+  const pageSize = columns * rows;
+
+  return Math.min(MARKETPLACE_MAX_PAGE_SIZE, Math.max(MARKETPLACE_MIN_PAGE_SIZE, pageSize));
+};
+
+const getMarketplacePageItems = (currentPage: number, pageCount: number): MarketplacePageItem[] => {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const pages = new Set<number>([1, pageCount]);
+  const start = Math.max(2, currentPage - MARKETPLACE_PAGE_WINDOW);
+  const end = Math.min(pageCount - 1, currentPage + MARKETPLACE_PAGE_WINDOW);
+
+  for (let page = start; page <= end; page++) {
+    pages.add(page);
+  }
+
+  const sortedPages = Array.from(pages).sort((a, b) => a - b);
+  const items: MarketplacePageItem[] = [];
+
+  for (const page of sortedPages) {
+    const previous = items[items.length - 1];
+    if (typeof previous === 'number' && page - previous > 1) {
+      items.push(previous === 1 ? 'ellipsis-left' : 'ellipsis-right');
+    }
+    items.push(page);
+  }
+
+  return items;
+};
 
 const importTabConfig: Record<ImportSourceType, {
   tabLabelKey: string;
@@ -76,6 +128,8 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [marketTags, setMarketTags] = useState<MarketTag[]>([]);
   const [activeMarketTag, setActiveMarketTag] = useState('all');
+  const [marketplacePage, setMarketplacePage] = useState(1);
+  const [marketplacePageSize, setMarketplacePageSize] = useState(estimateMarketplacePageSize);
   const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(false);
   const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
   const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(null);
@@ -134,6 +188,30 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       setIsLoadingMarketplace(false);
     });
     return () => { isActive = false; };
+  }, []);
+
+  useEffect(() => {
+    let animationFrame = 0;
+
+    const updatePageSize = () => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        setMarketplacePageSize(estimateMarketplacePageSize());
+      });
+    };
+
+    updatePageSize();
+    window.addEventListener('resize', updatePageSize);
+
+    return () => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      window.removeEventListener('resize', updatePageSize);
+    };
   }, []);
 
   useEffect(() => {
@@ -218,6 +296,26 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     }
     return results;
   }, [marketplaceSkills, skillSearchQuery, activeMarketTag]);
+
+  const marketplacePageCount = Math.max(1, Math.ceil(filteredMarketplaceSkills.length / marketplacePageSize));
+  const marketplacePageItems = useMemo(() => {
+    return getMarketplacePageItems(marketplacePage, marketplacePageCount);
+  }, [marketplacePage, marketplacePageCount]);
+  const visibleMarketplaceSkills = useMemo(() => {
+    const safePage = Math.min(marketplacePage, marketplacePageCount);
+    const start = (safePage - 1) * marketplacePageSize;
+    return filteredMarketplaceSkills.slice(start, start + marketplacePageSize);
+  }, [filteredMarketplaceSkills, marketplacePage, marketplacePageCount, marketplacePageSize]);
+
+  useEffect(() => {
+    setMarketplacePage(1);
+  }, [skillSearchQuery, activeMarketTag, activeTab]);
+
+  useEffect(() => {
+    if (marketplacePage > marketplacePageCount) {
+      setMarketplacePage(marketplacePageCount);
+    }
+  }, [marketplacePage, marketplacePageCount]);
 
   const formatSkillDate = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -838,9 +936,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 {i18nService.t('skillMarketplaceEmpty')}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {filteredMarketplaceSkills.map((skill) => (
-              <div
+              <>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {visibleMarketplaceSkills.map((skill) => (
+                <div
                 key={skill.id}
                 className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary cursor-pointer"
                 onClick={() => setSelectedMarketplaceSkill(skill)}
@@ -934,8 +1033,51 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                   )}
                 </div>
               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+            {filteredMarketplaceSkills.length > marketplacePageSize && (
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-secondary">
+                <button
+                  type="button"
+                  onClick={() => setMarketplacePage(page => Math.max(1, page - 1))}
+                  disabled={marketplacePage <= 1}
+                  className="px-3 py-1.5 rounded-lg border border-border bg-surface hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {i18nService.t('skillMarketplacePrevPage')}
+                </button>
+                <div className="flex items-center gap-1">
+                  {marketplacePageItems.map((item) => (
+                    typeof item === 'number' ? (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => setMarketplacePage(item)}
+                        className={`min-w-8 px-2 py-1.5 rounded-lg border transition-colors ${
+                          item === marketplacePage
+                            ? 'border-primary bg-primary text-white'
+                            : 'border-border bg-surface hover:bg-surface-raised'
+                        }`}
+                      >
+                        {item}
+                      </button>
+                    ) : (
+                      <span key={item} className="px-1 text-secondary">
+                        ...
+                      </span>
+                    )
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMarketplacePage(page => Math.min(marketplacePageCount, page + 1))}
+                  disabled={marketplacePage >= marketplacePageCount}
+                  className="px-3 py-1.5 rounded-lg border border-border bg-surface hover:bg-surface-raised disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {i18nService.t('skillMarketplaceNextPage')}
+                </button>
+              </div>
+            )}
+          </>
             )}
           </>
         )
