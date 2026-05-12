@@ -17,3 +17,6 @@ export const getServerApiBaseUrl = (): string => {
 export const getSkillStoreUrl = (): string => '';
 export const getMcpMarketplaceUrl = (): string => '';
 export const getLoginOvermindUrl = (): string => '';
+
+export const getModelScopeMcpBaseUrl = (): string =>
+  'https://www.modelscope.cn/openapi/v1/mcp/servers';

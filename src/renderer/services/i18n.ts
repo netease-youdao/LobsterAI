@@ -1191,6 +1191,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpDesc_canva: 'Canva 设计平台：创建和管理设计、模板操作',
     mcpDesc_firecrawl: '网页抓取与数据提取：支持批处理、结构化提取和内容分析',
     mcpDesc_fetch: '网页内容抓取和 HTML 转 Markdown，适合 LLM 消费',
+    mcpSourceLocal: '本地市场',
+    mcpSourceModelScope: '魔搭社区市场',
+    mcpModelScopeSearch: '搜索魔搭 MCP 服务',
+    mcpModelScopeInstall: '安装',
+    mcpModelScopeInstalling: '安装中...',
+    mcpModelScopeNoResults: '魔搭社区暂无可用 MCP 服务',
+    mcpModelScopeTokenRequired: '需要在设置中配置 ModelScope Token 才能查看 Hosted URL',
 
     // 邮箱技能配置
     emailTab: '邮箱',
@@ -3133,6 +3140,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     mcpDesc_firecrawl:
       'Web scraping and data extraction: batch processing, structured extraction and content analysis',
     mcpDesc_fetch: 'Web content fetching and HTML-to-markdown conversion for LLM consumption',
+    mcpSourceLocal: 'Local Registry',
+    mcpSourceModelScope: 'ModelScope Marketplace',
+    mcpModelScopeSearch: 'Search ModelScope MCP servers',
+    mcpModelScopeInstall: 'Install',
+    mcpModelScopeInstalling: 'Installing...',
+    mcpModelScopeNoResults: 'No MCP servers found in ModelScope',
+    mcpModelScopeTokenRequired: 'ModelScope Token required in Settings to view Hosted URLs',
 
     // Email Skill Config
     emailTab: 'Email',

@@ -62,6 +62,12 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('mcp:bridge:syncDone', handler);
       return () => ipcRenderer.removeListener('mcp:bridge:syncDone', handler);
     },
+    modelscopeSearch: (keyword?: string, pageSize?: number) =>
+      ipcRenderer.invoke('mcp:modelscope:search', keyword, pageSize),
+    modelscopeDetail: (serverId: string) =>
+      ipcRenderer.invoke('mcp:modelscope:detail', serverId),
+    modelscopeInstall: (serverId: string) =>
+      ipcRenderer.invoke('mcp:modelscope:install', serverId),
   },
   ollama: {
     status: () => ipcRenderer.invoke(OllamaIpcChannel.Status),
