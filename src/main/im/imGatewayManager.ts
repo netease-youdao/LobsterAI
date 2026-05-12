@@ -1509,35 +1509,26 @@ export class IMGatewayManager extends EventEmitter {
       message: t('imWeixinConfigReady'),
     });
 
-    // Check 3: Probe the weixin channel via the OpenClaw gateway
+    // Check 3: Probe via sessions.list — read-only, no side effects
     try {
-      const probeResult = await client.request<{
-        connected?: boolean;
-        message?: string;
-        accountId?: string;
-        error?: string;
-      }>(
-        'web.login.wait',
-        { accountId: wxConfig.accountId, timeoutMs: 5000 },
+      const result = await client.request<{ sessions?: Array<{ key?: string }> }>(
+        'sessions.list',
+        { activeMinutes: 240, limit: 200 },
       );
-      if (probeResult.connected) {
+      const hasWeixinSessions = result.sessions?.some(
+        s => s.key?.startsWith('openclaw-weixin:'),
+      );
+      if (hasWeixinSessions) {
         checks.push({
           code: 'inbound_activity',
           level: 'pass',
           message: t('imWeixinChannelActive'),
         });
-      } else if (probeResult.error) {
-        checks.push({
-          code: 'weixin_gateway_probe_failed',
-          level: 'warn',
-          message: t('imWeixinGatewayProbeError', { error: probeResult.error }),
-          suggestion: t('imWeixinChannelProbeFailedSuggestion'),
-        });
       } else {
         checks.push({
           code: 'weixin_not_logged_in',
           level: 'fail',
-          message: probeResult.message || t('imWeixinChannelProbeFailed'),
+          message: t('imWeixinChannelProbeFailed'),
           suggestion: t('imWeixinChannelProbeFailedSuggestion'),
         });
       }
