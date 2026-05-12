@@ -59,6 +59,7 @@ import { mergeEnterpriseOpenclawConfig, resolveEnterpriseConfigPath, syncEnterpr
 import { exportLogsZip } from './libs/logExport';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import { McpServerManager } from './libs/mcpServerManager';
+import { getNvidiaSmiSnapshot } from './libs/nvidiaSmi';
 import { OllamaManager } from './libs/ollamaManager';
 import { parsePrimaryModelRef, resolveQualifiedAgentModelRef } from './libs/openclawAgentModels';
 import {
@@ -2131,6 +2132,8 @@ if (!gotTheLock) {
       return null;
     }
   });
+
+  ipcMain.handle('hardware:nvidia-smi', async () => getNvidiaSmiSnapshot());
 
   // Network status change handler
   // Remove any existing listener first to avoid duplicate registrations
