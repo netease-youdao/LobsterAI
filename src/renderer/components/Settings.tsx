@@ -3,6 +3,7 @@ import { ArrowTopRightOnSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChip
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
+import type { OllamaStatusSnapshot } from '../../shared/ollama';
 import { OpenClawProviderId, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import { type AppConfig, defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, getVisibleProviders, isCustomProvider } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
@@ -537,8 +538,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [testResult, setTestResult] = useState<ProviderConnectionTestResult | null>(null);
   const [isTestResultModalOpen, setIsTestResultModalOpen] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusSnapshot | null>(null);
-  const [isUpdatingOllamaService, setIsUpdatingOllamaService] = useState(false);
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<ProviderType | null>(null);
   const [isImportingProviders, setIsImportingProviders] = useState(false);
   const [isExportingProviders, setIsExportingProviders] = useState(false);
@@ -571,6 +570,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusSnapshot | null>(null);
 
 
   // authType defaults to undefined on first open, which should behave as OAuth mode
@@ -620,6 +620,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setShowApiKey(false);
   }, [activeProvider]);
 
+  void ollamaStatus;
+
   const syncOllamaProviderEnabled = useCallback((status: OllamaStatusSnapshot) => {
     const enabled = status.status === 'running';
     setProviders(prev => {
@@ -652,131 +654,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     });
     return unsubscribe;
   }, [activeTab, refreshOllamaStatus, syncOllamaProviderEnabled]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const syncUpdateStatus = async () => {
-      try {
-        const state = await window.electron.appUpdate.getState();
-        if (!mounted) {
-          return;
-        }
-        setAppUpdateState(state);
-        setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
-      } catch (error) {
-        console.error('Failed to load app update state in settings:', error);
-      }
-    };
-
-    void syncUpdateStatus();
-
-    const unsubscribe = window.electron.appUpdate.onStateChanged((state) => {
-      if (
-        updateCheckTimerRef.current != null &&
-        state.source === AppUpdateSource.Manual &&
-        state.status !== AppUpdateStatus.Idle
-      ) {
-        window.clearTimeout(updateCheckTimerRef.current);
-        updateCheckTimerRef.current = null;
-      }
-      setAppUpdateState(state);
-      setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
-    });
-
-    return () => {
-      mounted = false;
-      unsubscribe();
-    };
-  }, []);
-
-  const handleCopyContactEmail = useCallback(async () => {
-    const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
-    if (copied) {
-      setEmailCopied(true);
-      if (emailCopiedTimerRef.current != null) {
-        window.clearTimeout(emailCopiedTimerRef.current);
-      }
-      emailCopiedTimerRef.current = window.setTimeout(() => {
-        setEmailCopied(false);
-        emailCopiedTimerRef.current = null;
-      }, 1200);
-    }
-  }, []);
-
-  const authUser = useSelector((state: RootState) => state.auth.user);
-
-  const handleCheckUpdate = useCallback(async () => {
-    if (updateCheckStatus === 'checking' || !appVersion) return;
-    setUpdateCheckStatus('checking');
-    try {
-      const result = await window.electron.appUpdate.checkNow({ manual: true, userId: authUser?.yid });
-      if (!result.success) {
-        throw new Error(result.error || 'Update check failed');
-      }
-
-      if (!result.updateFound) {
-        setUpdateCheckStatus('upToDate');
-        if (updateCheckTimerRef.current != null) {
-          window.clearTimeout(updateCheckTimerRef.current);
-        }
-        updateCheckTimerRef.current = window.setTimeout(() => {
-          setUpdateCheckStatus('idle');
-          updateCheckTimerRef.current = null;
-        }, 3000);
-        return;
-      }
-
-      if (result.state.status === AppUpdateStatus.Ready) {
-        setUpdateCheckStatus('ready');
-      } else if (result.state.status === AppUpdateStatus.Downloading) {
-        setUpdateCheckStatus('downloading');
-      } else {
-        setUpdateCheckStatus('idle');
-      }
-
-      if (result.state.info) {
-        onUpdateFound?.(result.state.info);
-      }
-    } catch {
-      setUpdateCheckStatus('error');
-      if (updateCheckTimerRef.current != null) {
-        window.clearTimeout(updateCheckTimerRef.current);
-      }
-      updateCheckTimerRef.current = window.setTimeout(() => {
-        setUpdateCheckStatus('idle');
-        updateCheckTimerRef.current = null;
-      }, 3000);
-    }
-  }, [appVersion, authUser, updateCheckStatus, onUpdateFound]);
-
-  const updateButtonLabel = useMemo(() => {
-    if (
-      updateCheckStatus === 'downloading' &&
-      appUpdateState?.progress?.percent != null &&
-      Number.isFinite(appUpdateState.progress.percent)
-    ) {
-      return `${i18nService.t('updateDownloadingBackground')} ${Math.round(appUpdateState.progress.percent * 100)}%`;
-    }
-    if (updateCheckStatus === 'checking') return i18nService.t('updateChecking');
-    if (updateCheckStatus === 'downloading') return i18nService.t('updateDownloadingBackground');
-    if (updateCheckStatus === 'ready') return i18nService.t('updateReadyTitle');
-    if (updateCheckStatus === 'upToDate') return i18nService.t('updateUpToDate');
-    if (updateCheckStatus === 'error') return i18nService.t('updateCheckFailed');
-    return i18nService.t('checkForUpdate');
-  }, [appUpdateState?.progress?.percent, updateCheckStatus]);
-
-  const handleOpenUserManual = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
-  }, []);
-
-  const handleOpenUserCommunity = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_USER_COMMUNITY_URL);
-  }, []);
-
-  const handleOpenServiceTerms = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_SERVICE_TERMS_URL);
-  }, []);
 
   const handleExportLogs = useCallback(async () => {
     if (isExportingLogs) {
@@ -1728,11 +1605,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   // Toggle provider enabled status
   const toggleProviderEnabled = (provider: ProviderType) => {
-    if (provider === ProviderName.Ollama) {
-      void toggleOllamaService();
-      return;
-    }
-
     const providerConfig = providers[provider];
     const isEnabling = !providerConfig.enabled;
     const hasValidAuth = hasProviderAuthConfigured(provider, providerConfig);
@@ -1755,39 +1627,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         enabled: !prev[provider].enabled
       }
     }));
-  };
-
-  const toggleOllamaService = async () => {
-    if (isUpdatingOllamaService) return;
-    setIsUpdatingOllamaService(true);
-    setError(null);
-    try {
-      const currentStatus = ollamaStatus ?? await refreshOllamaStatus();
-      let nextStatus: OllamaStatusSnapshot;
-      if (currentStatus.status === 'running') {
-        if (!currentStatus.managedByApp) {
-          setNoticeMessage(i18nService.t('localInferenceExternalServiceHint'));
-          return;
-        }
-        await window.electron.ollama.stop();
-        nextStatus = await refreshOllamaStatus();
-      } else if (currentStatus.status === 'not-installed') {
-        await window.electron.ollama.install();
-        nextStatus = await refreshOllamaStatus();
-        if (nextStatus.status === 'not-installed' || nextStatus.status === 'error') {
-          setNoticeMessage(i18nService.t('localInferenceInstallOpened'));
-        }
-      } else {
-        await window.electron.ollama.start();
-        nextStatus = await refreshOllamaStatus();
-      }
-      setOllamaStatus(nextStatus);
-      syncOllamaProviderEnabled(nextStatus);
-    } catch (toggleError) {
-      setError(toggleError instanceof Error ? toggleError.message : String(toggleError));
-    } finally {
-      setIsUpdatingOllamaService(false);
-    }
   };
 
   const enableProvider = (provider: ProviderType) => {
@@ -3249,18 +3088,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 const providerKey = provider as ProviderType;
                 const isCustom = isCustomProvider(provider);
                 const hasValidAuth = hasProviderAuthConfigured(providerKey, config);
-                const isOllamaProvider = providerKey === ProviderName.Ollama;
-                const ollamaServiceRunning = ollamaStatus?.status === 'running';
-                const ollamaServiceManagedByApp = Boolean(ollamaStatus?.managedByApp);
-                const ollamaServiceBusy = isUpdatingOllamaService
-                  || ollamaStatus?.status === 'starting'
-                  || ollamaStatus?.status === 'installing';
-                const effectiveEnabled = isOllamaProvider
-                  ? ollamaServiceRunning
-                  : config.enabled && hasValidAuth;
-                const canToggleProvider = isOllamaProvider
-                  ? !ollamaServiceBusy && (!ollamaServiceRunning || ollamaServiceManagedByApp)
-                  : effectiveEnabled || hasValidAuth;
+                const effectiveEnabled = config.enabled && hasValidAuth;
+                const canToggleProvider = effectiveEnabled || hasValidAuth;
                 const displayLabel = isCustom
                   ? ((config as ProviderConfig).displayName || getCustomProviderDefaultName(provider))
                   : (ProviderRegistry.get(providerKey)?.label ?? getProviderDisplayName(provider));
@@ -3312,11 +3141,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                         </button>
                       )}
                       <div
-                        title={isOllamaProvider
-                          ? ollamaServiceRunning && !ollamaServiceManagedByApp
-                            ? i18nService.t('localInferenceExternalServiceHint')
-                            : i18nService.t(`localInferenceStatus_${ollamaStatus?.status ?? 'unknown'}`)
-                          : !canToggleProvider ? i18nService.t('configureApiKey') : undefined}
+                        title={!canToggleProvider ? i18nService.t('configureApiKey') : undefined}
                         className={`w-7 h-4 rounded-full flex items-center transition-colors ${
                           effectiveEnabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
                         } ${
@@ -3376,16 +3201,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 </div>
                 <div
                   className={`px-2 py-0.5 rounded-lg text-xs font-medium ${
-                    (activeProvider === ProviderName.Ollama
-                      ? ollamaStatus?.status === 'running'
-                      : providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider]))
+                    providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
                       ? 'bg-green-500/20 text-green-600 dark:text-green-400'
                       : 'bg-red-500/20 text-red-600 dark:text-red-400'
                   }`}
                 >
-                  {(activeProvider === ProviderName.Ollama
-                    ? ollamaStatus?.status === 'running'
-                    : providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider]))
+                  {providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
                     ? i18nService.t('providerStatusOn')
                     : i18nService.t('providerStatusOff')}
                 </div>
@@ -4580,13 +4401,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   };
 
   return (
-    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-3 sm:p-4">
+    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center">
       <div
-        className="relative flex h-[min(80vh,760px)] max-h-[calc(100vh-24px)] w-[min(900px,calc(100vw-24px))] rounded-2xl border-border border shadow-modal overflow-hidden modal-content sm:max-h-[calc(100vh-32px)] sm:w-[min(900px,calc(100vw-32px))]"
+        className="relative flex w-[900px] h-[80vh] rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
         {/* Left sidebar */}
-        <div className="w-[180px] sm:w-[220px] shrink-0 flex flex-col bg-surface-raised border-r border-border rounded-l-2xl overflow-y-auto">
+        <div className="w-[220px] shrink-0 flex flex-col bg-surface-raised border-r border-border rounded-l-2xl overflow-y-auto">
           <div className="px-5 pt-5 pb-3">
             <h2 className="text-lg font-semibold text-foreground">{i18nService.t('settings')}</h2>
           </div>
