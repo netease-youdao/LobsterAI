@@ -1465,7 +1465,6 @@ export class IMGatewayManager extends EventEmitter {
     const mergedConfig = this.buildMergedConfig(configOverride);
     const wxConfig = mergedConfig.weixin;
 
-    // Weixin has no credentials; just check if enabled
     if (!wxConfig?.enabled) {
       checks.push({
         code: 'gateway_running',
@@ -1476,19 +1475,71 @@ export class IMGatewayManager extends EventEmitter {
       return { platform, testedAt, verdict: 'pass', checks };
     }
 
-    // Config completeness passes (no credentials needed)
+    // Check 1: Gateway must be running
+    const client = this.getOpenClawGatewayClient?.() ?? null;
+    const gatewayRunning = client !== null;
+    if (!gatewayRunning) {
+      checks.push({
+        code: 'openclaw_gateway_not_running',
+        level: 'fail',
+        message: t('imWeixinGatewayNotRunning'),
+        suggestion: t('imWeixinGatewayNotRunningSuggestion'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+    checks.push({
+      code: 'gateway_running',
+      level: 'pass',
+      message: t('imWeixinConfigReadyOpenClaw'),
+    });
+
+    // Check 2: Account must be bound via QR login
+    if (!wxConfig.accountId) {
+      checks.push({
+        code: 'weixin_account_missing',
+        level: 'fail',
+        message: t('imWeixinAccountMissing'),
+        suggestion: t('imWeixinAccountMissingSuggestion'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
     checks.push({
       code: 'auth_check',
       level: 'pass',
       message: t('imWeixinConfigReady'),
     });
 
-    // OpenClaw Gateway running info
-    checks.push({
-      code: 'gateway_running',
-      level: 'info',
-      message: t('imWeixinOpenClawHint'),
-    });
+    // Check 3: Probe via sessions.list — read-only, no side effects
+    try {
+      const result = await client.request<{ sessions?: Array<{ key?: string }> }>(
+        'sessions.list',
+        { activeMinutes: 240, limit: 200 },
+      );
+      const hasWeixinSessions = result.sessions?.some(
+        s => s.key?.startsWith('openclaw-weixin:'),
+      );
+      if (hasWeixinSessions) {
+        checks.push({
+          code: 'inbound_activity',
+          level: 'pass',
+          message: t('imWeixinChannelActive'),
+        });
+      } else {
+        checks.push({
+          code: 'weixin_not_logged_in',
+          level: 'fail',
+          message: t('imWeixinChannelProbeFailed'),
+          suggestion: t('imWeixinChannelProbeFailedSuggestion'),
+        });
+      }
+    } catch (err) {
+      checks.push({
+        code: 'weixin_gateway_probe_failed',
+        level: 'warn',
+        message: t('imWeixinGatewayProbeError', { error: String(err) }),
+        suggestion: t('imWeixinChannelProbeFailedSuggestion'),
+      });
+    }
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
       ? 'fail'

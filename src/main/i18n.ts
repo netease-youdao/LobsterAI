@@ -177,6 +177,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinOpenClawHint:
       '微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imWeixinConfigReadyOpenClaw: '微信配置已就绪，通过 OpenClaw 运行。',
+    imWeixinAccountMissing: '尚未绑定微信账号，需要扫码登录。',
+    imWeixinAccountMissingSuggestion: '请在微信设置中点击"扫码连接微信"完成账号绑定。',
+    imWeixinGatewayNotRunning: 'OpenClaw Gateway 未启动，微信频道无法连接。',
+    imWeixinGatewayNotRunningSuggestion: '请先启动 AI 引擎（OpenClaw），微信 Bot 才会连接微信服务器。',
+    imWeixinChannelProbeFailed: '无法确认微信频道状态。',
+    imWeixinChannelProbeFailedSuggestion: '请稍后重试。如果问题持续，尝试重启 OpenClaw Gateway 或重新扫码绑定。',
+    imWeixinChannelActive: '微信频道连接状态正常。',
+    imWeixinGatewayProbeError: '微信频道探活失败：{error}',
 
     // NIM
     imNimFillCredentials: '请补全 AppKey、Account 和 Token 后重新测试连通性。',
@@ -457,6 +465,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinOpenClawHint:
       'WeChat runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imWeixinConfigReadyOpenClaw: 'WeChat configuration is ready, running via OpenClaw.',
+    imWeixinAccountMissing: 'WeChat account is not bound. QR code scan is required.',
+    imWeixinAccountMissingSuggestion: 'Please use "Scan to Connect WeChat" in WeChat settings to bind your account.',
+    imWeixinGatewayNotRunning: 'OpenClaw Gateway is not running. WeChat channel cannot connect.',
+    imWeixinGatewayNotRunningSuggestion: 'Please start the AI engine (OpenClaw) first for the WeChat bot to connect.',
+    imWeixinChannelProbeFailed: 'Unable to verify WeChat channel status.',
+    imWeixinChannelProbeFailedSuggestion: 'Please try again later. If the issue persists, restart OpenClaw Gateway or re-scan the QR code.',
+    imWeixinChannelActive: 'WeChat channel connection is active.',
+    imWeixinGatewayProbeError: 'WeChat channel health check failed: {error}',
 
     // NIM
     imNimFillCredentials:
