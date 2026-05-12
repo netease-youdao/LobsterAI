@@ -4354,12 +4354,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 </button>
               </div>
 
-              <p className="mt-5 text-xs text-secondary">
-                {i18nService.t('copyrightHolder')}
-              </p>
-              <p className="mt-1 text-xs text-secondary">
-                Copyright &copy; {new Date().getFullYear()} NetEase Youdao. All Rights Reserved.
-              </p>
             </div>
           </div>
         );
