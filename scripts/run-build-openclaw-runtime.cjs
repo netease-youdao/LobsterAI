@@ -27,7 +27,7 @@ function resolveBashExecutable(rootDir) {
     });
     if (result.status === 0 && result.stdout) {
       const paths = result.stdout.trim().split(/\r?\n/).map(p => p.trim()).filter(Boolean);
-      const isWslBash = (p: string) => {
+      const isWslBash = (p) => {
         const lower = p.toLowerCase();
         return lower.includes('windowsapps') || lower.includes('system32');
       };
@@ -98,10 +98,6 @@ if (process.platform === 'win32') {
   const pathValue = pathEntries.map(([, v]) => v).join(path.delimiter);
   for (const [k] of pathEntries) delete env[k];
   env.PATH = `${nodeDir}${path.delimiter}${pathValue}`;
-  console.error(`[run-build-openclaw-runtime] execPath=${process.execPath}`);
-  console.error(`[run-build-openclaw-runtime] nodeDir=${nodeDir}`);
-  console.error(`[run-build-openclaw-runtime] bash=${bashExecutable}`);
-  console.error(`[run-build-openclaw-runtime] PATH first 3 entries: ${env.PATH.split(path.delimiter).slice(0, 3).join(path.delimiter)}`);
 }
 
 // Use a relative path so bash never sees Windows drive-letter paths like
