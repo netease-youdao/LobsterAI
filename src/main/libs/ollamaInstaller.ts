@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import type { Dirent } from 'fs';
 import { app } from 'electron';
 import { createWriteStream } from 'fs';
 import { access, mkdtemp, open, readdir, rename, rm, stat } from 'fs/promises';
@@ -88,7 +89,7 @@ export class OllamaInstaller {
     const tempPath = `${targetPath}.download`;
 
     try {
-      await rm(tempPath, { force: true }).catch(() => undefined);
+      await rm(tempPath, { force: true }).catch((): void => undefined);
 
       const response = await fetch(mirrorUrl);
       if (!response.ok || !response.body) {
@@ -111,11 +112,11 @@ export class OllamaInstaller {
         throw new Error('Downloaded installer failed validation');
       }
 
-      await rm(targetPath, { force: true }).catch(() => undefined);
+      await rm(targetPath, { force: true }).catch((): void => undefined);
       await rename(tempPath, targetPath);
       return targetPath;
     } catch (error) {
-      await rm(tempPath, { force: true }).catch(() => undefined);
+      await rm(tempPath, { force: true }).catch((): void => undefined);
       const message = error instanceof Error ? error.message : String(error);
       this.emitProgress({ phase: 'failed', error: `Ollama download failed: ${message}` });
       return null;
@@ -138,7 +139,7 @@ export class OllamaInstaller {
         try {
           await execFileAsync('cp', ['-R', path.join(volumePath, 'Ollama.app'), '/Applications/']);
         } finally {
-          await execFileAsync('hdiutil', ['detach', volumePath]).catch(() => undefined);
+          await execFileAsync('hdiutil', ['detach', volumePath]).catch((): void => undefined);
         }
         return;
       }
@@ -152,7 +153,7 @@ export class OllamaInstaller {
           }
           await execFileAsync('cp', ['-R', appPath, '/Applications/']);
         } finally {
-          await rm(extractDir, { recursive: true, force: true }).catch(() => undefined);
+          await rm(extractDir, { recursive: true, force: true }).catch((): void => undefined);
         }
         return;
       }
@@ -178,11 +179,11 @@ function appDownloadsDir(): string {
 
 async function findOllamaApp(dirPath: string, depth = 0): Promise<string | null> {
   if (depth > 3) return null;
-  const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  const entries = await readdir(dirPath, { withFileTypes: true }).catch((): Dirent[] => []);
   for (const entry of entries) {
     const entryPath = path.join(dirPath, entry.name);
     if (entry.isDirectory() && entry.name === 'Ollama.app' && path.extname(entry.name) === '.app') {
-      const appStat = await stat(entryPath).catch(() => null);
+      const appStat = await stat(entryPath).catch((): null => null);
       if (appStat?.isDirectory()) return entryPath;
     }
   }
@@ -249,7 +250,7 @@ function closeWriteStream(fileStream: ReturnType<typeof createWriteStream>): Pro
 }
 
 async function isUsableInstaller(filePath: string, filename = filePath, expectedSize?: number | null): Promise<boolean> {
-  const fileStat = await stat(filePath).catch(() => null);
+  const fileStat = await stat(filePath).catch((): null => null);
   if (!fileStat) return false;
   if (typeof fileStat.isFile === 'function' && !fileStat.isFile()) return false;
   if (typeof expectedSize === 'number' && expectedSize > 0 && fileStat.size !== expectedSize) return false;
@@ -258,7 +259,7 @@ async function isUsableInstaller(filePath: string, filename = filePath, expected
   const expectedHeader = getExpectedInstallerHeader(filename);
   if (!expectedHeader) return true;
 
-  const file = await open(filePath, 'r').catch(() => null);
+  const file = await open(filePath, 'r').catch((): null => null);
   if (!file) return false;
   try {
     const header = Buffer.alloc(expectedHeader.length);
@@ -266,7 +267,7 @@ async function isUsableInstaller(filePath: string, filename = filePath, expected
     if (bytesRead < expectedHeader.length) return false;
     return expectedHeader.every((byte, index) => header[index] === byte);
   } finally {
-    await file.close().catch(() => undefined);
+    await file.close().catch((): void => undefined);
   }
 }
 
