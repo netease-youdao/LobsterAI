@@ -2668,29 +2668,51 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:fetchMarketplace', async () => {
     const url = getSkillStoreUrl();
-    const clawhubUrl = 'https://clawhub.ai/api/v1/skills?limit=200';
-    const apiUrl = url || clawhubUrl;
+    const clawhubBase = 'https://clawhub.ai/api/v1/skills';
+    const apiUrl = url || clawhubBase;
     console.log(`[SkillMarketplace] fetching from: ${apiUrl}`);
     try {
-      const response = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      const MAX_PAGES = 20;
+      let cursor: string | undefined;
+      let allItems: Array<Record<string, unknown>> = [];
+      let pageCount = 0;
+      const overallTimeout = Date.now() + 25000;
+
+      while (pageCount < MAX_PAGES && Date.now() < overallTimeout) {
+        pageCount++;
+        const pageUrl = cursor
+          ? `${apiUrl}?limit=200&cursor=${encodeURIComponent(cursor)}`
+          : `${apiUrl}?limit=200`;
+        try {
+          const pageResponse = await fetch(pageUrl, { signal: AbortSignal.timeout(8000) });
+          if (!pageResponse.ok) break;
+          const pageData = await pageResponse.json() as {
+            items?: Array<Record<string, unknown>>;
+            nextCursor?: string;
+          };
+          const pageItems = pageData.items ?? [];
+          if (pageItems.length === 0) break;
+          allItems = allItems.concat(pageItems);
+          cursor = pageData.nextCursor;
+          if (!cursor) break;
+        } catch {
+          break;
+        }
       }
-      const rawData = await response.json();
 
-      const items = rawData.items ?? rawData?.data?.value?.marketplace ?? [];
+      console.log(`[SkillMarketplace] fetched ${allItems.length} skills (${pageCount} pages)`);
 
-      const marketplace = items.map((item: Record<string, unknown>) => ({
+      const marketplace = allItems.map((item) => ({
         id: item.slug || item.id,
         name: item.displayName || item.name,
         description: item.summary || item.description || '',
         tags: item.tags ? Object.keys(item.tags as Record<string, unknown>) : [],
         url: `https://clawhub.ai/skills/${item.slug || item.id}`,
-        version: (item.tags as Record<string, string> | undefined)?.latest || '1.0.0',
+        version: ((item.tags as Record<string, string> | undefined)?.latest) || '1.0.0',
         source: {
           from: 'ClawHub',
           url: `https://clawhub.ai/skills/${item.slug || item.id}`,
-          author: (item.owner as Record<string, unknown> | undefined)?.displayName as string ?? '',
+          author: ((item.owner as Record<string, unknown> | undefined)?.displayName as string) ?? '',
         },
       }));
 
