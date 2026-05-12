@@ -1,50 +1,19 @@
-import { app } from 'electron';
-
 import type { SqliteStore } from '../sqliteStore';
 
-let cachedTestMode: boolean | null = null;
+/** No-op stub, kept for callers. */
+export function refreshEndpointsTestMode(_store: SqliteStore): void {}
 
 /**
- * Read testMode from store and cache it.
- * Call once at startup and again whenever app_config changes.
- */
-export function refreshEndpointsTestMode(store: SqliteStore): void {
-  const appConfig = store.get<any>('app_config');
-  cachedTestMode = appConfig?.app?.testMode === true;
-}
-
-/**
- * Whether the app is in test mode.
- * Uses cached value after init; falls back to !app.isPackaged before init.
- */
-const isTestMode = (): boolean => {
-  return cachedTestMode ?? !app.isPackaged;
-};
-
-/**
- * Server API base URL — switches based on testMode.
+ * Server API base URL — configurable via environment variable.
  * Used for auth exchange/refresh, models, proxy, etc.
+ * Set LOBSTERAI_SERVER_API_BASE_URL to your own server.
  */
 export const getServerApiBaseUrl = (): string => {
-  return isTestMode()
-    ? 'https://lobsterai-server.inner.youdao.com'
-    : 'https://lobsterai-server.youdao.com';
+  const envUrl = process.env.LOBSTERAI_SERVER_API_BASE_URL?.trim();
+  if (envUrl) return envUrl;
+  return '';
 };
 
-export const getSkillStoreUrl = (): string => (
-  isTestMode()
-    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/skill-store'
-    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/skill-store'
-);
-
-export const getMcpMarketplaceUrl = (): string => (
-  isTestMode()
-    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace'
-    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
-);
-
-export const getLoginOvermindUrl = (): string => (
-  isTestMode()
-    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/login-url'
-    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/login-url'
-);
+export const getSkillStoreUrl = (): string => '';
+export const getMcpMarketplaceUrl = (): string => '';
+export const getLoginOvermindUrl = (): string => '';

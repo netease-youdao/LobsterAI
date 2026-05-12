@@ -2072,6 +2072,15 @@ if (!gotTheLock) {
     fn(`[Renderer][${tag}] ${message}`);
   });
 
+  // Helper: returns server base URL or sends error if not configured
+  const requireServerUrl = (): string | null => {
+    const url = getServerApiBaseUrl();
+    if (!url) {
+      console.warn('[Auth] Server API base URL not configured. Set LOBSTERAI_SERVER_API_BASE_URL.');
+    }
+    return url || null;
+  };
+
   // Allow renderer to retrieve a buffered auth code on init
   ipcMain.handle('auth:getPendingCallback', () => {
     const code = pendingAuthCode;
@@ -2323,7 +2332,8 @@ if (!gotTheLock) {
     let resp = await doFetch(tokens.accessToken);
 
     if (resp.status === 401 && tokens.refreshToken) {
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return resp;
       const refreshResp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2384,7 +2394,9 @@ if (!gotTheLock) {
 
   ipcMain.handle('auth:login', async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
     try {
-      const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
+      const serverUrl = requireServerUrl();
+      const baseUrl = loginUrl || (serverUrl ? `${serverUrl}/login` : '');
+      if (!baseUrl) return { success: false, error: 'Server not configured. Set LOBSTERAI_SERVER_API_BASE_URL.' };
       const finalUrl = `${baseUrl}?source=electron`;
       await shell.openExternal(finalUrl);
       return { success: true };
@@ -2396,7 +2408,8 @@ if (!gotTheLock) {
 
   ipcMain.handle('auth:exchange', async (_event, { code }: { code: string }) => {
     try {
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return { success: false, error: 'Server not configured. Set LOBSTERAI_SERVER_API_BASE_URL.' };
       const resp = await net.fetch(`${serverBaseUrl}/api/auth/exchange`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2431,7 +2444,8 @@ if (!gotTheLock) {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return { success: false };
       // Fetch user profile
       const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
       if (!profileResp.ok) return { success: false };
@@ -2457,7 +2471,8 @@ if (!gotTheLock) {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return { success: false };
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
       if (!resp.ok) return { success: false };
       const body = await resp.json() as { code: number; data: Record<string, unknown> };
@@ -2472,7 +2487,8 @@ if (!gotTheLock) {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return { success: false };
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile-summary`);
       if (!resp.ok) return { success: false };
       const body = await resp.json() as { code: number; data: Record<string, unknown> };
@@ -2487,11 +2503,13 @@ if (!gotTheLock) {
     try {
       const tokens = getAuthTokens();
       if (tokens) {
-        const serverBaseUrl = getServerApiBaseUrl();
-        await net.fetch(`${serverBaseUrl}/api/auth/logout`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${tokens.accessToken}` },
-        }).catch(() => { /* best-effort */ });
+        const serverBaseUrl = requireServerUrl();
+        if (serverBaseUrl) {
+          await net.fetch(`${serverBaseUrl}/api/auth/logout`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${tokens.accessToken}` },
+          }).catch(() => { /* best-effort */ });
+        }
       }
       clearAuthTokens();
       clearServerModelMetadata();
@@ -2507,7 +2525,8 @@ if (!gotTheLock) {
     try {
       const tokens = getAuthTokens();
       if (!tokens?.refreshToken) return { success: false };
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return { success: false };
       const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2535,7 +2554,8 @@ if (!gotTheLock) {
         console.log('[Auth:getModels] No auth tokens available');
         return { success: false };
       }
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return { success: false };
       const url = `${serverBaseUrl}/api/models/available`;
       console.log('[Auth:getModels] Fetching:', url);
       const resp = await fetchWithAuth(url);
@@ -5866,7 +5886,8 @@ if (!gotTheLock) {
         try {
           const tokens = getAuthTokens();
           if (!tokens?.refreshToken) return null;
-          const serverBaseUrl = getServerApiBaseUrl();
+          const serverBaseUrl = requireServerUrl();
+          if (!serverBaseUrl) return null;
           const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5927,7 +5948,8 @@ if (!gotTheLock) {
     registerProxyTokenRefresher('lobsterai-server', async () => {
       const tokens = getAuthTokens();
       if (!tokens?.refreshToken) return null;
-      const serverBaseUrl = getServerApiBaseUrl();
+      const serverBaseUrl = requireServerUrl();
+      if (!serverBaseUrl) return null;
       try {
         const resp = await net.fetch(`${serverBaseUrl}/api/auth/refresh`, {
           method: 'POST',
