@@ -54,7 +54,7 @@ import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { registerProxyTokenRefresher, startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy } from './libs/coworkOpenAICompatProxy';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
-import { getServerApiBaseUrl, getSkillStoreUrl, refreshEndpointsTestMode } from './libs/endpoints';
+import { getMcpMarketplaceUrl, getServerApiBaseUrl, getSkillStoreUrl, refreshEndpointsTestMode } from './libs/endpoints';
 import { mergeEnterpriseOpenclawConfig, resolveEnterpriseConfigPath, syncEnterpriseConfig } from './libs/enterpriseConfigSync';
 import { exportLogsZip } from './libs/logExport';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
@@ -2830,9 +2830,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('mcp:fetchMarketplace', async () => {
-    const url = app.isPackaged
-      ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
-      : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace';
+    const url = getMcpMarketplaceUrl();
     try {
       const https = await import('https');
       const data = await new Promise<string>((resolve, reject) => {

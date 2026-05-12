@@ -3,7 +3,6 @@ import { ArrowTopRightOnSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChip
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
 import { OpenClawProviderId, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import { type AppConfig, defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, getVisibleProviders, isCustomProvider } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
@@ -15,7 +14,6 @@ import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPasswo
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { themeService } from '../services/theme';
-import type { RootState } from '../store';
 import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
@@ -67,7 +65,6 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
-  onUpdateFound?: (info: AppUpdateInfo) => void;
   enterpriseConfig?: {
     ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
     disableUpdate?: boolean;
@@ -182,10 +179,6 @@ const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
 );
-const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
-const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
-const ABOUT_USER_COMMUNITY_URL = 'https://lobsterai.youdao.com/#/about';
-const ABOUT_SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
 
 // MiniMax Portal OAuth constants
 const MINIMAX_OAUTH_CLIENT_ID = '78257093-7e40-4613-99e0-527b14b39113';
@@ -222,40 +215,6 @@ async function generateMiniMaxPkce(): Promise<{ verifier: string; challenge: str
   return { verifier, challenge, state };
 }
 
-const copyTextFallback = (text: string): boolean => {
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  textarea.style.pointerEvents = 'none';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  textarea.setSelectionRange(0, text.length);
-  const copied = document.execCommand('copy');
-  document.body.removeChild(textarea);
-  return copied;
-};
-
-const copyTextToClipboard = async (text: string): Promise<boolean> => {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch (clipboardError) {
-      console.warn('Navigator clipboard write failed, trying fallback:', clipboardError);
-    }
-  }
-
-  try {
-    return copyTextFallback(text);
-  } catch (fallbackError) {
-    console.error('Fallback clipboard copy failed:', fallbackError);
-    return false;
-  }
-};
-
 const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | 'gemini' | null => {
   if (provider === 'openai' || provider === 'stepfun') {
     return 'openai';
@@ -283,25 +242,6 @@ const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 
 const shouldShowApiFormatSelector = (provider: string): boolean => (
   getFixedApiFormatForProvider(provider) === null
 );
-const getUpdateCheckStatusFromRuntimeStatus = (
-  state: AppUpdateRuntimeState,
-): 'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready' => {
-  if (state.source !== AppUpdateSource.Manual) {
-    return 'idle';
-  }
-  switch (state.status) {
-    case AppUpdateStatus.Checking:
-      return 'checking';
-    case AppUpdateStatus.Downloading:
-      return 'downloading';
-    case AppUpdateStatus.Ready:
-      return 'ready';
-    case AppUpdateStatus.Error:
-      return 'error';
-    default:
-      return 'idle';
-  }
-};
 const getProviderDefaultBaseUrl = (
   provider: ProviderType,
   apiFormat: 'anthropic' | 'openai' | 'gemini'
@@ -570,7 +510,7 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
   );
 };
 
-const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, noticeI18nKey, noticeExtra, onUpdateFound, enterpriseConfig }) => {
+const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, noticeI18nKey, noticeExtra, enterpriseConfig }) => {
   const dispatch = useDispatch();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
@@ -640,9 +580,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const emailCopiedTimerRef = useRef<number | null>(null);
-  const updateCheckTimerRef = useRef<number | null>(null);
-
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
     newChat: 'Ctrl+N',
@@ -669,14 +606,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   // About tab
   const [appVersion, setAppVersion] = useState('');
-  const [emailCopied, setEmailCopied] = useState(false);
   const [isExportingLogs, setIsExportingLogs] = useState(false);
   const [testMode, setTestMode] = useState(false);
   const [logoClickCount, setLogoClickCount] = useState(0);
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
-  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready'>('idle');
-  const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState | null>(null);
-
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
   }, []);
@@ -684,131 +617,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   useEffect(() => {
     setShowApiKey(false);
   }, [activeProvider]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const syncUpdateStatus = async () => {
-      try {
-        const state = await window.electron.appUpdate.getState();
-        if (!mounted) {
-          return;
-        }
-        setAppUpdateState(state);
-        setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
-      } catch (error) {
-        console.error('Failed to load app update state in settings:', error);
-      }
-    };
-
-    void syncUpdateStatus();
-
-    const unsubscribe = window.electron.appUpdate.onStateChanged((state) => {
-      if (
-        updateCheckTimerRef.current != null &&
-        state.source === AppUpdateSource.Manual &&
-        state.status !== AppUpdateStatus.Idle
-      ) {
-        window.clearTimeout(updateCheckTimerRef.current);
-        updateCheckTimerRef.current = null;
-      }
-      setAppUpdateState(state);
-      setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
-    });
-
-    return () => {
-      mounted = false;
-      unsubscribe();
-    };
-  }, []);
-
-  const handleCopyContactEmail = useCallback(async () => {
-    const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
-    if (copied) {
-      setEmailCopied(true);
-      if (emailCopiedTimerRef.current != null) {
-        window.clearTimeout(emailCopiedTimerRef.current);
-      }
-      emailCopiedTimerRef.current = window.setTimeout(() => {
-        setEmailCopied(false);
-        emailCopiedTimerRef.current = null;
-      }, 1200);
-    }
-  }, []);
-
-  const authUser = useSelector((state: RootState) => state.auth.user);
-
-  const handleCheckUpdate = useCallback(async () => {
-    if (updateCheckStatus === 'checking' || !appVersion) return;
-    setUpdateCheckStatus('checking');
-    try {
-      const result = await window.electron.appUpdate.checkNow({ manual: true, userId: authUser?.yid });
-      if (!result.success) {
-        throw new Error(result.error || 'Update check failed');
-      }
-
-      if (!result.updateFound) {
-        setUpdateCheckStatus('upToDate');
-        if (updateCheckTimerRef.current != null) {
-          window.clearTimeout(updateCheckTimerRef.current);
-        }
-        updateCheckTimerRef.current = window.setTimeout(() => {
-          setUpdateCheckStatus('idle');
-          updateCheckTimerRef.current = null;
-        }, 3000);
-        return;
-      }
-
-      if (result.state.status === AppUpdateStatus.Ready) {
-        setUpdateCheckStatus('ready');
-      } else if (result.state.status === AppUpdateStatus.Downloading) {
-        setUpdateCheckStatus('downloading');
-      } else {
-        setUpdateCheckStatus('idle');
-      }
-
-      if (result.state.info) {
-        onUpdateFound?.(result.state.info);
-      }
-    } catch {
-      setUpdateCheckStatus('error');
-      if (updateCheckTimerRef.current != null) {
-        window.clearTimeout(updateCheckTimerRef.current);
-      }
-      updateCheckTimerRef.current = window.setTimeout(() => {
-        setUpdateCheckStatus('idle');
-        updateCheckTimerRef.current = null;
-      }, 3000);
-    }
-  }, [appVersion, authUser, updateCheckStatus, onUpdateFound]);
-
-  const updateButtonLabel = useMemo(() => {
-    if (
-      updateCheckStatus === 'downloading' &&
-      appUpdateState?.progress?.percent != null &&
-      Number.isFinite(appUpdateState.progress.percent)
-    ) {
-      return `${i18nService.t('updateDownloadingBackground')} ${Math.round(appUpdateState.progress.percent * 100)}%`;
-    }
-    if (updateCheckStatus === 'checking') return i18nService.t('updateChecking');
-    if (updateCheckStatus === 'downloading') return i18nService.t('updateDownloadingBackground');
-    if (updateCheckStatus === 'ready') return i18nService.t('updateReadyTitle');
-    if (updateCheckStatus === 'upToDate') return i18nService.t('updateUpToDate');
-    if (updateCheckStatus === 'error') return i18nService.t('updateCheckFailed');
-    return i18nService.t('checkForUpdate');
-  }, [appUpdateState?.progress?.percent, updateCheckStatus]);
-
-  const handleOpenUserManual = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
-  }, []);
-
-  const handleOpenUserCommunity = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_USER_COMMUNITY_URL);
-  }, []);
-
-  const handleOpenServiceTerms = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_SERVICE_TERMS_URL);
-  }, []);
 
   const handleExportLogs = useCallback(async () => {
     if (isExportingLogs) {
@@ -902,15 +710,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     coworkConfig.embeddingRemoteBaseUrl,
     coworkConfig.embeddingRemoteApiKey,
   ]);
-
-  useEffect(() => () => {
-    if (emailCopiedTimerRef.current != null) {
-      window.clearTimeout(emailCopiedTimerRef.current);
-    }
-    if (updateCheckTimerRef.current != null) {
-      window.clearTimeout(updateCheckTimerRef.current);
-    }
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -4512,72 +4311,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 <span className="text-sm text-foreground">{i18nService.t('aboutVersion')}</span>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-secondary">{appVersion}</span>
-                  {!enterpriseConfig?.disableUpdate && (
-                  <button
-                    type="button"
-                    disabled={updateCheckStatus === 'checking' || updateCheckStatus === 'downloading'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCheckUpdate();
-                    }}
-                    className="text-xs px-2 py-0.5 rounded-md border border-border text-secondary hover:text-primary dark:hover:text-primary hover:border-primary dark:hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {updateButtonLabel}
-                  </button>
-                  )}
-                  {enterpriseConfig?.disableUpdate && (
                   <span className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
                     {i18nService.t('settings.enterprise.managed')}
                   </span>
-                  )}
                 </div>
-              </div>
-              <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                <span className="text-sm text-foreground">{i18nService.t('aboutContactEmail')}</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCopyContactEmail();
-                    }}
-                    title={i18nService.t('copyToClipboard')}
-                    className="text-sm text-secondary bg-transparent border-none appearance-none p-0 m-0 cursor-pointer focus:outline-none"
-                  >
-                    {ABOUT_CONTACT_EMAIL}
-                  </button>
-                  {emailCopied && (
-                    <span className="text-[11px] leading-4 text-emerald-600 dark:text-emerald-400">
-                      {i18nService.t('copied')}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                <span className="text-sm text-foreground">{i18nService.t('aboutUserManual')}</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenUserManual();
-                  }}
-                  className="text-sm text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors"
-                >
-                  {ABOUT_USER_MANUAL_URL}
-                </button>
-              </div>
-              <div className={`flex items-center justify-between px-4 py-3${testModeUnlocked ? ' border-b border-border' : ''}`}>
-                <span className="text-sm text-foreground">{i18nService.t('aboutUserCommunity')}</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenUserCommunity();
-                  }}
-                  className="text-sm text-secondary hover:text-primary dark:hover:text-primary bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer focus:outline-none hover:bg-surface-raised transition-colors"
-                >
-                  {ABOUT_USER_COMMUNITY_URL}
-                </button>
               </div>
               {testModeUnlocked && (
                 <div className="flex items-center justify-between px-4 py-3">
@@ -4604,17 +4341,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             {/* Footer */}
             <div className="mt-auto w-full pt-14 pb-2 flex flex-col items-center">
               <div className="flex items-center justify-center text-sm text-secondary">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenServiceTerms();
-                  }}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-primary dark:hover:text-primary transition-colors"
-                >
-                  {i18nService.t('aboutServiceTerms')}
-                </button>
-                <span className="mx-3 text-xs opacity-40">|</span>
                 <button
                   type="button"
                   onClick={(e) => {

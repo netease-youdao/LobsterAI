@@ -3,9 +3,6 @@ import React, { useCallback, useEffect, useMemo,useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
 import {
-  APP_UPDATE_HEARTBEAT_INTERVAL_MS,
-  APP_UPDATE_POLL_INTERVAL_MS,
-  type AppUpdateInfo,
   type AppUpdateRuntimeState,
   AppUpdateStatus,
 } from '../shared/appUpdate/constants';
@@ -93,7 +90,6 @@ const App: React.FC = () => {
   const defaultSelectedModel = useSelector((state: RootState) => state.model.defaultSelectedModel);
   const currentSessionId = useSelector(selectCurrentSessionId);
   const pendingPermission = useSelector(selectFirstPendingPermission);
-  const authUser = useSelector((state: RootState) => state.auth.user);
   const isWindows = window.electron.platform === 'win32';
 
   const waitWithTimeout = useCallback(
@@ -406,18 +402,6 @@ const App: React.FC = () => {
     showToast(i18nService.t('featureInDevelopment'));
   }, [showToast]);
 
-  const runUpdateCheck = useCallback(async () => {
-    try {
-      const result = await window.electron.appUpdate.checkNow({ userId: authUser?.yid });
-      setAppUpdateState(result.state);
-      if (!result.success) {
-        console.error('[App] app update check failed:', result.error);
-      }
-    } catch (error) {
-      console.error('Failed to check app update:', error);
-    }
-  }, [authUser]);
-
   const updateInfo = appUpdateState.info;
 
   const handleOpenUpdateModal = useCallback(() => {
@@ -425,11 +409,7 @@ const App: React.FC = () => {
     setShowUpdateModal(true);
   }, [updateInfo]);
 
-  const handleUpdateFound = useCallback((_info: AppUpdateInfo) => {
-    setShowUpdateModal(true);
-  }, []);
-
-  const handleConfirmUpdate = useCallback(async () => {
+const handleConfirmUpdate = useCallback(async () => {
     if (!updateInfo) return;
 
     if (appUpdateState.readyFilePath) {
@@ -634,46 +614,7 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [handleNewChat]);
 
-  useEffect(() => {
-    if (!isInitialized) return;
-
-    // Enterprise mode: completely skip update detection
-    if (enterpriseConfig?.disableUpdate) return;
-
-    let cancelled = false;
-    let lastCheckTime = 0;
-
-    const maybeCheck = async (reason: 'startup' | 'heartbeat' | 'visibility') => {
-      if (cancelled) return;
-      const now = Date.now();
-      if (lastCheckTime > 0 && now - lastCheckTime < APP_UPDATE_POLL_INTERVAL_MS) return;
-      lastCheckTime = now;
-      console.log(`[App] auto update check triggered, reason=${reason}, at=${new Date(now).toISOString()}`);
-      await runUpdateCheck();
-    };
-
-    // 启动时立即检查
-    void maybeCheck('startup');
-
-    // 心跳：每 30 分钟检测是否距上次检查已超过 12 小时
-    const timer = window.setInterval(() => {
-      void maybeCheck('heartbeat');
-    }, APP_UPDATE_HEARTBEAT_INTERVAL_MS);
-
-    // 窗口恢复可见时检测（覆盖休眠唤醒场景）
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void maybeCheck('visibility');
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [isInitialized, runUpdateCheck, enterpriseConfig]);
+  // Update system is permanently disabled
 
   // 根据场景选择使用哪个权限组件
   const permissionModal = useMemo(() => {
@@ -771,7 +712,6 @@ const App: React.FC = () => {
               onClose={handleCloseSettings}
               initialTab={settingsOptions.initialTab}
               notice={settingsOptions.notice}
-              onUpdateFound={handleUpdateFound}
               enterpriseConfig={enterpriseConfig}
             />
           )}
@@ -854,7 +794,6 @@ const App: React.FC = () => {
           onClose={handleCloseSettings}
           initialTab={settingsOptions.initialTab}
           notice={settingsOptions.notice}
-          onUpdateFound={handleUpdateFound}
           enterpriseConfig={enterpriseConfig}
         />
       )}
