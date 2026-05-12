@@ -4401,13 +4401,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   };
 
   return (
-    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center">
+    <Modal onClose={onClose} overlayClassName="fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-3 sm:p-4">
       <div
-        className="relative flex w-[900px] h-[80vh] rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
+        className="relative flex w-[min(900px,calc(100vw-24px))] sm:w-[min(900px,calc(100vw-32px))] h-[min(80vh,760px)] max-h-[calc(100vh-24px)] sm:max-h-[calc(100vh-32px)] rounded-2xl border-border border shadow-modal overflow-hidden modal-content"
         onClick={handleSettingsClick}
       >
         {/* Left sidebar */}
-        <div className="w-[220px] shrink-0 flex flex-col bg-surface-raised border-r border-border rounded-l-2xl overflow-y-auto">
+        <div className="w-[180px] sm:w-[220px] shrink-0 flex flex-col bg-surface-raised border-r border-border rounded-l-2xl overflow-y-auto">
           <div className="px-5 pt-5 pb-3">
             <h2 className="text-lg font-semibold text-foreground">{i18nService.t('settings')}</h2>
           </div>
