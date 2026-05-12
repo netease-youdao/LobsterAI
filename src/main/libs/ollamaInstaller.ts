@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
-import type { Dirent } from 'fs';
 import { app } from 'electron';
+import type { Dirent } from 'fs';
 import { createWriteStream } from 'fs';
 import { access, mkdtemp, open, readdir, rename, rm, stat } from 'fs/promises';
 import os from 'os';
