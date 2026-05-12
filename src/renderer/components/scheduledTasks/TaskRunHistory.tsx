@@ -7,12 +7,14 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import DateInput from './DateInput';
+import FailureDetailModal from './FailureDetailModal';
 import RunSessionModal from './RunSessionModal';
 import { formatDateTime, formatDuration } from './utils';
 
 interface TaskRunHistoryProps {
   taskId: string;
   runs: ScheduledTaskRun[];
+  taskPrompt?: string;
 }
 
 const STATUS_OPTIONS = ['success', 'error', 'skipped', 'running'] as const;
@@ -49,11 +51,12 @@ function applyClientFilter(runs: ScheduledTaskRun[], filter: RunFilter): Schedul
 
 const EMPTY_FILTER: RunFilter = {};
 
-const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
+const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs, taskPrompt }) => {
   const hasMore = useSelector(
     (state: RootState) => state.scheduledTask.runsHasMore[taskId] ?? false,
   );
   const [viewingRun, setViewingRun] = useState<ScheduledTaskRun | null>(null);
+  const [viewingError, setViewingError] = useState<Pick<ScheduledTaskRun, 'startedAt' | 'error'> | null>(null);
   const [filter, setFilter] = useState<RunFilter>(EMPTY_FILTER);
 
   const hasActiveFilter = Boolean(filter.startDate || filter.endDate || filter.status);
@@ -173,9 +176,13 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
                     <span className="text-xs text-secondary">{formatDuration(run.durationMs)}</span>
                   )}
                   {run.status === 'error' && run.error && (
-                    <span className="text-xs text-red-500 max-w-[150px] truncate" title={run.error}>
-                      {run.error}
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setViewingError(run)}
+                      className="text-xs text-primary hover:text-primary-hover transition-colors"
+                    >
+                      {i18nService.t('scheduledTasksViewFailureDetails')}
+                    </button>
                   )}
                   {(run.sessionId || run.sessionKey) && (
                     <button
@@ -208,6 +215,15 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
           sessionId={viewingRun.sessionId}
           sessionKey={viewingRun.sessionKey}
           onClose={() => setViewingRun(null)}
+        />
+      )}
+
+      {viewingError && (
+        <FailureDetailModal
+          inputCommand={taskPrompt || ''}
+          error={viewingError.error || ''}
+          runTime={formatDateTime(new Date(viewingError.startedAt))}
+          onClose={() => setViewingError(null)}
         />
       )}
     </div>
