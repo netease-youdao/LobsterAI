@@ -7,7 +7,7 @@ import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
 import { RootState } from '../../store';
 import { setMcpServers } from '../../store/slices/mcpSlice';
-import { McpMarketplaceCategoryInfo,McpRegistryEntry, McpServerConfig, McpServerFormData, ModelScopeMCPServer } from '../../types/mcp';
+import { McpMarketplaceCategoryInfo,McpRegistryEntry, McpServerConfig, McpServerFormData } from '../../types/mcp';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import ConnectorIcon from '../icons/ConnectorIcon';
@@ -86,12 +86,6 @@ const McpManager: React.FC = () => {
   const [dynamicRegistry, setDynamicRegistry] = useState<McpRegistryEntry[]>(mcpRegistry);
   const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(mcpCategories);
   const [bridgeSyncing, setBridgeSyncing] = useState(false);
-  const [marketplaceSource, setMarketplaceSource] = useState<'local' | 'modelscope'>('local');
-  const [modelScopeServers, setModelScopeServers] = useState<ModelScopeMCPServer[]>([]);
-  const [modelScopeLoading, setModelScopeLoading] = useState(false);
-  const [modelScopeSearchError, setModelScopeSearchError] = useState<string | null>(null);
-  const [modelScopeInstallingId, setModelScopeInstallingId] = useState<string | null>(null);
-  const modelScopeAbortRef = useRef<AbortController | null>(null);
   const [bridgeSyncResult, setBridgeSyncResult] = useState<{ tools: number; error?: string } | null>(null);
   const currentLanguage = i18nService.getLanguage();
 
@@ -128,48 +122,6 @@ const McpManager: React.FC = () => {
     fetchMarketplace();
     return () => { isActive = false; };
   }, []);
-
-  useEffect(() => {
-    if (marketplaceSource !== 'modelscope') return;
-
-    modelScopeAbortRef.current?.abort();
-    const controller = new AbortController();
-    modelScopeAbortRef.current = controller;
-
-    const timer = setTimeout(async () => {
-      setModelScopeLoading(true);
-      setModelScopeSearchError(null);
-      const result = await mcpService.searchModelScope(searchQuery, 50);
-      if (controller.signal.aborted) return;
-      setModelScopeLoading(false);
-      if (result.success && result.data) {
-        setModelScopeServers(result.data.servers);
-      } else if (result.success && !result.data) {
-        setModelScopeServers([]);
-      } else {
-        setModelScopeSearchError(result.error || 'Search failed');
-      }
-    }, 300);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-      if (modelScopeAbortRef.current === controller) {
-        modelScopeAbortRef.current = null;
-      }
-    };
-  }, [marketplaceSource, searchQuery]);
-
-  const handleInstallModelScope = async (serverId: string) => {
-    setModelScopeInstallingId(serverId);
-    const result = await mcpService.installModelScopeMCP(serverId);
-    setModelScopeInstallingId(null);
-    if (result.success && result.servers) {
-      dispatch(setMcpServers(result.servers));
-    } else {
-      setActionError(result.error || 'Install failed');
-    }
-  };
 
   const installedRegistryIds = useMemo(() => {
     const ids = new Set<string>();
@@ -512,36 +464,8 @@ const McpManager: React.FC = () => {
           </button>
         </div>
 
-        {/* Source toggle (Marketplace only) */}
+        {/* Category filter pills (Marketplace only) */}
         {activeTab === 'marketplace' && (
-          <div className="flex items-center gap-2 mb-2">
-            <button
-              type="button"
-              onClick={() => { setMarketplaceSource('local'); setActiveCategory('all'); }}
-              className={`px-3 py-1 text-xs rounded-lg transition-colors ${
-                marketplaceSource === 'local'
-                  ? 'bg-primary text-white'
-                  : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
-              }`}
-            >
-              {i18nService.t('mcpSourceLocal')}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMarketplaceSource('modelscope'); setActiveCategory('all'); }}
-              className={`px-3 py-1 text-xs rounded-lg transition-colors ${
-                marketplaceSource === 'modelscope'
-                  ? 'bg-primary text-white'
-                  : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
-              }`}
-            >
-              {i18nService.t('mcpSourceModelScope')}
-            </button>
-          </div>
-        )}
-
-        {/* Category filter pills (Marketplace only, local source) */}
-        {activeTab === 'marketplace' && marketplaceSource === 'local' && (
           <div className="flex items-center gap-1.5 flex-wrap">
             {dynamicCategories.map((cat) => (
               <button
@@ -654,7 +578,7 @@ const McpManager: React.FC = () => {
       )}
 
       {/* ── Tab: Marketplace ────────────────────────────── */}
-      {activeTab === 'marketplace' && marketplaceSource === 'local' && (
+      {activeTab === 'marketplace' && (
         <div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {filteredMarketplace.length === 0 ? (
@@ -714,72 +638,6 @@ const McpManager: React.FC = () => {
               ))
             )}
           </div>
-        </div>
-      )}
-
-      {/* ── Tab: Marketplace — ModelScope ──────────────── */}
-      {activeTab === 'marketplace' && marketplaceSource === 'modelscope' && (
-        <div>
-          {modelScopeSearchError && (
-            <div className="mb-3 px-3 py-2 rounded-xl text-xs border dark:bg-red-500/10 bg-red-50 dark:text-red-400 text-red-600 dark:border-red-500/20 border-red-200">
-              {modelScopeSearchError}
-            </div>
-          )}
-          {modelScopeLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <svg className="animate-spin h-6 w-6 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-            </div>
-          ) : !modelScopeSearchError && modelScopeServers.length === 0 ? (
-            <div className="text-center py-12 text-sm text-secondary">
-              {i18nService.t('mcpModelScopeNoResults') || 'No MCP servers found in ModelScope'}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-              {modelScopeServers.map((server) => (
-                <div
-                  key={server.id}
-                  className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary"
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-                        <ConnectorIcon className="h-4 w-4 text-secondary" />
-                      </div>
-                      <span className="text-sm font-medium text-foreground truncate">
-                        {server.name}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {installedRegistryIds.has(server.id) ? (
-                        <span className="px-2.5 py-1 text-xs rounded-lg bg-surface text-secondary">
-                          {i18nService.t('mcpInstalled')}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleInstallModelScope(server.id)}
-                          disabled={modelScopeInstallingId === server.id}
-                          className="px-2.5 py-1 text-xs rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-50"
-                        >
-                          {modelScopeInstallingId === server.id
-                            ? i18nService.t('mcpModelScopeInstalling')
-                            : i18nService.t('mcpModelScopeInstall')
-                          }
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <ClampedText text={server.description || server.id} className="text-xs text-secondary mb-2" />
-                  <div className="text-[10px] text-secondary">
-                    {server.id}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

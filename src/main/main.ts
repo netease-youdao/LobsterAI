@@ -58,7 +58,6 @@ import { getMcpMarketplaceUrl, getServerApiBaseUrl, getSkillStoreUrl, refreshEnd
 import { mergeEnterpriseOpenclawConfig, resolveEnterpriseConfigPath, syncEnterpriseConfig } from './libs/enterpriseConfigSync';
 import { exportLogsZip } from './libs/logExport';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
-import { initModelScopeStore, registerModelScopeMcpHandlers } from './libs/mcpModelscopeManager';
 import { McpServerManager } from './libs/mcpServerManager';
 import { getNvidiaSmiSnapshot } from './libs/nvidiaSmi';
 import { OllamaManager } from './libs/ollamaManager';
@@ -5870,8 +5869,6 @@ if (!gotTheLock) {
       syncOpenClawConfig,
     });
     registerMarketplaceIpcHandlers();
-    initModelScopeStore(getStore());
-    registerModelScopeMcpHandlers(ipcMain, getMcpStore, refreshMcpBridge);
     // Inject auth getters for lobsterai-server provider routing
     // The getter proactively triggers a background token refresh when the
     // accessToken is within 5 minutes of expiry, so that the SDK always

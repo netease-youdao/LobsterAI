@@ -253,8 +253,6 @@ interface McpMarketplaceData {
   servers: McpMarketplaceServer[];
 }
 
-import type { ModelScopeMCPDetail, ModelScopeMCPSearchResult } from './mcp';
-
 import type { Platform } from '@shared/platform';
 
 import type { Agent, PresetAgent } from './agent';
@@ -351,21 +349,6 @@ interface IElectronAPI {
     refreshBridge: () => Promise<{ success: boolean; tools: number; error?: string }>;
     onBridgeSyncStart: (callback: () => void) => () => void;
     onBridgeSyncDone: (callback: (data: { tools: number; error?: string }) => void) => () => void;
-    modelscopeSearch: (keyword?: string, pageSize?: number) => Promise<{
-      success: boolean;
-      data?: ModelScopeMCPSearchResult;
-      error?: string;
-    }>;
-    modelscopeDetail: (serverId: string) => Promise<{
-      success: boolean;
-      data?: ModelScopeMCPDetail;
-      error?: string;
-    }>;
-    modelscopeInstall: (serverId: string) => Promise<{
-      success: boolean;
-      servers?: McpServerConfigIPC[];
-      error?: string;
-    }>;
   };
   ollama: {
     status: () => Promise<OllamaStatusSnapshot>;

@@ -1,4 +1,4 @@
-import { McpCategory, McpMarketplaceCategoryInfo, McpMarketplaceServer, McpRegistryEntry, McpServerConfig, McpServerFormData, ModelScopeMCPDetail,ModelScopeMCPSearchResult } from '../types/mcp';
+import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo, McpCategory, McpMarketplaceServer } from '../types/mcp';
 
 /**
  * Convert remote marketplace server data to McpRegistryEntry format.
@@ -154,44 +154,6 @@ class McpService {
 
   onBridgeSyncDone(callback: (data: { tools: number; error?: string }) => void): () => void {
     return window.electron.mcp.onBridgeSyncDone(callback);
-  }
-
-  async searchModelScope(
-    keyword = '',
-    pageSize = 20,
-  ): Promise<{ success: boolean; data?: ModelScopeMCPSearchResult; error?: string }> {
-    try {
-      return await window.electron.mcp.modelscopeSearch(keyword, pageSize);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to search ModelScope MCP';
-      return { success: false, error: message };
-    }
-  }
-
-  async getModelScopeDetail(
-    serverId: string,
-  ): Promise<{ success: boolean; data?: ModelScopeMCPDetail; error?: string }> {
-    try {
-      return await window.electron.mcp.modelscopeDetail(serverId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to get ModelScope MCP detail';
-      return { success: false, error: message };
-    }
-  }
-
-  async installModelScopeMCP(
-    serverId: string,
-  ): Promise<{ success: boolean; servers?: McpServerConfig[]; error?: string }> {
-    try {
-      const result = await window.electron.mcp.modelscopeInstall(serverId);
-      if (result.success && result.servers) {
-        this.servers = result.servers;
-      }
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to install ModelScope MCP';
-      return { success: false, error: message };
-    }
   }
 }
 

@@ -78,26 +78,3 @@ export type McpCategory =
   | 'productivity'
   | 'design'
   | 'data-api';
-
-export interface ModelScopeMCPServer {
-  id: string;
-  name: string;
-  description: string;
-}
-
-export interface ModelScopeMCPSearchResult {
-  total_count: number;
-  servers: ModelScopeMCPServer[];
-}
-
-export interface ModelScopeMCPOperationalUrl {
-  type: string;
-  url: string;
-}
-
-export interface ModelScopeMCPDetail {
-  id: string;
-  name: string;
-  description: string;
-  servers: ModelScopeMCPOperationalUrl[];
-}
