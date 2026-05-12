@@ -62,29 +62,11 @@ class AuthService {
   }
 
   /**
-   * Fetch login URL from overmind, fallback to Portal login page.
+   * Resolve login URL.
+   * Returns empty string to let main process use its default (getServerApiBaseUrl).
    */
   private async fetchLoginUrl(): Promise<string> {
-    const { getLoginOvermindUrl } = await import('./endpoints');
-    const url = getLoginOvermindUrl();
-    try {
-      const response = await window.electron.api.fetch({
-        url,
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-      if (response.ok && typeof response.data === 'object' && response.data !== null) {
-        const value = (response.data as any)?.data?.value;
-        if (typeof value === 'string' && value.trim()) {
-          return value.trim();
-        }
-      }
-    } catch (e) {
-      console.error('[Auth] Failed to fetch login URL from overmind:', e);
-    }
-    // Fallback: use Portal login page directly
-    const { getPortalLoginUrl } = await import('./endpoints');
-    return getPortalLoginUrl();
+    return '';
   }
 
   /**

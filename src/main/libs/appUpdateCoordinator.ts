@@ -13,7 +13,6 @@ import {
 } from '../../shared/appUpdate/constants';
 import type { SqliteStore } from '../sqliteStore';
 import { cancelActiveDownload, downloadUpdate, installUpdate } from './appUpdateInstaller';
-import { getFallbackDownloadUrl, getManualUpdateCheckUrl, getUpdateCheckUrl } from './endpoints';
 
 type ChangeLogLang = {
   title?: string;
@@ -41,7 +40,6 @@ type UpdateApiResponse = {
   };
 };
 
-const INSTALLATION_UUID_KEY = 'installation_uuid';
 const APP_UPDATE_TEST_CURRENT_VERSION_ENV = 'LOBSTERAI_UPDATE_CURRENT_VERSION';
 const APP_UPDATE_READY_FILE_KEY_PREFIX = 'app_update_ready_file';
 
@@ -87,204 +85,18 @@ export class AppUpdateCoordinator {
     this.autoOpenReadyModal = false;
   }
 
-  async checkNow(options?: { manual?: boolean; userId?: string | null }): Promise<AppUpdateCheckResult> {
-    const targetSource = options?.manual === true ? AppUpdateSource.Manual : AppUpdateSource.Auto;
-    console.log(
-      `[AppUpdate] checkNow started, manual=${options?.manual === true}, status=${this.state.status}, source=${this.state.source ?? 'none'}, readyFilePath=${this.state.readyFilePath ?? 'none'}`,
-    );
-    if (this.isUpdateDisabled()) {
-      console.log('[AppUpdate] updates are disabled by enterprise config');
-      const state = this.resetToIdle();
-      return { success: true, state, updateFound: false };
-    }
-
-    if (options?.manual === true && this.state.source === AppUpdateSource.Auto) {
-      if (this.state.status === AppUpdateStatus.Downloading) {
-        console.log('[AppUpdate] manual check is preempting active auto download');
-        const cancelled = cancelActiveDownload();
-        console.log(`[AppUpdate] auto download cancel requested by manual check, cancelled=${cancelled}`);
-      } else if (this.state.status === AppUpdateStatus.Checking) {
-        console.log('[AppUpdate] manual check is preempting active auto check before download');
-      } else if (this.state.status === AppUpdateStatus.Installing) {
-        console.log('[AppUpdate] manual check cannot preempt auto install already in progress');
-        return { success: true, state: this.getState(), updateFound: this.state.info !== null };
-      }
-    }
-
-    if (
-      (this.state.status === AppUpdateStatus.Downloading || this.state.status === AppUpdateStatus.Installing) &&
-      this.state.source === targetSource
-    ) {
-      console.log(`[AppUpdate] returning existing active ${targetSource} flow without starting a new check`);
-      return { success: true, state: this.getState(), updateFound: this.state.info !== null };
-    }
-
-    const previousState = this.getState();
-    const flowId = this.beginFlow(
-      targetSource,
-      options?.manual === true ? 'manual-check' : 'auto-check',
-    );
-    this.setState({
-      ...this.state,
-      status: AppUpdateStatus.Checking,
-      source: targetSource,
-      errorMessage: null,
-    });
-
-    try {
-      const currentVersion = this.resolveCurrentVersion();
-      const info = await this.fetchUpdateInfo(currentVersion, options?.manual === true, options?.userId);
-      if (!this.isFlowActive(flowId, targetSource)) {
-        console.log(
-          `[AppUpdate] ignoring stale check result after fetch, flowId=${flowId}, source=${targetSource}, activeFlowId=${this.activeFlowId}, activeSource=${this.activeFlowSource ?? 'none'}`,
-        );
-        return { success: true, state: this.getState(), updateFound: this.getState().info !== null };
-      }
-      if (!info) {
-        if (
-          previousState.source === targetSource &&
-          previousState.status === AppUpdateStatus.Ready &&
-          previousState.readyFilePath != null &&
-          previousState.readyFileHash != null &&
-          previousState.info != null &&
-          this.compareVersions(previousState.info.latestVersion, currentVersion) > 0
-        ) {
-          console.log(
-            `[AppUpdate] no update from server, preserving existing ready update ${previousState.info.latestVersion}`,
-          );
-          const state = this.setState({
-            ...previousState,
-            errorMessage: null,
-          });
-          return { success: true, state, updateFound: true };
-        }
-        const state = this.setState({
-          ...initialState(),
-          source: targetSource,
-        });
-        return { success: true, state, updateFound: false };
-      }
-
-      const updateFound = true;
-      const matchingReadyFile = await this.resolveMatchingReadyFile(
-        previousState,
-        targetSource,
-        info.latestVersion,
-      );
-      if (!this.isFlowActive(flowId, targetSource)) {
-        console.log(
-          `[AppUpdate] ignoring stale check result after ready-file resolution, flowId=${flowId}, source=${targetSource}, activeFlowId=${this.activeFlowId}, activeSource=${this.activeFlowSource ?? 'none'}`,
-        );
-        return { success: true, state: this.getState(), updateFound: this.getState().info !== null };
-      }
-
-      if (matchingReadyFile) {
-        console.log(
-          `[AppUpdate] reusing ready file for version ${info.latestVersion}: ${matchingReadyFile.filePath}`,
-        );
-        const state = this.setState({
-          ...previousState,
-          info,
-          status: AppUpdateStatus.Ready,
-          source: targetSource,
-          readyFilePath: matchingReadyFile.filePath,
-          readyFileHash: matchingReadyFile.fileHash,
-          errorMessage: null,
-        });
-        return { success: true, state, updateFound };
-      }
-
-      console.log(
-        `[AppUpdate] no reusable ready file found for version ${info.latestVersion}, previousReadyFilePath=${previousState.readyFilePath ?? 'none'}`,
-      );
-      const existingReadyFile = this.getStoredReadyFile(targetSource);
-      if (existingReadyFile?.filePath) {
-        await this.cleanupReadyFile(existingReadyFile.filePath);
-      }
-      this.clearStoredReadyFile(targetSource);
-      await this.pruneCachedInstallerFiles(targetSource);
-
-      if (!this.canPredownload(info.url)) {
-        const state = this.setState({
-          status: AppUpdateStatus.Available,
-          source: targetSource,
-          info,
-          progress: null,
-          readyFilePath: null,
-          readyFileHash: null,
-          errorMessage: null,
-        });
-        return { success: true, state, updateFound };
-      }
-
-      if (options?.manual === true) {
-        const state = this.setState({
-          status: AppUpdateStatus.Available,
-          source: targetSource,
-          info,
-          progress: null,
-          readyFilePath: null,
-          readyFileHash: null,
-          errorMessage: null,
-        });
-        return { success: true, state, updateFound };
-      }
-
-      const state = await this.startDownload(info, flowId, targetSource);
-      return { success: true, state, updateFound };
-    } catch (error) {
-      if (!this.isFlowActive(flowId, targetSource)) {
-        console.log(
-          `[AppUpdate] ignoring stale check failure, flowId=${flowId}, source=${targetSource}, activeFlowId=${this.activeFlowId}, activeSource=${this.activeFlowSource ?? 'none'}`,
-        );
-        return { success: true, state: this.getState(), updateFound: this.getState().info !== null };
-      }
-      console.error('[AppUpdate] check failed:', error);
-      const state = this.setState({
-        ...previousState,
-        status: previousState.info ? AppUpdateStatus.Error : AppUpdateStatus.Idle,
-        errorMessage: error instanceof Error ? error.message : 'Check failed',
-      });
-      return {
-        success: false,
-        state,
-        updateFound: previousState.info !== null,
-        error: state.errorMessage ?? 'Check failed',
-      };
-    }
+  async checkNow(_options?: { manual?: boolean; userId?: string | null }): Promise<AppUpdateCheckResult> {
+    console.log('[AppUpdate] update system is disabled');
+    const state = this.resetToIdle();
+    return { success: true, state, updateFound: false };
   }
 
   async retryDownload(): Promise<AppUpdateRuntimeState> {
-    if (!this.state.info) {
-      return this.getState();
-    }
-    if (!this.canPredownload(this.state.info.url)) {
-      return this.getState();
-    }
-    if (this.state.status === AppUpdateStatus.Downloading || this.state.status === AppUpdateStatus.Installing) {
-      return this.getState();
-    }
-    const source = this.state.source ?? AppUpdateSource.Auto;
-    const flowId = this.beginFlow(source, 'retry-download');
-    void this.startDownload(this.state.info, flowId, source);
     return this.getState();
   }
 
   cancelDownload(): AppUpdateRuntimeState {
-    const cancelled = cancelActiveDownload();
-    if (!cancelled) {
-      return this.getState();
-    }
-    this.clearStoredReadyFile(this.state.source);
-    return this.setState({
-      status: AppUpdateStatus.Available,
-      source: this.state.source,
-      info: this.state.info,
-      progress: null,
-      readyFilePath: null,
-      readyFileHash: null,
-      errorMessage: null,
-    });
+    return this.getState();
   }
 
   async installReadyUpdate(): Promise<{
@@ -292,37 +104,11 @@ export class AppUpdateCoordinator {
     state: AppUpdateRuntimeState;
     error?: string;
   }> {
-    if (!this.state.readyFilePath || this.state.status !== AppUpdateStatus.Ready) {
-      return {
-        success: false,
-        state: this.getState(),
-        error: 'Update is not ready to install',
-      };
-    }
-
-    const filePath = this.state.readyFilePath;
-    this.setState({
-      ...this.state,
-      status: AppUpdateStatus.Installing,
-      errorMessage: null,
-    });
-
-    try {
-      await installUpdate(filePath);
-      return { success: true, state: this.getState() };
-    } catch (error) {
-      console.error('[AppUpdate] install failed:', error);
-      const state = this.setState({
-        ...this.state,
-        status: AppUpdateStatus.Error,
-        errorMessage: error instanceof Error ? error.message : 'Installation failed',
-      });
-      return {
-        success: false,
-        state,
-        error: state.errorMessage ?? 'Installation failed',
-      };
-    }
+    return {
+      success: false,
+      state: this.getState(),
+      error: 'Update system is disabled',
+    };
   }
 
   private resetToIdle(): AppUpdateRuntimeState {
@@ -436,58 +222,11 @@ export class AppUpdateCoordinator {
   }
 
   private async fetchUpdateInfo(
-    currentVersion: string,
-    manual: boolean,
-    userId?: string | null,
+    _currentVersion: string,
+    _manual: boolean,
+    _userId?: string | null,
   ): Promise<AppUpdateInfo | null> {
-    const baseUrl = manual ? getManualUpdateCheckUrl() : getUpdateCheckUrl();
-    const qs = this.getUpdateQueryString(userId, currentVersion);
-    const url = qs ? `${baseUrl}?${qs}` : baseUrl;
-    console.log(`[AppUpdate] checking update, currentVersion=${currentVersion}, url=${url}`);
-
-    const response = await session.defaultSession.fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Update check failed (HTTP ${response.status})`);
-    }
-
-    const payload = (await response.json()) as UpdateApiResponse;
-    if (payload.code !== 0) {
-      throw new Error(`Update check failed with code ${payload.code ?? 'unknown'}`);
-    }
-
-    const value = payload.data?.value;
-    const latestVersion = value?.version?.trim();
-    if (!latestVersion || !this.isNewerVersion(latestVersion, currentVersion)) {
-      console.log(
-        `[AppUpdate] no update available, latestVersion=${latestVersion || 'N/A'}, currentVersion=${currentVersion}`,
-      );
-      return null;
-    }
-
-    const toEntry = (log?: ChangeLogLang) => ({
-      title: typeof log?.title === 'string' ? log.title : '',
-      content: Array.isArray(log?.content) ? log.content : [],
-    });
-
-    const result: AppUpdateInfo = {
-      latestVersion,
-      date: value?.date?.trim() || '',
-      changeLog: {
-        zh: toEntry(value?.changeLog?.ch),
-        en: toEntry(value?.changeLog?.en),
-      },
-      url: this.getPlatformDownloadUrl(value),
-    };
-    console.log(
-      `[AppUpdate] update available: ${currentVersion} -> ${latestVersion}, downloadUrl=${result.url}`,
-    );
-    return result;
+    return null;
   }
 
   private getPlatformDownloadUrl(
@@ -495,14 +234,14 @@ export class AppUpdateCoordinator {
   ): string {
     if (process.platform === 'darwin') {
       const download = process.arch === 'arm64' ? value?.macArm : value?.macIntel;
-      return download?.url?.trim() || getFallbackDownloadUrl();
+      return download?.url?.trim() || '';
     }
 
     if (process.platform === 'win32') {
-      return value?.windowsX64?.url?.trim() || getFallbackDownloadUrl();
+      return value?.windowsX64?.url?.trim() || '';
     }
 
-    return getFallbackDownloadUrl();
+    return '';
   }
 
   private canPredownload(url: string): boolean {
@@ -527,8 +266,7 @@ export class AppUpdateCoordinator {
   }
 
   private isUpdateDisabled(): boolean {
-    const enterprise = this.store.get<{ disableUpdate?: boolean }>('enterprise_config');
-    return enterprise?.disableUpdate === true;
+    return true;
   }
 
   private resolveCurrentVersion(): string {
@@ -541,36 +279,6 @@ export class AppUpdateCoordinator {
     }
 
     return app.getVersion();
-  }
-
-  private getUpdateQueryString(userId?: string | null, version?: string): string {
-    const params = new URLSearchParams();
-    const installationId = this.getOrCreateInstallationId();
-    if (installationId) {
-      params.append('uuid', installationId);
-    }
-    if (userId) {
-      params.append('userId', userId);
-    }
-    if (version) {
-      params.append('version', version);
-    }
-    return params.toString();
-  }
-
-  private getOrCreateInstallationId(): string | null {
-    try {
-      const existing = this.store.get<string>(INSTALLATION_UUID_KEY);
-      if (typeof existing === 'string' && existing.trim()) {
-        return existing;
-      }
-      const nextId = crypto.randomUUID();
-      this.store.set(INSTALLATION_UUID_KEY, nextId);
-      return nextId;
-    } catch (error) {
-      console.warn('[AppUpdate] failed to get installation uuid:', error);
-      return null;
-    }
   }
 
   private isNewerVersion(latestVersion: string, currentVersion: string): boolean {

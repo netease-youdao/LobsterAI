@@ -5,7 +5,6 @@ import { useDispatch,useSelector } from 'react-redux';
 import {
   APP_UPDATE_HEARTBEAT_INTERVAL_MS,
   APP_UPDATE_POLL_INTERVAL_MS,
-  type AppUpdateInfo,
   type AppUpdateRuntimeState,
   AppUpdateStatus,
 } from '../shared/appUpdate/constants';
@@ -425,11 +424,7 @@ const App: React.FC = () => {
     setShowUpdateModal(true);
   }, [updateInfo]);
 
-  const handleUpdateFound = useCallback((_info: AppUpdateInfo) => {
-    setShowUpdateModal(true);
-  }, []);
-
-  const handleConfirmUpdate = useCallback(async () => {
+const handleConfirmUpdate = useCallback(async () => {
     if (!updateInfo) return;
 
     if (appUpdateState.readyFilePath) {
@@ -637,8 +632,8 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isInitialized) return;
 
-    // Enterprise mode: completely skip update detection
-    if (enterpriseConfig?.disableUpdate) return;
+    // Update system is permanently disabled
+    return;
 
     let cancelled = false;
     let lastCheckTime = 0;
@@ -771,7 +766,6 @@ const App: React.FC = () => {
               onClose={handleCloseSettings}
               initialTab={settingsOptions.initialTab}
               notice={settingsOptions.notice}
-              onUpdateFound={handleUpdateFound}
               enterpriseConfig={enterpriseConfig}
             />
           )}
@@ -854,7 +848,6 @@ const App: React.FC = () => {
           onClose={handleCloseSettings}
           initialTab={settingsOptions.initialTab}
           notice={settingsOptions.notice}
-          onUpdateFound={handleUpdateFound}
           enterpriseConfig={enterpriseConfig}
         />
       )}

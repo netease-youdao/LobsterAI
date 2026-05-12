@@ -3,7 +3,7 @@ import { ArrowTopRightOnSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, CpuChip
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { type AppUpdateInfo,type AppUpdateRuntimeState,AppUpdateSource,AppUpdateStatus } from '../../shared/appUpdate/constants';
+
 import { OpenClawProviderId, ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import { type AppConfig, defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, getVisibleProviders, isCustomProvider } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
@@ -15,7 +15,7 @@ import { decryptSecret, decryptWithPassword, EncryptedPayload, encryptWithPasswo
 import { i18nService, LanguageType } from '../services/i18n';
 import { imService } from '../services/im';
 import { themeService } from '../services/theme';
-import type { RootState } from '../store';
+
 import { selectCoworkConfig } from '../store/selectors/coworkSelectors';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
@@ -67,7 +67,6 @@ export type SettingsOpenOptions = {
 
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
-  onUpdateFound?: (info: AppUpdateInfo) => void;
   enterpriseConfig?: {
     ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
     disableUpdate?: boolean;
@@ -283,25 +282,6 @@ const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 
 const shouldShowApiFormatSelector = (provider: string): boolean => (
   getFixedApiFormatForProvider(provider) === null
 );
-const getUpdateCheckStatusFromRuntimeStatus = (
-  state: AppUpdateRuntimeState,
-): 'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready' => {
-  if (state.source !== AppUpdateSource.Manual) {
-    return 'idle';
-  }
-  switch (state.status) {
-    case AppUpdateStatus.Checking:
-      return 'checking';
-    case AppUpdateStatus.Downloading:
-      return 'downloading';
-    case AppUpdateStatus.Ready:
-      return 'ready';
-    case AppUpdateStatus.Error:
-      return 'error';
-    default:
-      return 'idle';
-  }
-};
 const getProviderDefaultBaseUrl = (
   provider: ProviderType,
   apiFormat: 'anthropic' | 'openai' | 'gemini'
@@ -570,7 +550,7 @@ const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => voi
   );
 };
 
-const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, noticeI18nKey, noticeExtra, onUpdateFound, enterpriseConfig }) => {
+const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, noticeI18nKey, noticeExtra, enterpriseConfig }) => {
   const dispatch = useDispatch();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
@@ -641,8 +621,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
-  const updateCheckTimerRef = useRef<number | null>(null);
-
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
     newChat: 'Ctrl+N',
@@ -674,9 +652,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [testMode, setTestMode] = useState(false);
   const [logoClickCount, setLogoClickCount] = useState(0);
   const [testModeUnlocked, setTestModeUnlocked] = useState(false);
-  const [updateCheckStatus, setUpdateCheckStatus] = useState<'idle' | 'checking' | 'upToDate' | 'error' | 'downloading' | 'ready'>('idle');
-  const [appUpdateState, setAppUpdateState] = useState<AppUpdateRuntimeState | null>(null);
-
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
   }, []);
@@ -684,43 +659,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   useEffect(() => {
     setShowApiKey(false);
   }, [activeProvider]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const syncUpdateStatus = async () => {
-      try {
-        const state = await window.electron.appUpdate.getState();
-        if (!mounted) {
-          return;
-        }
-        setAppUpdateState(state);
-        setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
-      } catch (error) {
-        console.error('Failed to load app update state in settings:', error);
-      }
-    };
-
-    void syncUpdateStatus();
-
-    const unsubscribe = window.electron.appUpdate.onStateChanged((state) => {
-      if (
-        updateCheckTimerRef.current != null &&
-        state.source === AppUpdateSource.Manual &&
-        state.status !== AppUpdateStatus.Idle
-      ) {
-        window.clearTimeout(updateCheckTimerRef.current);
-        updateCheckTimerRef.current = null;
-      }
-      setAppUpdateState(state);
-      setUpdateCheckStatus(getUpdateCheckStatusFromRuntimeStatus(state));
-    });
-
-    return () => {
-      mounted = false;
-      unsubscribe();
-    };
-  }, []);
 
   const handleCopyContactEmail = useCallback(async () => {
     const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
@@ -735,68 +673,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       }, 1200);
     }
   }, []);
-
-  const authUser = useSelector((state: RootState) => state.auth.user);
-
-  const handleCheckUpdate = useCallback(async () => {
-    if (updateCheckStatus === 'checking' || !appVersion) return;
-    setUpdateCheckStatus('checking');
-    try {
-      const result = await window.electron.appUpdate.checkNow({ manual: true, userId: authUser?.yid });
-      if (!result.success) {
-        throw new Error(result.error || 'Update check failed');
-      }
-
-      if (!result.updateFound) {
-        setUpdateCheckStatus('upToDate');
-        if (updateCheckTimerRef.current != null) {
-          window.clearTimeout(updateCheckTimerRef.current);
-        }
-        updateCheckTimerRef.current = window.setTimeout(() => {
-          setUpdateCheckStatus('idle');
-          updateCheckTimerRef.current = null;
-        }, 3000);
-        return;
-      }
-
-      if (result.state.status === AppUpdateStatus.Ready) {
-        setUpdateCheckStatus('ready');
-      } else if (result.state.status === AppUpdateStatus.Downloading) {
-        setUpdateCheckStatus('downloading');
-      } else {
-        setUpdateCheckStatus('idle');
-      }
-
-      if (result.state.info) {
-        onUpdateFound?.(result.state.info);
-      }
-    } catch {
-      setUpdateCheckStatus('error');
-      if (updateCheckTimerRef.current != null) {
-        window.clearTimeout(updateCheckTimerRef.current);
-      }
-      updateCheckTimerRef.current = window.setTimeout(() => {
-        setUpdateCheckStatus('idle');
-        updateCheckTimerRef.current = null;
-      }, 3000);
-    }
-  }, [appVersion, authUser, updateCheckStatus, onUpdateFound]);
-
-  const updateButtonLabel = useMemo(() => {
-    if (
-      updateCheckStatus === 'downloading' &&
-      appUpdateState?.progress?.percent != null &&
-      Number.isFinite(appUpdateState.progress.percent)
-    ) {
-      return `${i18nService.t('updateDownloadingBackground')} ${Math.round(appUpdateState.progress.percent * 100)}%`;
-    }
-    if (updateCheckStatus === 'checking') return i18nService.t('updateChecking');
-    if (updateCheckStatus === 'downloading') return i18nService.t('updateDownloadingBackground');
-    if (updateCheckStatus === 'ready') return i18nService.t('updateReadyTitle');
-    if (updateCheckStatus === 'upToDate') return i18nService.t('updateUpToDate');
-    if (updateCheckStatus === 'error') return i18nService.t('updateCheckFailed');
-    return i18nService.t('checkForUpdate');
-  }, [appUpdateState?.progress?.percent, updateCheckStatus]);
 
   const handleOpenUserManual = useCallback(() => {
     void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
@@ -906,9 +782,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   useEffect(() => () => {
     if (emailCopiedTimerRef.current != null) {
       window.clearTimeout(emailCopiedTimerRef.current);
-    }
-    if (updateCheckTimerRef.current != null) {
-      window.clearTimeout(updateCheckTimerRef.current);
     }
   }, []);
 
@@ -4512,24 +4385,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 <span className="text-sm text-foreground">{i18nService.t('aboutVersion')}</span>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-secondary">{appVersion}</span>
-                  {!enterpriseConfig?.disableUpdate && (
-                  <button
-                    type="button"
-                    disabled={updateCheckStatus === 'checking' || updateCheckStatus === 'downloading'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCheckUpdate();
-                    }}
-                    className="text-xs px-2 py-0.5 rounded-md border border-border text-secondary hover:text-primary dark:hover:text-primary hover:border-primary dark:hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {updateButtonLabel}
-                  </button>
-                  )}
-                  {enterpriseConfig?.disableUpdate && (
                   <span className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
                     {i18nService.t('settings.enterprise.managed')}
                   </span>
-                  )}
                 </div>
               </div>
               <div className="flex items-center justify-between px-4 py-3 border-b border-border">

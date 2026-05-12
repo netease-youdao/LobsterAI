@@ -31,26 +31,20 @@ export const getServerApiBaseUrl = (): string => {
     : 'https://lobsterai-server.youdao.com';
 };
 
-export const getUpdateCheckUrl = (): string => (
-  isTestMode()
-    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/update'
-    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/update'
-);
-
-export const getManualUpdateCheckUrl = (): string => (
-  isTestMode()
-    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/update-manual'
-    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/update-manual'
-);
-
-export const getFallbackDownloadUrl = (): string => (
-  isTestMode()
-    ? 'https://lobsterai.inner.youdao.com/#/download-list'
-    : 'https://lobsterai.youdao.com/#/download-list'
-);
-
 export const getSkillStoreUrl = (): string => (
   isTestMode()
     ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/skill-store'
     : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/skill-store'
+);
+
+export const getMcpMarketplaceUrl = (): string => (
+  isTestMode()
+    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace'
+    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
+);
+
+export const getLoginOvermindUrl = (): string => (
+  isTestMode()
+    ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/login-url'
+    : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/login-url'
 );
