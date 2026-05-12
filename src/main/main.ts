@@ -29,7 +29,7 @@ import { pollNimQrLogin, startNimQrLogin } from './im/nimQrLoginService';
 import type { DingTalkInstanceConfig, DiscordInstanceConfig, EmailMultiInstanceConfig, FeishuInstanceConfig, NimInstanceConfig, Platform, QQInstanceConfig, TelegramInstanceConfig, WecomInstanceConfig } from './im/types';
 import { registerMarketplaceIpcHandlers } from './ipcHandlers/marketplace';
 import { registerNimQrLoginHandlers } from './ipcHandlers/nimQrLogin';
-import { registerOllamaIpcHandlers } from './ipcHandlers/ollama';
+import { getOllamaServiceConfig, registerOllamaIpcHandlers } from './ipcHandlers/ollama';
 import {
   getCronJobService,
   initCronJobServiceManager,
@@ -857,7 +857,7 @@ const getOpenClawEngineManager = (): OpenClawEngineManager => {
 
 const getOllamaManager = (): OllamaManager => {
   if (!ollamaManager) {
-    ollamaManager = new OllamaManager();
+    ollamaManager = new OllamaManager(() => getOllamaServiceConfig(getStore()));
   }
   return ollamaManager;
 };

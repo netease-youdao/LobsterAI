@@ -25,6 +25,7 @@ import type {
   OllamaModel,
   OllamaModelLaunchInput,
   OllamaRunningModel,
+  OllamaServiceConfig,
   OllamaStatusSnapshot,
 } from '../../../shared/ollama';
 import {
@@ -75,6 +76,14 @@ type SuggestedLaunchOptions = {
   mainGpu?: number;
   lowVram?: boolean;
   summary: string;
+};
+
+type OllamaServiceConfigFormState = {
+  cudaVisibleDevices: string;
+  numGpu: string;
+  maxLoadedModels: string;
+  numParallel: string;
+  schedSpread: string;
 };
 
 const DEFAULT_INFERENCE_OPTIONS: InferenceOptions = {
@@ -136,6 +145,7 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
   const [marketplaceSize, setMarketplaceSize] = useState<string>('all');
   const [marketplaceQuant, setMarketplaceQuant] = useState<string>('all');
   const [launchTarget, setLaunchTarget] = useState<OllamaModel | null>(null);
+  const [serviceConfig, setServiceConfig] = useState<OllamaServiceConfig>({});
   const marketplaceSearchRef = useRef<number>(0);
   const installedModelNames = useMemo(() => new Set(localModels.map((m) => m.name)), [localModels]);
 
@@ -220,6 +230,8 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
       }),
     ];
     void runAction(async () => {
+      const nextServiceConfig = await loadOllamaServiceConfig();
+      setServiceConfig(nextServiceConfig);
       const nextStatus = await refreshStatus();
       if (nextStatus.status === 'running') {
         await refreshLocalModels();
@@ -230,6 +242,16 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
   }, [refreshLocalModels, refreshRunningModels, refreshStatus, runAction]);
+
+  const handleSaveServiceConfig = (config: OllamaServiceConfig) => {
+    void runAction(async () => {
+      const saved = await saveOllamaServiceConfig(config);
+      setServiceConfig(saved);
+      setNotice(status?.status === 'running'
+        ? i18nService.t('localInferenceServiceConfigSavedRestartRequired')
+        : i18nService.t('localInferenceServiceConfigSaved'));
+    });
+  };
 
   useEffect(() => {
     if (!isRunning) return;
@@ -474,9 +496,11 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
             loading={loading}
             localModels={localModels}
             runningModels={runningModels}
+            serviceConfig={serviceConfig}
             onPrepare={handlePrepare}
             onStart={handleStart}
             onStop={handleStop}
+            onSaveServiceConfig={handleSaveServiceConfig}
             onRefresh={() => void runAction(async () => {
               await refreshStatus();
               if (isRunning) {
@@ -607,18 +631,22 @@ function ServiceHeader({
   loading,
   localModels,
   runningModels,
+  serviceConfig,
   onPrepare,
   onStart,
   onStop,
+  onSaveServiceConfig,
   onRefresh,
 }: {
   status: OllamaStatusSnapshot | null;
   loading: boolean;
   localModels: OllamaModel[];
   runningModels: OllamaRunningModel[];
+  serviceConfig: OllamaServiceConfig;
   onPrepare: () => void;
   onStart: () => void;
   onStop: () => void;
+  onSaveServiceConfig: (config: OllamaServiceConfig) => void;
   onRefresh: () => void;
 }) {
   const running = status?.status === 'running';
@@ -687,7 +715,149 @@ function ServiceHeader({
           ) : null}
         </div>
       </div>
+      <OllamaServiceConfigPanel
+        loading={loading}
+        running={running}
+        config={serviceConfig}
+        onSave={onSaveServiceConfig}
+      />
     </section>
+  );
+}
+
+function OllamaServiceConfigPanel({
+  loading,
+  running,
+  config,
+  onSave,
+}: {
+  loading: boolean;
+  running: boolean;
+  config: OllamaServiceConfig;
+  onSave: (config: OllamaServiceConfig) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [form, setForm] = useState<OllamaServiceConfigFormState>(() => serviceConfigToForm(config));
+
+  useEffect(() => {
+    setForm(serviceConfigToForm(config));
+  }, [config]);
+
+  const updateForm = (key: keyof OllamaServiceConfigFormState, value: string) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const save = () => {
+    onSave({
+      cudaVisibleDevices: form.cudaVisibleDevices,
+      numGpu: form.numGpu,
+      maxLoadedModels: form.maxLoadedModels,
+      numParallel: form.numParallel,
+      ...(form.schedSpread ? { schedSpread: form.schedSpread === 'true' } : {}),
+    });
+  };
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-secondary transition-colors hover:text-foreground"
+      >
+        <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
+        {i18nService.t('localInferenceServiceConfigTitle')}
+      </button>
+      {expanded && (
+        <div className="mt-3 rounded-md border border-border bg-background/60 p-3">
+          <p className="text-xs text-secondary">{i18nService.t('localInferenceServiceConfigDescription')}</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <ServiceConfigInput
+              label="CUDA_VISIBLE_DEVICES"
+              value={form.cudaVisibleDevices}
+              placeholder="0,1"
+              hint={i18nService.t('localInferenceServiceConfigCudaHint')}
+              onChange={(value) => updateForm('cudaVisibleDevices', value)}
+            />
+            <ServiceConfigInput
+              label="OLLAMA_NUM_GPU"
+              value={form.numGpu}
+              placeholder={i18nService.t('localInferenceLaunchDefault')}
+              hint={i18nService.t('localInferenceServiceConfigNumGpuHint')}
+              onChange={(value) => updateForm('numGpu', value)}
+            />
+            <ServiceConfigInput
+              label="OLLAMA_MAX_LOADED_MODELS"
+              value={form.maxLoadedModels}
+              placeholder={i18nService.t('localInferenceLaunchDefault')}
+              hint={i18nService.t('localInferenceServiceConfigMaxLoadedHint')}
+              onChange={(value) => updateForm('maxLoadedModels', value)}
+            />
+            <ServiceConfigInput
+              label="OLLAMA_NUM_PARALLEL"
+              value={form.numParallel}
+              placeholder={i18nService.t('localInferenceLaunchDefault')}
+              hint={i18nService.t('localInferenceServiceConfigNumParallelHint')}
+              onChange={(value) => updateForm('numParallel', value)}
+            />
+            <label className="space-y-1.5 md:col-span-2">
+              <span className="font-mono text-xs font-semibold text-foreground">OLLAMA_SCHED_SPREAD</span>
+              <select
+                value={form.schedSpread}
+                onChange={(event) => updateForm('schedSpread', event.target.value)}
+                className="h-8 w-full rounded-md border border-border bg-surface px-2 text-sm text-foreground outline-none transition-colors focus:border-primary/60"
+              >
+                <option value="">{i18nService.t('localInferenceLaunchDefault')}</option>
+                <option value="true">{i18nService.t('localInferenceLaunchBooleanEnabled')}</option>
+                <option value="false">{i18nService.t('localInferenceLaunchBooleanDisabled')}</option>
+              </select>
+              <p className="text-xs text-secondary">{i18nService.t('localInferenceServiceConfigSchedSpreadHint')}</p>
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-secondary">
+              {running
+                ? i18nService.t('localInferenceServiceConfigRestartHint')
+                : i18nService.t('localInferenceServiceConfigStartHint')}
+            </p>
+            <button
+              type="button"
+              onClick={save}
+              disabled={loading}
+              className="inline-flex h-7 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-60"
+            >
+              {i18nService.t('save')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServiceConfigInput({
+  label,
+  value,
+  placeholder,
+  hint,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  hint: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-1.5">
+      <span className="font-mono text-xs font-semibold text-foreground">{label}</span>
+      <input
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-8 w-full rounded-md border border-border bg-surface px-2 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary/60"
+      />
+      <p className="text-xs text-secondary">{hint}</p>
+    </label>
   );
 }
 
@@ -1431,6 +1601,41 @@ function parseOptionalBoolean(value: string): boolean | undefined {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return undefined;
+}
+
+function serviceConfigToForm(config: OllamaServiceConfig): OllamaServiceConfigFormState {
+  return {
+    cudaVisibleDevices: config.cudaVisibleDevices ?? '',
+    numGpu: config.numGpu ?? '',
+    maxLoadedModels: config.maxLoadedModels ?? '',
+    numParallel: config.numParallel ?? '',
+    schedSpread: config.schedSpread === undefined ? '' : String(config.schedSpread),
+  };
+}
+
+async function loadOllamaServiceConfig(): Promise<OllamaServiceConfig> {
+  try {
+    return await window.electron.ollama.getServiceConfig();
+  } catch (error) {
+    if (isMissingIpcHandlerError(error)) return {};
+    throw error;
+  }
+}
+
+async function saveOllamaServiceConfig(config: OllamaServiceConfig): Promise<OllamaServiceConfig> {
+  try {
+    return await window.electron.ollama.setServiceConfig(config);
+  } catch (error) {
+    if (isMissingIpcHandlerError(error)) {
+      throw new Error(i18nService.t('localInferenceServiceConfigRestartAppRequired'));
+    }
+    throw error;
+  }
+}
+
+function isMissingIpcHandlerError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('No handler registered') && message.includes('ollama:service-config');
 }
 
 function suggestLaunchOptions(

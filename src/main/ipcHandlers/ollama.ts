@@ -5,12 +5,16 @@ import type {
   OllamaChatPayload,
   OllamaInstallProgress,
   OllamaModelLaunchInput,
+  OllamaServiceConfig,
   OllamaStatusSnapshot,
 } from '../../shared/ollama';
 import { OllamaIpcChannel } from '../../shared/ollama';
 import { OllamaManager } from '../libs/ollamaManager';
 import { buildOllamaOpenClawAppConfig, type OllamaOpenClawAppConfig } from '../libs/ollamaOpenClawBinding';
 import type { SqliteStore } from '../sqliteStore';
+
+const OLLAMA_SERVICE_CONFIG_KEY = 'ollama_service_config';
+const DEFAULT_OLLAMA_SERVICE_CONFIG: OllamaServiceConfig = {};
 
 export function registerOllamaIpcHandlers(
   manager: OllamaManager,
@@ -46,6 +50,12 @@ export function registerOllamaIpcHandlers(
   ipcMain.handle(OllamaIpcChannel.Start, async () => manager.start());
   ipcMain.handle(OllamaIpcChannel.Stop, async () => manager.stop());
   ipcMain.handle(OllamaIpcChannel.Restart, async () => manager.restart());
+  ipcMain.handle(OllamaIpcChannel.GetServiceConfig, async () => getOllamaServiceConfig(options.getStore()));
+  ipcMain.handle(OllamaIpcChannel.SetServiceConfig, async (_event, config: OllamaServiceConfig) => {
+    const sanitized = sanitizeOllamaServiceConfig(config);
+    options.getStore().set(OLLAMA_SERVICE_CONFIG_KEY, sanitized);
+    return sanitized;
+  });
   ipcMain.handle(OllamaIpcChannel.ModelsDir, async () => {
     return process.env.OLLAMA_MODELS || `${os.homedir()}/.ollama/models`;
   });
@@ -158,6 +168,41 @@ export function registerOllamaIpcHandlers(
     });
     return { success: syncResult.success, error: syncResult.error };
   });
+}
+
+export function getOllamaServiceConfig(store: SqliteStore): OllamaServiceConfig {
+  return sanitizeOllamaServiceConfig(store.get<OllamaServiceConfig>(OLLAMA_SERVICE_CONFIG_KEY) ?? DEFAULT_OLLAMA_SERVICE_CONFIG);
+}
+
+function sanitizeOllamaServiceConfig(config: OllamaServiceConfig | undefined): OllamaServiceConfig {
+  const next: OllamaServiceConfig = {};
+  const cudaVisibleDevices = normalizeCsvIntegerList(config?.cudaVisibleDevices);
+  const numGpu = normalizeIntegerString(config?.numGpu, { allowMinusOne: true });
+  const maxLoadedModels = normalizeIntegerString(config?.maxLoadedModels);
+  const numParallel = normalizeIntegerString(config?.numParallel);
+
+  if (cudaVisibleDevices) next.cudaVisibleDevices = cudaVisibleDevices;
+  if (numGpu) next.numGpu = numGpu;
+  if (maxLoadedModels) next.maxLoadedModels = maxLoadedModels;
+  if (numParallel) next.numParallel = numParallel;
+  if (typeof config?.schedSpread === 'boolean') next.schedSpread = config.schedSpread;
+  return next;
+}
+
+function normalizeIntegerString(value: string | undefined, options: { allowMinusOne?: boolean } = {}): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (options.allowMinusOne && trimmed === '-1') return trimmed;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function normalizeCsvIntegerList(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const parts = trimmed.split(',').map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0 || parts.some((part) => !/^\d+$/.test(part))) return undefined;
+  return parts.join(',');
 }
 
 function isAbortError(error: unknown): boolean {

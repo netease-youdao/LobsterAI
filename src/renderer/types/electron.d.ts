@@ -11,6 +11,7 @@ import type {
   OllamaModelLaunchInput,
   OllamaModelLaunchResult,
   OllamaRunningModel,
+  OllamaServiceConfig,
   OllamaStatusSnapshot,
 } from '../../shared/ollama';
 interface ApiResponse {
@@ -355,6 +356,8 @@ interface IElectronAPI {
     start: () => Promise<OllamaStatusSnapshot>;
     stop: () => Promise<OllamaStatusSnapshot>;
     restart: () => Promise<OllamaStatusSnapshot>;
+    getServiceConfig: () => Promise<OllamaServiceConfig>;
+    setServiceConfig: (config: OllamaServiceConfig) => Promise<OllamaServiceConfig>;
     modelsDir: () => Promise<string>;
     listLocalModels: () => Promise<OllamaModel[]>;
     listRunningModels: () => Promise<OllamaRunningModel[]>;

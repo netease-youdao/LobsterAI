@@ -38,6 +38,14 @@ export type OllamaInstallProgress = {
   error?: string;
 };
 
+export type OllamaServiceConfig = {
+  cudaVisibleDevices?: string;
+  numGpu?: string;
+  maxLoadedModels?: string;
+  numParallel?: string;
+  schedSpread?: boolean;
+};
+
 export type OllamaCancelPullResult = {
   success: true;
   cancelled: boolean;

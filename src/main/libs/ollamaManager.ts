@@ -9,6 +9,7 @@ import { promisify } from 'util';
 import type {
   OllamaInstallProgress,
   OllamaRunningModel,
+  OllamaServiceConfig,
   OllamaStatusSnapshot,
 } from '../../shared/ollama';
 import { OllamaClient } from './ollamaClient';
@@ -25,6 +26,10 @@ export class OllamaManager extends EventEmitter {
     status: 'unknown',
     checkedAt: new Date().toISOString(),
   };
+
+  constructor(private readonly getServiceConfig: () => OllamaServiceConfig = () => ({})) {
+    super();
+  }
 
   getStatus(): OllamaStatusSnapshot {
     return this.status;
@@ -69,7 +74,7 @@ export class OllamaManager extends EventEmitter {
     this.process = spawn(this.executablePath, ['serve'], {
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: buildOllamaServeEnv(process.env, this.getServiceConfig()),
     });
 
     this.process.stdout.on('data', (chunk) => console.debug(`[Ollama] ${chunk.toString().trim()}`));
@@ -221,6 +226,17 @@ export class OllamaManager extends EventEmitter {
     };
     this.emit('status', this.status);
   }
+}
+
+function buildOllamaServeEnv(baseEnv: NodeJS.ProcessEnv, config: OllamaServiceConfig): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    ...(config.cudaVisibleDevices ? { CUDA_VISIBLE_DEVICES: config.cudaVisibleDevices } : {}),
+    ...(config.numGpu ? { OLLAMA_NUM_GPU: config.numGpu } : {}),
+    ...(config.maxLoadedModels ? { OLLAMA_MAX_LOADED_MODELS: config.maxLoadedModels } : {}),
+    ...(config.numParallel ? { OLLAMA_NUM_PARALLEL: config.numParallel } : {}),
+    ...(typeof config.schedSpread === 'boolean' ? { OLLAMA_SCHED_SPREAD: String(config.schedSpread) } : {}),
+  };
 }
 
 export async function findOllamaExecutable(): Promise<string | null> {
