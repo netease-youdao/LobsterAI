@@ -642,28 +642,25 @@ export class CronJobService {
     });
     if (!Array.isArray(result.entries) || result.entries.length === 0) return [];
 
-    // Build a jobId→name map for entries missing jobName
-    const missingIds = new Set(
-      result.entries.filter(e => !e.jobName && !e.summary).map(e => e.jobId),
-    );
+    // Build job metadata maps for entries that need enrichment
     const nameMap = new Map<string, string>();
-    if (missingIds.size > 0) {
-      try {
-        const jobs = await this.listJobs();
-        for (const job of jobs) {
-          if (missingIds.has(job.id)) {
-            nameMap.set(job.id, job.name);
-          }
-        }
-      } catch {
-        // fall through
+    const payloadMap = new Map<string, string>();
+    try {
+      const jobs = await this.listJobs();
+      for (const job of jobs) {
+        nameMap.set(job.id, job.name);
+        const promptText = job.payload.kind === 'systemEvent' ? job.payload.text : job.payload.message;
+        if (promptText) payloadMap.set(job.id, promptText);
       }
+    } catch {
+      // fall through
     }
 
     return result.entries.map(entry => ({
       ...mapGatewayRun(entry),
       taskName:
         entry.jobName || nameMap.get(entry.jobId) || extractRunTitle(entry.summary) || entry.jobId,
+      taskPayload: payloadMap.get(entry.jobId),
     }));
   }
 

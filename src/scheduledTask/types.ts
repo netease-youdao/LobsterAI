@@ -85,6 +85,7 @@ export interface ScheduledTaskRun {
 
 export interface ScheduledTaskRunWithName extends ScheduledTaskRun {
   taskName: string;
+  taskPayload?: string;
 }
 
 export interface ScheduledTaskInput {

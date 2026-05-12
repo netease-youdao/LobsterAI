@@ -7,6 +7,7 @@ import { i18nService } from '../../services/i18n';
 import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import DateInput from './DateInput';
+import FailureDetailModal from './FailureDetailModal';
 import RunSessionModal from './RunSessionModal';
 import { formatDateTime, formatDuration } from './utils';
 
@@ -53,6 +54,7 @@ const AllRunsHistory: React.FC = () => {
   const allRuns = useSelector((state: RootState) => state.scheduledTask.allRuns);
   const allRunsHasMore = useSelector((state: RootState) => state.scheduledTask.allRunsHasMore);
   const [viewingRun, setViewingRun] = useState<ScheduledTaskRunWithName | null>(null);
+  const [viewingError, setViewingError] = useState<ScheduledTaskRunWithName | null>(null);
   const [filter, setFilter] = useState<RunFilter>(EMPTY_FILTER);
 
   const hasActiveFilter = Boolean(filter.startDate || filter.endDate || filter.status);
@@ -91,9 +93,11 @@ const AllRunsHistory: React.FC = () => {
     scheduledTaskService.loadAllRuns(50, allRuns.length, filter);
   };
 
-  const handleViewSession = (run: ScheduledTaskRunWithName) => {
+  const handleRowClick = (run: ScheduledTaskRunWithName) => {
     if (run.sessionId || run.sessionKey) {
       setViewingRun(run);
+    } else if (run.status === 'error' && run.error) {
+      setViewingError(run);
     }
   };
 
@@ -184,13 +188,14 @@ const AllRunsHistory: React.FC = () => {
       {displayedRuns.map(run => {
         const cfg = statusConfig[run.status] || { label: '', color: '' };
         const hasSession = run.sessionId || run.sessionKey;
+        const isClickable = hasSession || (run.status === 'error' && run.error);
         return (
           <div
             key={run.id}
             className={`grid grid-cols-[1fr_1fr_80px] items-center gap-3 px-4 py-3 border-b border-border-subtle transition-colors ${
-              hasSession ? 'hover:bg-surface-raised/50 cursor-pointer' : ''
+              isClickable ? 'hover:bg-surface-raised/50 cursor-pointer' : ''
             }`}
-            onClick={() => handleViewSession(run)}
+            onClick={() => handleRowClick(run)}
           >
             {/* Task title */}
             <div className="text-sm text-foreground truncate">
@@ -252,6 +257,16 @@ const AllRunsHistory: React.FC = () => {
           sessionId={viewingRun.sessionId}
           sessionKey={viewingRun.sessionKey}
           onClose={() => setViewingRun(null)}
+        />
+      )}
+
+      {viewingError && (
+        <FailureDetailModal
+          inputCommand={viewingError.taskPayload || viewingError.taskName}
+          error={viewingError.error || ''}
+          taskName={viewingError.taskName}
+          runTime={formatDateTime(new Date(viewingError.startedAt))}
+          onClose={() => setViewingError(null)}
         />
       )}
     </div>
