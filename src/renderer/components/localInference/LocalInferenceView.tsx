@@ -296,18 +296,15 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
     });
   };
 
-  const handleStart = () => {
-    void runAction(async () => {
-      await window.electron.ollama.start();
-      await refreshLocalModels();
-      await refreshRunningModels();
-    });
-  };
-
   const handleStop = () => {
     void runAction(async () => {
       await window.electron.ollama.stop();
-      setRunningModels([]);
+      const nextStatus = await refreshStatus();
+      if (nextStatus.status === 'running') {
+        await refreshRunningModels();
+      } else {
+        setRunningModels([]);
+      }
     });
   };
 
@@ -498,12 +495,11 @@ const LocalInferenceView: React.FC<LocalInferenceViewProps> = ({
             runningModels={runningModels}
             serviceConfig={serviceConfig}
             onPrepare={handlePrepare}
-            onStart={handleStart}
             onStop={handleStop}
             onSaveServiceConfig={handleSaveServiceConfig}
             onRefresh={() => void runAction(async () => {
-              await refreshStatus();
-              if (isRunning) {
+              const nextStatus = await refreshStatus();
+              if (nextStatus.status === 'running') {
                 await refreshLocalModels();
                 await refreshRunningModels();
               }
@@ -633,7 +629,6 @@ function ServiceHeader({
   runningModels,
   serviceConfig,
   onPrepare,
-  onStart,
   onStop,
   onSaveServiceConfig,
   onRefresh,
@@ -644,17 +639,18 @@ function ServiceHeader({
   runningModels: OllamaRunningModel[];
   serviceConfig: OllamaServiceConfig;
   onPrepare: () => void;
-  onStart: () => void;
   onStop: () => void;
   onSaveServiceConfig: (config: OllamaServiceConfig) => void;
   onRefresh: () => void;
 }) {
   const running = status?.status === 'running';
+  const managedByApp = Boolean(status?.managedByApp);
+  const canPrepare = status?.status === 'not-installed'
+    || status?.status === 'installed'
+    || status?.status === 'stopped';
   const actionLabel = status?.status === 'not-installed'
     ? i18nService.t('localInferenceInstall')
-    : status?.status === 'installed' || status?.status === 'stopped'
-      ? i18nService.t('localInferenceStart')
-      : i18nService.t('refresh');
+    : i18nService.t('localInferenceStart');
   return (
     <section className="rounded-lg border border-border bg-surface px-3 py-3">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -664,12 +660,26 @@ function ServiceHeader({
             <h2 className="text-sm font-semibold text-foreground">{i18nService.t('localInferenceService')}</h2>
             <StatusBadge status={status?.status ?? 'unknown'} />
             {status?.version && <span className="font-mono text-xs text-secondary">v{status.version}</span>}
+            {running && (
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                managedByApp
+                  ? 'bg-blue-500/15 text-blue-500'
+                  : 'bg-amber-500/15 text-amber-500'
+              }`}>
+                {i18nService.t(managedByApp ? 'localInferenceServiceManagedByApp' : 'localInferenceServiceExternal')}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-xs text-secondary">
             {i18nService.t('localInferenceServiceHint')
               .replace('{local}', String(localModels.length))
               .replace('{running}', String(runningModels.length))}
           </p>
+          {running && !managedByApp && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              {i18nService.t('localInferenceExternalServiceHint')}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -681,7 +691,7 @@ function ServiceHeader({
             <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             {i18nService.t('refresh')}
           </button>
-          {!running && (
+          {!running && canPrepare && (
             <button
               type="button"
               onClick={onPrepare}
@@ -692,7 +702,7 @@ function ServiceHeader({
               {actionLabel}
             </button>
           )}
-          {running ? (
+          {running && managedByApp ? (
             <button
               type="button"
               onClick={onStop}
@@ -701,16 +711,6 @@ function ServiceHeader({
             >
               <StopIcon className="h-3.5 w-3.5" />
               {i18nService.t('localInferenceStop')}
-            </button>
-          ) : status?.status === 'installed' || status?.status === 'stopped' ? (
-            <button
-              type="button"
-              onClick={onStart}
-              disabled={loading}
-              className={smallOutlineButtonClass}
-            >
-              <PlayIcon className="h-3.5 w-3.5" />
-              {i18nService.t('localInferenceStart')}
             </button>
           ) : null}
         </div>

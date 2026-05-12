@@ -13,6 +13,7 @@ export type OllamaStatusSnapshot = {
   version?: string;
   executablePath?: string;
   pid?: number;
+  managedByApp?: boolean;
   error?: string;
   checkedAt: string;
 };

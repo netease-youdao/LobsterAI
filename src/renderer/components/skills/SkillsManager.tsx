@@ -721,7 +721,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
       <div>
       {activeTab === 'installed' && (
       <>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {filteredSkills.length === 0 ? (
           <div className="col-span-2 text-center py-8 text-sm text-secondary">
             {i18nService.t('noSkillsAvailable')}
@@ -838,7 +838,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 {i18nService.t('skillMarketplaceEmpty')}
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {filteredMarketplaceSkills.map((skill) => (
               <div
                 key={skill.id}
