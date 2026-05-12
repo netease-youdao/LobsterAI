@@ -2668,7 +2668,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:fetchMarketplace', async () => {
     const url = getSkillStoreUrl();
-    const clawhubUrl = 'https://clawhub.ai/api/v1/skills';
+    const clawhubUrl = 'https://clawhub.ai/api/v1/skills?limit=200';
     const apiUrl = url || clawhubUrl;
     console.log(`[SkillMarketplace] fetching from: ${apiUrl}`);
     try {
