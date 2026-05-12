@@ -13,7 +13,7 @@ import { i18nService } from '../../services/i18n';
 import { compareVersions,resolveLocalizedText, skillService } from '../../services/skill';
 import { RootState } from '../../store';
 import { setSkills } from '../../store/slices/skillSlice';
-import { MarketplaceSkill, MarketTag,Skill } from '../../types/skill';
+import { MarketplaceSkill, Skill } from '../../types/skill';
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import FolderOpenIcon from '../icons/FolderOpenIcon';
@@ -74,9 +74,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   const [importTab, setImportTab] = useState<ImportSourceType>('github');
   const [activeTab, setActiveTab] = useState<SkillTab>('installed');
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
-  const [marketTags, setMarketTags] = useState<MarketTag[]>([]);
   const [activeMarketTag, setActiveMarketTag] = useState('all');
   const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(false);
+  const [visibleSkillCount, setVisibleSkillCount] = useState(30);
+  const pageStep = 30;
   const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
   const [selectedMarketplaceSkill, setSelectedMarketplaceSkill] = useState<MarketplaceSkill | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
@@ -130,7 +131,6 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     skillService.fetchMarketplaceSkills().then((data) => {
       if (!isActive) return;
       setMarketplaceSkills(data.skills);
-      setMarketTags(data.tags);
       setIsLoadingMarketplace(false);
     });
     return () => { isActive = false; };
@@ -204,6 +204,22 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     });
   }, [skills, skillSearchQuery]);
 
+  const categoryTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const skill of marketplaceSkills) {
+      if (skill.tags) {
+        for (const tag of skill.tags) {
+          if (tag !== 'latest' && tag !== 'all') tagSet.add(tag);
+        }
+      }
+    }
+    return Array.from(tagSet).sort();
+  }, [marketplaceSkills]);
+
+  useEffect(() => {
+    setVisibleSkillCount(pageStep);
+  }, [skillSearchQuery, activeMarketTag]);
+
   const filteredMarketplaceSkills = useMemo(() => {
     const query = skillSearchQuery.trim().replace(/\s+/g, ' ').toLowerCase();
     let results = marketplaceSkills;
@@ -218,6 +234,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     }
     return results;
   }, [marketplaceSkills, skillSearchQuery, activeMarketTag]);
+
+  const paginatedMarketplaceSkills = useMemo(() => {
+    return filteredMarketplaceSkills.slice(0, visibleSkillCount);
+  }, [filteredMarketplaceSkills, visibleSkillCount]);
+
+  const hasMore = filteredMarketplaceSkills.length > visibleSkillCount;
 
   const formatSkillDate = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -687,11 +709,11 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
         </div>
 
         {/* Tag filter pills (Marketplace only) */}
-        {activeTab === 'marketplace' && !isLoadingMarketplace && marketTags.length > 0 && (
+        {activeTab === 'marketplace' && !isLoadingMarketplace && categoryTags.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
-              onClick={() => setActiveMarketTag('all')}
+              onClick={() => { setActiveMarketTag('all'); setVisibleSkillCount(pageStep); }}
               className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
                 activeMarketTag === 'all'
                   ? 'bg-primary text-white'
@@ -700,18 +722,18 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
             >
               {i18nService.t('skillCategoryAll')}
             </button>
-            {marketTags.map((tag) => (
+            {categoryTags.map((tag) => (
               <button
-                key={tag.id}
+                key={tag}
                 type="button"
-                onClick={() => setActiveMarketTag(tag.id)}
+                onClick={() => { setActiveMarketTag(tag); setVisibleSkillCount(pageStep); }}
                 className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                  activeMarketTag === tag.id
+                  activeMarketTag === tag
                     ? 'bg-primary text-white'
                     : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
                 }`}
               >
-                {resolveLocalizedText(tag)}
+                {tag}
               </button>
             ))}
           </div>
@@ -838,8 +860,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                 {i18nService.t('skillMarketplaceEmpty')}
               </div>
             ) : (
+              <>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {filteredMarketplaceSkills.map((skill) => (
+                {paginatedMarketplaceSkills.map((skill) => (
               <div
                 key={skill.id}
                 className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary cursor-pointer"
@@ -936,7 +959,19 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
               </div>
             ))}
           </div>
+            {hasMore && (
+              <div className="flex justify-center pt-4 pb-2">
+                <button
+                  type="button"
+                  onClick={() => setVisibleSkillCount(prev => prev + pageStep)}
+                  className="px-6 py-2 text-sm font-medium rounded-lg bg-surface text-secondary hover:bg-surface-raised border border-border transition-colors"
+                >
+                  {i18nService.t('skillLoadMore')} ({filteredMarketplaceSkills.length - visibleSkillCount})
+                </button>
+              </div>
             )}
+            </>
+          )}
           </>
         )
       )}
