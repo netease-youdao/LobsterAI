@@ -2668,27 +2668,36 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:fetchMarketplace', async () => {
     const url = getSkillStoreUrl();
-    console.log(`[SkillMarketplace] fetching from: ${url}`);
+    const clawhubUrl = 'https://clawhub.ai/api/v1/skills';
+    const apiUrl = url || clawhubUrl;
+    console.log(`[SkillMarketplace] fetching from: ${apiUrl}`);
     try {
-      const https = await import('https');
-      const data = await new Promise<string>((resolve, reject) => {
-        const req = https.get(url, { timeout: 10000 }, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            res.resume();
-            return;
-          }
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk: string) => { body += chunk; });
-          res.on('end', () => resolve(body));
-          res.on('error', reject);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
-      });
-      return { success: true, data };
+      const response = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const rawData = await response.json();
+
+      const items = rawData.items ?? rawData?.data?.value?.marketplace ?? [];
+
+      const marketplace = items.map((item: Record<string, unknown>) => ({
+        id: item.slug || item.id,
+        name: item.displayName || item.name,
+        description: item.summary || item.description || '',
+        tags: item.tags ? Object.keys(item.tags as Record<string, unknown>) : [],
+        url: `https://clawhub.ai/skills/${item.slug || item.id}`,
+        version: (item.tags as Record<string, string> | undefined)?.latest || '1.0.0',
+        source: {
+          from: 'ClawHub',
+          url: `https://clawhub.ai/skills/${item.slug || item.id}`,
+          author: (item.owner as Record<string, unknown> | undefined)?.displayName as string ?? '',
+        },
+      }));
+
+      const result = JSON.stringify({ data: { value: { marketplace, marketTags: [], localSkill: [] } } });
+      return { success: true, data: result };
     } catch (error) {
+      console.error('[SkillMarketplace] fetch error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch skill marketplace' };
     }
   });
