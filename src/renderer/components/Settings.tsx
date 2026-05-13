@@ -4571,6 +4571,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   </div>
                 </div>
                 <button
+                  type="button"
                   role="switch"
                   aria-checked={securityMonitorEnabled}
                   onClick={() => setSecurityMonitorEnabled(!securityMonitorEnabled)}
