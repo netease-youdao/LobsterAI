@@ -507,6 +507,7 @@ export interface CoworkConfig {
   dreamingFrequency: string;
   dreamingModel: string;
   dreamingTimezone: string;
+  securityMonitorEnabled: boolean;
 }
 
 export type CoworkConfigUpdate = Partial<Pick<
@@ -531,6 +532,7 @@ CoworkConfig,
   | 'dreamingFrequency'
   | 'dreamingModel'
   | 'dreamingTimezone'
+  | 'securityMonitorEnabled'
 >>;
 
 
@@ -1296,6 +1298,7 @@ export class CoworkStore {
       'dreamingFrequency',
       'dreamingModel',
       'dreamingTimezone',
+      'securityMonitorEnabled',
     ] as const;
     const configRows = this.getAll<{ key: string; value: string }>(
       `SELECT key, value FROM cowork_config WHERE key IN (${configKeys.map(() => '?').join(', ')})`,
@@ -1333,6 +1336,7 @@ export class CoworkStore {
       dreamingFrequency: cfg.get('dreamingFrequency') || DEFAULT_DREAMING_FREQUENCY,
       dreamingModel: cfg.get('dreamingModel') || DEFAULT_DREAMING_MODEL,
       dreamingTimezone: cfg.get('dreamingTimezone') || DEFAULT_DREAMING_TIMEZONE,
+      securityMonitorEnabled: parseBooleanConfig(cfg.get('securityMonitorEnabled'), true),
     };
   }
 
@@ -1398,6 +1402,9 @@ export class CoworkStore {
     }
     if (config.dreamingTimezone !== undefined) {
       this.upsertConfig('dreamingTimezone', String(config.dreamingTimezone), now);
+    }
+    if (config.securityMonitorEnabled !== undefined) {
+      this.upsertConfig('securityMonitorEnabled', config.securityMonitorEnabled ? '1' : '0', now);
     }
   }
 

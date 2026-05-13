@@ -116,6 +116,7 @@ export interface CoworkConfig {
   dreamingFrequency: string;
   dreamingModel: string;
   dreamingTimezone: string;
+  securityMonitorEnabled: boolean;
   openClawSessionPolicy: OpenClawSessionPolicyConfig;
 }
 
@@ -141,6 +142,7 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'dreamingFrequency'
   | 'dreamingModel'
   | 'dreamingTimezone'
+  | 'securityMonitorEnabled'
 >>;
 
 export interface CoworkApiConfig {

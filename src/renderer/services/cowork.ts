@@ -283,6 +283,7 @@ class CoworkService {
         dreamingFrequency: (cfg.dreamingFrequency as string) ?? '0 3 * * *',
         dreamingModel: (cfg.dreamingModel as string) ?? '',
         dreamingTimezone: (cfg.dreamingTimezone as string) ?? '',
+        securityMonitorEnabled: (cfg.securityMonitorEnabled as boolean) ?? true,
         openClawSessionPolicy: sessionPolicyResult?.success && sessionPolicyResult.config
           ? sessionPolicyResult.config
           : { keepAlive: '30d' },

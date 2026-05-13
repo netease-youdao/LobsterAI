@@ -39,7 +39,7 @@ import IMSettings from './im/IMSettings';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
+type TabType = 'general' | 'appearance' | 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'security' | 'about';
 
 const SettingsSlidersIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg
@@ -863,6 +863,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [dreamingFrequency, setDreamingFrequency] = useState<string>(coworkConfig.dreamingFrequency ?? '0 3 * * *');
   const [dreamingModel, setDreamingModel] = useState<string>(coworkConfig.dreamingModel ?? '');
   const [dreamingTimezone, setDreamingTimezone] = useState<string>(coworkConfig.dreamingTimezone ?? '');
+  const [securityMonitorEnabled, setSecurityMonitorEnabled] = useState<boolean>(coworkConfig.securityMonitorEnabled ?? true);
   const [memoryTab, setMemoryTab] = useState<'entries' | 'embedding' | 'dreaming'>('entries');
   const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
     coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
@@ -897,6 +898,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setDreamingFrequency(coworkConfig.dreamingFrequency ?? '0 3 * * *');
     setDreamingModel(coworkConfig.dreamingModel ?? '');
     setDreamingTimezone(coworkConfig.dreamingTimezone ?? '');
+    setSecurityMonitorEnabled(coworkConfig.securityMonitorEnabled ?? true);
     setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   }, [
     coworkConfig.agentEngine,
@@ -915,6 +917,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     coworkConfig.dreamingFrequency,
     coworkConfig.dreamingModel,
     coworkConfig.dreamingTimezone,
+    coworkConfig.securityMonitorEnabled,
   ]);
 
   useEffect(() => () => {
@@ -1652,7 +1655,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     || dreamingEnabled !== (coworkConfig.dreamingEnabled ?? false)
     || dreamingFrequency !== (coworkConfig.dreamingFrequency ?? '0 3 * * *')
     || dreamingModel !== (coworkConfig.dreamingModel ?? '')
-    || dreamingTimezone !== (coworkConfig.dreamingTimezone ?? '');
+    || dreamingTimezone !== (coworkConfig.dreamingTimezone ?? '')
+    || securityMonitorEnabled !== (coworkConfig.securityMonitorEnabled ?? true);
   const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
   const openClawProgressPercent = useMemo(() => {
@@ -1999,6 +2003,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           dreamingFrequency,
           dreamingModel,
           dreamingTimezone,
+          securityMonitorEnabled,
         });
         if (!updated) {
           throw new Error(i18nService.t('coworkConfigSaveFailed'));
@@ -2674,6 +2679,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
       { key: 'coworkAgent' as TabType,    label: i18nService.t('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
       { key: 'shortcuts' as TabType,      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
+      { key: 'security' as TabType,       label: i18nService.t('securityTab'),    icon: <ShieldCheckIcon className="h-5 w-5" /> },
       { key: 'about' as TabType,          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
     ];
     // Filter out tabs hidden by enterprise config
@@ -4547,6 +4553,51 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
       case 'im':
         return <IMSettings />;
+
+      case 'security':
+        return (
+          <div className="space-y-6 px-1">
+            <div>
+              <h3 className="text-base font-semibold text-foreground mb-1">
+                {i18nService.t('securityMonitorTitle')}
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                {i18nService.t('securityMonitorDesc')}
+              </p>
+              <div className="flex items-center justify-between rounded-lg border border-border p-4">
+                <div className="flex-1">
+                  <div className="text-sm font-medium text-foreground">
+                    {i18nService.t('securityMonitorTitle')}
+                  </div>
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={securityMonitorEnabled}
+                  onClick={() => setSecurityMonitorEnabled(!securityMonitorEnabled)}
+                  className={`
+                    relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full
+                    transition-colors duration-200 ease-in-out focus:outline-none
+                    ${
+                      securityMonitorEnabled
+                        ? 'bg-claude-accent'
+                        : 'bg-claude-border dark:bg-claude-darkBorder'
+                    }
+                  `}
+                >
+                  <span
+                    className={`
+                      inline-block h-5 w-5 rounded-full bg-white shadow-lg
+                      transition-transform duration-200 ease-in-out
+                      ${
+                        securityMonitorEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }
+                    `}
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+        );
 
       case 'about':
         return (

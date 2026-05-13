@@ -69,6 +69,7 @@ const initialState: CoworkState = {
     dreamingFrequency: '0 3 * * *',
     dreamingModel: '',
     dreamingTimezone: '',
+    securityMonitorEnabled: true,
     openClawSessionPolicy: {
       keepAlive: '30d',
     },
