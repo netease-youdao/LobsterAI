@@ -1677,8 +1677,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
   // Clear lazy-render height cache when session changes
   const sessionId = currentSession?.id;
+  const [gatewaySessionId, setGatewaySessionId] = useState<string | null>(null);
   useEffect(() => {
     clearHeightCache();
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (sessionId) {
+      window.electron.cowork.getGatewaySessionId(sessionId).then((res) => {
+        if (res.success) setGatewaySessionId(res.gatewaySessionId);
+      });
+    } else {
+      setGatewaySessionId(null);
+    }
   }, [sessionId]);
 
   // Rail navigation states
@@ -2667,8 +2678,16 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               {updateBadge}
             </div>
           )}
-          <h1 className="text-sm leading-none font-medium text-foreground truncate max-w-[360px]">
+          <h1 className="text-sm leading-none font-medium text-foreground truncate max-w-[400px]">
             {currentSession.title || i18nService.t('coworkNewSession')}
+            {process.env.NODE_ENV === 'development' && gatewaySessionId && (
+              <span
+                className="non-draggable text-[10px] text-muted-foreground ml-1.5 font-mono select-text cursor-text"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                {gatewaySessionId.slice(0, 8)}
+              </span>
+            )}
           </h1>
         </div>
 

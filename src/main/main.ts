@@ -3224,6 +3224,20 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:gatewaySessionId', async (_event, lobsterSessionId: string) => {
+    try {
+      const stateDir = getOpenClawEngineManager().getStateDir();
+      const sessionsPath = path.join(stateDir, 'agents', 'main', 'sessions', 'sessions.json');
+      const raw = await fs.promises.readFile(sessionsPath, 'utf-8');
+      const sessions = JSON.parse(raw);
+      const sessionKey = `agent:main:lobsterai:${lobsterSessionId}`;
+      const entry = sessions[sessionKey];
+      return { success: true, gatewaySessionId: entry?.sessionId ?? null };
+    } catch {
+      return { success: false, gatewaySessionId: null };
+    }
+  });
+
   ipcMain.handle('cowork:session:remoteManaged', async (_event, sessionId: string) => {
     try {
       const mapping = getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId);
