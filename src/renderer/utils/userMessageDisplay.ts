@@ -10,7 +10,7 @@
 
 // --------------- Pattern A: NIM/DingTalk ---------------
 
-// Placeholder line — e.g. "[图片] https://nos.netease.com/..."
+// Placeholder line — e.g. "[图片] https://example.com/..."
 // Capture the URL (group 2) so we can preserve it as plain text instead of stripping it.
 const NIM_PLACEHOLDER_RE = /^\[(图片|语音消息|视频|文件|多媒体消息)\](?:\s+(https?:\/\/\S+))?\s*$/m;
 
