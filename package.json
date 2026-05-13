@@ -39,6 +39,13 @@
         "optional": true
       },
       {
+        "id": "nsp-clawguard",
+        "npm": "nsp-clawguard",
+        "version": "2.1.5",
+        "registry": "https://npm.nie.netease.com",
+        "optional": true
+      },
+      {
         "id": "openclaw-nim-channel",
         "npm": "git+https://github.com/netease-im/openclaw-nim-channel.git#1.1.1",
         "version": "1.1.1",
