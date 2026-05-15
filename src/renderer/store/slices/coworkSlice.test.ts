@@ -21,6 +21,7 @@ const makeSession = (overrides: Partial<Parameters<typeof addSession>[0]> = {}) 
   cwd: '/tmp',
   systemPrompt: '',
   modelOverride: '',
+  thinkingLevel: '',
   executionMode: 'local' as const,
   activeSkillIds: [],
   agentId: 'main',

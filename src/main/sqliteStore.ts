@@ -251,6 +251,11 @@ export class SqliteStore {
         this.didRunMigration = true;
       }
 
+      if (!colNames.includes('thinking_level')) {
+        this.db.exec("ALTER TABLE cowork_sessions ADD COLUMN thinking_level TEXT NOT NULL DEFAULT '';");
+        this.didRunMigration = true;
+      }
+
       // Migration: Add sequence column to cowork_messages
       const msgColumns = this.db.pragma('table_info(cowork_messages)') as Array<{ name: string }>;
       const msgColNames = msgColumns.map(c => c.name);

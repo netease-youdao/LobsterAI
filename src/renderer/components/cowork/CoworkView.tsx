@@ -1,5 +1,5 @@
 import { ShieldCheckIcon } from '@heroicons/react/24/outline';
-import React, { useEffect, useRef,useState } from 'react';
+import React, { useCallback, useEffect, useRef,useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
 import { buildSessionTitleFromInput } from '../../../common/sessionTitle';
@@ -7,6 +7,7 @@ import { agentService } from '../../services/agent';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { quickActionService } from '../../services/quickAction';
+import { localStore } from '../../services/store';
 import { RootState } from '../../store';
 import {
   selectCoworkConfig,
@@ -69,6 +70,11 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
   const currentAgentWorkingDirectory = currentAgent?.workingDirectory?.trim() || config.workingDirectory || '';
   const currentAgentSelectedModel = useAgentSelectedModel(currentAgentId, currentAgent?.model ?? '');
+
+  const refreshLastThinkingLevel = useCallback(async () => {
+    const level = await localStore.getItem<string>('lastThinkingLevel');
+    return level || '';
+  }, []);
 
   const buildApiConfigNotice = (error?: string): { noticeI18nKey: string; noticeExtra?: string } => {
     const key = 'coworkModelSettingsRequired';
@@ -224,6 +230,9 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       // Capture active skill IDs before clearing them
       const sessionSkillIds = [...activeSkillIds];
 
+      // Read fresh thinking level from persistent store
+      const inheritedThinkingLevel = await refreshLastThinkingLevel();
+
       const tempSession: CoworkSession = {
         id: tempSessionId,
         title: fallbackTitle,
@@ -235,6 +244,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         cwd: currentAgentWorkingDirectory,
         systemPrompt: '',
         modelOverride: currentAgentSelectedModel ? toOpenClawModelRef(currentAgentSelectedModel) : '',
+        thinkingLevel: inheritedThinkingLevel,
         executionMode: config.executionMode || 'local',
         activeSkillIds: sessionSkillIds,
         agentId: currentAgentId,
@@ -283,6 +293,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         activeSkillIds: sessionSkillIds,
         agentId: currentAgentId,
         modelOverride: sessionModelOverride,
+        thinkingLevel: inheritedThinkingLevel,
         imageAttachments,
       });
 

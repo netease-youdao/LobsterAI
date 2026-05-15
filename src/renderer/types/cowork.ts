@@ -96,6 +96,7 @@ export interface CoworkSession {
   cwd: string;
   systemPrompt: string;
   modelOverride: string;
+  thinkingLevel: string;
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
   agentId: string;
@@ -245,6 +246,7 @@ export interface CoworkStartOptions {
   activeSkillIds?: string[];
   agentId?: string;
   modelOverride?: string;
+  thinkingLevel?: string;
   imageAttachments?: CoworkImageAttachment[];
 }
 

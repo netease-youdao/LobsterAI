@@ -27,6 +27,7 @@ interface CoworkSession {
   cwd: string;
   systemPrompt: string;
   modelOverride: string;
+  thinkingLevel: string;
   executionMode: 'auto' | 'local' | 'sandbox';
   activeSkillIds: string[];
   agentId: string;
@@ -434,6 +435,8 @@ interface IElectronAPI {
       title?: string;
       activeSkillIds?: string[];
       agentId?: string;
+      modelOverride?: string;
+      thinkingLevel?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
     }) => Promise<{
       success: boolean;

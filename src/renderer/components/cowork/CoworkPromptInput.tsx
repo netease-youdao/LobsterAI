@@ -8,6 +8,7 @@ import { configService } from '../../services/config';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
+import { localStore } from '../../services/store';
 import { RootState } from '../../store';
 import { selectDraftPrompts } from '../../store/selectors/coworkSelectors';
 import {
@@ -17,6 +18,7 @@ import {
   setDraftAttachments,
   setDraftPrompt,
   updateCurrentSessionModelOverride,
+  updateCurrentSessionThinkingLevel,
 } from '../../store/slices/coworkSlice';
 import type { Model } from '../../store/slices/modelSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
@@ -31,6 +33,7 @@ import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import { ActiveSkillBadge, SkillsButton } from '../skills';
+import ThinkingLevelSelector from '../ThinkingLevelSelector';
 import { resolveAgentModelSelection, resolveEffectiveModel, useAgentSelectedModel } from './agentModelSelection';
 import AttachmentCard from './AttachmentCard';
 import FolderSelectorPopover from './FolderSelectorPopover';
@@ -211,6 +214,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const [isAddingFile, setIsAddingFile] = useState(false);
     const [imageVisionHint, setImageVisionHint] = useState(false);
     const [isPatchingModel, setIsPatchingModel] = useState(false);
+    const [pendingThinkingLevel, setPendingThinkingLevel] = useState('');
     const [showAgentMenu, setShowAgentMenu] = useState(false);
     const [isReadOnlyContextCompact, setIsReadOnlyContextCompact] = useState(false);
 
@@ -970,6 +974,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     return () => window.removeEventListener('config-updated', syncFromConfig);
   }, []);
 
+  useEffect(() => {
+    localStore.getItem<string>('lastThinkingLevel').then((level) => {
+      if (level) setPendingThinkingLevel(level);
+    });
+  }, []);
+
   const largeModelSelector = showModelSelector ? (
     <div className="flex flex-col items-start gap-1">
       <ModelSelector
@@ -1040,6 +1050,52 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       )}
     </div>
   ) : null;
+
+  const thinkingLevelSelector = (
+    <ThinkingLevelSelector
+      compact={useHomeContextLayout}
+      dropdownDirection="up"
+      disabled={disabled}
+      value={sessionId ? (currentSession?.thinkingLevel ?? '') : pendingThinkingLevel}
+      onChange={async (level) => {
+        if (!sessionId) {
+          void localStore.setItem('lastThinkingLevel', level);
+          setPendingThinkingLevel(level);
+          return;
+        }
+
+        const previousThinkingLevel = currentSession?.id === sessionId
+          ? (currentSession.thinkingLevel ?? '')
+          : '';
+
+        dispatch(updateCurrentSessionThinkingLevel({ sessionId, thinkingLevel: level }));
+
+        try {
+          const patchedSession = await coworkService.patchSession(sessionId, {
+            thinkingLevel: level || null,
+          });
+
+          if (!patchedSession) {
+            dispatch(updateCurrentSessionThinkingLevel({
+              sessionId,
+              thinkingLevel: previousThinkingLevel,
+            }));
+            window.dispatchEvent(new CustomEvent('app:showToast', {
+              detail: i18nService.t('coworkThinkingSwitchFailed'),
+            }));
+          }
+        } catch {
+          dispatch(updateCurrentSessionThinkingLevel({
+            sessionId,
+            thinkingLevel: previousThinkingLevel,
+          }));
+          window.dispatchEvent(new CustomEvent('app:showToast', {
+            detail: i18nService.t('coworkThinkingSwitchFailed'),
+          }));
+        }
+      }}
+    />
+  );
 
   const largeInputActions = !remoteManaged ? (
     <>
@@ -1210,6 +1266,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {contextUsageControl}
+                    {thinkingLevelSelector}
                     {largeModelSelector}
                     {largeSendButton}
                   </div>
@@ -1358,6 +1415,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {contextUsageControl}
+                  {thinkingLevelSelector}
                   {largeModelSelector}
                   {largeSendButton}
                 </div>

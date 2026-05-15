@@ -17,6 +17,7 @@ const makeSession = (): CoworkSession => ({
   cwd: '/tmp',
   systemPrompt: '',
   modelOverride: '',
+  thinkingLevel: '',
   executionMode: 'local',
   activeSkillIds: [],
   agentId: 'agent-1',

@@ -345,6 +345,12 @@ const coworkSlice = createSlice({
       state.currentSession.modelOverride = modelOverride;
     },
 
+    updateCurrentSessionThinkingLevel(state, action: PayloadAction<{ sessionId: string; thinkingLevel: string }>) {
+      const { sessionId, thinkingLevel } = action.payload;
+      if (state.currentSession?.id !== sessionId) return;
+      state.currentSession.thinkingLevel = thinkingLevel;
+    },
+
     enqueuePendingPermission(state, action: PayloadAction<CoworkPermissionRequest>) {
       const alreadyQueued = state.pendingPermissions.some(
         (permission) => permission.requestId === action.payload.requestId
@@ -432,6 +438,7 @@ export const {
   updateSessionPinned,
   updateSessionTitle,
   updateCurrentSessionModelOverride,
+  updateCurrentSessionThinkingLevel,
   enqueuePendingPermission,
   dequeuePendingPermission,
   clearPendingPermissions,

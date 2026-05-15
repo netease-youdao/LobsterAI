@@ -2859,6 +2859,7 @@ if (!gotTheLock) {
     imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
     agentId?: string;
     modelOverride?: string;
+    thinkingLevel?: string;
   }) => {
     try {
       const engineStatus = await ensureOpenClawRunningForCowork();
@@ -2897,7 +2898,8 @@ if (!gotTheLock) {
         config.executionMode || 'local',
         options.activeSkillIds || [],
         options.agentId || 'main',
-        options.modelOverride || ''
+        options.modelOverride || '',
+        options.thinkingLevel || ''
       );
 
       if (options.modelOverride) {
@@ -3592,6 +3594,12 @@ if (!gotTheLock) {
       if (patch.model !== undefined) {
         getCoworkStore().updateSession(sessionId, {
           modelOverride: patch.model ?? '',
+        }, { touchUpdatedAt: false });
+      }
+
+      if (patch.thinkingLevel !== undefined) {
+        getCoworkStore().updateSession(sessionId, {
+          thinkingLevel: patch.thinkingLevel ?? '',
         }, { touchUpdatedAt: false });
       }
 

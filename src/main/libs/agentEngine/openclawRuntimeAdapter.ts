@@ -1338,6 +1338,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         cwd: '',
         systemPrompt: '',
         modelOverride: '',
+        thinkingLevel: '',
         executionMode: 'local' as CoworkExecutionMode,
         activeSkillIds: [],
         messages,
@@ -1439,6 +1440,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         cwd: '',
         systemPrompt: '',
         modelOverride: '',
+        thinkingLevel: '',
         executionMode: 'local' as CoworkExecutionMode,
         activeSkillIds: [],
         messages,
@@ -1953,6 +1955,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       const message = error instanceof Error ? error.message : String(error);
       this.emit('error', sessionId, message);
       throw error;
+    }
+
+    if (session.thinkingLevel) {
+      try {
+        const client = this.requireGatewayClient();
+        await client.request('sessions.patch', { key: sessionKey, thinkingLevel: session.thinkingLevel });
+      } catch (error) {
+        console.warn('[OpenClawRuntime] failed to patch session thinkingLevel before chat.send:', error);
+      }
     }
 
     const outboundMessage = await this.buildOutboundPrompt(
