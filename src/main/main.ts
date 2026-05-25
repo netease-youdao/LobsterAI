@@ -7187,7 +7187,7 @@ end tell'`, { timeout: 5000 });
     // When skills change (install/enable/disable/delete), re-sync AGENTS.md
     // so OpenClaw's IM channel agents pick up the latest skill list.
     manager.onSkillsChanged(() => {
-      syncOpenClawConfig({ reason: 'skills-changed' }).catch((error) => {
+      syncOpenClawConfig({ reason: 'skills-changed', restartGatewayIfRunning: true }).catch((error) => {
         console.warn('[Main] Failed to sync OpenClaw config after skills change:', error);
       });
     });
