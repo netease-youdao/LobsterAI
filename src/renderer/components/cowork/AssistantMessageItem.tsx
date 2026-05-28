@@ -11,6 +11,7 @@ import {
   MEDIA_TOKEN_DISPLAY_RE,
   messageMetaClassName,
 } from './messageDisplayUtils';
+import ReadButton from './ReadButton';
 
 // ── CopyButton ───────────────────────────────────────────────────────────────
 
@@ -121,6 +122,10 @@ const AssistantMessageItem: React.FC<{
           <span>{formatMessageDateTime(message.timestamp)}</span>
           {modelLabel && <span>{modelLabel}</span>}
           <CopyButton
+            content={displayContent}
+            visible={isHovered}
+          />
+          <ReadButton
             content={displayContent}
             visible={isHovered}
           />

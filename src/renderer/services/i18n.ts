@@ -307,6 +307,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     regenerateResponse: '重新生成回复',
     copyToClipboard: '复制到剪贴板',
     coworkReEdit: '重新编辑',
+    readAloud: '朗读',
+    readAloudPause: '暂停朗读',
+    readAloudResume: '继续朗读',
+    readAloudStop: '停止朗读',
     messageCopied: '消息已复制',
     copyFailed: '复制失败',
     // 代码块搜索面板
@@ -2525,6 +2529,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     regenerateResponse: 'Regenerate Response',
     copyToClipboard: 'Copy to Clipboard',
     coworkReEdit: 'Re-edit',
+    readAloud: 'Read Aloud',
+    readAloudPause: 'Pause',
+    readAloudResume: 'Resume',
+    readAloudStop: 'Stop',
     messageCopied: 'Message copied',
     copyFailed: 'Copy failed',
     // Code block search panel
