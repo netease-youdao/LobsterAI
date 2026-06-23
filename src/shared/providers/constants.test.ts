@@ -127,7 +127,21 @@ describe('ProviderRegistry', () => {
   test('supportsCodingPlan is false for others', () => {
     expect(ProviderRegistry.supportsCodingPlan(ProviderName.OpenAI)).toBe(false);
     expect(ProviderRegistry.supportsCodingPlan(ProviderName.DeepSeek)).toBe(false);
+    expect(ProviderRegistry.supportsCodingPlan(ProviderName.LiteLLM)).toBe(false);
     expect(ProviderRegistry.supportsCodingPlan('unknown')).toBe(false);
+  });
+
+  test('litellm provider defaults to OpenAI-compatible proxy', () => {
+    const def = ProviderRegistry.get(ProviderName.LiteLLM);
+    expect(def).toBeDefined();
+    expect(def!.id).toBe('litellm');
+    expect(def!.label).toBe('LiteLLM');
+    expect(def!.defaultApiFormat).toBe(ApiFormat.OpenAI);
+    expect(def!.defaultBaseUrl).toBe('http://localhost:4000/v1');
+    expect(def!.region).toBe('global');
+    expect(def!.codingPlanSupported).toBe(false);
+    expect(def!.defaultModels).toEqual([]);
+    expect(def!.website).toBe('https://litellm.ai');
   });
 
   test('idsByRegion china returns 12 providers', () => {
