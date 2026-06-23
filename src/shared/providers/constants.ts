@@ -39,11 +39,12 @@ export const ProviderName = {
   OpenRouter: 'openrouter',
   Ollama: 'ollama',
   LmStudio: 'lm-studio',
+  LiteLLM: 'litellm',
   Custom: 'custom',
   LobsteraiServer: 'lobsterai-server',
   Copilot: 'github-copilot',
 } as const;
-export type ProviderName = typeof ProviderName[keyof typeof ProviderName];
+export type ProviderName = (typeof ProviderName)[keyof typeof ProviderName];
 
 // ─── OpenClaw Provider ID ───────────────────────────────────────────────
 // OpenClaw gateway provider identifiers. May differ from ProviderName.
@@ -66,11 +67,12 @@ export const OpenClawProviderId = {
   OpenRouter: 'openrouter',
   Copilot: 'github-copilot',
   LobsteraiCopilot: 'lobsterai-copilot',
+  LiteLLM: 'litellm',
   Ollama: 'ollama',
   LmStudio: 'lm-studio',
   Lobster: 'lobster',
 } as const;
-export type OpenClawProviderId = typeof OpenClawProviderId[keyof typeof OpenClawProviderId];
+export type OpenClawProviderId = (typeof OpenClawProviderId)[keyof typeof OpenClawProviderId];
 
 // ─── OpenClaw API Protocol ──────────────────────────────────────────────
 export const OpenClawApi = {
@@ -80,7 +82,7 @@ export const OpenClawApi = {
   OpenAICodexResponses: 'openai-codex-responses',
   GoogleGenerativeAI: 'google-generative-ai',
 } as const;
-export type OpenClawApi = typeof OpenClawApi[keyof typeof OpenClawApi];
+export type OpenClawApi = (typeof OpenClawApi)[keyof typeof OpenClawApi];
 
 // ─── API Format (provider default protocol format) ──────────────────────
 export const ApiFormat = {
@@ -88,20 +90,20 @@ export const ApiFormat = {
   Anthropic: 'anthropic',
   Gemini: 'gemini',
 } as const;
-export type ApiFormat = typeof ApiFormat[keyof typeof ApiFormat];
+export type ApiFormat = (typeof ApiFormat)[keyof typeof ApiFormat];
 
 // ─── Auth Type ──────────────────────────────────────────────────────────
 export const AuthType = {
   ApiKey: 'api-key',
   OAuth: 'oauth',
 } as const;
-export type AuthType = typeof AuthType[keyof typeof AuthType];
+export type AuthType = (typeof AuthType)[keyof typeof AuthType];
 
 export const ProviderAuthType = {
   ApiKey: 'apikey',
   OAuth: 'oauth',
 } as const;
-export type ProviderAuthType = typeof ProviderAuthType[keyof typeof ProviderAuthType];
+export type ProviderAuthType = (typeof ProviderAuthType)[keyof typeof ProviderAuthType];
 
 // ═══════════════════════════════════════════════════════
 // 2. Provider Definition Shape
@@ -205,8 +207,18 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', supportsImage: false, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
+      {
+        id: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        supportsImage: false,
+        contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW,
+      },
+      {
+        id: 'deepseek-v4-pro',
+        name: 'DeepSeek V4 Pro',
+        supportsImage: false,
+        contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW,
+      },
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
     ],
   },
@@ -375,7 +387,12 @@ const PROVIDER_DEFINITIONS = [
       { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: false },
       { id: 'glm-5.1', name: 'GLM 5.1', supportsImage: false },
       { id: 'minimax-m2.5', name: 'MiniMax M2.5', supportsImage: false },
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', supportsImage: false, contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW },
+      {
+        id: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        supportsImage: false,
+        contextWindow: DEEPSEEK_V4_CONTEXT_WINDOW,
+      },
       { id: 'ernie-4.5-turbo-20260402', name: 'ERNIE 4.5 Turbo', supportsImage: false },
     ],
   },
@@ -412,7 +429,12 @@ const PROVIDER_DEFINITIONS = [
     region: 'china',
     enPriority: 0,
     defaultModels: [
-      { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', supportsImage: false, contextWindow: 1_000_000 },
+      {
+        id: 'mimo-v2.5-pro',
+        name: 'MiMo V2.5 Pro',
+        supportsImage: false,
+        contextWindow: 1_000_000,
+      },
       { id: 'mimo-v2.5', name: 'MiMo V2.5', supportsImage: true, contextWindow: 1_000_000 },
     ],
   },
@@ -540,6 +562,19 @@ const PROVIDER_DEFINITIONS = [
       { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true },
     ],
   },
+  {
+    id: ProviderName.LiteLLM,
+    label: 'LiteLLM',
+    website: 'https://litellm.ai',
+    apiKeyUrl: 'https://docs.litellm.ai/docs/proxy/virtual_keys',
+    openClawProviderId: OpenClawProviderId.LiteLLM,
+    defaultBaseUrl: 'http://localhost:4000/v1',
+    defaultApiFormat: ApiFormat.OpenAI,
+    codingPlanSupported: false,
+    region: 'global',
+    enPriority: 0,
+    defaultModels: [],
+  },
 ] as const satisfies readonly ProviderDefInput[];
 
 // ═══════════════════════════════════════════════════════
@@ -660,14 +695,19 @@ class ProviderRegistryImpl {
   }
 
   getOpenClawProviderId(providerName: string): string {
-    return this.idIndex.get(providerName)?.openClawProviderId ?? providerName ?? OpenClawProviderId.Lobster;
+    return (
+      this.idIndex.get(providerName)?.openClawProviderId ??
+      providerName ??
+      OpenClawProviderId.Lobster
+    );
   }
 
   getProviderModelSupportsImage(providerName: string, modelId: string): boolean | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
-    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
-      .find(candidate => candidate.id === modelId);
+    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])].find(
+      candidate => candidate.id === modelId,
+    );
     return model?.supportsImage;
   }
 
@@ -678,8 +718,9 @@ class ProviderRegistryImpl {
   getProviderModelContextWindow(providerName: string, modelId: string): number | undefined {
     const def = this.idIndex.get(providerName);
     if (!def) return undefined;
-    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])]
-      .find(candidate => candidate.id === modelId);
+    const model = [...def.defaultModels, ...(def.codingPlanModels ?? [])].find(
+      candidate => candidate.id === modelId,
+    );
     return model?.contextWindow;
   }
 
@@ -714,8 +755,10 @@ class ProviderRegistryImpl {
     if (isValidContextWindow(configuredContextWindow)) {
       return configuredContextWindow;
     }
-    return this.getProviderModelContextWindow(providerName, modelId)
-      ?? this.getKnownModelContextWindow(modelId);
+    return (
+      this.getProviderModelContextWindow(providerName, modelId) ??
+      this.getKnownModelContextWindow(modelId)
+    );
   }
 
   /** Provider IDs filtered by region. */

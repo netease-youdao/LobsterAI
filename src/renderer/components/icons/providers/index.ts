@@ -7,6 +7,7 @@ export { default as GeminiIcon } from './GeminiIcon';
 export { default as GitHubCopilotIcon } from './GitHubCopilotIcon';
 export { default as HappyHorseIcon } from './HappyHorseIcon';
 export { default as KlingIcon } from './KlingIcon';
+export { default as LiteLLMIcon } from './LiteLLMIcon';
 export { default as LmStudioIcon } from './LmStudioIcon';
 export { default as MiniMaxIcon } from './MiniMaxIcon';
 export { default as MoonshotIcon } from './MoonshotIcon';
