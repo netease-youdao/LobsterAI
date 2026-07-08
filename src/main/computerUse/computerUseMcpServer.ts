@@ -9,6 +9,7 @@ import {
   getComputerUseLogRetentionDays,
 } from './computerUseLogs';
 import {
+  ComputerUseRuntimeMode,
   type ComputerUseRuntimePaths,
   ensureComputerUseHelperStateHome,
   inspectComputerUseRuntime,
@@ -79,10 +80,6 @@ export function resolvePackageRoot(packageName: string): string | null {
 }
 
 export function resolveComputerUseRuntimePaths(): ComputerUseRuntimePaths | null {
-  if (process.platform !== 'win32') {
-    return null;
-  }
-
   const inspection = inspectComputerUseRuntime();
   return inspection.paths;
 }
@@ -101,9 +98,6 @@ export function ensureComputerUseMcpServerScript(): string {
 export function resolveComputerUseMcpServer(
   options: ResolveComputerUseMcpServerOptions,
 ): ResolvedMcpServer | null {
-  if (process.platform !== 'win32') {
-    return null;
-  }
   if (!options.askUserCallbackUrl) {
     console.warn('[ComputerUseMCP] skipped built-in server because AskUser callback is unavailable');
     return null;
@@ -118,6 +112,26 @@ export function resolveComputerUseMcpServer(
     console.warn(
       `[ComputerUseMCP] skipped built-in server because Computer Use runtime is not installed (status=${inspection.status}, userData=${app.getPath('userData')}${missing})`,
     );
+    return null;
+  }
+
+  if (runtimePaths.mode === ComputerUseRuntimeMode.MacMcpApp) {
+    if (!runtimePaths.mcpCommandPath || !runtimePaths.mcpCwd) {
+      console.warn('[ComputerUseMCP] skipped built-in server because macOS runtime paths are incomplete');
+      return null;
+    }
+
+    return {
+      name: ComputerUseMcpServerName.BuiltIn,
+      transportType: 'stdio',
+      command: runtimePaths.mcpCommandPath,
+      args: runtimePaths.mcpArgs,
+      cwd: runtimePaths.mcpCwd,
+    };
+  }
+
+  if (!runtimePaths.clientModulePath || !runtimePaths.helperExePath || !runtimePaths.runtimePackageRoot) {
+    console.warn('[ComputerUseMCP] skipped built-in server because Windows runtime paths are incomplete');
     return null;
   }
 

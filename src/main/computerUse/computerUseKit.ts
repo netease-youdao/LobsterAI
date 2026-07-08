@@ -4,6 +4,7 @@ import path from 'path';
 
 import {
   ComputerUseKitBundle,
+  ComputerUseKitBundleArchive,
   ComputerUseKitBundleIntegrity,
   ComputerUseKitId,
   ComputerUseKitMetadata,
@@ -16,37 +17,93 @@ import {
   KitStoreKey,
 } from '../../shared/kit/constants';
 import type { SqliteStore } from '../sqliteStore';
-import { ComputerUseRuntime } from './computerUseRuntime';
+import {
+  ComputerUseRuntimeTarget,
+  getCurrentComputerUseRuntimeDescriptor,
+  isComputerUseRuntimeSupportedPlatform,
+} from './computerUseRuntime';
 
 const SKILLS_DIR_NAME = 'SKILLs';
 const SKILL_STATE_KEY = 'skills_state';
+const COMPUTER_USE_RESOURCE_DIR = 'computer-use';
 const COMPUTER_USE_KIT_ICON_URL = 'https://ydhardwarecommon.nosdn.127.net/f02f8c2d2af8b1f88426327944f6e1f5.png';
 const COMPUTER_USE_MCP_REF = {
   id: ComputerUseKitId.BuiltIn,
   name: 'Computer Use',
-  description: 'Built-in local Windows desktop control MCP server.',
+  description: 'Built-in local desktop control MCP server.',
 };
 
 type InstalledKitsMap = Record<string, InstalledKitRecord>;
 type SkillStateMap = Record<string, { enabled: boolean }>;
 
+export interface ComputerUseKitBundleDescriptor {
+  archiveName?: string;
+  bundle: ComputerUseKitBundle;
+  sha256: string;
+  sizeBytes: number;
+}
+
+const ComputerUseKitBundlesByRuntimeTarget = {
+  [ComputerUseRuntimeTarget.MacArm64]: {
+    archiveName: ComputerUseKitBundleArchive.MacArm64,
+    bundle: ComputerUseKitBundle.MacArm64,
+    sha256: ComputerUseKitBundleIntegrity.MacArm64.Sha256,
+    sizeBytes: ComputerUseKitBundleIntegrity.MacArm64.SizeBytes,
+  },
+  [ComputerUseRuntimeTarget.WindowsX64]: {
+    bundle: ComputerUseKitBundle.WindowsX64,
+    sha256: ComputerUseKitBundleIntegrity.WindowsX64.Sha256,
+    sizeBytes: ComputerUseKitBundleIntegrity.WindowsX64.SizeBytes,
+  },
+} as const satisfies Record<ComputerUseRuntimeTarget, ComputerUseKitBundleDescriptor>;
+
+function isFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function isComputerUseKitSupportedPlatform(): boolean {
-  return process.platform === ComputerUseRuntime.Platform
-    && process.arch === ComputerUseRuntime.Arch;
+  return isComputerUseRuntimeSupportedPlatform();
+}
+
+export function getCurrentComputerUseKitBundleDescriptor(): ComputerUseKitBundleDescriptor | null {
+  const runtime = getCurrentComputerUseRuntimeDescriptor();
+  return runtime ? ComputerUseKitBundlesByRuntimeTarget[runtime.target] : null;
+}
+
+export function resolveBundledComputerUseKitArchivePath(
+  descriptor: ComputerUseKitBundleDescriptor,
+): string | null {
+  if (!descriptor.archiveName) {
+    return null;
+  }
+
+  const candidates = [
+    path.join(process.resourcesPath ?? '', COMPUTER_USE_RESOURCE_DIR, descriptor.archiveName),
+    path.join(app.getAppPath(), 'resources', COMPUTER_USE_RESOURCE_DIR, descriptor.archiveName),
+    path.join(process.cwd(), 'resources', COMPUTER_USE_RESOURCE_DIR, descriptor.archiveName),
+  ];
+
+  return candidates.find(candidate => isFile(candidate)) ?? null;
 }
 
 export function buildComputerUseMarketplaceKit(): Record<string, unknown> {
+  const runtime = getCurrentComputerUseRuntimeDescriptor();
+  const bundleDescriptor = getCurrentComputerUseKitBundleDescriptor();
   return {
     id: ComputerUseKitId.BuiltIn,
     name: ComputerUseKitMetadata.Name,
     description: ComputerUseKitMetadata.Description,
     icon: COMPUTER_USE_KIT_ICON_URL,
     author: 'LobsterAI',
-    version: ComputerUseRuntime.Version,
+    version: runtime?.version ?? '0.0.0',
     tryAsking: [
       {
-        en: 'Open Notepad and type a short note',
-        zh: '打开记事本并输入一段简短笔记',
+        en: 'Open a desktop app and type a short note',
+        zh: '打开一个桌面应用并输入一段简短笔记',
       },
       {
         en: 'List the desktop applications I can control',
@@ -54,9 +111,9 @@ export function buildComputerUseMarketplaceKit(): Record<string, unknown> {
       },
     ],
     skills: {
-      bundle: ComputerUseKitBundle.BuiltIn,
-      bundleSha256: ComputerUseKitBundleIntegrity.Sha256,
-      bundleSizeBytes: ComputerUseKitBundleIntegrity.SizeBytes,
+      bundle: bundleDescriptor?.bundle ?? ComputerUseKitBundle.WindowsX64,
+      bundleSha256: bundleDescriptor?.sha256 ?? ComputerUseKitBundleIntegrity.WindowsX64.Sha256,
+      bundleSizeBytes: bundleDescriptor?.sizeBytes ?? ComputerUseKitBundleIntegrity.WindowsX64.SizeBytes,
       list: [
         {
           id: ComputerUseSkillId.BuiltIn,
@@ -83,13 +140,14 @@ export function buildInstalledComputerUseKitRecord(
   skillIds: string[],
   metadata: Record<string, KitSkillMetadata>,
 ): InstalledKitRecord {
+  const runtime = getCurrentComputerUseRuntimeDescriptor();
   const skills: InstalledKitSkills = {
     skillIds,
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
   return {
     id: ComputerUseKitId.BuiltIn,
-    version: ComputerUseRuntime.Version,
+    version: runtime?.version ?? '0.0.0',
     installedAt: Date.now(),
     skills,
     mcpServers: [COMPUTER_USE_MCP_REF],

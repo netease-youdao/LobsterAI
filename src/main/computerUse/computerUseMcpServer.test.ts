@@ -27,15 +27,24 @@ import {
   resolvePackageRoot,
 } from './computerUseMcpServer';
 import {
-  ComputerUseRuntime,
+  ComputerUseRuntimeMode,
+  ComputerUseRuntimes,
+  ComputerUseRuntimeTarget,
   getComputerUseHelperStateHome,
   getComputerUseRuntimeRoot,
   inspectComputerUseRuntime,
 } from './computerUseRuntime';
 
+const WINDOWS_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.WindowsX64];
+const MAC_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.MacArm64];
+
+function setProcessTarget(runtime: { platform: string; arch: string }): void {
+  Object.defineProperty(process, 'platform', { value: runtime.platform });
+  Object.defineProperty(process, 'arch', { value: runtime.arch });
+}
+
 beforeEach(() => {
-  Object.defineProperty(process, 'platform', { value: ComputerUseRuntime.Platform });
-  Object.defineProperty(process, 'arch', { value: ComputerUseRuntime.Arch });
+  setProcessTarget(WINDOWS_RUNTIME);
 });
 
 afterEach(() => {
@@ -56,13 +65,13 @@ describe('resolvePackageRoot', () => {
 });
 
 describe('resolveComputerUseRuntimePaths', () => {
-  function writeRuntimeFixture(): {
+  function writeWindowsRuntimeFixture(): {
     clientModulePath: string;
     helperExePath: string;
     rootDir: string;
     runtimePackageRoot: string;
   } {
-    const rootDir = getComputerUseRuntimeRoot();
+    const rootDir = getComputerUseRuntimeRoot(WINDOWS_RUNTIME);
     const runtimePackageRoot = path.join(rootDir, 'node_modules', '@lobsterai', 'computer-use');
     const helperExePath = path.join(runtimePackageRoot, 'bin', 'windows', 'lobster-computer-use.exe');
     const clientPath = path.join(
@@ -74,10 +83,11 @@ describe('resolveComputerUseRuntimePaths', () => {
     fs.mkdirSync(path.dirname(helperExePath), { recursive: true });
     fs.mkdirSync(path.dirname(clientPath), { recursive: true });
     fs.writeFileSync(path.join(rootDir, 'runtime.json'), `\uFEFF${JSON.stringify({
-      arch: ComputerUseRuntime.Arch,
-      id: ComputerUseRuntime.Id,
-      platform: ComputerUseRuntime.Platform,
-      version: ComputerUseRuntime.Version,
+      arch: WINDOWS_RUNTIME.arch,
+      id: WINDOWS_RUNTIME.id,
+      mode: ComputerUseRuntimeMode.WindowsHelper,
+      platform: WINDOWS_RUNTIME.platform,
+      version: WINDOWS_RUNTIME.version,
       clientModule: 'node_modules/@lobsterai/computer-use/dist/windows/computer_use_client.js',
       helper: 'node_modules/@lobsterai/computer-use/bin/windows/lobster-computer-use.exe',
       runtimePackageRoot: 'node_modules/@lobsterai/computer-use',
@@ -87,18 +97,57 @@ describe('resolveComputerUseRuntimePaths', () => {
     return { clientModulePath: clientPath, helperExePath, rootDir, runtimePackageRoot };
   }
 
-  test('resolves the installed runtime from userData runtimes directory', () => {
-    const { clientModulePath, helperExePath, rootDir, runtimePackageRoot } = writeRuntimeFixture();
+  function writeMacRuntimeFixture(): {
+    mcpCommandPath: string;
+    mcpCwd: string;
+    rootDir: string;
+  } {
+    setProcessTarget(MAC_RUNTIME);
+    const rootDir = getComputerUseRuntimeRoot(MAC_RUNTIME);
+    const mcpCwd = path.join(rootDir, 'computer-use');
+    const mcpCommandPath = path.join(
+      mcpCwd,
+      'Codex Computer Use.app',
+      'Contents',
+      'SharedSupport',
+      'SkyComputerUseClient.app',
+      'Contents',
+      'MacOS',
+      'SkyComputerUseClient',
+    );
+    fs.mkdirSync(path.dirname(mcpCommandPath), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, 'runtime.json'), JSON.stringify({
+      arch: MAC_RUNTIME.arch,
+      id: MAC_RUNTIME.id,
+      mode: ComputerUseRuntimeMode.MacMcpApp,
+      platform: MAC_RUNTIME.platform,
+      version: MAC_RUNTIME.version,
+      mcpArgs: ['mcp'],
+      mcpCommand: 'computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient',
+      mcpCwd: 'computer-use',
+    }));
+    fs.writeFileSync(mcpCommandPath, '');
+    return { mcpCommandPath, mcpCwd, rootDir };
+  }
+
+  test('resolves the installed Windows helper runtime from userData runtimes directory', () => {
+    const { clientModulePath, helperExePath, rootDir, runtimePackageRoot } = writeWindowsRuntimeFixture();
 
     const inspection = inspectComputerUseRuntime();
     const paths = resolveComputerUseRuntimePaths();
 
     expect(inspection.missing).toEqual([]);
-    expect(paths).toEqual({ clientModulePath, helperExePath, rootDir, runtimePackageRoot });
+    expect(paths).toEqual({
+      clientModulePath,
+      helperExePath,
+      mode: ComputerUseRuntimeMode.WindowsHelper,
+      rootDir,
+      runtimePackageRoot,
+    });
   });
 
-  test('configures the helper with LobsterAI branding', () => {
-    writeRuntimeFixture();
+  test('configures the Windows helper with LobsterAI branding', () => {
+    writeWindowsRuntimeFixture();
 
     const server = resolveComputerUseMcpServer({
       askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
@@ -125,6 +174,34 @@ describe('resolveComputerUseRuntimePaths', () => {
     expect(server?.env?.[ComputerUseMcpEnv.LogRetentionDays]).toBe('7');
     expect(config.strings?.usingComputer).toBe('LobsterAI正在使用你的电脑');
     expect(config.strings?.escToCancel).toBe('按 Esc 取消');
+  });
+
+  test('resolves the macOS Computer Use MCP app runtime', () => {
+    const { mcpCommandPath, mcpCwd, rootDir } = writeMacRuntimeFixture();
+
+    const inspection = inspectComputerUseRuntime();
+    const paths = resolveComputerUseRuntimePaths();
+    const server = resolveComputerUseMcpServer({
+      askUserCallbackUrl: 'http://127.0.0.1:1234/ask-user',
+      bridgeSecret: 'secret',
+      electronNodePath: process.execPath,
+    });
+
+    expect(inspection.missing).toEqual([]);
+    expect(paths).toEqual({
+      mcpArgs: ['mcp'],
+      mcpCommandPath,
+      mcpCwd,
+      mode: ComputerUseRuntimeMode.MacMcpApp,
+      rootDir,
+    });
+    expect(server).toEqual({
+      name: 'computer-use',
+      transportType: 'stdio',
+      command: mcpCommandPath,
+      args: ['mcp'],
+      cwd: mcpCwd,
+    });
   });
 
   test('reports Escape cancellation before renewing the helper turn', () => {
